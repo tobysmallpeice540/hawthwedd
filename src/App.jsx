@@ -322,7 +322,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Status",""].map(h=>(
+              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status",""].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -353,6 +353,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                       : accomBadges.map(a=><span key={a} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600 }}>{a}</span>)}
                   </td>
                   <td style={{ padding:"10px 12px" }}>{(b.setup||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
+                  <td style={{ padding:"10px 12px" }}>{(b.dayManager||[]).length===0?<span style={{ color:T.textLight,fontSize:11 }}>—</span>:(b.dayManager||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
                   <td style={{ padding:"10px 12px" }}>
                     {total>0?(<span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:isFullyPaid?T.greenBg:balance>0?T.amberBg:T.redBg, color:isFullyPaid?T.green:balance>0?T.amber:T.red, fontWeight:600 }}>{isFullyPaid?"✓ Paid":balance>0?`£${balance.toLocaleString()} due`:"Overpaid"}</span>):<span style={{ color:T.textLight,fontSize:11 }}>—</span>}
                   </td>
