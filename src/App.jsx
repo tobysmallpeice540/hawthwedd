@@ -1370,6 +1370,45 @@ function StockView({ products, stock, events }) {
 }
 
 // ─── Order / Stocktake Entry ──────────────────────────────────────────────────
+function ProductEntryCard({ p, lines, stock, setLine, isOrder }) {
+  const val      = lines[p.id];
+  const curStock = stock[p.id] || 0;
+  const hasVal   = val !== "" && val != null && Number(val) !== 0;
+  const stockOut  = curStock === 0;
+  const stockLow  = curStock <= 3;
+  const stockColour = stockOut ? T.red : stockLow ? T.amber : T.green;
+  const stockBg    = stockOut ? T.redBg : stockLow ? T.amberBg : T.greenBg;
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:hasVal?T.accentLight:T.bgInput, border:`1.5px solid ${hasVal?T.accentMid:T.border}`, borderRadius:8, transition:"all .15s" }}>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.name}</div>
+        <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Buy: {fmt2(p.costUnit)}</div>
+      </div>
+      {isOrder && (
+        <div style={{ flexShrink:0, display:"flex", flexDirection:"column", alignItems:"center", background:stockBg, border:`1px solid ${stockColour}`, borderRadius:6, padding:"3px 8px", minWidth:44 }}>
+          <span style={{ fontSize:16, fontWeight:700, color:stockColour, lineHeight:1.1 }}>{curStock}</span>
+          <span style={{ fontSize:9, fontWeight:600, color:stockColour, textTransform:"uppercase", letterSpacing:.5 }}>{stockOut?"out":stockLow?"low":"in stock"}</span>
+        </div>
+      )}
+      <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+        {isOrder && (
+          <button onClick={()=>setLine(p.id, Math.max(0,(Number(val)||0)-1))} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
+        )}
+        <input
+          type="number" min="0" step={isOrder?1:0.5}
+          value={val ?? (isOrder ? "" : (stock[p.id]||0))}
+          onChange={e => setLine(p.id, e.target.value)}
+          style={{ width:64, textAlign:"center", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
+        />
+        {isOrder && (
+          <button onClick={()=>setLine(p.id, (Number(val)||0)+1)} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
+        )}
+        <span style={{ fontSize:11, color:T.textLight, width:28 }}>{isOrder?"units":"in stock"}</span>
+      </div>
+    </div>
+  );
+}
+
 function EventEntryView({ type, products, stock, onSave }) {
   const today = new Date().toISOString().slice(0,10);
   const [date,  setDate]  = useState(today);
@@ -1439,52 +1478,57 @@ function EventEntryView({ type, products, stock, onSave }) {
         </div>
       </div>
 
-      {/* Product lines by category */}
-      {BAR_CATEGORIES.map(cat => {
-        const prods = products.filter(p => p.category === cat);
-        if (!prods.length) return null;
-        const cc = CAT_COLOURS[cat];
-        return (
-          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-            <div style={{ padding:"10px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}` }}>
-              <CatBadge cat={cat}/>
-            </div>
-            <div style={{ padding:"14px 18px", display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px,1fr))", gap:"10px 20px" }}>
-              {prods.map(p => {
-                const val = lines[p.id];
-                const curStock = stock[p.id] || 0;
-                const hasVal = val !== "" && val != null && Number(val) !== 0;
-                return (
-                  <div key={p.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:hasVal?T.accentLight:T.bgInput, border:`1.5px solid ${hasVal?T.accentMid:T.border}`, borderRadius:8, transition:"all .15s" }}>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.name}</div>
-                      <div style={{ fontSize:11, color:T.textLight }}>
-                        {isOrder ? `Buy: ${fmt2(p.costUnit)}` : `Current: ${curStock}`}
+      {/* Product lines — orders: by supplier then category; stocktakes: by category only */}
+      {isOrder ? (
+        // ORDER: group by supplier, then category within each supplier
+        (() => {
+          const suppliers = [...new Set(products.map(p => p.supplier))].sort();
+          return suppliers.map(supplier => {
+            const supplierProds = products.filter(p => p.supplier === supplier);
+            if (!supplierProds.length) return null;
+            const cats = [...new Set(supplierProds.map(p => p.category))];
+            return (
+              <div key={supplier} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+                <div style={{ padding:"10px 18px", background:T.midBlueBg, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10 }}>
+                  <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>{supplier}</span>
+                  <span style={{ fontSize:11, color:T.textLight }}>{supplierProds.length} product{supplierProds.length!==1?"s":""}</span>
+                </div>
+                {cats.map(cat => {
+                  const prods = supplierProds.filter(p => p.category === cat);
+                  const cc = CAT_COLOURS[cat];
+                  return (
+                    <div key={cat}>
+                      <div style={{ padding:"6px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}`, borderTop:`1px solid ${cc.border}`, display:"flex", alignItems:"center", gap:8 }}>
+                        <CatBadge cat={cat}/>
+                      </div>
+                      <div style={{ padding:"12px 18px", display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(320px,1fr))", gap:"10px 20px" }}>
+                        {prods.map(p => <ProductEntryCard key={p.id} p={p} lines={lines} stock={stock} setLine={setLine} isOrder={true}/>)}
                       </div>
                     </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
-                      {isOrder && (
-                        <button onClick={()=>setLine(p.id, Math.max(0,(Number(val)||0)-1))} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
-                      )}
-                      <input
-                        type="number" min="0" step={isOrder?1:0.5}
-                        value={val ?? (type==="stocktake" ? (stock[p.id]||0) : "")}
-                        onChange={e => setLine(p.id, e.target.value)}
-                        style={{ width:64, textAlign:"center", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
-                      />
-                      {isOrder && (
-                        <button onClick={()=>setLine(p.id, (Number(val)||0)+1)} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
-                      )}
-                      {isOrder && <span style={{ fontSize:11, color:T.textLight, width:28 }}>units</span>}
-                      {!isOrder && <span style={{ fontSize:11, color:T.textLight, width:28 }}>in stock</span>}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+            );
+          });
+        })()
+      ) : (
+        // STOCKTAKE: group by category only
+        BAR_CATEGORIES.map(cat => {
+          const prods = products.filter(p => p.category === cat);
+          if (!prods.length) return null;
+          const cc = CAT_COLOURS[cat];
+          return (
+            <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div style={{ padding:"10px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}` }}>
+                <CatBadge cat={cat}/>
+              </div>
+              <div style={{ padding:"14px 18px", display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px,1fr))", gap:"10px 20px" }}>
+                {prods.map(p => <ProductEntryCard key={p.id} p={p} lines={lines} stock={stock} setLine={setLine} isOrder={false}/>)}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })
+      )}
 
       <div style={{ display:"flex", gap:12, marginTop:8, position:"sticky", bottom:20 }}>
         <button onClick={handleSave} disabled={saving} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"13px 36px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>
