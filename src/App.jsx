@@ -471,7 +471,7 @@ const TEXT_FIELDS = [
   { key:"band",            label:"Band / Entertainment",  type:"text",     section:"vendors" },
   { key:"paSystem",        label:"PA System",             type:"text",     section:"vendors" },
   { key:"hairdresser",     label:"Hairdresser",           type:"text",     section:"vendors" },
-  { key:"corkage",          label:"Corkage",               type:"text",     section:"extras" },
+  { key:"corkage",          label:"Corkage",               type:"text",     section:"financials" },
   { key:"pets",             label:"Pets",                  type:"text",     section:"extras" },
   { key:"barTakeGross",     label:"Bar Take Gross (£)",    type:"number",   section:"extras" },
   { key:"circaCommission",  label:"Circa Commission (£)",  type:"number",   section:"extras" },
