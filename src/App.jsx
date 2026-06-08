@@ -1,0 +1,1126 @@
+import { useState, useEffect, useCallback } from "react";
+
+const LOGO_B64 = "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";
+
+
+const T = {
+  bg:          "#f0f6ff",
+  bgCard:      "#ffffff",
+  bgHeader:    "#ffffff",
+  bgInput:     "#f8fafd",
+  border:      "#c8d9ef",
+  borderFocus: "#2563eb",
+  text:        "#1a2d4a",
+  textMid:     "#3d5a7a",
+  textLight:   "#7a9bbf",
+  accent:      "#2563eb",
+  accentHov:   "#1d4ed8",
+  accentLight: "#dbeafe",
+  accentMid:   "#3b82f6",
+  midBlue:     "#1e4d8c",
+  midBlueBg:   "#e8f0fc",
+  green:       "#16a34a",
+  greenBg:     "#dcfce7",
+  red:         "#dc2626",
+  redBg:       "#fee2e2",
+  amber:       "#d97706",
+  amberBg:     "#fef3c7",
+  headerText:  "#1a2d4a",
+  navActive:   "#2563eb",
+  navInactive: "#5a7a9a",
+  chipBgs:     ["#dbeafe","#d1fae5","#fce7f3","#e0e7ff","#fef3c7","#f3e8ff","#ffedd5","#e0f2fe"],
+  chipTexts:   ["#1e40af","#065f46","#9d174d","#3730a3","#92400e","#6b21a8","#9a3412","#075985"],
+};
+
+function parseMoney(val) {
+  if (!val) return 0;
+  const n = parseFloat(String(val).replace(/[^0-9.]/g,""));
+  return isNaN(n) ? 0 : n;
+}
+
+function dayOfWeek(dateStr) {
+  if (!dateStr) return "";
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long" });
+}
+
+const DAY_COLOURS = {
+  Monday:    { bg:"#e0f2fe", text:"#075985" },
+  Tuesday:   { bg:"#f0fdf4", text:"#166534" },
+  Wednesday: { bg:"#fef9c3", text:"#854d0e" },
+  Thursday:  { bg:"#fdf4ff", text:"#6b21a8" },
+  Friday:    { bg:"#fff7ed", text:"#9a3412" },
+  Saturday:  { bg:"#fce7f3", text:"#9d174d" },
+  Sunday:    { bg:"#fee2e2", text:"#991b1b" },
+};
+
+function DayBadge({ dateStr, style={} }) {
+  const day = dayOfWeek(dateStr);
+  if (!day) return null;
+  const c = DAY_COLOURS[day] || { bg: T.midBlueBg, text: T.midBlue };
+  return (
+    <span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:10, background:c.bg, color:c.text, whiteSpace:"nowrap", ...style }}>
+      {day}
+    </span>
+  );
+}
+
+const INITIAL_STAFF = [
+  { id:"TM",  name:"Taryn May",           email:"Taryn.may@hotmail.co.uk",       phone:"", rate:"£15 incl Roll Up", role:"Bar Supervisor", active:true, notes:"" },
+  { id:"OK",  name:"Olive Kaufmann",      email:"130478@leeds-art.ac.uk",         phone:"", rate:"£14 incl Roll Up", role:"Bar Staff",       active:true, notes:"" },
+  { id:"AC",  name:"Aggie Chapman",       email:"aggiechapman10@gmail.com",       phone:"", rate:"£14 incl Roll Up", role:"Bar Staff",       active:true, notes:"" },
+  { id:"BeW", name:"Ben Williams",        email:"ben.oscar.williams1@gmail.com",  phone:"", rate:"£10 inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"OH",  name:"Oli Hammond",         email:"oliver.l.hammond@gmail.com",     phone:"", rate:"£10 inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"AP",  name:"Archie Proctor",      email:"archiehp46@icloud.com",          phone:"", rate:"£14 inc Roll Up",  role:"Handy",           active:true, notes:"" },
+  { id:"RM",  name:"Rafferty Massingham", email:"Raffgang@icloud.com",            phone:"", rate:"£12 Inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"EP",  name:"Edie",               email:"ediepops46@outlook.com",          phone:"", rate:"£12 Inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"AK",  name:"Ash Kawakita",        email:"akawakita98@gmail.com",          phone:"", rate:"£14 inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"CK",  name:"Connor Keely",        email:"Conor.keeley@icloud.com",        phone:"", rate:"£12 Inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"JD",  name:"Jane Davison",        email:"dressesbyjane@hotmail.co.uk",    phone:"", rate:"£15 incl Roll Up", role:"Day Manager",     active:true, notes:"" },
+  { id:"OM",  name:"Ollie Murphy",        email:"olliemur_1@icloud.com",          phone:"", rate:"£14 Inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"RC",  name:"Rose Chaplin",        email:"rchaplin892@gmail.com",          phone:"", rate:"£14 Inc Roll Up",  role:"Bar Staff",       active:true, notes:"" },
+  { id:"LM",  name:"Lani Mohan",          email:"lanimahon@icloud.com",           phone:"", rate:"",                 role:"Bar Staff",       active:true, notes:"" },
+  { id:"BW",  name:"Bonnie Whitmore",     email:"",                               phone:"", rate:"",                 role:"Day Manager",     active:true, notes:"Inferred from bookings" },
+  { id:"TF",  name:"Tom Faulkner",        email:"",                               phone:"", rate:"",                 role:"Day Manager",     active:true, notes:"Inferred from bookings" },
+  { id:"BoW", name:"Bo Williams",         email:"",                               phone:"", rate:"",                 role:"Bar Staff",       active:true, notes:"Inferred from bookings" },
+  { id:"KN",  name:"KN (Unknown)",        email:"",                               phone:"", rate:"",                 role:"Bar Staff",       active:true, notes:"Initials only — update name" },
+];
+
+const INITIAL_BOOKINGS = [
+  { id:1,  couple:"Alice Smith Birthday party Barn",         date:"2025-01-24", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"44 7557 598 231", email:"alicelouise90@hotmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"yes", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"", hamletBooked:true, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:2,  couple:"Jason Lindfield & Lindy Anderson",        date:"2026-05-23", setup:["TF"], dayManager:["TF"], dayStaff:["RM","AK","OH"], barSupervisor:["TM"], sunday:["KN"], bar:["AK","RM","EP"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"120", mealChildren:"20", mealBabies:"", eveGuests:"120", phone:"", email:"jasonlindfield@ohmenergy.co.uk", email2:"lindyclaire@hotmail.com", ceremony:"NO", guestArrivalTime:"13:00", caterers:"12:00 External caterers arrive, 14:00 Food served 15:00-17:00 Ice Cream & Bubbles Van", foodTruck:"Miky Dough Pizzas", eveFood:"Bucking Broncho", otherVendors:"YES £760", amlyBooked:false, amlyFee:"", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"3270", deposit:"1000", payment2:"1015", finalPayment:"3095", extras:"Food trucks: up to 3 vendors, waive usual £100 per vendor fee. ALL INVOICES PAID", corkage:"£9 per adult - 100 guests invoiced", pets:"", hairdresser:"", florist:"", band:"16:00-17:00 live music, DJ from 17:00", paSystem:"", notes:"", hoursWorked:{} },
+  { id:3,  couple:"Sam Adams & Sarah Precious",              date:"2026-05-30", setup:["BW"], dayManager:["BW"], dayStaff:["JD","BoW","OH"], barSupervisor:["TM"], sunday:[], bar:["AK","OH"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"62", mealChildren:"", mealBabies:"", eveGuests:"62", phone:"07551 801563", email:"sarahp001@hotmail.co.uk", email2:"", ceremony:"Clearing 15:00PM", guestArrivalTime:"14:00 for canapes & drinks", caterers:"12:00 Circa", foodTruck:"none", eveFood:"CIRCA", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:false, campingFee:"", nonStandard:"Round tables being delivered day tbc with Circa.", venueFee:"5100", deposit:"1000", payment2:"3935", finalPayment:"4641.8", extras:"Need to find quiet place for Sam to do interview with registrars", corkage:"£9.50 - they are supplying the coffee and tea", pets:"", hairdresser:"9:30 on the day", florist:"10:00 am on the set up Mother-in-law", band:"21:00 Duke of Havoc", paSystem:"", notes:"", hoursWorked:{} },
+  { id:4,  couple:"Natalia Szczepanska & Simon Rosenhead",   date:"2026-06-06", setup:["BW"], dayManager:["JD"], dayStaff:["CK","BoW","AK"], barSupervisor:["TM"], sunday:[], bar:["AK","EP","OH"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"80", mealChildren:"2", mealBabies:"", eveGuests:"80", phone:"7972280260", email:"Natalia_kim@hotmail.com", email2:"", ceremony:"Clearing 13:00", guestArrivalTime:"13:00", caterers:"Circa", foodTruck:"Circa Pizza", eveFood:"CIRCA", otherVendors:"", amlyBooked:true, amlyFee:"950", hamletBooked:true, hamletFee:"2678", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"4950", deposit:"1000", payment2:"3289", finalPayment:"5481", extras:"", corkage:"£12 plus VAT per guest if 80-90 guests", pets:"", hairdresser:"", florist:"Big Field Flowers", band:"Steel Pan Man", paSystem:"SENT TO JAMES", notes:"", hoursWorked:{} },
+  { id:5,  couple:"Richard Mann & Leanne",                   date:"2026-06-12", setup:["BW"], dayManager:["BW"], dayStaff:["BoW","OM","RC","OH"], barSupervisor:["JD"], sunday:[], bar:["AK","EP","CK","OM","RC"], dayHandy:["TF"], eveHandy:["AP","TF"], mealGuests:"106", mealChildren:"", mealBabies:"", eveGuests:"225", phone:"07833 615851", email:"mannroofing@aol.com", email2:"leannesfarley1985@outlook.com", ceremony:"Clearing 13:00", guestArrivalTime:"12:30", caterers:"Greg Churcher - will arrive 10:00", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"1230", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"NEED TO ADD £250 FOR A 3RD NIGHT IN AMLY", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"9.50 corkage", pets:"", hairdresser:"", florist:"", band:"Our PA guy 10:30am, band 1pm, done by 3:30pm", paSystem:"", notes:"Friday wedding", hoursWorked:{} },
+  { id:6,  couple:"Ruby Gislingham & Jack",                  date:"2026-06-20", setup:["BW"], dayManager:["JD"], dayStaff:["BoW","RM","AK"], barSupervisor:["OK"], sunday:["OK"], bar:["AK","RM","TM","BoW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"86", mealChildren:"", mealBabies:"", eveGuests:"130", phone:"7528350684", email:"rubyjgis@hotmail.com", email2:"jackrowland4@gmail.com", ceremony:"Clearing (non-legal ceremony) Celebrant James", guestArrivalTime:"", caterers:"Circa", foodTruck:"Circa", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2200", nonStandard:"£500 agreed discount for booking by end of Jan 2025", venueFee:"4600", deposit:"1000", payment2:"4185", finalPayment:"", extras:"", corkage:"INVOICED £9.50 plus VAT for 75-80. HAWTHBUSH TO SUPPLY TEA & COFFEE", pets:"", hairdresser:"", florist:"Mum is doing flowers", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:7,  couple:"Rosa Lavelle-Hill & Sam",                 date:"2026-06-27", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["BeW"], dayHandy:["TF"], eveHandy:["TF"], mealGuests:"74", mealChildren:"10", mealBabies:"", eveGuests:"85", phone:"7717126690", email:"rosaellenlavellehill@gmail.com", email2:"", ceremony:"Clearing 2:00pm", guestArrivalTime:"", caterers:"Circa", foodTruck:"The Real Pizza Company £100 charge", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"1495", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4127.5", finalPayment:"", extras:"", corkage:"TO INVOICE TBC - quoted higher 26 corkage prices", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:8,  couple:"Rosie Latawski & Tim",                    date:"2026-07-04", setup:["JD"], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:["OK"], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"72", mealChildren:"10", mealBabies:"3", eveGuests:"72", phone:"07740 265594", email:"rosieandtimwedding26@gmail.com", email2:"", ceremony:"1:00pm Friends hosting ceremony", guestArrivalTime:"12:30/12:45 (meeting first at the tap rooms)", caterers:"Circa", foodTruck:"Circa", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"HIGH CHAIRS - 3 tbc - poss looking for babysitting service", corkage:"TO INVOICE CORKAGE - Standard corkage which will finish around 6pm", pets:"", hairdresser:"", florist:"Rosies mum doing flowers", band:"Marmalade First dance 7:45pm", paSystem:"", notes:"", hoursWorked:{} },
+  { id:9,  couple:"Lucyanne Mathews & Marcus Brasier",       date:"2026-07-11", setup:["BW"], dayManager:["BW"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"90", mealChildren:"", mealBabies:"", eveGuests:"25", phone:"", email:"lamatthews@hgluk.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"3335", finalPayment:"", extras:"", corkage:"TO INVOICE CORKAGE TBC", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:10, couple:"Yasmin Roberts & Jack Crisp",             date:"2026-07-18", setup:["BW"], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"105", mealChildren:"", mealBabies:"", eveGuests:"20", phone:"07535 326046", email:"Yasmin.Roberts@baw.live", email2:"", ceremony:"1:30PM", guestArrivalTime:"", caterers:"Circa", foodTruck:"Pizza van in eve", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2750", campingBooked:false, campingFee:"", nonStandard:"Waiting for signatures. £150+VAT cake cutting. £100+VAT pizza van.", venueFee:"5190", deposit:"1000", payment2:"3460", finalPayment:"", extras:"", corkage:"Standard corkage TBC", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:11, couple:"Jenny Lippiatt & Laurence Organ-Jennings",date:"2026-07-25", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"100", mealChildren:"", mealBabies:"4", eveGuests:"0", phone:"07504732555", email:"jennyandlaurence@outlook.com", email2:"", ceremony:"2:00pm Clearing", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"730", hamletBooked:true, hamletFee:"2790", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"3355", finalPayment:"", extras:"", corkage:"Standard corkage - wine being delivered on the Friday", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:12, couple:"Diene Petterle & Tom Mitchelson",         date:"2026-08-01", setup:["BW"], dayManager:["TM"], dayStaff:[], barSupervisor:["OK"], sunday:["OK"], bar:["TM"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"65", mealChildren:"", mealBabies:"", eveGuests:"", phone:"07949 653646", email:"dienepetterle@gmail.com", email2:"tommitchelson@hotmail.com", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"", corkage:"Waiting for confirmation", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:13, couple:"Aimee Fenn & Henry Stephens",             date:"2026-08-05", setup:["BW"], dayManager:["BW","TM"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"80", mealChildren:"25", mealBabies:"", eveGuests:"0", phone:"", email:"aimeefenn88@gmail.com", email2:"hostepo@gmai.com", ceremony:"2pm - friend not legal ceremony", guestArrivalTime:"", caterers:"Sienna Pizza - no need to access kitchen", foodTruck:"Sienna + Ice Cream van", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"1600", nonStandard:"£100 x 2 for the food trucks", venueFee:"5190", deposit:"1000", payment2:"3480", finalPayment:"", extras:"", corkage:"Standard corkage package", pets:"4 tiny dogs - agreed would allow to stay for half price!!", hairdresser:"", florist:"Aimee is organising all the flowers", band:"", paSystem:"", notes:"Wednesday wedding. Invoice sent 04/11/2025 awaiting payment", hoursWorked:{} },
+  { id:14, couple:"Gabrielle Aron & Tommy Ramsay",           date:"2026-08-08", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7927593896", email:"gtaronramsay@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"Having a ceilidh", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"corkage WITH 20% discount", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:15, couple:"Louise Berry & Gren",                     date:"2026-08-15", setup:["BW"], dayManager:["JD"], dayStaff:[], barSupervisor:["OK"], sunday:["OK"], bar:["TM"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"50", mealChildren:"", mealBabies:"", eveGuests:"50", phone:"05522 787324", email:"louiseberry00@hotmail.co.uk", email2:"", ceremony:"Yes", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"Standard corkage confirmed", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:16, couple:"Em Hodson & Robert ODonoghue",           date:"2026-08-22", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"95", mealChildren:"", mealBabies:"", eveGuests:"0", phone:"7532290198", email:"emrobodonoghue@gmail.com", email2:"", ceremony:"Clearing tbc", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2750", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"", corkage:"Standard corkage TBC", pets:"Jura - need to charge for 1 dog", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:17, couple:"Ellie Bradley & Ashley Williams",         date:"2026-09-05", setup:["BW"], dayManager:["JD"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:["BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"80", phone:"07527 163713", email:"elizabeth.bradley994@gmail.com", email2:"", ceremony:"Clearing 2:30 PM", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4630", finalPayment:"", extras:"", corkage:"TO INVOICE CORKAGE - 61-90 Guests £10.50+VAT pp", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:18, couple:"Hannah & Johnny",                         date:"2026-09-18", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"75", phone:"", email:"hannahbergin@live.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa TBC", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"4190", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"Friday wedding", hoursWorked:{} },
+  { id:19, couple:"Holly Freeman & Cameron",                 date:"2026-09-26", setup:[], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"50", mealChildren:"", mealBabies:"", eveGuests:"15", phone:"7429762459", email:"hollyfreeman@hotmail.co.uk", email2:"", ceremony:"Clearing tbc", guestArrivalTime:"", caterers:"£100+VAT 5pm external catering truck", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"3085", extras:"£100+VAT for external food truck", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:20, couple:"Emily Hudson & Ed",                       date:"2026-10-03", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:["BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"80", phone:"7479043253", email:"emilyrosehudson@gmail.com", email2:"edmund.pearce@hotmail.co.uk", ceremony:"Clearing", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"3885", campingBooked:false, campingFee:"", nonStandard:"£500 discount agreed as out of season wedding.", venueFee:"5190", deposit:"1000", payment2:"4027.5", finalPayment:"", extras:"", corkage:"£10.50+VAT for 61-90 guests", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:21, couple:"Emily Cave & Daniel",                     date:"2026-11-28", setup:["BW"], dayManager:["BW"], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7479043253", email:"thebookgirlandgamerguy26@outlook.com", email2:"", ceremony:"Clearing", guestArrivalTime:"", caterers:"TBC", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"£500 discount", venueFee:"4140", deposit:"", payment2:"1460", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+];
+
+const STAFFING_FIELDS = ["dayManager","dayStaff","barSupervisor","sunday","bar","dayHandy","eveHandy"];
+const STAFFING_LABELS = { dayManager:"Day Manager", dayStaff:"Day Staff", barSupervisor:"Bar Supervisor", sunday:"Sunday", bar:"Bar", dayHandy:"Day Handy", eveHandy:"Eve Handy" };
+
+const BOOKING_STORAGE = "hawthbush_bookings_v5";
+const STAFF_STORAGE   = "hawthbush_staff_v5";
+
+// ─── STAFF CHIP ───────────────────────────────────────────────────────────────
+function StaffChip({ initials, staff, size="sm" }) {
+  const person = staff.find(s=>s.id===initials);
+  const name = person ? person.name : initials;
+  const idx = (initials||"").split("").reduce((a,c)=>a+c.charCodeAt(0),0) % T.chipBgs.length;
+  return (
+    <span title={name} style={{ display:"inline-flex", alignItems:"center", background:T.chipBgs[idx], color:T.chipTexts[idx], borderRadius:4, padding:size==="sm"?"2px 8px":"4px 12px", fontSize:size==="sm"?11:13, marginRight:4, marginBottom:3, whiteSpace:"nowrap", fontWeight:600 }}>
+      {size==="sm" ? initials : name}
+    </span>
+  );
+}
+
+// ─── STAFF PICKER ─────────────────────────────────────────────────────────────
+function StaffPicker({ label, value=[], onChange, staff }) {
+  const [open, setOpen] = useState(false);
+  const toggle = id => onChange(value.includes(id) ? value.filter(v=>v!==id) : [...value, id]);
+  const activeStaff = staff.filter(s=>s.active);
+  return (
+    <div style={{ position:"relative" }}>
+      <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>{label}</label>
+      <div onClick={()=>setOpen(!open)} style={{ minHeight:36, background:T.bgInput, border:`1.5px solid ${open?T.borderFocus:T.border}`, borderRadius:6, padding:"4px 10px", cursor:"pointer", display:"flex", flexWrap:"wrap", alignItems:"center", gap:2, boxShadow:open?"0 0 0 3px #dbeafe":"none", transition:"all .15s" }}>
+        {value.length===0 && <span style={{ color:T.textLight, fontSize:13 }}>Select staff…</span>}
+        {value.map(id=><StaffChip key={id} initials={id} staff={staff}/>)}
+        <span style={{ marginLeft:"auto", color:T.textLight, fontSize:10 }}>▾</span>
+      </div>
+      {open && (
+        <div style={{ position:"absolute", zIndex:200, top:"100%", left:0, right:0, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, maxHeight:220, overflowY:"auto", boxShadow:"0 8px 24px rgba(0,0,0,.12)" }}>
+          {activeStaff.map(s=>{
+            const sel = value.includes(s.id);
+            return (
+              <div key={s.id} onClick={()=>toggle(s.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", cursor:"pointer", background:sel?T.accentLight:"none", borderBottom:`1px solid ${T.border}` }}
+                onMouseEnter={e=>e.currentTarget.style.background=sel?T.accentLight:"#f0f6ff"}
+                onMouseLeave={e=>e.currentTarget.style.background=sel?T.accentLight:"none"}>
+                <span style={{ width:18, height:18, border:`2px solid ${sel?T.accent:T.border}`, borderRadius:4, background:sel?T.accent:"none", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, color:"#fff", flexShrink:0 }}>{sel?"✓":""}</span>
+                <StaffChip initials={s.id} staff={staff}/>
+                <span style={{ fontSize:13, color:T.text }}>{s.name}</span>
+                <span style={{ marginLeft:"auto", fontSize:11, color:T.textLight }}>{s.role}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── INPUT HELPERS ────────────────────────────────────────────────────────────
+const IS = (f) => ({ width:"100%", background:T.bgInput, border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box", boxShadow:f?"0 0 0 3px #dbeafe":"none", transition:"all .15s" });
+function FLabel({ children, required }) {
+  return <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>{children}{required&&<span style={{ color:T.red, marginLeft:4 }}>*</span>}</label>;
+}
+function FInput({ value, onChange, type="text", placeholder="" }) {
+  const [f,setF] = useState(false);
+  return <input type={type} value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} onFocus={()=>setF(true)} onBlur={()=>setF(false)} style={IS(f)} />;
+}
+function FTextarea({ value, onChange, rows=3 }) {
+  const [f,setF] = useState(false);
+  return <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} onFocus={()=>setF(true)} onBlur={()=>setF(false)} style={{ ...IS(f), resize:"vertical" }} />;
+}
+function FCheck({ checked, onChange, label, bold }) {
+  return (
+    <label style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer", userSelect:"none" }}>
+      <span style={{ width:20, height:20, border:`2px solid ${checked?T.accent:T.border}`, borderRadius:4, background:checked?T.accent:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:"#fff", flexShrink:0, transition:"all .15s" }}>{checked?"✓":""}</span>
+      <span style={{ fontSize:bold?15:14, color:T.text, fontWeight:bold?600:400 }}>{label}</span>
+    </label>
+  );
+}
+
+// ─── ACCOMMODATION FIELD ──────────────────────────────────────────────────────
+function AccomField({ bookedKey, feeKey, label, formData, update }) {
+  const [f,setF] = useState(false);
+  const booked = !!formData[bookedKey];
+  return (
+    <div style={{ background:booked?T.accentLight:T.bgInput, border:`1.5px solid ${booked?T.accentMid:T.border}`, borderRadius:8, padding:"14px 16px", transition:"all .2s" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+        <FCheck checked={booked} onChange={v=>update(bookedKey,v)} label={label} bold />
+        {booked && (
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:13, color:T.textMid, fontWeight:500 }}>Fee agreed: £</span>
+            <input type="number" value={formData[feeKey]||""} onChange={e=>update(feeKey,e.target.value)} placeholder="0"
+              onFocus={()=>setF(true)} onBlur={()=>setF(false)}
+              style={{ width:100, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"6px 10px", outline:"none", boxShadow:f?"0 0 0 3px #dbeafe":"none" }} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [bookings, setBookings] = useState([]);
+  const [staff, setStaff]       = useState([]);
+  const [view, setView]         = useState("list");
+  const [editId, setEditId]     = useState(null);
+  const [formData, setFormData] = useState(null);
+  const [search, setSearch]     = useState("");
+  const [reportType, setReportType] = useState("summary");
+  const [loaded, setLoaded]     = useState(false);
+  const [editStaffId, setEditStaffId] = useState(null);
+  const [staffForm, setStaffForm]     = useState(null);
+
+  useEffect(()=>{
+    (async()=>{
+      try { const r=await window.storage.get(BOOKING_STORAGE); setBookings(r?.value?JSON.parse(r.value):INITIAL_BOOKINGS); } catch { setBookings(INITIAL_BOOKINGS); }
+      try { const r=await window.storage.get(STAFF_STORAGE);   setStaff(r?.value?JSON.parse(r.value):INITIAL_STAFF); }   catch { setStaff(INITIAL_STAFF); }
+      setLoaded(true);
+    })();
+  },[]);
+
+  const saveBookings = useCallback(async data=>{ setBookings(data); try{await window.storage.set(BOOKING_STORAGE,JSON.stringify(data));}catch(e){console.error(e);} },[]);
+  const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await window.storage.set(STAFF_STORAGE,JSON.stringify(data));}catch(e){console.error(e);} },[]);
+
+  const emptyBooking = ()=>({ couple:"", date:"", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:false, amlyFee:"", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+
+  const safeArr = v => Array.isArray(v) ? v : [];
+  const handleNew    = ()=>{ setFormData(emptyBooking()); setEditId(null); setView("form"); };
+  const handleEdit   = id=>{ const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
+  const handleDelete = async id=>{ if(!confirm("Delete this booking?"))return; await saveBookings(bookings.filter(b=>b.id!==id)); };
+  const handleSubmit = async ()=>{
+    if(!formData.couple||!formData.date){ alert("Couple name and date are required."); return; }
+    let updated;
+    if(editId) updated=bookings.map(b=>b.id===editId?{...formData,id:editId}:b);
+    else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...formData,id:newId}]; }
+    updated=updated.sort((a,b)=>a.date>b.date?1:-1);
+    await saveBookings(updated); setView("list");
+  };
+
+  const emptyStaff = ()=>({ id:"", name:"", email:"", phone:"", rate:"", role:"Bar Staff", active:true, notes:"" });
+  const handleNewStaff    = ()=>{ setStaffForm(emptyStaff()); setEditStaffId(null); };
+  const handleEditStaff   = id=>{ const s=staff.find(x=>x.id===id); setStaffForm({...s}); setEditStaffId(id); };
+  const handleDeleteStaff = async id=>{ if(!confirm("Remove this staff member?"))return; await saveStaff(staff.filter(s=>s.id!==id)); };
+  const handleSubmitStaff = async ()=>{
+    if(!staffForm.id||!staffForm.name){ alert("Initials and name are required."); return; }
+    let updated;
+    if(editStaffId) updated=staff.map(s=>s.id===editStaffId?{...staffForm}:s);
+    else { if(staff.find(s=>s.id===staffForm.id)){ alert(`Initials "${staffForm.id}" already exists.`); return; } updated=[...staff,staffForm]; }
+    await saveStaff(updated); setStaffForm(null); setEditStaffId(null);
+  };
+
+  const filtered = bookings.filter(b=>{ const q=search.toLowerCase(); return !q||(b.couple||"").toLowerCase().includes(q)||(b.email||"").toLowerCase().includes(q)||(b.date||"").includes(q); });
+
+  if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:"system-ui,sans-serif",fontSize:20 }}>Loading…</div>;
+
+  return (
+    <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
+      <Header view={view} setView={setView} onNew={handleNew}/>
+      <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
+        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff}/>}
+        {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
+        {view==="reports" && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType}/>}
+      </div>
+    </div>
+  );
+}
+
+// ─── HEADER ───────────────────────────────────────────────────────────────────
+function Header({ view, setView, onNew }) {
+  const tabs = [{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"reports",label:"Reports"}];
+  return (
+    <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
+      <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
+        <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:52, width:"auto", imageRendering:"crisp-edges" }} />
+      </div>
+      <nav style={{ display:"flex", gap:0, flex:1 }}>
+        {tabs.map(t=>(
+          <button key={t.id} onClick={()=>setView(t.id)} style={{ background:"none", border:"none", color:view===t.id?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:view===t.id?700:400, padding:"22px 20px 18px", cursor:"pointer", borderBottom:view===t.id?`3px solid ${T.accent}`:"3px solid transparent", transition:"all .2s", letterSpacing:.2 }}>{t.label}</button>
+        ))}
+      </nav>
+      <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)", flexShrink:0 }}>
+        + New Booking
+      </button>
+    </header>
+  );
+}
+
+// ─── BOOKINGS LIST ────────────────────────────────────────────────────────────
+function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff }) {
+  const today = new Date().toISOString().slice(0,10);
+  const upcoming = bookings.filter(b=>b.date>=today);
+  const past     = bookings.filter(b=>b.date<today);
+  return (
+    <div>
+      <div style={{ padding:"28px 0 18px", display:"flex", alignItems:"center", gap:14 }}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name, email or date…"
+          style={{ flex:1, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 14px", outline:"none", boxShadow:"0 1px 3px rgba(37,99,235,.06)" }}/>
+        <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} booking{bookings.length!==1?"s":""}</span>
+      </div>
+      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff}/> : <>
+        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff}/>
+        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff}/>}
+      </>}
+      {bookings.length===0 && <div style={{ textAlign:"center", padding:60, color:T.textLight }}><p style={{ fontSize:18, marginBottom:16 }}>No bookings yet</p><button onClick={onNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 28px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:15 }}>Create First Booking</button></div>}
+    </div>
+  );
+}
+
+function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
+  if(rows.length===0) return null;
+  return (
+    <div style={{ marginBottom:36 }}>
+      <h3 style={{ color:T.midBlue, fontSize:11, letterSpacing:2, textTransform:"uppercase", marginBottom:10, fontWeight:700 }}>{label} ({rows.length})</h3>
+      <div style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
+          <thead>
+            <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
+              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Status",""].map(h=>(
+                <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((b,i)=>{
+              const paid=parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment);
+              const total=parseMoney(b.venueFee), balance=total-paid, isFullyPaid=total>0&&balance<=0;
+              const accomBadges = [];
+              if(b.amlyBooked)   accomBadges.push("Amly");
+              if(b.hamletBooked) accomBadges.push("Hamlet");
+              if(b.campingBooked) accomBadges.push("Camping");
+              return (
+                <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s" }}
+                  onMouseEnter={e=>e.currentTarget.style.background="#f5f9ff"}
+                  onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}):"—"}</td>
+                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date}/></td>
+                  <td style={{ padding:"10px 12px", maxWidth:180 }}>
+                    <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
+                    {b.email&&<div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>{b.email}</div>}
+                  </td>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.mealGuests||"—"}</td>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.eveGuests||"—"}</td>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.text, fontWeight:500 }}>{total>0?`£${total.toLocaleString()}`:"—"}</td>
+                  <td style={{ padding:"10px 12px" }}>
+                    {accomBadges.length===0 ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
+                      : accomBadges.map(a=><span key={a} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600 }}>{a}</span>)}
+                  </td>
+                  <td style={{ padding:"10px 12px" }}>{(b.setup||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
+                  <td style={{ padding:"10px 12px" }}>
+                    {total>0?(<span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:isFullyPaid?T.greenBg:balance>0?T.amberBg:T.redBg, color:isFullyPaid?T.green:balance>0?T.amber:T.red, fontWeight:600 }}>{isFullyPaid?"✓ Paid":balance>0?`£${balance.toLocaleString()} due`:"Overpaid"}</span>):<span style={{ color:T.textLight,fontSize:11 }}>—</span>}
+                  </td>
+                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                    <button onClick={()=>onEdit(b.id)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"5px 13px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit", marginRight:6, fontWeight:600 }}>Edit</button>
+                    <button onClick={()=>onDelete(b.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── FORM ─────────────────────────────────────────────────────────────────────
+const TEXT_FIELDS = [
+  { key:"couple",          label:"Couple / Event Name",  type:"text",     section:"core",     required:true },
+  { key:"date",            label:"Wedding Date",          type:"date",     section:"core",     required:true },
+  { key:"venueFee",        label:"Venue Fee (£)",         type:"number",   section:"financials" },
+  { key:"deposit",         label:"Deposit (£)",           type:"number",   section:"financials" },
+  { key:"payment2",        label:"2nd Payment (£)",       type:"number",   section:"financials" },
+  { key:"finalPayment",    label:"Final Payment (£)",     type:"number",   section:"financials" },
+  { key:"mealGuests",      label:"Adults (meal)",         type:"number",   section:"guests" },
+  { key:"mealChildren",    label:"Children (meal)",       type:"number",   section:"guests" },
+  { key:"mealBabies",      label:"Babies (meal)",         type:"number",   section:"guests" },
+  { key:"eveGuests",       label:"Evening Guests",        type:"number",   section:"guests" },
+  { key:"phone",           label:"Phone",                 type:"text",     section:"contact" },
+  { key:"email",           label:"Email",                 type:"email",    section:"contact" },
+  { key:"email2",          label:"2nd Email",             type:"email",    section:"contact" },
+  { key:"ceremony",        label:"Ceremony / Clearing",   type:"text",     section:"logistics" },
+  { key:"guestArrivalTime",label:"Guest Arrival Time",    type:"text",     section:"logistics" },
+  { key:"caterers",        label:"Caterers",              type:"text",     section:"vendors" },
+  { key:"foodTruck",       label:"Food Truck",            type:"text",     section:"vendors" },
+  { key:"eveFood",         label:"Evening Food",          type:"text",     section:"vendors" },
+  { key:"otherVendors",    label:"Other Vendors",         type:"text",     section:"vendors" },
+  { key:"florist",         label:"Florist",               type:"text",     section:"vendors" },
+  { key:"band",            label:"Band / Entertainment",  type:"text",     section:"vendors" },
+  { key:"paSystem",        label:"PA System",             type:"text",     section:"vendors" },
+  { key:"hairdresser",     label:"Hairdresser",           type:"text",     section:"vendors" },
+  { key:"corkage",         label:"Corkage",               type:"text",     section:"extras" },
+  { key:"pets",            label:"Pets",                  type:"text",     section:"extras" },
+  { key:"nonStandard",     label:"Non-Standard / Extras", type:"textarea", section:"extras" },
+  { key:"notes",           label:"Internal Notes",        type:"textarea", section:"extras" },
+];
+
+const FORM_SECTIONS = {
+  core:          { label:"Event Details" },
+  financials:    { label:"Financials" },
+  guests:        { label:"Guests" },
+  contact:       { label:"Contact" },
+  staffing:      { label:"Staffing" },
+  logistics:     { label:"Logistics" },
+  vendors:       { label:"Vendors" },
+  accommodation: { label:"Accommodation" },
+  extras:        { label:"Extras & Notes" },
+  hours:         { label:"Hours Worked" },
+};
+
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) {
+  const [activeSection, setActiveSection] = useState("core");
+  const update = (key,val) => setFormData(f=>({...f,[key]:val}));
+
+  const countFilled = s => {
+    if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
+    if(s==="accommodation") return ["amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]).length;
+    return TEXT_FIELDS.filter(f=>f.section===s&&formData[f.key]).length;
+  };
+  const countTotal = s => {
+    if(s==="staffing") return 1+STAFFING_FIELDS.length;
+    if(s==="accommodation") return 3;
+    return TEXT_FIELDS.filter(f=>f.section===s).length;
+  };
+
+  return (
+    <div style={{ paddingTop:28 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:22 }}>
+        <button onClick={onCancel} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, cursor:"pointer", fontSize:13, fontFamily:"inherit", padding:"6px 14px", borderRadius:6 }}>← Back</button>
+        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>{isEdit?"Edit Booking":"New Booking"}</h2>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"200px 1fr", gap:20 }}>
+        <div>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            {Object.keys(FORM_SECTIONS).map(s=>{
+              const filled=countFilled(s), total=countTotal(s), active=activeSection===s;
+              return (
+                <button key={s} onClick={()=>setActiveSection(s)} style={{ display:"block", width:"100%", textAlign:"left", padding:"11px 14px", background:active?"#eef4fd":"none", border:"none", borderLeft:active?`3px solid ${T.accent}`:"3px solid transparent", borderBottom:`1px solid ${T.border}`, color:active?T.accent:T.textMid, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:active?700:400 }}>
+                  <span style={{ display:"block" }}>{FORM_SECTIONS[s].label}</span>
+                  <span style={{ fontSize:10, opacity:.65, color:active?T.accent:T.textLight }}>{filled}/{total} filled</span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ marginTop:16, display:"flex", flexDirection:"column", gap:8 }}>
+            <button onClick={onSubmit} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>{isEdit?"Save Changes":"Create Booking"}</button>
+            <button onClick={onCancel} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+          </div>
+        </div>
+
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:28, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <h3 style={{ margin:"0 0 22px", color:T.midBlue, fontWeight:700, fontSize:17, borderBottom:`2px solid ${T.border}`, paddingBottom:12 }}>{FORM_SECTIONS[activeSection].label}</h3>
+
+          {activeSection==="staffing" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+              <StaffPicker label="Set-Up (who sets up the venue)" value={formData.setup||[]} onChange={val=>update("setup",val)} staff={staff}/>
+              {STAFFING_FIELDS.map(key=>(
+                <StaffPicker key={key} label={STAFFING_LABELS[key]} value={formData[key]||[]} onChange={val=>update(key,val)} staff={staff}/>
+              ))}
+            </div>
+          )}
+
+          {activeSection==="accommodation" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              <p style={{ margin:"0 0 8px", fontSize:13, color:T.textMid }}>Tick to confirm booked, then enter the agreed fee.</p>
+              <AccomField bookedKey="amlyBooked"    feeKey="amlyFee"    label="Amly"    formData={formData} update={update}/>
+              <AccomField bookedKey="hamletBooked"  feeKey="hamletFee"  label="Hamlet"  formData={formData} update={update}/>
+              <AccomField bookedKey="campingBooked" feeKey="campingFee" label="Camping" formData={formData} update={update}/>
+            </div>
+          )}
+
+          {activeSection==="hours" && (
+            <HoursSection formData={formData} update={update} staff={staff}/>
+          )}
+
+          {activeSection!=="staffing" && activeSection!=="accommodation" && activeSection!=="hours" && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px 22px" }}>
+              {TEXT_FIELDS.filter(f=>f.section===activeSection).map(field=>(
+                <div key={field.key} style={{ gridColumn:field.type==="textarea"?"1 / -1":"auto" }}>
+                  <FLabel required={field.required}>{field.label}</FLabel>
+                  {field.key==="date" ? (
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <FInput type="date" value={formData[field.key]} onChange={v=>update(field.key,v)}/>
+                      <DayBadge dateStr={formData.date} style={{ fontSize:13, padding:"6px 12px" }}/>
+                    </div>
+                  ) : field.type==="textarea"
+                    ? <FTextarea value={formData[field.key]} onChange={v=>update(field.key,v)}/>
+                    : <FInput type={field.type} value={formData[field.key]} onChange={v=>update(field.key,v)}/>
+                  }
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── STAFF TAB ────────────────────────────────────────────────────────────────
+const ROLES = ["Day Manager","Bar Supervisor","Bar Staff","Handy","Other"];
+
+function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNew, onEdit, onDelete, onSubmit, onCancel }) {
+  const updateForm = (k,v) => setStaffForm(f=>({...f,[k]:v}));
+  const today = new Date().toISOString().slice(0,10);
+  const bookingCount = {};
+  bookings.forEach(b=>{ ["setup",...STAFFING_FIELDS].forEach(field=>{ (b[field]||[]).forEach(id=>{ bookingCount[id]=(bookingCount[id]||0)+1; }); }); });
+  const upcomingFor = id => bookings.filter(b=>b.date>=today&&["setup",...STAFFING_FIELDS].some(f=>(b[f]||[]).includes(id)));
+
+  return (
+    <div style={{ paddingTop:28 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:22 }}>
+        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Staff Database</h2>
+        <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>+ Add Staff Member</button>
+      </div>
+
+      {staffForm && (
+        <div style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:26, marginBottom:26, boxShadow:"0 4px 16px rgba(59,130,246,.1)" }}>
+          <h3 style={{ margin:"0 0 18px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{editStaffId?"Edit Staff Member":"New Staff Member"}</h3>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"14px 22px" }}>
+            {[{k:"id",l:"Initials / Code",required:true,hint:"e.g. TM, BeW"},{k:"name",l:"Full Name",required:true},{k:"email",l:"Email"},{k:"phone",l:"Phone"},{k:"rate",l:"Pay Rate"}].map(({k,l,required,hint})=>(
+              <div key={k}>
+                <FLabel required={required}>{l}</FLabel>
+                <FInput value={staffForm[k]} onChange={v=>updateForm(k,v)} placeholder={hint||""}/>
+              </div>
+            ))}
+            <div>
+              <FLabel>Role</FLabel>
+              <select value={staffForm.role||"Bar Staff"} onChange={e=>updateForm("role",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
+                {ROLES.map(r=><option key={r}>{r}</option>)}
+              </select>
+            </div>
+            <div style={{ gridColumn:"1/-1" }}>
+              <FLabel>Notes</FLabel>
+              <FTextarea value={staffForm.notes} onChange={v=>updateForm("notes",v)} rows={2}/>
+            </div>
+            <div><FCheck checked={staffForm.active!==false} onChange={v=>updateForm("active",v)} label="Active"/></div>
+          </div>
+          <div style={{ display:"flex", gap:10, marginTop:18 }}>
+            <button onClick={onSubmit} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"10px 24px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>{editStaffId?"Save Changes":"Add Staff Member"}</button>
+            <button onClick={onCancel} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"10px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))", gap:16 }}>
+        {staff.map(s=>{
+          const upcoming=upcomingFor(s.id), total=bookingCount[s.id]||0;
+          return (
+            <div key={s.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:18, opacity:s.active?1:.55, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:10 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <StaffChip initials={s.id} staff={[s]} size="lg"/>
+                  <div>
+                    <div style={{ fontWeight:700, color:T.text, fontSize:15 }}>{s.name}</div>
+                    <div style={{ fontSize:11, color:T.textLight }}>{s.role}{!s.active&&" · Inactive"}</div>
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:6 }}>
+                  <button onClick={()=>onEdit(s.id)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"3px 10px", borderRadius:5, cursor:"pointer", fontSize:11, fontFamily:"inherit", fontWeight:600 }}>Edit</button>
+                  <button onClick={()=>onDelete(s.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"3px 8px", borderRadius:5, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕</button>
+                </div>
+              </div>
+              {s.email&&<div style={{ fontSize:12, color:T.textLight, marginBottom:3 }}>{s.email}</div>}
+              {s.phone&&<div style={{ fontSize:12, color:T.textLight, marginBottom:3 }}>{s.phone}</div>}
+              {s.rate&&<div style={{ fontSize:12, color:T.accent, marginBottom:8, fontWeight:600 }}>{s.rate}</div>}
+              {s.notes&&<div style={{ fontSize:11, color:T.textMid, marginBottom:8, fontStyle:"italic" }}>{s.notes}</div>}
+              <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:10, display:"flex", gap:16 }}>
+                <span style={{ fontSize:11, color:T.textLight }}><span style={{ color:T.accent, fontWeight:700 }}>{total}</span> total</span>
+                <span style={{ fontSize:11, color:T.textLight }}><span style={{ color:upcoming.length>0?T.green:T.textLight, fontWeight:700 }}>{upcoming.length}</span> upcoming</span>
+              </div>
+              {upcoming.length>0&&(
+                <div style={{ marginTop:8, display:"flex", flexWrap:"wrap", gap:4 }}>
+                  {upcoming.slice(0,3).map(b=>(
+                    <span key={b.id} style={{ fontSize:10, background:T.bg, border:`1px solid ${T.border}`, borderRadius:4, padding:"2px 7px", color:T.textMid }}>
+                      {new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} · {b.couple.split("&")[0].trim().split(" ")[0]}
+                    </span>
+                  ))}
+                  {upcoming.length>3&&<span style={{ fontSize:10, color:T.textLight }}>+{upcoming.length-3} more</span>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── REPORTS ──────────────────────────────────────────────────────────────────
+function ReportsView({ bookings, staff, reportType, setReportType }) {
+  const types = [{id:"summary",label:"Annual Summary"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Staffing Rota"},{id:"pipeline",label:"Payment Pipeline"},{id:"staffload",label:"Staff Workload"},{id:"hours",label:"Hours Worked"}];
+  return (
+    <div style={{ paddingTop:28 }}>
+      <div style={{ marginBottom:22, display:"flex", gap:8, flexWrap:"wrap" }}>
+        {types.map(t=>(
+          <button key={t.id} onClick={()=>setReportType(t.id)} style={{ background:reportType===t.id?T.midBlue:"#fff", color:reportType===t.id?"#fff":T.textMid, border:`1.5px solid ${reportType===t.id?T.midBlue:T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:reportType===t.id?700:400 }}>{t.label}</button>
+        ))}
+      </div>
+      {reportType==="summary"       && <SummaryReport bookings={bookings}/>}
+      {reportType==="revenue"       && <RevenueReport bookings={bookings}/>}
+      {reportType==="accommodation" && <AccommodationReport bookings={bookings}/>}
+      {reportType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
+      {reportType==="pipeline"      && <PipelineReport bookings={bookings}/>}
+      {reportType==="staffload"     && <StaffWorkloadReport bookings={bookings} staff={staff}/>}
+      {reportType==="hours"          && <HoursReport bookings={bookings} staff={staff}/>}
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub }) {
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, marginBottom:8, fontWeight:600 }}>{label}</div>
+      <div style={{ fontSize:28, color:T.midBlue, fontWeight:700 }}>{value}</div>
+      {sub&&<div style={{ fontSize:12, color:T.textLight, marginTop:4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function SummaryReport({ bookings }) {
+  const weddings=bookings.filter(b=>b.couple&&b.date);
+  const today=new Date().toISOString().slice(0,10);
+  const upcoming=weddings.filter(b=>b.date>=today);
+  const totalRevenue=weddings.reduce((s,b)=>s+parseMoney(b.venueFee),0);
+  const totalCollected=weddings.reduce((s,b)=>s+parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment),0);
+  const monthCounts={};
+  upcoming.forEach(b=>{ const m=b.date.slice(0,7); monthCounts[m]=(monthCounts[m]||0)+1; });
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:28 }}>
+        <StatCard label="Total Bookings" value={weddings.length} sub={`${upcoming.length} upcoming`}/>
+        <StatCard label="Total Venue Revenue" value={`£${totalRevenue.toLocaleString()}`} sub="Across all bookings"/>
+        <StatCard label="Total Collected" value={`£${totalCollected.toLocaleString()}`} sub={`£${(totalRevenue-totalCollected).toLocaleString()} outstanding`}/>
+        <StatCard label="Amly Booked" value={weddings.filter(b=>b.amlyBooked).length} sub={`£${weddings.filter(b=>b.amlyBooked).reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()} revenue`}/>
+        <StatCard label="Hamlet Booked" value={weddings.filter(b=>b.hamletBooked).length} sub={`£${weddings.filter(b=>b.hamletBooked).reduce((s,b)=>s+parseMoney(b.hamletFee),0).toLocaleString()} revenue`}/>
+        <StatCard label="Camping Booked" value={weddings.filter(b=>b.campingBooked).length} sub={`£${weddings.filter(b=>b.campingBooked).reduce((s,b)=>s+parseMoney(b.campingFee),0).toLocaleString()} revenue`}/>
+      </div>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>Upcoming Bookings by Month</h3>
+        {Object.entries(monthCounts).sort().map(([month,count])=>{
+          const lbl=new Date(month+"-01").toLocaleDateString("en-GB",{month:"long",year:"numeric"});
+          return (
+            <div key={month} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+              <span style={{ width:130, color:T.textMid, fontSize:13 }}>{lbl}</span>
+              <div style={{ flex:1, background:T.accentLight, borderRadius:4, height:22, overflow:"hidden" }}>
+                <div style={{ width:`${Math.min(100,(count/5)*100)}%`, minWidth:count>0?30:0, height:"100%", background:T.midBlue, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
+                  <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{count}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RevenueReport({ bookings }) {
+  const rows=bookings.filter(b=>b.couple&&parseMoney(b.venueFee)>0).sort((a,b)=>a.date>b.date?1:-1);
+  const total=rows.reduce((s,b)=>s+parseMoney(b.venueFee),0);
+  const collected=rows.reduce((s,b)=>s+parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment),0);
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
+        <StatCard label="Total Venue Fees" value={`£${total.toLocaleString()}`}/>
+        <StatCard label="Collected" value={`£${collected.toLocaleString()}`}/>
+        <StatCard label="Outstanding" value={`£${(total-collected).toLocaleString()}`}/>
+      </div>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Venue Fee","Deposit","2nd","Final","Balance"].map(h=><th key={h} style={{ padding:"10px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((b,i)=>{
+              const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),p2=parseMoney(b.payment2),fp=parseMoney(b.finalPayment),balance=fee-dep-p2-fp;
+              return <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
+                <td style={{ padding:"10px 14px", fontSize:12, color:T.accent, fontWeight:500 }}>{b.date}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:500 }}>{b.couple}</td>
+                <td style={{ padding:"10px 14px", fontSize:13 }}>£{fee.toLocaleString()}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, color:dep>0?T.green:T.textLight }}>{dep>0?`£${dep.toLocaleString()}`:"—"}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, color:p2>0?T.green:T.textLight }}>{p2>0?`£${p2.toLocaleString()}`:"—"}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, color:fp>0?T.green:T.textLight }}>{fp>0?`£${fp.toLocaleString()}`:"—"}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:balance<=0?T.green:balance>0?T.amber:T.red }}>{balance===0?"✓ Paid":balance>0?`£${balance.toLocaleString()}`:`Over £${Math.abs(balance).toLocaleString()}`}</td>
+              </tr>;
+            })}
+          </tbody>
+          <tfoot><tr style={{ borderTop:`2px solid ${T.border}`, background:"#eef4fd" }}>
+            <td colSpan={2} style={{ padding:"10px 14px", fontSize:13, color:T.midBlue, fontWeight:700 }}>TOTALS</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.midBlue, fontWeight:700 }}>£{total.toLocaleString()}</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.green, fontWeight:600 }}>£{rows.reduce((s,b)=>s+parseMoney(b.deposit),0).toLocaleString()}</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.green, fontWeight:600 }}>£{rows.reduce((s,b)=>s+parseMoney(b.payment2),0).toLocaleString()}</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.green, fontWeight:600 }}>£{rows.reduce((s,b)=>s+parseMoney(b.finalPayment),0).toLocaleString()}</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.amber, fontWeight:700 }}>£{(total-collected).toLocaleString()}</td>
+          </tr></tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AccommodationReport({ bookings }) {
+  const rows=bookings.filter(b=>b.couple&&b.date);
+  const amlyRows=rows.filter(b=>b.amlyBooked);
+  const hamletRows=rows.filter(b=>b.hamletBooked);
+  const campingRows=rows.filter(b=>b.campingBooked);
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
+        <StatCard label="Amly Booked"    value={amlyRows.length}    sub={`£${amlyRows.reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()} confirmed`}/>
+        <StatCard label="Hamlet Booked"  value={hamletRows.length}  sub={`£${hamletRows.reduce((s,b)=>s+parseMoney(b.hamletFee),0).toLocaleString()} confirmed`}/>
+        <StatCard label="Camping Booked" value={campingRows.length} sub={`£${campingRows.reduce((s,b)=>s+parseMoney(b.campingFee),0).toLocaleString()} confirmed`}/>
+      </div>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Amly","Amly Fee","Hamlet","Hamlet Fee","Camping","Camping Fee"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((b,i)=>(
+              <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
+                <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, fontWeight:500 }}>{b.date}</td>
+                <td style={{ padding:"10px 12px", fontSize:13, fontWeight:500 }}>{b.couple}</td>
+                {[["amlyBooked","amlyFee"],["hamletBooked","hamletFee"],["campingBooked","campingFee"]].map(([bk,fk])=>[
+                  <td key={bk} style={{ padding:"10px 12px" }}><span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:b[bk]?T.greenBg:T.redBg, color:b[bk]?T.green:T.red, fontWeight:700 }}>{b[bk]?"Yes":"No"}</span></td>,
+                  <td key={fk} style={{ padding:"10px 12px", fontSize:13, color:parseMoney(b[fk])>0?T.text:T.textLight }}>{parseMoney(b[fk])>0?`£${parseMoney(b[fk]).toLocaleString()}`:"—"}</td>
+                ])}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function StaffingRota({ bookings, staff }) {
+  const today=new Date().toISOString().slice(0,10);
+  const rows=bookings.filter(b=>b.couple&&b.date&&b.date>=today).sort((a,b)=>a.date>b.date?1:-1);
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Set-Up","Day Manager","Bar Sup","Day Staff","Bar","Day Handy","Eve Handy"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((b,i)=>(
+              <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
+                <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</td>
+                <td style={{ padding:"10px 12px", fontSize:13, fontWeight:500, maxWidth:130 }}>{b.couple.split("&")[0].trim()}</td>
+                {["setup","dayManager","barSupervisor","dayStaff","bar","dayHandy","eveHandy"].map(field=>(
+                  <td key={field} style={{ padding:"10px 12px" }}>
+                    {(b[field]||[]).length===0?<span style={{ color:T.textLight,fontSize:11 }}>—</span>:(b[field]||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function PipelineReport({ bookings }) {
+  const today=new Date().toISOString().slice(0,10);
+  const rows=bookings.filter(b=>b.couple&&b.date>=today&&parseMoney(b.venueFee)>0);
+  return (
+    <div>
+      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings with outstanding payments</p>
+      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+        {rows.map(b=>{
+          const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),p2=parseMoney(b.payment2),fp=parseMoney(b.finalPayment),collected=dep+p2+fp,pct=fee>0?Math.round((collected/fee)*100):0;
+          return (
+            <div key={b.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+                <div><div style={{ fontWeight:600, color:T.text }}>{b.couple}</div><div style={{ fontSize:12, color:T.textLight }}>{b.date}</div></div>
+                <div style={{ textAlign:"right" }}><div style={{ fontSize:18, color:T.midBlue, fontWeight:700 }}>£{fee.toLocaleString()}</div><div style={{ fontSize:11, color:T.textLight }}>£{collected.toLocaleString()} received</div></div>
+              </div>
+              <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}><div style={{ background:pct>=100?T.green:T.accentMid, height:"100%", width:`${Math.min(100,pct)}%`, borderRadius:4 }}/></div>
+              <div style={{ display:"flex", justifyContent:"space-between", marginTop:6, fontSize:11, color:T.textLight }}>
+                <span>Dep: {dep>0?`£${dep.toLocaleString()}`:"—"} | 2nd: {p2>0?`£${p2.toLocaleString()}`:"—"} | Final: {fp>0?`£${fp.toLocaleString()}`:"—"}</span>
+                <span style={{ color:pct>=100?T.green:T.accent, fontWeight:700 }}>{pct}% collected</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StaffWorkloadReport({ bookings, staff }) {
+  const today=new Date().toISOString().slice(0,10);
+  const upcoming=bookings.filter(b=>b.date>=today);
+  const workload=staff.filter(s=>s.active).map(s=>{
+    const assigned=upcoming.filter(b=>["setup",...STAFFING_FIELDS].some(f=>(b[f]||[]).includes(s.id)));
+    const roles={};
+    upcoming.forEach(b=>["setup",...STAFFING_FIELDS].forEach(f=>{ if((b[f]||[]).includes(s.id)) roles[f]=(roles[f]||0)+1; }));
+    return {...s, count:assigned.length, roles};
+  }).sort((a,b)=>b.count-a.count);
+  const max=Math.max(1,...workload.map(w=>w.count));
+  return (
+    <div>
+      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings per active staff member</p>
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {workload.map(w=>(
+          <div key={w.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
+              <StaffChip initials={w.id} staff={staff} size="lg"/>
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                  <span style={{ fontWeight:700, color:T.text }}>{w.name}</span>
+                  <span style={{ fontSize:11, color:T.textLight }}>{w.role}</span>
+                  <span style={{ marginLeft:"auto", fontSize:13, color:T.midBlue, fontWeight:700 }}>{w.count} upcoming</span>
+                </div>
+                <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}>
+                  <div style={{ background:w.count>5?T.red:w.count>2?T.amber:T.green, height:"100%", width:`${(w.count/max)*100}%`, minWidth:w.count>0?4:0, borderRadius:4 }}/>
+                </div>
+              </div>
+            </div>
+            {w.count>0&&(
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {Object.entries(w.roles).map(([role,cnt])=>(
+                  <span key={role} style={{ fontSize:11, background:T.accentLight, border:`1px solid ${T.border}`, borderRadius:4, padding:"2px 8px", color:T.accent, fontWeight:600 }}>{role==="setup"?"Set-Up":STAFFING_LABELS[role]}: {cnt}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── HOURS SECTION (in booking form) ─────────────────────────────────────────
+function HoursSection({ formData, update, staff }) {
+  const hw = formData.hoursWorked || {};
+  const updateHours = (id, val) => {
+    const updated = { ...hw };
+    if (val === "" || val === "0") delete updated[id];
+    else updated[id] = parseFloat(val) || 0;
+    update("hoursWorked", updated);
+  };
+
+  // Which staff are already assigned to this booking
+  const assignedIds = new Set([
+    ...(formData.setup||[]),
+    ...(formData.dayManager||[]),
+    ...(formData.dayStaff||[]),
+    ...(formData.barSupervisor||[]),
+    ...(formData.sunday||[]),
+    ...(formData.bar||[]),
+    ...(formData.dayHandy||[]),
+    ...(formData.eveHandy||[]),
+  ]);
+
+  const assignedStaff = staff.filter(s => assignedIds.has(s.id));
+  const otherStaff    = staff.filter(s => s.active && !assignedIds.has(s.id));
+
+  const totalHours = Object.values(hw).reduce((a,b)=>a+b,0);
+
+  return (
+    <div>
+      <p style={{ margin:"0 0 16px", fontSize:13, color:T.textMid }}>
+        Enter actual hours worked by each staff member at this event.
+      </p>
+
+      {assignedStaff.length > 0 && (
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>Assigned Staff</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
+            {assignedStaff.map(s => (
+              <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} highlighted />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {otherStaff.length > 0 && (
+        <div>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:700, marginBottom:10 }}>Other Staff</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
+            {otherStaff.map(s => (
+              <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {totalHours > 0 && (
+        <div style={{ marginTop:20, padding:"12px 16px", background:T.accentLight, borderRadius:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:13, color:T.midBlue, fontWeight:600 }}>Total hours this event</span>
+          <span style={{ fontSize:20, color:T.midBlue, fontWeight:700 }}>{totalHours.toLocaleString()}h</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HoursRow({ s, hw, updateHours, highlighted }) {
+  const [f, setF] = useState(false);
+  const val = hw[s.id] || "";
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background: highlighted ? T.accentLight : T.bgInput, border:`1.5px solid ${f ? T.borderFocus : highlighted && val ? T.accentMid : T.border}`, borderRadius:8, transition:"all .15s" }}>
+      <StaffChip initials={s.id} staff={[s]} />
+      <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500 }}>{s.name}</span>
+      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+        <input
+          type="number"
+          min="0"
+          step="0.5"
+          value={val}
+          onChange={e => updateHours(s.id, e.target.value)}
+          onFocus={() => setF(true)}
+          onBlur={() => setF(false)}
+          placeholder="0"
+          style={{ width:70, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 8px", outline:"none", textAlign:"center", boxShadow:f?"0 0 0 3px #dbeafe":"none" }}
+        />
+        <span style={{ fontSize:12, color:T.textLight }}>hrs</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── HOURS WORKED REPORT ──────────────────────────────────────────────────────
+function HoursReport({ bookings, staff }) {
+  const today = new Date().toISOString().slice(0,10);
+  const threeMonthsAgo = new Date(Date.now() - 90*24*60*60*1000).toISOString().slice(0,10);
+
+  const [from, setFrom] = useState(threeMonthsAgo);
+  const [to,   setTo]   = useState(today);
+
+  const filtered = bookings.filter(b => b.date >= from && b.date <= to && b.hoursWorked && Object.keys(b.hoursWorked).length > 0);
+
+  // Aggregate hours per staff member
+  const totals = {};
+  filtered.forEach(b => {
+    Object.entries(b.hoursWorked||{}).forEach(([id, hrs]) => {
+      totals[id] = (totals[id] || 0) + hrs;
+    });
+  });
+
+  // Per-staff breakdown by month
+  const monthlyBreakdown = {}; // { staffId: { 'YYYY-MM': hours } }
+  filtered.forEach(b => {
+    const month = b.date.slice(0,7);
+    Object.entries(b.hoursWorked||{}).forEach(([id, hrs]) => {
+      if (!monthlyBreakdown[id]) monthlyBreakdown[id] = {};
+      monthlyBreakdown[id][month] = (monthlyBreakdown[id][month] || 0) + hrs;
+    });
+  });
+
+  // All months in range
+  const allMonths = [...new Set(filtered.map(b => b.date.slice(0,7)))].sort();
+
+  const sortedStaff = staff.filter(s => totals[s.id] > 0).sort((a,b) => (totals[b.id]||0) - (totals[a.id]||0));
+  const unknownIds = Object.keys(totals).filter(id => !staff.find(s=>s.id===id));
+  const grandTotal = Object.values(totals).reduce((a,b)=>a+b,0);
+
+  // Per-event detail for each staff member
+  const [expandedStaff, setExpandedStaff] = useState(null);
+  const eventsForStaff = (id) => filtered.filter(b => (b.hoursWorked||{})[id] > 0).sort((a,b)=>a.date>b.date?1:-1);
+
+  const monthLabel = m => new Date(m+"-01").toLocaleDateString("en-GB",{month:"short",year:"numeric"});
+
+  return (
+    <div>
+      {/* Date range controls */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <span style={{ fontSize:13, color:T.textMid, fontWeight:600 }}>Date range:</span>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <label style={{ fontSize:12, color:T.textLight }}>From</label>
+          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 10px", outline:"none" }}/>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <label style={{ fontSize:12, color:T.textLight }}>To</label>
+          <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 10px", outline:"none" }}/>
+        </div>
+        {/* Quick range buttons */}
+        {[
+          {label:"This month",  fn:()=>{ const n=new Date(); const m=n.toISOString().slice(0,7); setFrom(m+"-01"); setTo(n.toISOString().slice(0,10)); }},
+          {label:"Last month",  fn:()=>{ const d=new Date(); d.setMonth(d.getMonth()-1); const m=d.toISOString().slice(0,7); setFrom(m+"-01"); const last=new Date(d.getFullYear(),d.getMonth()+1,0); setTo(last.toISOString().slice(0,10)); }},
+          {label:"Last 3 months",fn:()=>{ const n=new Date(); setTo(n.toISOString().slice(0,10)); const f=new Date(n); f.setMonth(f.getMonth()-3); setFrom(f.toISOString().slice(0,10)); }},
+          {label:"This year",   fn:()=>{ const y=new Date().getFullYear(); setFrom(y+"-01-01"); setTo(y+"-12-31"); }},
+        ].map(({label,fn})=>(
+          <button key={label} onClick={fn} style={{ background:T.midBlueBg, border:"none", color:T.midBlue, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>{label}</button>
+        ))}
+        <span style={{ marginLeft:"auto", fontSize:13, color:T.textLight }}>{filtered.length} event{filtered.length!==1?"s":""} with hours logged</span>
+      </div>
+
+      {grandTotal === 0 ? (
+        <div style={{ textAlign:"center", padding:60, color:T.textLight }}>
+          <p style={{ fontSize:16 }}>No hours logged in this period.</p>
+          <p style={{ fontSize:13 }}>Add hours to bookings using the Hours Worked section in each booking form.</p>
+        </div>
+      ) : (
+        <>
+          {/* Summary stat cards */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:24 }}>
+            <StatCard label="Total Hours" value={`${grandTotal.toLocaleString()}h`} sub={`Across ${filtered.length} events`}/>
+            <StatCard label="Staff Worked" value={sortedStaff.length} sub="Unique staff members"/>
+            <StatCard label="Avg per Event" value={filtered.length>0?`${(grandTotal/filtered.length).toFixed(1)}h`:"—"} sub="Average total hours"/>
+          </div>
+
+          {/* Monthly breakdown table (if multiple months) */}
+          {allMonths.length > 1 && (
+            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:22, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div style={{ padding:"14px 20px", borderBottom:`1px solid ${T.border}`, background:"#eef4fd" }}>
+                <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>Monthly Summary</span>
+              </div>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead>
+                    <tr style={{ background:"#f5f9ff" }}>
+                      <th style={{ padding:"10px 16px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>Staff Member</th>
+                      {allMonths.map(m=><th key={m} style={{ padding:"10px 12px", textAlign:"center", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{monthLabel(m)}</th>)}
+                      <th style={{ padding:"10px 12px", textAlign:"center", color:T.midBlue, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedStaff.map((s,i)=>(
+                      <tr key={s.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}
+                        onMouseEnter={e=>e.currentTarget.style.background="#f5f9ff"}
+                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                        <td style={{ padding:"10px 16px" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <StaffChip initials={s.id} staff={[s]}/>
+                            <span style={{ fontSize:13, fontWeight:500, color:T.text }}>{s.name}</span>
+                          </div>
+                        </td>
+                        {allMonths.map(m=>{
+                          const hrs = (monthlyBreakdown[s.id]||{})[m]||0;
+                          return <td key={m} style={{ padding:"10px 12px", textAlign:"center", fontSize:13, color:hrs>0?T.text:T.textLight, fontWeight:hrs>0?500:400 }}>{hrs>0?`${hrs}h`:"—"}</td>;
+                        })}
+                        <td style={{ padding:"10px 12px", textAlign:"center", fontSize:14, color:T.midBlue, fontWeight:700 }}>{totals[s.id]}h</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ borderTop:`2px solid ${T.border}`, background:"#eef4fd" }}>
+                      <td style={{ padding:"10px 16px", fontSize:13, fontWeight:700, color:T.midBlue }}>Month total</td>
+                      {allMonths.map(m=>{
+                        const mTotal = Object.values(monthlyBreakdown).reduce((sum, byMonth)=>sum+(byMonth[m]||0),0);
+                        return <td key={m} style={{ padding:"10px 12px", textAlign:"center", fontSize:13, fontWeight:700, color:T.midBlue }}>{mTotal>0?`${mTotal}h`:"—"}</td>;
+                      })}
+                      <td style={{ padding:"10px 12px", textAlign:"center", fontSize:14, fontWeight:700, color:T.midBlue }}>{grandTotal}h</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Per-staff cards with expand to see events */}
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {sortedStaff.map(s=>{
+              const isExpanded = expandedStaff === s.id;
+              const events = eventsForStaff(s.id);
+              const total = totals[s.id] || 0;
+              const maxHrs = Math.max(...sortedStaff.map(x=>totals[x.id]||0));
+              const rate = parseFloat((s.rate||"").replace(/[^0-9.]/g,"")) || 0;
+              const estPay = rate > 0 ? (total * rate).toFixed(2) : null;
+
+              return (
+                <div key={s.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+                  <div style={{ padding:"14px 20px", display:"flex", alignItems:"center", gap:12, cursor:"pointer" }} onClick={()=>setExpandedStaff(isExpanded?null:s.id)}>
+                    <StaffChip initials={s.id} staff={[s]} size="lg"/>
+                    <div style={{ flex:1 }}>
+                      <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:5 }}>
+                        <span style={{ fontWeight:700, color:T.text, fontSize:15 }}>{s.name}</span>
+                        <span style={{ fontSize:11, color:T.textLight }}>{s.role}</span>
+                        {s.rate && <span style={{ fontSize:11, color:T.accent, marginLeft:"auto" }}>{s.rate}</span>}
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                        <div style={{ flex:1, background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}>
+                          <div style={{ background:T.midBlue, height:"100%", width:`${(total/maxHrs)*100}%`, borderRadius:4 }}/>
+                        </div>
+                        <span style={{ fontSize:16, fontWeight:700, color:T.midBlue, width:60, textAlign:"right" }}>{total}h</span>
+                        {estPay && <span style={{ fontSize:12, color:T.green, fontWeight:600, width:80, textAlign:"right" }}>~£{estPay}</span>}
+                        <span style={{ fontSize:11, color:T.textLight, width:70, textAlign:"right" }}>{events.length} event{events.length!==1?"s":""}</span>
+                      </div>
+                    </div>
+                    <span style={{ fontSize:16, color:T.textLight, marginLeft:8 }}>{isExpanded?"▲":"▼"}</span>
+                  </div>
+                  {isExpanded && (
+                    <div style={{ borderTop:`1px solid ${T.border}`, background:T.bg }}>
+                      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                        <thead>
+                          <tr style={{ background:"#eef4fd" }}>
+                            {["Date","Event","Hours","Est. Pay"].map(h=><th key={h} style={{ padding:"8px 16px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {events.map((b,i)=>{
+                            const hrs = (b.hoursWorked||{})[s.id]||0;
+                            const ep = rate>0?(hrs*rate).toFixed(2):null;
+                            return (
+                              <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
+                                <td style={{ padding:"8px 16px", fontSize:12, color:T.accent, fontWeight:500 }}>{new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</td>
+                                <td style={{ padding:"8px 16px", fontSize:13 }}>{b.couple}</td>
+                                <td style={{ padding:"8px 16px", fontSize:13, fontWeight:700, color:T.midBlue }}>{hrs}h</td>
+                                <td style={{ padding:"8px 16px", fontSize:13, color:T.green, fontWeight:500 }}>{ep?`£${ep}`:"—"}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ borderTop:`1.5px solid ${T.border}`, background:"#eef4fd" }}>
+                            <td colSpan={2} style={{ padding:"8px 16px", fontSize:12, fontWeight:700, color:T.midBlue }}>Total</td>
+                            <td style={{ padding:"8px 16px", fontSize:14, fontWeight:700, color:T.midBlue }}>{total}h</td>
+                            <td style={{ padding:"8px 16px", fontSize:13, fontWeight:700, color:T.green }}>{estPay?`£${estPay}`:"—"}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
