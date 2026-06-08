@@ -266,6 +266,7 @@ export default function App() {
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff}/>}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
+        {view==="bar"     && <BarView/>}
         {view==="reports" && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType}/>}
       </div>
     </div>
@@ -274,7 +275,7 @@ export default function App() {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 function Header({ view, setView, onNew }) {
-  const tabs = [{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"reports",label:"Reports"}];
+  const tabs = [{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -1122,6 +1123,592 @@ function HoursReport({ bookings, staff }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BAR MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const BAR_PRODUCTS_KEY  = "hbf_bar_products_v1";
+const BAR_EVENTS_KEY    = "hbf_bar_events_v1";   // orders + stocktakes
+
+const INITIAL_PRODUCTS = [
+  // Wine
+  { id:"p1",  name:"Sauvignon, Les Fleurs de Montblanc", category:"Wine",      supplier:"Flint",           multiple:3.33, costUnit:7.65  },
+  { id:"p2",  name:"Chardonnay, Château Pesquié",        category:"Wine",      supplier:"Flint",           multiple:3.56, costUnit:8.00  },
+  { id:"p3",  name:"Atance Blanco, Atance",              category:"Wine",      supplier:"Flint",           multiple:3.61, costUnit:7.90  },
+  { id:"p4",  name:"Grace Bridge Pinot Noir",            category:"Wine",      supplier:"Flint",           multiple:3.17, costUnit:9.00  },
+  { id:"p5",  name:"Triennes Rosé, Triennes",            category:"Wine",      supplier:"Flint",           multiple:3.83, costUnit:9.00  },
+  { id:"p6",  name:"Lampo Prosecco",                     category:"Wine",      supplier:"Flint",           multiple:6.00, costUnit:8.55  },
+  // Beer
+  { id:"p7",  name:"Numb Angel Lager 4%",                category:"Beer",      supplier:"Gun",             multiple:3.84, costUnit:83.94 },
+  { id:"p8",  name:"Project Babylon APA 4.6%",           category:"Beer",      supplier:"Gun",             multiple:4.03, costUnit:83.94 },
+  { id:"p9",  name:"Limbertwig Cider 4.6%",              category:"Beer",      supplier:"Gun",             multiple:3.84, costUnit:83.94 },
+  { id:"p10", name:"Cans (Stout, IPA, No Alc)",          category:"Beer",      supplier:"Gun",             multiple:5.00, costUnit:null  },
+  { id:"p11", name:"Peroni 0%",                          category:"Beer",      supplier:"LWC",             multiple:4.80, costUnit:1.04  },
+  // Cocktails
+  { id:"p12", name:"Margarita",                          category:"Cocktails", supplier:"LWC",             multiple:2.26, costUnit:2.484 },
+  { id:"p13", name:"Espresso Martini",                   category:"Cocktails", supplier:"LWC",             multiple:5.27, costUnit:2.484 },
+  { id:"p14", name:"Paloma",                             category:"Cocktails", supplier:"LWC",             multiple:5.27, costUnit:2.484 },
+  { id:"p15", name:"Cosmopolitan",                       category:"Cocktails", supplier:"LWC",             multiple:5.27, costUnit:2.484 },
+  { id:"p16", name:"Aperol Spritz",                      category:"Cocktails", supplier:"LWC",             multiple:6.05, costUnit:11.90 },
+  { id:"p17", name:"Pimms No.1 Cup",                     category:"Cocktails", supplier:"LWC",             multiple:4.38, costUnit:14.61 },
+  // Spirits
+  { id:"p18", name:"Mousehall Gin",                      category:"Spirits",   supplier:"Mousehall",       multiple:3.45, costUnit:27.88 },
+  { id:"p19", name:"Mousehall Vodka",                    category:"Spirits",   supplier:"Mousehall",       multiple:3.45, costUnit:27.88 },
+  { id:"p20", name:"Nikka Coffee Whisky",                category:"Spirits",   supplier:"Whisky Exchange", multiple:2.87, costUnit:47.48 },
+  { id:"p21", name:"Bombay Sapphire Gin",                category:"Spirits",   supplier:"LWC",             multiple:5.23, costUnit:18.36 },
+  { id:"p22", name:"Smirnoff Vodka",                     category:"Spirits",   supplier:"LWC",             multiple:6.83, costUnit:13.46 },
+  { id:"p23", name:"Bacardi Rum",                        category:"Spirits",   supplier:"LWC",             multiple:5.49, costUnit:17.49 },
+  { id:"p24", name:"Captain Morgan Spiced",              category:"Spirits",   supplier:"LWC",             multiple:6.90, costUnit:13.93 },
+  { id:"p25", name:"Tequila Buen Amigo Silver",          category:"Spirits",   supplier:"LWC",             multiple:6.16, costUnit:15.59 },
+  { id:"p26", name:"Jack Daniels",                       category:"Spirits",   supplier:"LWC",             multiple:5.14, costUnit:18.69 },
+  { id:"p27", name:"Jamesons",                           category:"Spirits",   supplier:"LWC",             multiple:4.84, costUnit:21.50 },
+  { id:"p28", name:"Disaronno",                          category:"Spirits",   supplier:"LWC",             multiple:5.26, costUnit:18.27 },
+  { id:"p29", name:"Baileys Irish Cream",                category:"Spirits",   supplier:"LWC",             multiple:7.79, costUnit:12.34 },
+  { id:"p30", name:"Jagermeister",                       category:"Spirits",   supplier:"LWC",             multiple:5.75, costUnit:16.71 },
+  { id:"p31", name:"Kahlua",                             category:"Spirits",   supplier:"LWC",             multiple:7.42, costUnit:12.94 },
+  { id:"p32", name:"Sambuca",                            category:"Spirits",   supplier:"LWC",             multiple:6.23, costUnit:15.43 },
+  // Softs
+  { id:"p33", name:"Redbull",                            category:"Softs",     supplier:"LWC",             multiple:3.03, costUnit:1.088 },
+  { id:"p34", name:"Diet Coke",                          category:"Softs",     supplier:"LWC",             multiple:4.67, costUnit:0.535 },
+  { id:"p35", name:"Coke",                               category:"Softs",     supplier:"LWC",             multiple:3.77, costUnit:0.664 },
+  { id:"p36", name:"Folkington Tonic",                   category:"Softs",     supplier:"LWC",             multiple:5.92, costUnit:0.464 },
+  { id:"p37", name:"Folkington Tonic Light",             category:"Softs",     supplier:"LWC",             multiple:5.92, costUnit:0.464 },
+  { id:"p38", name:"Frobishers Orange Juice",            category:"Softs",     supplier:"LWC",             multiple:2.95, costUnit:1.118 },
+  { id:"p39", name:"South Downs Sparkling",              category:"Softs",     supplier:"LWC",             multiple:6.40, costUnit:0.391 },
+  { id:"p40", name:"Karma Lemony Lemonade",              category:"Softs",     supplier:"LWC",             multiple:2.90, costUnit:1.036 },
+  { id:"p41", name:"Ginger Ale",                         category:"Softs",     supplier:"LWC",             multiple:4.85, costUnit:0.619 },
+];
+
+const INITIAL_BAR_EVENTS = [
+  {
+    id:"ev_import_6", type:"stocktake", date:"2026-05-01", label:"Stocktake 1 May",
+    lines:{"p1":0,"p2":0,"p3":0,"p4":0,"p5":0,"p6":0,"p11":0,"p12":0,"p13":0,"p15":0,"p21":0,"p22":0,"p23":0,"p24":0,"p25":0,"p26":0,"p27":0,"p28":0,"p29":0,"p30":0,"p31":0,"p32":0,"p16":0,"p17":0,"p33":0,"p34":0,"p35":0,"p36":0,"p37":0,"p38":0,"p39":0,"p40":0,"p41":0}
+  },
+  {
+    id:"ev_import_7", type:"order", date:"2026-05-15", label:"Order 15 May",
+    lines:{"p1":24,"p2":24,"p3":24,"p4":12,"p5":12,"p6":24,"p11":24,"p12":24,"p13":24,"p15":24,"p21":4,"p22":4,"p24":4,"p25":4,"p26":4,"p27":4,"p28":4,"p29":4,"p30":4,"p31":4,"p32":4,"p16":4,"p17":4,"p33":24,"p34":24,"p35":24,"p36":24,"p37":24,"p38":24,"p39":24,"p40":24,"p41":24}
+  },
+  {
+    id:"ev_import_8", type:"stocktake", date:"2026-06-01", label:"Stocktake 1 June",
+    lines:{"p1":12,"p2":23,"p3":15,"p4":1,"p5":4,"p6":17,"p11":19,"p12":3,"p15":16,"p21":3,"p22":3,"p23":1,"p24":1,"p25":7,"p26":3,"p27":4,"p28":2,"p29":2,"p30":2,"p31":1,"p32":3,"p16":9,"p17":3,"p33":18,"p34":2,"p35":16,"p36":20,"p37":23,"p38":3,"p39":12,"p40":16,"p41":12}
+  },
+  {
+    id:"ev_import_9", type:"order", date:"2026-06-02", label:"Order 2 June",
+    lines:{"p1":12,"p3":12,"p4":12,"p5":12,"p6":6,"p11":24,"p12":24,"p13":24,"p15":12,"p21":1,"p22":1,"p23":3,"p24":3,"p28":1,"p29":1,"p30":1,"p31":1,"p17":2,"p34":24,"p35":24,"p36":12,"p38":24,"p39":24,"p41":12}
+  },
+];
+
+const BAR_CATEGORIES = ["Wine","Beer","Cocktails","Spirits","Softs"];
+
+const CAT_COLOURS = {
+  Wine:      { bg:"#fce7f3", text:"#9d174d", border:"#f9a8d4" },
+  Beer:      { bg:"#fef3c7", text:"#92400e", border:"#fcd34d" },
+  Cocktails: { bg:"#f3e8ff", text:"#6b21a8", border:"#d8b4fe" },
+  Spirits:   { bg:"#e0f2fe", text:"#075985", border:"#7dd3fc" },
+  Softs:     { bg:"#dcfce7", text:"#166534", border:"#86efac" },
+};
+
+function CatBadge({ cat }) {
+  const c = CAT_COLOURS[cat] || { bg:T.accentLight, text:T.accent, border:T.border };
+  return <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:c.bg, color:c.text, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>{cat}</span>;
+}
+
+function fmt2(n) { return n == null ? "—" : `£${Number(n).toFixed(2)}`; }
+function fmtN(n) { return n == null || n === "" ? "—" : Number(n).toLocaleString(); }
+
+// ─── currentStock: derive from events ────────────────────────────────────────
+function computeStock(products, events) {
+  // returns { productId: qty }
+  const stock = {};
+  products.forEach(p => { stock[p.id] = 0; });
+  const sorted = [...events].sort((a,b) => a.date > b.date ? 1 : -1);
+  sorted.forEach(ev => {
+    Object.entries(ev.lines || {}).forEach(([pid, qty]) => {
+      if (ev.type === "order") stock[pid] = (stock[pid] || 0) + Number(qty || 0);
+      if (ev.type === "stocktake") stock[pid] = Number(qty || 0); // absolute
+    });
+  });
+  return stock;
+}
+
+// ─── BarView ──────────────────────────────────────────────────────────────────
+function BarView() {
+  const [products, setProducts] = useState([]);
+  const [events, setEvents]     = useState([]);
+  const [loaded, setLoaded]     = useState(false);
+  const [barView, setBarView]   = useState("stock"); // stock | order | stocktake | report | products
+  const [editProduct, setEditProduct] = useState(null);
+  const [productForm, setProductForm] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try { const r = await window.storage.get(BAR_PRODUCTS_KEY); setProducts(r?.value ? JSON.parse(r.value) : INITIAL_PRODUCTS); } catch { setProducts(INITIAL_PRODUCTS); }
+      try { const r = await window.storage.get(BAR_EVENTS_KEY);   setEvents(r?.value ? JSON.parse(r.value) : INITIAL_BAR_EVENTS); }   catch { setEvents(INITIAL_BAR_EVENTS); }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const saveProducts = async p => { setProducts(p); try { await window.storage.set(BAR_PRODUCTS_KEY, JSON.stringify(p)); } catch(e) { console.error(e); } };
+  const saveEvents   = async e => { setEvents(e);   try { await window.storage.set(BAR_EVENTS_KEY,   JSON.stringify(e)); } catch(e) { console.error(e); } };
+
+  const stock = computeStock(products, events);
+
+  if (!loaded) return <div style={{ padding:40, color:T.textLight }}>Loading bar data…</div>;
+
+  const subTabs = [
+    { id:"stock",      label:"Current Stock" },
+    { id:"order",      label:"+ New Order" },
+    { id:"stocktake",  label:"+ New Stocktake" },
+    { id:"report",     label:"Usage Report" },
+    { id:"products",   label:"Products" },
+  ];
+
+  return (
+    <div style={{ paddingTop:28 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:22 }}>
+        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Bar Management</h2>
+      </div>
+
+      {/* Sub-navigation */}
+      <div style={{ display:"flex", gap:6, marginBottom:24, flexWrap:"wrap" }}>
+        {subTabs.map(t => (
+          <button key={t.id} onClick={() => setBarView(t.id)} style={{ background: barView===t.id ? T.midBlue : "#fff", color: barView===t.id ? "#fff" : T.textMid, border:`1.5px solid ${barView===t.id ? T.midBlue : T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:barView===t.id?700:400 }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {barView === "stock"     && <StockView products={products} stock={stock} events={events}/>}
+      {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} onSave={async ev => { await saveEvents([...events, ev]); setBarView("stock"); }}/>}
+      {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} onSave={async ev => { await saveEvents([...events, ev]); setBarView("stock"); }}/>}
+      {barView === "report"    && <BarReportView  products={products} events={events}/>}
+      {barView === "products"  && <ProductsView   products={products} onSave={saveProducts}/>}
+    </div>
+  );
+}
+
+// ─── Current Stock ────────────────────────────────────────────────────────────
+function StockView({ products, stock, events }) {
+  const lastStocktake = [...events].filter(e=>e.type==="stocktake").sort((a,b)=>b.date>a.date?1:-1)[0];
+  const lastOrder     = [...events].filter(e=>e.type==="order").sort((a,b)=>b.date>a.date?1:-1)[0];
+
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:24 }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Last Stocktake</div>
+          <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{lastStocktake ? lastStocktake.date : "None yet"}</div>
+          {lastStocktake && <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>{lastStocktake.label || ""}</div>}
+        </div>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Last Order</div>
+          <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{lastOrder ? lastOrder.date : "None yet"}</div>
+          {lastOrder && <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>{lastOrder.label || ""}</div>}
+        </div>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Stock Value (Cost)</div>
+          <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>
+            {fmt2(products.reduce((s,p) => s + (stock[p.id]||0) * (p.costUnit||0), 0))}
+          </div>
+        </div>
+      </div>
+
+      {BAR_CATEGORIES.map(cat => {
+        const prods = products.filter(p => p.category === cat);
+        if (!prods.length) return null;
+        const cc = CAT_COLOURS[cat];
+        return (
+          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:16, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ padding:"12px 20px", background:cc.bg, borderBottom:`1px solid ${cc.border}`, display:"flex", alignItems:"center", gap:10 }}>
+              <CatBadge cat={cat}/>
+              <span style={{ fontSize:12, color:cc.text, fontWeight:500 }}>{prods.length} products</span>
+              <span style={{ marginLeft:"auto", fontSize:12, color:cc.text, fontWeight:600 }}>
+                Stock value: {fmt2(prods.reduce((s,p) => s + (stock[p.id]||0) * (p.costUnit||0), 0))}
+              </span>
+            </div>
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead>
+                <tr style={{ background:"#f5f9ff" }}>
+                  {["Product","Supplier","Buy Price","Multiple","Est. Sale Price","Current Stock","Stock Value"].map(h => (
+                    <th key={h} style={{ padding:"8px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {prods.map((p,i) => {
+                  const qty = stock[p.id] || 0;
+                  const stockVal = p.costUnit ? qty * p.costUnit : null;
+                  const salePrice = p.costUnit ? p.costUnit * p.multiple : null;
+                  const low = qty <= 2;
+                  return (
+                    <tr key={p.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", background:low&&qty===0?"#fff5f5":low?"#fffbeb":"transparent" }}>
+                      <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600, color:T.text }}>{p.name}</td>
+                      <td style={{ padding:"10px 14px", fontSize:12, color:T.textLight }}>{p.supplier}</td>
+                      <td style={{ padding:"10px 14px", fontSize:13 }}>{fmt2(p.costUnit)}</td>
+                      <td style={{ padding:"10px 14px", fontSize:13, color:T.textMid }}>{p.multiple}x</td>
+                      <td style={{ padding:"10px 14px", fontSize:13, color:T.green, fontWeight:500 }}>{fmt2(salePrice)}</td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:14, fontWeight:700, color:qty===0?T.red:qty<=3?T.amber:T.text }}>{qty}</span>
+                        {qty===0 && <span style={{ fontSize:10, color:T.red, marginLeft:6, fontWeight:600 }}>OUT</span>}
+                        {qty>0&&qty<=3 && <span style={{ fontSize:10, color:T.amber, marginLeft:6, fontWeight:600 }}>LOW</span>}
+                      </td>
+                      <td style={{ padding:"10px 14px", fontSize:13, color:T.textMid }}>{stockVal != null ? fmt2(stockVal) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Order / Stocktake Entry ──────────────────────────────────────────────────
+function EventEntryView({ type, products, stock, onSave }) {
+  const today = new Date().toISOString().slice(0,10);
+  const [date,  setDate]  = useState(today);
+  const [label, setLabel] = useState("");
+  const [lines, setLines] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  // For stocktake: pre-populate with current stock as a starting point
+  const initStocktake = () => {
+    const init = {};
+    products.forEach(p => { init[p.id] = stock[p.id] || 0; });
+    setLines(init);
+  };
+
+  useEffect(() => {
+    if (type === "stocktake") initStocktake();
+  }, []);
+
+  const setLine = (pid, val) => setLines(l => ({ ...l, [pid]: val === "" ? "" : Number(val) }));
+
+  const handleSave = async () => {
+    if (!date) { alert("Please set a date."); return; }
+    setSaving(true);
+    const ev = {
+      id:    `ev_${Date.now()}`,
+      type,
+      date,
+      label: label || (type === "order" ? "Order" : "Stocktake"),
+      lines: Object.fromEntries(Object.entries(lines).filter(([,v]) => v !== "" && v !== 0 && v != null)),
+    };
+    await onSave(ev);
+    setSaving(false);
+  };
+
+  const isOrder = type === "order";
+  const title   = isOrder ? "New Order" : "New Stocktake";
+  const hint    = isOrder
+    ? "Enter quantities ordered for each product. Leave blank or 0 to skip."
+    : "Enter actual counted stock for each product.";
+
+  const totalLines = Object.entries(lines).filter(([,v]) => v !== "" && Number(v) > 0).length;
+  const totalCost  = isOrder
+    ? products.reduce((s,p) => s + (Number(lines[p.id]||0)) * (p.costUnit||0), 0)
+    : null;
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:20, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:17 }}>{title}</h3>
+        <p style={{ margin:"0 0 16px", fontSize:13, color:T.textMid }}>{hint}</p>
+        <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"flex-end" }}>
+          <div>
+            <FLabel>Date</FLabel>
+            <FInput type="date" value={date} onChange={setDate}/>
+          </div>
+          <div style={{ flex:1, minWidth:200 }}>
+            <FLabel>Label (optional)</FLabel>
+            <FInput value={label} onChange={setLabel} placeholder={isOrder ? "e.g. Order before 14 June wedding" : "e.g. After 14 June wedding"}/>
+          </div>
+          {totalLines > 0 && (
+            <div style={{ background:T.accentLight, borderRadius:8, padding:"10px 16px", display:"flex", gap:20 }}>
+              <span style={{ fontSize:13, color:T.midBlue }}><strong>{totalLines}</strong> lines</span>
+              {totalCost > 0 && <span style={{ fontSize:13, color:T.midBlue }}>Est. cost: <strong>{fmt2(totalCost)}</strong></span>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Product lines by category */}
+      {BAR_CATEGORIES.map(cat => {
+        const prods = products.filter(p => p.category === cat);
+        if (!prods.length) return null;
+        const cc = CAT_COLOURS[cat];
+        return (
+          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ padding:"10px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}` }}>
+              <CatBadge cat={cat}/>
+            </div>
+            <div style={{ padding:"14px 18px", display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px,1fr))", gap:"10px 20px" }}>
+              {prods.map(p => {
+                const val = lines[p.id];
+                const curStock = stock[p.id] || 0;
+                const hasVal = val !== "" && val != null && Number(val) !== 0;
+                return (
+                  <div key={p.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:hasVal?T.accentLight:T.bgInput, border:`1.5px solid ${hasVal?T.accentMid:T.border}`, borderRadius:8, transition:"all .15s" }}>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.name}</div>
+                      <div style={{ fontSize:11, color:T.textLight }}>
+                        {isOrder ? `Buy: ${fmt2(p.costUnit)}` : `Current: ${curStock}`}
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                      {isOrder && (
+                        <button onClick={()=>setLine(p.id, Math.max(0,(Number(val)||0)-1))} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
+                      )}
+                      <input
+                        type="number" min="0" step={isOrder?1:0.5}
+                        value={val ?? (type==="stocktake" ? (stock[p.id]||0) : "")}
+                        onChange={e => setLine(p.id, e.target.value)}
+                        style={{ width:64, textAlign:"center", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
+                      />
+                      {isOrder && (
+                        <button onClick={()=>setLine(p.id, (Number(val)||0)+1)} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
+                      )}
+                      {isOrder && <span style={{ fontSize:11, color:T.textLight, width:28 }}>units</span>}
+                      {!isOrder && <span style={{ fontSize:11, color:T.textLight, width:28 }}>in stock</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ display:"flex", gap:12, marginTop:8, position:"sticky", bottom:20 }}>
+        <button onClick={handleSave} disabled={saving} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"13px 36px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>
+          {saving ? "Saving…" : isOrder ? "Save Order" : "Save Stocktake"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Bar Usage Report ─────────────────────────────────────────────────────────
+function BarReportView({ products, events }) {
+  const stocktakes = [...events].filter(e=>e.type==="stocktake").sort((a,b)=>a.date>b.date?1:-1);
+  const [fromIdx, setFromIdx] = useState(0);
+  const [toIdx,   setToIdx]   = useState(Math.min(1, stocktakes.length-1));
+
+  if (stocktakes.length < 2) {
+    return (
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:48, textAlign:"center", color:T.textLight, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ fontSize:32, marginBottom:12 }}>📦</div>
+        <p style={{ fontSize:16, fontWeight:600, color:T.textMid, marginBottom:8 }}>At least two stocktakes needed</p>
+        <p style={{ fontSize:13 }}>Record two stocktakes to see usage between them. Any orders placed between stocktakes will be accounted for automatically.</p>
+      </div>
+    );
+  }
+
+  const fromST = stocktakes[fromIdx];
+  const toST   = stocktakes[toIdx];
+
+  // Orders between the two stocktake dates (inclusive of from, exclusive of to)
+  const ordersInRange = events.filter(e =>
+    e.type === "order" && e.date >= fromST.date && e.date < toST.date
+  );
+
+  // Usage per product: opening + ordered - closing = used
+  const rows = products.map(p => {
+    const opening = Number(fromST.lines?.[p.id] || 0);
+    const ordered = ordersInRange.reduce((s,o) => s + Number(o.lines?.[p.id]||0), 0);
+    const closing = Number(toST.lines?.[p.id] || 0);
+    const used    = opening + ordered - closing;
+    const costVal = p.costUnit ? used * p.costUnit : null;
+    const saleVal = p.costUnit ? used * p.costUnit * p.multiple : null;
+    return { ...p, opening, ordered, closing, used, costVal, saleVal };
+  }).filter(r => r.used !== 0 || r.ordered > 0);
+
+  const totCost = rows.reduce((s,r) => s + (r.costVal||0), 0);
+  const totSale = rows.reduce((s,r) => s + (r.saleVal||0), 0);
+  const totUsed = rows.filter(r=>r.used>0).length;
+
+  return (
+    <div>
+      {/* Controls */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <h3 style={{ margin:"0 0 14px", color:T.midBlue, fontWeight:700, fontSize:16 }}>Compare Stocktakes</h3>
+        <div style={{ display:"flex", gap:24, flexWrap:"wrap", alignItems:"flex-end" }}>
+          <div>
+            <FLabel>From stocktake</FLabel>
+            <select value={fromIdx} onChange={e=>setFromIdx(Number(e.target.value))} style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 11px", outline:"none" }}>
+              {stocktakes.map((s,i) => <option key={s.id} value={i}>{s.date} — {s.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <FLabel>To stocktake</FLabel>
+            <select value={toIdx} onChange={e=>setToIdx(Number(e.target.value))} style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 11px", outline:"none" }}>
+              {stocktakes.map((s,i) => <option key={s.id} value={i}>{s.date} — {s.label}</option>)}
+            </select>
+          </div>
+          {ordersInRange.length > 0 && (
+            <div style={{ background:T.midBlueBg, borderRadius:8, padding:"8px 14px", fontSize:12, color:T.midBlue, fontWeight:600 }}>
+              {ordersInRange.length} order{ordersInRange.length!==1?"s":""} included between dates
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:22 }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Products Used</div>
+          <div style={{ fontSize:28, fontWeight:700, color:T.midBlue }}>{totUsed}</div>
+        </div>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Est. Cost of Stock Used</div>
+          <div style={{ fontSize:28, fontWeight:700, color:T.midBlue }}>{fmt2(totCost)}</div>
+        </div>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Est. Sale Value</div>
+          <div style={{ fontSize:28, fontWeight:700, color:T.green }}>{fmt2(totSale)}</div>
+          {totCost > 0 && <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>Implied margin: {Math.round((1-totCost/totSale)*100)}%</div>}
+        </div>
+      </div>
+
+      {/* Breakdown by category */}
+      {BAR_CATEGORIES.map(cat => {
+        const catRows = rows.filter(r => r.category === cat);
+        if (!catRows.length) return null;
+        const cc = CAT_COLOURS[cat];
+        const catCost = catRows.reduce((s,r)=>s+(r.costVal||0),0);
+        const catSale = catRows.reduce((s,r)=>s+(r.saleVal||0),0);
+        return (
+          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ padding:"12px 20px", background:cc.bg, borderBottom:`1px solid ${cc.border}`, display:"flex", alignItems:"center", gap:12 }}>
+              <CatBadge cat={cat}/>
+              <span style={{ marginLeft:"auto", fontSize:12, color:cc.text, fontWeight:600 }}>Cost: {fmt2(catCost)} · Est. sale: {fmt2(catSale)}</span>
+            </div>
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead>
+                <tr style={{ background:"#f5f9ff" }}>
+                  {["Product","Opening","Ordered","Closing","Used","Buy Price","Cost of Usage","Est. Sale Value"].map(h=>(
+                    <th key={h} style={{ padding:"8px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {catRows.map((r,i) => (
+                  <tr key={r.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", background:r.used<0?"#fff5f5":"transparent" }}>
+                    <td style={{ padding:"9px 12px", fontSize:13, fontWeight:600 }}>{r.name}</td>
+                    <td style={{ padding:"9px 12px", fontSize:13, color:T.textMid }}>{fmtN(r.opening)}</td>
+                    <td style={{ padding:"9px 12px", fontSize:13, color:r.ordered>0?T.green:T.textLight }}>{r.ordered>0?`+${r.ordered}`:"—"}</td>
+                    <td style={{ padding:"9px 12px", fontSize:13, color:T.textMid }}>{fmtN(r.closing)}</td>
+                    <td style={{ padding:"9px 12px" }}>
+                      <span style={{ fontSize:14, fontWeight:700, color:r.used>0?T.text:r.used<0?T.red:T.textLight }}>{r.used>0?r.used:r.used<0?`${r.used} ⚠`:"—"}</span>
+                    </td>
+                    <td style={{ padding:"9px 12px", fontSize:13, color:T.textMid }}>{fmt2(r.costUnit)}</td>
+                    <td style={{ padding:"9px 12px", fontSize:13, fontWeight:500 }}>{r.costVal!=null&&r.used>0?fmt2(r.costVal):"—"}</td>
+                    <td style={{ padding:"9px 12px", fontSize:13, color:T.green, fontWeight:500 }}>{r.saleVal!=null&&r.used>0?fmt2(r.saleVal):"—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Products Admin ───────────────────────────────────────────────────────────
+function ProductsView({ products, onSave }) {
+  const [editId, setEditId]   = useState(null);
+  const [form, setForm]       = useState(null);
+  const [filterCat, setFilterCat] = useState("All");
+
+  const updateForm = (k,v) => setForm(f=>({...f,[k]:v}));
+  const emptyProduct = () => ({ id:`p${Date.now()}`, name:"", category:"Wine", supplier:"", multiple:1, costUnit:"" });
+
+  const handleEdit = p => { setForm({...p}); setEditId(p.id); };
+  const handleNew  = () => { setForm(emptyProduct()); setEditId("new"); };
+  const handleDelete = id => { if (!confirm("Delete this product?")) return; onSave(products.filter(p=>p.id!==id)); };
+  const handleSubmit = () => {
+    if (!form.name) { alert("Product name required."); return; }
+    let updated;
+    if (editId==="new") updated = [...products, {...form, multiple:Number(form.multiple), costUnit:form.costUnit?Number(form.costUnit):null}];
+    else updated = products.map(p=>p.id===editId?{...form,multiple:Number(form.multiple),costUnit:form.costUnit?Number(form.costUnit):null}:p);
+    onSave(updated);
+    setEditId(null); setForm(null);
+  };
+
+  const visibleCats = ["All", ...BAR_CATEGORIES];
+  const filtered = filterCat==="All" ? products : products.filter(p=>p.category===filterCat);
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
+        <div style={{ display:"flex", gap:6 }}>
+          {visibleCats.map(c=>(
+            <button key={c} onClick={()=>setFilterCat(c)} style={{ background:filterCat===c?T.midBlue:"#fff", color:filterCat===c?"#fff":T.textMid, border:`1px solid ${filterCat===c?T.midBlue:T.border}`, padding:"6px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:filterCat===c?700:400 }}>{c}</button>
+          ))}
+        </div>
+        <button onClick={handleNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>+ Add Product</button>
+      </div>
+
+      {/* Edit/Add form */}
+      {form && (
+        <div style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:24, marginBottom:20, boxShadow:"0 4px 16px rgba(59,130,246,.1)" }}>
+          <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{editId==="new"?"New Product":"Edit Product"}</h3>
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr", gap:"12px 18px" }}>
+            <div><FLabel required>Product Name</FLabel><FInput value={form.name} onChange={v=>updateForm("name",v)}/></div>
+            <div>
+              <FLabel>Category</FLabel>
+              <select value={form.category} onChange={e=>updateForm("category",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
+                {BAR_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div><FLabel>Supplier</FLabel><FInput value={form.supplier||""} onChange={v=>updateForm("supplier",v)}/></div>
+            <div><FLabel>Buy Price (£)</FLabel><FInput type="number" value={form.costUnit||""} onChange={v=>updateForm("costUnit",v)}/></div>
+            <div><FLabel>Multiple</FLabel><FInput type="number" value={form.multiple||""} onChange={v=>updateForm("multiple",v)}/></div>
+          </div>
+          <div style={{ display:"flex", gap:10, marginTop:16 }}>
+            <button onClick={handleSubmit} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save</button>
+            <button onClick={()=>{setForm(null);setEditId(null);}} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"9px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr style={{ background:"#eef4fd" }}>
+              {["Product","Category","Supplier","Buy Price","Multiple","Est. Sale",""].map(h=>(
+                <th key={h} style={{ padding:"10px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((p,i)=>(
+              <tr key={p.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}
+                onMouseEnter={e=>e.currentTarget.style.background="#f5f9ff"}
+                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600, color:T.text }}>{p.name}</td>
+                <td style={{ padding:"10px 14px" }}><CatBadge cat={p.category}/></td>
+                <td style={{ padding:"10px 14px", fontSize:12, color:T.textLight }}>{p.supplier}</td>
+                <td style={{ padding:"10px 14px", fontSize:13 }}>{fmt2(p.costUnit)}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, color:T.textMid }}>{p.multiple}x</td>
+                <td style={{ padding:"10px 14px", fontSize:13, color:T.green, fontWeight:500 }}>{p.costUnit ? fmt2(p.costUnit*p.multiple) : "—"}</td>
+                <td style={{ padding:"10px 14px", whiteSpace:"nowrap" }}>
+                  <button onClick={()=>handleEdit(p)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"4px 12px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600, marginRight:6 }}>Edit</button>
+                  <button onClick={()=>handleDelete(p.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
