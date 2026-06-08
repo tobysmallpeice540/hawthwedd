@@ -32,22 +32,11 @@ if (typeof window.storage === 'undefined') {
   }
 }
 
-// ─── Credentials (hashed at runtime — plain text never stored) ────────────────
+// ─── Credentials ─────────────────────────────────────────────────────────────
 const CORRECT_USER = 'admin'
 const CORRECT_PASS = 'Hawth8u$h'
 const SESSION_KEY  = 'hbf_auth_v1'
-
-function hashCreds(user, pass) {
-  // Simple deterministic token — not cryptographic but keeps creds out of storage
-  const raw = `${user}:${pass}:hawthbush-salt-2024`
-  let h = 0
-  for (let i = 0; i < raw.length; i++) {
-    h = (Math.imul(31, h) + raw.charCodeAt(i)) | 0
-  }
-  return h.toString(36)
-}
-
-const VALID_TOKEN = hashCreds(CORRECT_USER, CORRECT_PASS)
+const SESSION_VAL  = 'granted'
 
 function LoginScreen({ onAuth }) {
   const [user, setUser]     = useState('')
@@ -57,7 +46,7 @@ function LoginScreen({ onAuth }) {
 
   const attempt = () => {
     if (user.trim() === CORRECT_USER && pass === CORRECT_PASS) {
-      sessionStorage.setItem(SESSION_KEY, VALID_TOKEN)
+      sessionStorage.setItem(SESSION_KEY, SESSION_VAL)
       onAuth()
     } else {
       setError('Incorrect username or password.')
@@ -139,7 +128,7 @@ function Root() {
 
   useEffect(() => {
     const token = sessionStorage.getItem(SESSION_KEY)
-    if (token === VALID_TOKEN) setAuthed(true)
+    if (token === SESSION_VAL) setAuthed(true)
   }, [])
 
   if (!authed) return <LoginScreen onAuth={() => setAuthed(true)} />
