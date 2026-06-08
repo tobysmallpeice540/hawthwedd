@@ -32,6 +32,27 @@ const T = {
   chipTexts:   ["#1e40af","#065f46","#9d174d","#3730a3","#92400e","#6b21a8","#9a3412","#075985"],
 };
 
+// ─── CONFIRM DIALOG ───────────────────────────────────────────────────────────
+function ConfirmDialog({ message, subMessage, confirmLabel="Delete", onConfirm, onCancel }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(15,30,60,.45)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}
+      onClick={onCancel}>
+      <div style={{ background:"#fff", borderRadius:12, padding:"28px 32px", maxWidth:400, width:"90%", boxShadow:"0 16px 48px rgba(0,0,0,.18)", border:`1px solid ${T.border}` }}
+        onClick={e=>e.stopPropagation()}>
+        <div style={{ width:44, height:44, borderRadius:"50%", background:T.redBg, display:"flex", alignItems:"center", justifyContent:"center", marginBottom:16 }}>
+          <span style={{ fontSize:22 }}>🗑</span>
+        </div>
+        <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:8 }}>{message}</div>
+        {subMessage && <div style={{ fontSize:13, color:T.textMid, marginBottom:20, lineHeight:1.5 }}>{subMessage}</div>}
+        <div style={{ display:"flex", gap:10, marginTop:20 }}>
+          <button onClick={onConfirm} style={{ flex:1, background:T.red, color:"#fff", border:"none", padding:"11px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>{confirmLabel}</button>
+          <button onClick={onCancel}  style={{ flex:1, background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"11px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function parseMoney(val) {
   if (!val) return 0;
   const n = parseFloat(String(val).replace(/[^0-9.]/g,""));
@@ -86,33 +107,45 @@ const INITIAL_STAFF = [
 ];
 
 const INITIAL_BOOKINGS = [
-  { id:1,  couple:"Alice Smith Birthday party Barn",         date:"2025-01-24", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"44 7557 598 231", email:"alicelouise90@hotmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"yes", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"", hamletBooked:true, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:2,  couple:"Jason Lindfield & Lindy Anderson",        date:"2026-05-23", setup:["TF"], dayManager:["TF"], dayStaff:["RM","AK","OH"], barSupervisor:["TM"], sunday:["KN"], bar:["AK","RM","EP"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"120", mealChildren:"20", mealBabies:"", eveGuests:"120", phone:"", email:"jasonlindfield@ohmenergy.co.uk", email2:"lindyclaire@hotmail.com", ceremony:"NO", guestArrivalTime:"13:00", caterers:"12:00 External caterers arrive, 14:00 Food served 15:00-17:00 Ice Cream & Bubbles Van", foodTruck:"Miky Dough Pizzas", eveFood:"Bucking Broncho", otherVendors:"YES £760", amlyBooked:false, amlyFee:"", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"3270", deposit:"1000", payment2:"1015", finalPayment:"3095", extras:"Food trucks: up to 3 vendors, waive usual £100 per vendor fee. ALL INVOICES PAID", corkage:"£9 per adult - 100 guests invoiced", pets:"", hairdresser:"", florist:"", band:"16:00-17:00 live music, DJ from 17:00", paSystem:"", notes:"", hoursWorked:{} },
-  { id:3,  couple:"Sam Adams & Sarah Precious",              date:"2026-05-30", setup:["BW"], dayManager:["BW"], dayStaff:["JD","BoW","OH"], barSupervisor:["TM"], sunday:[], bar:["AK","OH"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"62", mealChildren:"", mealBabies:"", eveGuests:"62", phone:"07551 801563", email:"sarahp001@hotmail.co.uk", email2:"", ceremony:"Clearing 15:00PM", guestArrivalTime:"14:00 for canapes & drinks", caterers:"12:00 Circa", foodTruck:"none", eveFood:"CIRCA", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:false, campingFee:"", nonStandard:"Round tables being delivered day tbc with Circa.", venueFee:"5100", deposit:"1000", payment2:"3935", finalPayment:"4641.8", extras:"Need to find quiet place for Sam to do interview with registrars", corkage:"£9.50 - they are supplying the coffee and tea", pets:"", hairdresser:"9:30 on the day", florist:"10:00 am on the set up Mother-in-law", band:"21:00 Duke of Havoc", paSystem:"", notes:"", hoursWorked:{} },
-  { id:4,  couple:"Natalia Szczepanska & Simon Rosenhead",   date:"2026-06-06", setup:["BW"], dayManager:["JD"], dayStaff:["CK","BoW","AK"], barSupervisor:["TM"], sunday:[], bar:["AK","EP","OH"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"80", mealChildren:"2", mealBabies:"", eveGuests:"80", phone:"7972280260", email:"Natalia_kim@hotmail.com", email2:"", ceremony:"Clearing 13:00", guestArrivalTime:"13:00", caterers:"Circa", foodTruck:"Circa Pizza", eveFood:"CIRCA", otherVendors:"", amlyBooked:true, amlyFee:"950", hamletBooked:true, hamletFee:"2678", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"4950", deposit:"1000", payment2:"3289", finalPayment:"5481", extras:"", corkage:"£12 plus VAT per guest if 80-90 guests", pets:"", hairdresser:"", florist:"Big Field Flowers", band:"Steel Pan Man", paSystem:"SENT TO JAMES", notes:"", hoursWorked:{} },
-  { id:5,  couple:"Richard Mann & Leanne",                   date:"2026-06-12", setup:["BW"], dayManager:["BW"], dayStaff:["BoW","OM","RC","OH"], barSupervisor:["JD"], sunday:[], bar:["AK","EP","CK","OM","RC"], dayHandy:["TF"], eveHandy:["AP","TF"], mealGuests:"106", mealChildren:"", mealBabies:"", eveGuests:"225", phone:"07833 615851", email:"mannroofing@aol.com", email2:"leannesfarley1985@outlook.com", ceremony:"Clearing 13:00", guestArrivalTime:"12:30", caterers:"Greg Churcher - will arrive 10:00", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"1230", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"NEED TO ADD £250 FOR A 3RD NIGHT IN AMLY", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"9.50 corkage", pets:"", hairdresser:"", florist:"", band:"Our PA guy 10:30am, band 1pm, done by 3:30pm", paSystem:"", notes:"Friday wedding", hoursWorked:{} },
-  { id:6,  couple:"Ruby Gislingham & Jack",                  date:"2026-06-20", setup:["BW"], dayManager:["JD"], dayStaff:["BoW","RM","AK"], barSupervisor:["OK"], sunday:["OK"], bar:["AK","RM","TM","BoW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"86", mealChildren:"", mealBabies:"", eveGuests:"130", phone:"7528350684", email:"rubyjgis@hotmail.com", email2:"jackrowland4@gmail.com", ceremony:"Clearing (non-legal ceremony) Celebrant James", guestArrivalTime:"", caterers:"Circa", foodTruck:"Circa", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2200", nonStandard:"£500 agreed discount for booking by end of Jan 2025", venueFee:"4600", deposit:"1000", payment2:"4185", finalPayment:"", extras:"", corkage:"INVOICED £9.50 plus VAT for 75-80. HAWTHBUSH TO SUPPLY TEA & COFFEE", pets:"", hairdresser:"", florist:"Mum is doing flowers", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:7,  couple:"Rosa Lavelle-Hill & Sam",                 date:"2026-06-27", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["BeW"], dayHandy:["TF"], eveHandy:["TF"], mealGuests:"74", mealChildren:"10", mealBabies:"", eveGuests:"85", phone:"7717126690", email:"rosaellenlavellehill@gmail.com", email2:"", ceremony:"Clearing 2:00pm", guestArrivalTime:"", caterers:"Circa", foodTruck:"The Real Pizza Company £100 charge", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"1495", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4127.5", finalPayment:"", extras:"", corkage:"TO INVOICE TBC - quoted higher 26 corkage prices", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:8,  couple:"Rosie Latawski & Tim",                    date:"2026-07-04", setup:["JD"], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:["OK"], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"72", mealChildren:"10", mealBabies:"3", eveGuests:"72", phone:"07740 265594", email:"rosieandtimwedding26@gmail.com", email2:"", ceremony:"1:00pm Friends hosting ceremony", guestArrivalTime:"12:30/12:45 (meeting first at the tap rooms)", caterers:"Circa", foodTruck:"Circa", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"HIGH CHAIRS - 3 tbc - poss looking for babysitting service", corkage:"TO INVOICE CORKAGE - Standard corkage which will finish around 6pm", pets:"", hairdresser:"", florist:"Rosies mum doing flowers", band:"Marmalade First dance 7:45pm", paSystem:"", notes:"", hoursWorked:{} },
-  { id:9,  couple:"Lucyanne Mathews & Marcus Brasier",       date:"2026-07-11", setup:["BW"], dayManager:["BW"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"90", mealChildren:"", mealBabies:"", eveGuests:"25", phone:"", email:"lamatthews@hgluk.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"3335", finalPayment:"", extras:"", corkage:"TO INVOICE CORKAGE TBC", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:10, couple:"Yasmin Roberts & Jack Crisp",             date:"2026-07-18", setup:["BW"], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"105", mealChildren:"", mealBabies:"", eveGuests:"20", phone:"07535 326046", email:"Yasmin.Roberts@baw.live", email2:"", ceremony:"1:30PM", guestArrivalTime:"", caterers:"Circa", foodTruck:"Pizza van in eve", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2750", campingBooked:false, campingFee:"", nonStandard:"Waiting for signatures. £150+VAT cake cutting. £100+VAT pizza van.", venueFee:"5190", deposit:"1000", payment2:"3460", finalPayment:"", extras:"", corkage:"Standard corkage TBC", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:11, couple:"Jenny Lippiatt & Laurence Organ-Jennings",date:"2026-07-25", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"100", mealChildren:"", mealBabies:"4", eveGuests:"0", phone:"07504732555", email:"jennyandlaurence@outlook.com", email2:"", ceremony:"2:00pm Clearing", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"730", hamletBooked:true, hamletFee:"2790", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"3355", finalPayment:"", extras:"", corkage:"Standard corkage - wine being delivered on the Friday", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:12, couple:"Diene Petterle & Tom Mitchelson",         date:"2026-08-01", setup:["BW"], dayManager:["TM"], dayStaff:[], barSupervisor:["OK"], sunday:["OK"], bar:["TM"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"65", mealChildren:"", mealBabies:"", eveGuests:"", phone:"07949 653646", email:"dienepetterle@gmail.com", email2:"tommitchelson@hotmail.com", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"", corkage:"Waiting for confirmation", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:13, couple:"Aimee Fenn & Henry Stephens",             date:"2026-08-05", setup:["BW"], dayManager:["BW","TM"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"80", mealChildren:"25", mealBabies:"", eveGuests:"0", phone:"", email:"aimeefenn88@gmail.com", email2:"hostepo@gmai.com", ceremony:"2pm - friend not legal ceremony", guestArrivalTime:"", caterers:"Sienna Pizza - no need to access kitchen", foodTruck:"Sienna + Ice Cream van", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"1600", nonStandard:"£100 x 2 for the food trucks", venueFee:"5190", deposit:"1000", payment2:"3480", finalPayment:"", extras:"", corkage:"Standard corkage package", pets:"4 tiny dogs - agreed would allow to stay for half price!!", hairdresser:"", florist:"Aimee is organising all the flowers", band:"", paSystem:"", notes:"Wednesday wedding. Invoice sent 04/11/2025 awaiting payment", hoursWorked:{} },
-  { id:14, couple:"Gabrielle Aron & Tommy Ramsay",           date:"2026-08-08", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7927593896", email:"gtaronramsay@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"Having a ceilidh", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"corkage WITH 20% discount", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:15, couple:"Louise Berry & Gren",                     date:"2026-08-15", setup:["BW"], dayManager:["JD"], dayStaff:[], barSupervisor:["OK"], sunday:["OK"], bar:["TM"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"50", mealChildren:"", mealBabies:"", eveGuests:"50", phone:"05522 787324", email:"louiseberry00@hotmail.co.uk", email2:"", ceremony:"Yes", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"Standard corkage confirmed", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:16, couple:"Em Hodson & Robert ODonoghue",           date:"2026-08-22", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"95", mealChildren:"", mealBabies:"", eveGuests:"0", phone:"7532290198", email:"emrobodonoghue@gmail.com", email2:"", ceremony:"Clearing tbc", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"2750", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"", corkage:"Standard corkage TBC", pets:"Jura - need to charge for 1 dog", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:17, couple:"Ellie Bradley & Ashley Williams",         date:"2026-09-05", setup:["BW"], dayManager:["JD"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:["BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"80", phone:"07527 163713", email:"elizabeth.bradley994@gmail.com", email2:"", ceremony:"Clearing 2:30 PM", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:true, campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4630", finalPayment:"", extras:"", corkage:"TO INVOICE CORKAGE - 61-90 Guests £10.50+VAT pp", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:18, couple:"Hannah & Johnny",                         date:"2026-09-18", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"75", phone:"", email:"hannahbergin@live.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa TBC", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:true, hamletFee:"2790", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"4190", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"Friday wedding", hoursWorked:{} },
-  { id:19, couple:"Holly Freeman & Cameron",                 date:"2026-09-26", setup:[], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"50", mealChildren:"", mealBabies:"", eveGuests:"15", phone:"7429762459", email:"hollyfreeman@hotmail.co.uk", email2:"", ceremony:"Clearing tbc", guestArrivalTime:"", caterers:"£100+VAT 5pm external catering truck", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"3085", extras:"£100+VAT for external food truck", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:20, couple:"Emily Hudson & Ed",                       date:"2026-10-03", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:["BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"80", phone:"7479043253", email:"emilyrosehudson@gmail.com", email2:"edmund.pearce@hotmail.co.uk", ceremony:"Clearing", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"980", hamletBooked:true, hamletFee:"3885", campingBooked:false, campingFee:"", nonStandard:"£500 discount agreed as out of season wedding.", venueFee:"5190", deposit:"1000", payment2:"4027.5", finalPayment:"", extras:"", corkage:"£10.50+VAT for 61-90 guests", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:21, couple:"Emily Cave & Daniel",                     date:"2026-11-28", setup:["BW"], dayManager:["BW"], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7479043253", email:"thebookgirlandgamerguy26@outlook.com", email2:"", ceremony:"Clearing", guestArrivalTime:"", caterers:"TBC", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:true, amlyFee:"780", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"£500 discount", venueFee:"4140", deposit:"", payment2:"1460", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:1,  status:"Confirmed", couple:"Alice Smith Birthday party Barn",         date:"2025-01-24", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"44 7557 598 231", email:"alicelouise90@hotmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"yes", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"yes", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:2,  status:"Confirmed", couple:"Jason Lindfield & Lindy Anderson",        date:"2026-05-23", setup:["TF"], dayManager:["TF"], dayStaff:["RM","AK","OH"], barSupervisor:["TM"], sunday:["KN"], bar:["AK","RM","EP"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"120", mealChildren:"20", mealBabies:"", eveGuests:"120", phone:"", email:"jasonlindfield@ohmenergy.co.uk", email2:"lindyclaire@hotmail.com", ceremony:"NO", guestArrivalTime:"13:00", caterers:"12:00 External caterers arrive, 14:00 Food served 15:00-17:00 Ice Cream & Bubbles Van", foodTruck:"Miky Dough Pizzas", eveFood:"Bucking Broncho", otherVendors:"YES £760", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"3270", deposit:"1000", payment2:"1015", finalPayment:"3095", extras:"Food trucks: up to 3 vendors, waive usual £100 per vendor fee. ALL INVOICES PAID", corkage:"£9 per adult - 100 guests invoiced", pets:"", hairdresser:"", florist:"", band:"16:00-17:00 live music, DJ from 17:00", paSystem:"", notes:"", hoursWorked:{} },
+  { id:3,  status:"Confirmed", couple:"Sam Adams & Sarah Precious",              date:"2026-05-30", setup:["BW"], dayManager:["BW"], dayStaff:["JD","BoW","OH"], barSupervisor:["TM"], sunday:[], bar:["AK","OH"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"62", mealChildren:"", mealBabies:"", eveGuests:"62", phone:"07551 801563", email:"sarahp001@hotmail.co.uk", email2:"", ceremony:"Clearing 15:00PM", guestArrivalTime:"14:00 for canapes & drinks", caterers:"12:00 Circa", foodTruck:"none", eveFood:"CIRCA", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"2790", campingBooked:"no", campingFee:"", nonStandard:"Round tables being delivered day tbc with Circa.", venueFee:"5100", deposit:"1000", payment2:"3935", finalPayment:"4641.8", extras:"Need to find quiet place for Sam to do interview with registrars", corkage:"£9.50 - they are supplying the coffee and tea", pets:"", hairdresser:"9:30 on the day", florist:"10:00 am on the set up Mother-in-law", band:"21:00 Duke of Havoc", paSystem:"", notes:"", hoursWorked:{} },
+  { id:4,  status:"Confirmed", couple:"Natalia Szczepanska & Simon Rosenhead",   date:"2026-06-06", setup:["BW"], dayManager:["JD"], dayStaff:["CK","BoW","AK"], barSupervisor:["TM"], sunday:[], bar:["AK","EP","OH"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"80", mealChildren:"2", mealBabies:"", eveGuests:"80", phone:"7972280260", email:"Natalia_kim@hotmail.com", email2:"", ceremony:"Clearing 13:00", guestArrivalTime:"13:00", caterers:"Circa", foodTruck:"Circa Pizza", eveFood:"CIRCA", otherVendors:"", amlyBooked:"yes", amlyFee:"950", hamletBooked:"yes", hamletFee:"2678", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"4950", deposit:"1000", payment2:"3289", finalPayment:"5481", extras:"", corkage:"£12 plus VAT per guest if 80-90 guests", pets:"", hairdresser:"", florist:"Big Field Flowers", band:"Steel Pan Man", paSystem:"SENT TO JAMES", notes:"", hoursWorked:{} },
+  { id:5,  status:"Confirmed", couple:"Richard Mann & Leanne",                   date:"2026-06-12", setup:["BW"], dayManager:["BW"], dayStaff:["BoW","OM","RC","OH"], barSupervisor:["JD"], sunday:[], bar:["AK","EP","CK","OM","RC"], dayHandy:["TF"], eveHandy:["AP","TF"], mealGuests:"106", mealChildren:"", mealBabies:"", eveGuests:"225", phone:"07833 615851", email:"mannroofing@aol.com", email2:"leannesfarley1985@outlook.com", ceremony:"Clearing 13:00", guestArrivalTime:"12:30", caterers:"Greg Churcher - will arrive 10:00", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"1230", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"NEED TO ADD £250 FOR A 3RD NIGHT IN AMLY", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"9.50 corkage", pets:"", hairdresser:"", florist:"", band:"Our PA guy 10:30am, band 1pm, done by 3:30pm", paSystem:"", notes:"Friday wedding", hoursWorked:{} },
+  { id:6,  status:"Confirmed", couple:"Ruby Gislingham & Jack",                  date:"2026-06-20", setup:["BW"], dayManager:["JD"], dayStaff:["BoW","RM","AK"], barSupervisor:["OK"], sunday:["OK"], bar:["AK","RM","TM","BoW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"86", mealChildren:"", mealBabies:"", eveGuests:"130", phone:"7528350684", email:"rubyjgis@hotmail.com", email2:"jackrowland4@gmail.com", ceremony:"Clearing (non-legal ceremony) Celebrant James", guestArrivalTime:"", caterers:"Circa", foodTruck:"Circa", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"780", hamletBooked:"yes", hamletFee:"2790", campingBooked:"yes", campingFee:"2200", nonStandard:"£500 agreed discount for booking by end of Jan 2025", venueFee:"4600", deposit:"1000", payment2:"4185", finalPayment:"", extras:"", corkage:"INVOICED £9.50 plus VAT for 75-80. HAWTHBUSH TO SUPPLY TEA & COFFEE", pets:"", hairdresser:"", florist:"Mum is doing flowers", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:7,  status:"Confirmed", couple:"Rosa Lavelle-Hill & Sam",                 date:"2026-06-27", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["BeW"], dayHandy:["TF"], eveHandy:["TF"], mealGuests:"74", mealChildren:"10", mealBabies:"", eveGuests:"85", phone:"7717126690", email:"rosaellenlavellehill@gmail.com", email2:"", ceremony:"Clearing 2:00pm", guestArrivalTime:"", caterers:"Circa", foodTruck:"The Real Pizza Company £100 charge", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"780", hamletBooked:"yes", hamletFee:"2790", campingBooked:"yes", campingFee:"1495", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4127.5", finalPayment:"", extras:"", corkage:"TO INVOICE TBC - quoted higher 26 corkage prices", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:8,  status:"Confirmed", couple:"Rosie Latawski & Tim",                    date:"2026-07-04", setup:["JD"], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:["OK"], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"72", mealChildren:"10", mealBabies:"3", eveGuests:"72", phone:"07740 265594", email:"rosieandtimwedding26@gmail.com", email2:"", ceremony:"1:00pm Friends hosting ceremony", guestArrivalTime:"12:30/12:45 (meeting first at the tap rooms)", caterers:"Circa", foodTruck:"Circa", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"2790", campingBooked:"yes", campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"HIGH CHAIRS - 3 tbc - poss looking for babysitting service", corkage:"TO INVOICE CORKAGE - Standard corkage which will finish around 6pm", pets:"", hairdresser:"", florist:"Rosies mum doing flowers", band:"Marmalade First dance 7:45pm", paSystem:"", notes:"", hoursWorked:{} },
+  { id:9,  status:"Confirmed", couple:"Lucyanne Mathews & Marcus Brasier",       date:"2026-07-11", setup:["BW"], dayManager:["BW"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"90", mealChildren:"", mealBabies:"", eveGuests:"25", phone:"", email:"lamatthews@hgluk.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"no", hamletFee:"", campingBooked:"yes", campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"3335", finalPayment:"", extras:"", corkage:"TO INVOICE CORKAGE TBC", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:10, status:"Confirmed", couple:"Yasmin Roberts & Jack Crisp",             date:"2026-07-18", setup:["BW"], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"105", mealChildren:"", mealBabies:"", eveGuests:"20", phone:"07535 326046", email:"Yasmin.Roberts@baw.live", email2:"", ceremony:"1:30PM", guestArrivalTime:"", caterers:"Circa", foodTruck:"Pizza van in eve", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"2750", campingBooked:"no", campingFee:"", nonStandard:"Waiting for signatures. £150+VAT cake cutting. £100+VAT pizza van.", venueFee:"5190", deposit:"1000", payment2:"3460", finalPayment:"", extras:"", corkage:"Standard corkage TBC", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:11, status:"Confirmed", couple:"Jenny Lippiatt & Laurence Organ-Jennings",date:"2026-07-25", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"100", mealChildren:"", mealBabies:"4", eveGuests:"0", phone:"07504732555", email:"jennyandlaurence@outlook.com", email2:"", ceremony:"2:00pm Clearing", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"730", hamletBooked:"yes", hamletFee:"2790", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"3355", finalPayment:"", extras:"", corkage:"Standard corkage - wine being delivered on the Friday", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:12, status:"Confirmed", couple:"Diene Petterle & Tom Mitchelson",         date:"2026-08-01", setup:["BW"], dayManager:["TM"], dayStaff:[], barSupervisor:["OK"], sunday:["OK"], bar:["TM"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"65", mealChildren:"", mealBabies:"", eveGuests:"", phone:"07949 653646", email:"dienepetterle@gmail.com", email2:"tommitchelson@hotmail.com", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"2790", campingBooked:"yes", campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"", corkage:"Waiting for confirmation", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:13, status:"Confirmed", couple:"Aimee Fenn & Henry Stephens",             date:"2026-08-05", setup:["BW"], dayManager:["BW","TM"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"80", mealChildren:"25", mealBabies:"", eveGuests:"0", phone:"", email:"aimeefenn88@gmail.com", email2:"hostepo@gmai.com", ceremony:"2pm - friend not legal ceremony", guestArrivalTime:"", caterers:"Sienna Pizza - no need to access kitchen", foodTruck:"Sienna + Ice Cream van", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"2790", campingBooked:"yes", campingFee:"1600", nonStandard:"£100 x 2 for the food trucks", venueFee:"5190", deposit:"1000", payment2:"3480", finalPayment:"", extras:"", corkage:"Standard corkage package", pets:"4 tiny dogs - agreed would allow to stay for half price!!", hairdresser:"", florist:"Aimee is organising all the flowers", band:"", paSystem:"", notes:"Wednesday wedding. Invoice sent 04/11/2025 awaiting payment", hoursWorked:{} },
+  { id:14, status:"Confirmed", couple:"Gabrielle Aron & Tommy Ramsay",           date:"2026-08-08", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7927593896", email:"gtaronramsay@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"Having a ceilidh", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"corkage WITH 20% discount", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:15, status:"Confirmed", couple:"Louise Berry & Gren",                     date:"2026-08-15", setup:["BW"], dayManager:["JD"], dayStaff:[], barSupervisor:["OK"], sunday:["OK"], bar:["TM"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"50", mealChildren:"", mealBabies:"", eveGuests:"50", phone:"05522 787324", email:"louiseberry00@hotmail.co.uk", email2:"", ceremony:"Yes", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"", extras:"", corkage:"Standard corkage confirmed", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:16, status:"Confirmed", couple:"Em Hodson & Robert ODonoghue",           date:"2026-08-22", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["OK"], sunday:["OK"], bar:["TM","BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"95", mealChildren:"", mealBabies:"", eveGuests:"0", phone:"7532290198", email:"emrobodonoghue@gmail.com", email2:"", ceremony:"Clearing tbc", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"2750", campingBooked:"yes", campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4730", finalPayment:"", extras:"", corkage:"Standard corkage TBC", pets:"Jura - need to charge for 1 dog", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:17, status:"Confirmed", couple:"Ellie Bradley & Ashley Williams",         date:"2026-09-05", setup:["BW"], dayManager:["JD"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:["BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"80", phone:"07527 163713", email:"elizabeth.bradley994@gmail.com", email2:"", ceremony:"Clearing 2:30 PM", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"780", hamletBooked:"yes", hamletFee:"2790", campingBooked:"yes", campingFee:"2500", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"4630", finalPayment:"", extras:"", corkage:"TO INVOICE CORKAGE - 61-90 Guests £10.50+VAT pp", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:18, status:"Confirmed", couple:"Hannah & Johnny",                         date:"2026-09-18", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"75", phone:"", email:"hannahbergin@live.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa TBC", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"780", hamletBooked:"yes", hamletFee:"2790", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"4190", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"Friday wedding", hoursWorked:{} },
+  { id:19, status:"Confirmed", couple:"Holly Freeman & Cameron",                 date:"2026-09-26", setup:[], dayManager:["JD"], dayStaff:[], barSupervisor:["TM"], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"50", mealChildren:"", mealBabies:"", eveGuests:"15", phone:"7429762459", email:"hollyfreeman@hotmail.co.uk", email2:"", ceremony:"Clearing tbc", guestArrivalTime:"", caterers:"£100+VAT 5pm external catering truck", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"5190", deposit:"1000", payment2:"2085", finalPayment:"3085", extras:"£100+VAT for external food truck", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:20, status:"Confirmed", couple:"Emily Hudson & Ed",                       date:"2026-10-03", setup:["BW"], dayManager:["BW"], dayStaff:["BeW"], barSupervisor:["TM"], sunday:[], bar:["BeW"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"80", phone:"7479043253", email:"emilyrosehudson@gmail.com", email2:"edmund.pearce@hotmail.co.uk", ceremony:"Clearing", guestArrivalTime:"", caterers:"Circa", foodTruck:"tbc", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"3885", campingBooked:"no", campingFee:"", nonStandard:"£500 discount agreed as out of season wedding.", venueFee:"5190", deposit:"1000", payment2:"4027.5", finalPayment:"", extras:"", corkage:"£10.50+VAT for 61-90 guests", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:21, status:"Confirmed", couple:"Emily Cave & Daniel",                     date:"2026-11-28", setup:["BW"], dayManager:["BW"], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7479043253", email:"thebookgirlandgamerguy26@outlook.com", email2:"", ceremony:"Clearing", guestArrivalTime:"", caterers:"TBC", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"780", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"£500 discount", venueFee:"4140", deposit:"", payment2:"1460", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  // ── 2027 bookings ──────────────────────────────────────────────────────────
+  { id:200, status:"Confirmed", couple:"Liz Newall TBC",           date:"2027-06-03", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"betcarter@hotmail.co.uk", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"600", deposit:"600", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:201, status:"Holding",   couple:"Jason McGeorge & Becky",   date:"2027-07-05", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"Becky 07796 138545", email:"jasonmcgeorge45@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:202, status:"Confirmed", couple:"Imogen Parr & Jack",       date:"2027-06-12", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"07766998811", email:"jackmeach@hotmail.com", email2:"imogenfjparr@gmail.com", ceremony:"13:00", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:203, status:"Confirmed", couple:"Tessa Taylor & Isaac",     date:"2027-06-19", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"66 adults + 3 or 4 children", mealChildren:"", mealBabies:"", eveGuests:"110 in total", phone:"", email:"tessa-taylor@hotmail.co.uk", email2:"", ceremony:"12:30 tbc", guestArrivalTime:"", caterers:"Cashew Catering or Isaac's brother", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"1.45pm drinks, food 3-4.30/5. Eve guests ~5-6pm", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"£9.50 daytime, £5.00+VAT evening", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:204, status:"Confirmed", couple:"Chloé & Ewan",             date:"2027-07-03", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"50 + 20 children", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"chloe-louiseb@hotmail.co.uk", email2:"", ceremony:"1:00pm", guestArrivalTime:"", caterers:"Bay Tree (10% commission)", foodTruck:"£150+VAT pizza van", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"£150 for cake cutting", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:205, status:"Confirmed", couple:"Lydia and Rob",            date:"2027-07-10", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"tbc", mealChildren:"", mealBabies:"", eveGuests:"tbc", phone:"", email:"lydsandrobwedding@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"yes", hamletFee:"", campingBooked:"yes", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:206, status:"Confirmed", couple:"Anna & Jasper",            date:"2027-07-24", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"annafarnfield@hotmail.co.uk", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:207, status:"Confirmed", couple:"Megan Grover & Simon",     date:"2027-07-30", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"85 approx", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7905777283", email:"groverdalywedding2027@gmail.com", email2:"", ceremony:"1pm in clearing", guestArrivalTime:"", caterers:"Likely Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"yes", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:208, status:"Confirmed", couple:"Tom and Becky",            date:"2027-08-21", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"saltdeanbeach@gmail.com", email2:"", ceremony:"Time tbc", guestArrivalTime:"", caterers:"Possibly brother", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:209, status:"Holding",   couple:"Liberty Kimber and Toby",  date:"2027-08-28", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"Awaiting completed forms", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:210, status:"Confirmed", couple:"Rachel Daly & Luke",       date:"2027-09-11", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"100 tbc", mealChildren:"", mealBabies:"", eveGuests:"20 tbc", phone:"07714 068219", email:"racheldaly_10@hotmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Pizza trucks etc", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"2325", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
 ];
 
 const STAFFING_FIELDS = ["dayManager","dayStaff","barSupervisor","sunday","bar","dayHandy","eveHandy"];
 const STAFFING_LABELS = { dayManager:"Day Manager", dayStaff:"Day Staff", barSupervisor:"Bar Supervisor", sunday:"Sunday", bar:"Bar", dayHandy:"Day Handy", eveHandy:"Eve Handy" };
 
-const BOOKING_STORAGE = "hawthbush_bookings_v5";
+const BOOKING_STORAGE = "hawthbush_bookings_v6";
 const STAFF_STORAGE   = "hawthbush_staff_v5";
 
 // ─── STAFF CHIP ───────────────────────────────────────────────────────────────
@@ -186,12 +219,21 @@ function FCheck({ checked, onChange, label, bold }) {
 // ─── ACCOMMODATION FIELD ──────────────────────────────────────────────────────
 function AccomField({ bookedKey, feeKey, label, formData, update }) {
   const [f,setF] = useState(false);
-  const booked = !!formData[bookedKey];
+  const val = formData[bookedKey] || "undecided";
+  const isYes = val === "yes";
+  const bgMap = { yes: T.accentLight, no: T.redBg, undecided: T.amberBg };
+  const borderMap = { yes: T.accentMid, no: "#fca5a5", undecided: "#fcd34d" };
   return (
-    <div style={{ background:booked?T.accentLight:T.bgInput, border:`1.5px solid ${booked?T.accentMid:T.border}`, borderRadius:8, padding:"14px 16px", transition:"all .2s" }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-        <FCheck checked={booked} onChange={v=>update(bookedKey,v)} label={label} bold />
-        {booked && (
+    <div style={{ background:bgMap[val]||T.bgInput, border:`1.5px solid ${borderMap[val]||T.border}`, borderRadius:8, padding:"14px 16px", transition:"all .2s" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+        <span style={{ fontSize:15, fontWeight:600, color:T.text, minWidth:70 }}>{label}</span>
+        <select value={val} onChange={e=>update(bookedKey,e.target.value)}
+          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"6px 10px", outline:"none", cursor:"pointer" }}>
+          <option value="undecided">Undecided</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+        {isYes && (
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:13, color:T.textMid, fontWeight:500 }}>Fee agreed: £</span>
             <input type="number" value={formData[feeKey]||""} onChange={e=>update(feeKey,e.target.value)} placeholder="0"
@@ -219,7 +261,19 @@ export default function App() {
 
   useEffect(()=>{
     (async()=>{
-      try { const r=await window.storage.get(BOOKING_STORAGE); setBookings(r?.value?JSON.parse(r.value):INITIAL_BOOKINGS); } catch { setBookings(INITIAL_BOOKINGS); }
+      try {
+        const r = await window.storage.get(BOOKING_STORAGE);
+        const raw = r?.value ? JSON.parse(r.value) : INITIAL_BOOKINGS;
+        // Migrate: convert old boolean booked fields to "yes"/"no" strings
+        const migrated = raw.map(b => ({
+          ...b,
+          amlyBooked:    b.amlyBooked === true ? "yes" : b.amlyBooked === false ? "no" : b.amlyBooked || "no",
+          hamletBooked:  b.hamletBooked === true ? "yes" : b.hamletBooked === false ? "no" : b.hamletBooked || "no",
+          campingBooked: b.campingBooked === true ? "yes" : b.campingBooked === false ? "no" : b.campingBooked || "no",
+          status: b.status || "Confirmed",
+        }));
+        setBookings(migrated);
+      } catch { setBookings(INITIAL_BOOKINGS); }
       try { const r=await window.storage.get(STAFF_STORAGE);   setStaff(r?.value?JSON.parse(r.value):INITIAL_STAFF); }   catch { setStaff(INITIAL_STAFF); }
       setLoaded(true);
     })();
@@ -228,12 +282,19 @@ export default function App() {
   const saveBookings = useCallback(async data=>{ setBookings(data); try{await window.storage.set(BOOKING_STORAGE,JSON.stringify(data));}catch(e){console.error(e);} },[]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await window.storage.set(STAFF_STORAGE,JSON.stringify(data));}catch(e){console.error(e);} },[]);
 
-  const emptyBooking = ()=>({ couple:"", date:"", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:false, amlyFee:"", hamletBooked:false, hamletFee:"", campingBooked:false, campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", hamletBooked:"undecided", hamletFee:"", campingBooked:"undecided", campingFee:"", nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
 
   const safeArr = v => Array.isArray(v) ? v : [];
+  const [confirmDlg, setConfirmDlg] = useState(null);
+  const askConfirm = (message, subMessage, onConfirm) => setConfirmDlg({ message, subMessage, onConfirm });
+
   const handleNew    = ()=>{ setFormData(emptyBooking()); setEditId(null); setView("form"); };
   const handleEdit   = id=>{ const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
-  const handleDelete = async id=>{ if(!confirm("Delete this booking?"))return; await saveBookings(bookings.filter(b=>b.id!==id)); };
+  const handleDelete = id => {
+    const b = bookings.find(x=>x.id===id);
+    askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
+      async () => { setConfirmDlg(null); await saveBookings(bookings.filter(x=>x.id!==id)); });
+  };
   const handleSubmit = async ()=>{
     if(!formData.couple||!formData.date){ alert("Couple name and date are required."); return; }
     let updated;
@@ -246,7 +307,11 @@ export default function App() {
   const emptyStaff = ()=>({ id:"", name:"", email:"", phone:"", rate:"", role:"Bar Staff", active:true, notes:"" });
   const handleNewStaff    = ()=>{ setStaffForm(emptyStaff()); setEditStaffId(null); };
   const handleEditStaff   = id=>{ const s=staff.find(x=>x.id===id); setStaffForm({...s}); setEditStaffId(id); };
-  const handleDeleteStaff = async id=>{ if(!confirm("Remove this staff member?"))return; await saveStaff(staff.filter(s=>s.id!==id)); };
+  const handleDeleteStaff = id => {
+    const s = staff.find(x=>x.id===id);
+    askConfirm("Remove this staff member?", `${s?.name||"This person"} will be removed from the staff database. They will still appear on any existing bookings.`,
+      async () => { setConfirmDlg(null); await saveStaff(staff.filter(x=>x.id!==id)); });
+  };
   const handleSubmitStaff = async ()=>{
     if(!staffForm.id||!staffForm.name){ alert("Initials and name are required."); return; }
     let updated;
@@ -261,13 +326,15 @@ export default function App() {
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
+      {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
       <Header view={view} setView={setView} onNew={handleNew}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff}/>}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
-        {view==="bar"     && <BarView/>}
-        {view==="reports" && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType}/>}
+        {view==="bar"        && <BarView/>}
+        {view==="enquiries"  && <EnquiriesView/>}
+        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType}/>}
       </div>
     </div>
   );
@@ -275,7 +342,7 @@ export default function App() {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 function Header({ view, setView, onNew }) {
-  const tabs = [{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
+  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -323,7 +390,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status",""].map(h=>(
+              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment",""].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -333,18 +400,18 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
               const paid=parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment);
               const total=parseMoney(b.venueFee), balance=total-paid, isFullyPaid=total>0&&balance<=0;
               const accomBadges = [];
-              if(b.amlyBooked)   accomBadges.push("Amly");
-              if(b.hamletBooked) accomBadges.push("Hamlet");
-              if(b.campingBooked) accomBadges.push("Camping");
+              if(b.amlyBooked==="yes")    accomBadges.push("Amly");
+              if(b.hamletBooked==="yes")  accomBadges.push("Hamlet");
+              if(b.campingBooked==="yes") accomBadges.push("Camping");
               return (
-                <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s" }}
-                  onMouseEnter={e=>e.currentTarget.style.background="#f5f9ff"}
+                <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s", cursor:"pointer" }}
+                  onClick={()=>onEdit(b.id)}
+                  onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}):"—"}</td>
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date}/></td>
                   <td style={{ padding:"10px 12px", maxWidth:180 }}>
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
-                    {b.email&&<div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>{b.email}</div>}
                   </td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.mealGuests||"—"}</td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.eveGuests||"—"}</td>
@@ -356,10 +423,16 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                   <td style={{ padding:"10px 12px" }}>{(b.setup||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
                   <td style={{ padding:"10px 12px" }}>{(b.dayManager||[]).length===0?<span style={{ color:T.textLight,fontSize:11 }}>—</span>:(b.dayManager||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
                   <td style={{ padding:"10px 12px" }}>
+                    {b.status==="Holding"
+                      ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:"#fef9c3", color:"#854d0e", fontWeight:600 }}>Holding</span>
+                      : b.status==="Confirmed"
+                        ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:T.greenBg, color:T.green, fontWeight:600 }}>Confirmed</span>
+                        : <span style={{ color:T.textLight, fontSize:11 }}>—</span>}
+                  </td>
+                  <td style={{ padding:"10px 12px" }}>
                     {total>0?(<span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:isFullyPaid?T.greenBg:balance>0?T.amberBg:T.redBg, color:isFullyPaid?T.green:balance>0?T.amber:T.red, fontWeight:600 }}>{isFullyPaid?"✓ Paid":balance>0?`£${balance.toLocaleString()} due`:"Overpaid"}</span>):<span style={{ color:T.textLight,fontSize:11 }}>—</span>}
                   </td>
-                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                    <button onClick={()=>onEdit(b.id)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"5px 13px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit", marginRight:6, fontWeight:600 }}>Edit</button>
+                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }} onClick={e=>e.stopPropagation()}>
                     <button onClick={()=>onDelete(b.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
                   </td>
                 </tr>
@@ -376,6 +449,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
 const TEXT_FIELDS = [
   { key:"couple",          label:"Couple / Event Name",  type:"text",     section:"core",     required:true },
   { key:"date",            label:"Wedding Date",          type:"date",     section:"core",     required:true },
+  { key:"status",          label:"Status",                type:"select",   section:"core",     options:["Confirmed","Holding"] },
   { key:"venueFee",        label:"Venue Fee (£)",         type:"number",   section:"financials" },
   { key:"deposit",         label:"Deposit (£)",           type:"number",   section:"financials" },
   { key:"payment2",        label:"2nd Payment (£)",       type:"number",   section:"financials" },
@@ -397,10 +471,12 @@ const TEXT_FIELDS = [
   { key:"band",            label:"Band / Entertainment",  type:"text",     section:"vendors" },
   { key:"paSystem",        label:"PA System",             type:"text",     section:"vendors" },
   { key:"hairdresser",     label:"Hairdresser",           type:"text",     section:"vendors" },
-  { key:"corkage",         label:"Corkage",               type:"text",     section:"extras" },
-  { key:"pets",            label:"Pets",                  type:"text",     section:"extras" },
-  { key:"nonStandard",     label:"Non-Standard / Extras", type:"textarea", section:"extras" },
-  { key:"notes",           label:"Internal Notes",        type:"textarea", section:"extras" },
+  { key:"corkage",          label:"Corkage",               type:"text",     section:"extras" },
+  { key:"pets",             label:"Pets",                  type:"text",     section:"extras" },
+  { key:"barTakeGross",     label:"Bar Take Gross (£)",    type:"number",   section:"extras" },
+  { key:"circaCommission",  label:"Circa Commission (£)",  type:"number",   section:"extras" },
+  { key:"nonStandard",      label:"Non-Standard / Extras", type:"textarea", section:"extras" },
+  { key:"notes",            label:"Internal Notes",        type:"textarea", section:"extras" },
 ];
 
 const FORM_SECTIONS = {
@@ -422,7 +498,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) 
 
   const countFilled = s => {
     if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
-    if(s==="accommodation") return ["amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]).length;
+    if(s==="accommodation") return ["amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]==="yes"||formData[k]==="no").length;
     return TEXT_FIELDS.filter(f=>f.section===s&&formData[f.key]).length;
   };
   const countTotal = s => {
@@ -491,6 +567,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) 
                       <FInput type="date" value={formData[field.key]} onChange={v=>update(field.key,v)}/>
                       <DayBadge dateStr={formData.date} style={{ fontSize:13, padding:"6px 12px" }}/>
                     </div>
+                  ) : field.type==="select" ? (
+                    <select value={formData[field.key]||""} onChange={e=>update(field.key,e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
+                      {(field.options||[]).map(o=><option key={o}>{o}</option>)}
+                    </select>
                   ) : field.type==="textarea"
                     ? <FTextarea value={formData[field.key]} onChange={v=>update(field.key,v)}/>
                     : <FInput type={field.type} value={formData[field.key]} onChange={v=>update(field.key,v)}/>
@@ -597,7 +677,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
 function ReportsView({ bookings, staff, reportType, setReportType }) {
-  const types = [{id:"summary",label:"Annual Summary"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Staffing Rota"},{id:"pipeline",label:"Payment Pipeline"},{id:"staffload",label:"Staff Workload"},{id:"hours",label:"Hours Worked"}];
+  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Staffing Rota"},{id:"pipeline",label:"Payment Pipeline"},{id:"staffload",label:"Staff Workload"},{id:"hours",label:"Hours Worked"}];
   return (
     <div style={{ paddingTop:28 }}>
       <div style={{ marginBottom:22, display:"flex", gap:8, flexWrap:"wrap" }}>
@@ -606,6 +686,7 @@ function ReportsView({ bookings, staff, reportType, setReportType }) {
         ))}
       </div>
       {reportType==="summary"       && <SummaryReport bookings={bookings}/>}
+      {reportType==="calendar"       && <CalendarReport bookings={bookings}/>}
       {reportType==="revenue"       && <RevenueReport bookings={bookings}/>}
       {reportType==="accommodation" && <AccommodationReport bookings={bookings}/>}
       {reportType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
@@ -627,25 +708,44 @@ function StatCard({ label, value, sub }) {
 }
 
 function SummaryReport({ bookings }) {
-  const weddings=bookings.filter(b=>b.couple&&b.date);
-  const today=new Date().toISOString().slice(0,10);
-  const upcoming=weddings.filter(b=>b.date>=today);
-  const totalRevenue=weddings.reduce((s,b)=>s+parseMoney(b.venueFee),0);
-  const totalCollected=weddings.reduce((s,b)=>s+parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment),0);
-  const monthCounts={};
-  upcoming.forEach(b=>{ const m=b.date.slice(0,7); monthCounts[m]=(monthCounts[m]||0)+1; });
+  const allYears = [...new Set(bookings.filter(b=>b.date).map(b=>b.date.slice(0,4)))].sort();
+  const currentYear = new Date().getFullYear().toString();
+  const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
+
+  const yearBookings = bookings.filter(b=>b.couple&&b.date&&b.date.startsWith(year));
+  const today = new Date().toISOString().slice(0,10);
+  const upcoming = yearBookings.filter(b=>b.date>=today);
+  const totalRevenue = yearBookings.reduce((s,b)=>s+parseMoney(b.venueFee),0);
+  const totalCollected = yearBookings.reduce((s,b)=>s+parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment),0);
+  const monthCounts = {};
+  yearBookings.forEach(b=>{ const m=b.date.slice(0,7); monthCounts[m]=(monthCounts[m]||0)+1; });
+
+  const prevYear = allYears[allYears.indexOf(year)-1];
+  const nextYear = allYears[allYears.indexOf(year)+1];
+
   return (
     <div>
+      {/* Year navigator */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:16, marginBottom:24 }}>
+        <button onClick={()=>setYear(prevYear)} disabled={!prevYear} style={{ background:prevYear?"#fff":"#f5f5f5", border:`1px solid ${T.border}`, color:prevYear?T.midBlue:T.textLight, width:36, height:36, borderRadius:8, cursor:prevYear?"pointer":"default", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>‹</button>
+        <div style={{ display:"flex", gap:8 }}>
+          {allYears.map(y=>(
+            <button key={y} onClick={()=>setYear(y)} style={{ background:y===year?T.midBlue:"#fff", color:y===year?"#fff":T.textMid, border:`1.5px solid ${y===year?T.midBlue:T.border}`, padding:"6px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:y===year?700:400 }}>{y}</button>
+          ))}
+        </div>
+        <button onClick={()=>setYear(nextYear)} disabled={!nextYear} style={{ background:nextYear?"#fff":"#f5f5f5", border:`1px solid ${T.border}`, color:nextYear?T.midBlue:T.textLight, width:36, height:36, borderRadius:8, cursor:nextYear?"pointer":"default", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>›</button>
+      </div>
+
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:28 }}>
-        <StatCard label="Total Bookings" value={weddings.length} sub={`${upcoming.length} upcoming`}/>
-        <StatCard label="Total Venue Revenue" value={`£${totalRevenue.toLocaleString()}`} sub="Across all bookings"/>
-        <StatCard label="Total Collected" value={`£${totalCollected.toLocaleString()}`} sub={`£${(totalRevenue-totalCollected).toLocaleString()} outstanding`}/>
-        <StatCard label="Amly Booked" value={weddings.filter(b=>b.amlyBooked).length} sub={`£${weddings.filter(b=>b.amlyBooked).reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()} revenue`}/>
-        <StatCard label="Hamlet Booked" value={weddings.filter(b=>b.hamletBooked).length} sub={`£${weddings.filter(b=>b.hamletBooked).reduce((s,b)=>s+parseMoney(b.hamletFee),0).toLocaleString()} revenue`}/>
-        <StatCard label="Camping Booked" value={weddings.filter(b=>b.campingBooked).length} sub={`£${weddings.filter(b=>b.campingBooked).reduce((s,b)=>s+parseMoney(b.campingFee),0).toLocaleString()} revenue`}/>
+        <StatCard label="Bookings" value={yearBookings.length} sub={`${upcoming.length} upcoming`}/>
+        <StatCard label="Venue Revenue" value={`£${totalRevenue.toLocaleString()}`} sub={`${year}`}/>
+        <StatCard label="Collected" value={`£${totalCollected.toLocaleString()}`} sub={`£${(totalRevenue-totalCollected).toLocaleString()} outstanding`}/>
+        <StatCard label="Confirmed" value={yearBookings.filter(b=>b.status==="Confirmed").length} sub="Confirmed bookings"/>
+        <StatCard label="Holding" value={yearBookings.filter(b=>b.status==="Holding").length} sub="Holding bookings"/>
+        <StatCard label="Amly / Hamlet / Camping" value={`${yearBookings.filter(b=>b.amlyBooked==="yes").length} / ${yearBookings.filter(b=>b.hamletBooked==="yes").length} / ${yearBookings.filter(b=>b.campingBooked==="yes").length}`} sub="Accommodation bookings"/>
       </div>
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-        <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>Upcoming Bookings by Month</h3>
+        <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Bookings by Month</h3>
         {Object.entries(monthCounts).sort().map(([month,count])=>{
           const lbl=new Date(month+"-01").toLocaleDateString("en-GB",{month:"long",year:"numeric"});
           return (
@@ -655,6 +755,134 @@ function SummaryReport({ bookings }) {
                 <div style={{ width:`${Math.min(100,(count/5)*100)}%`, minWidth:count>0?30:0, height:"100%", background:T.midBlue, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
                   <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{count}</span>
                 </div>
+              </div>
+            </div>
+          );
+        })}
+        {Object.keys(monthCounts).length===0 && <p style={{ color:T.textLight, fontSize:13 }}>No bookings in {year}.</p>}
+      </div>
+    </div>
+  );
+}
+
+// ─── YEAR CALENDAR REPORT ─────────────────────────────────────────────────────
+function CalendarReport({ bookings }) {
+  const allYears = [...new Set(bookings.filter(b=>b.date).map(b=>b.date.slice(0,4)))].sort();
+  const currentYear = new Date().getFullYear().toString();
+  const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
+  const today = new Date().toISOString().slice(0,10);
+
+  // Index bookings by date string
+  const byDate = {};
+  bookings.filter(b=>b.date&&b.couple&&b.date.startsWith(year)).forEach(b=>{
+    byDate[b.date] = byDate[b.date] || [];
+    byDate[b.date].push(b);
+  });
+
+  const prevYear = allYears[allYears.indexOf(year)-1];
+  const nextYear = allYears[allYears.indexOf(year)+1];
+  // Allow scrolling to years not yet in allYears
+  const yearInt = parseInt(year);
+
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+  const getBookingStyle = (b) => {
+    const isPast = b.date < today;
+    if (isPast) return { bg:"#e5e7eb", text:"#6b7280", border:"#d1d5db" };
+    if (b.status==="Holding") return { bg:"#fef9c3", text:"#854d0e", border:"#fcd34d" };
+    return { bg:"#dcfce7", text:"#166534", border:"#86efac" };
+  };
+
+  return (
+    <div>
+      {/* Year nav */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:16, marginBottom:24 }}>
+        <button onClick={()=>setYear(String(yearInt-1))} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.midBlue, width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>‹</button>
+        <div style={{ display:"flex", gap:8 }}>
+          {allYears.map(y=>(
+            <button key={y} onClick={()=>setYear(y)} style={{ background:y===year?T.midBlue:"#fff", color:y===year?"#fff":T.textMid, border:`1.5px solid ${y===year?T.midBlue:T.border}`, padding:"6px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:y===year?700:400 }}>{y}</button>
+          ))}
+          {!allYears.includes(String(yearInt)) && <button style={{ background:T.midBlue, color:"#fff", border:`1.5px solid ${T.midBlue}`, padding:"6px 18px", borderRadius:8, fontFamily:"inherit", fontSize:15, fontWeight:700 }}>{year}</button>}
+        </div>
+        <button onClick={()=>setYear(String(yearInt+1))} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.midBlue, width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>›</button>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display:"flex", gap:16, marginBottom:20, flexWrap:"wrap" }}>
+        {[{label:"Confirmed",bg:"#dcfce7",text:"#166534",border:"#86efac"},{label:"Holding",bg:"#fef9c3",text:"#854d0e",border:"#fcd34d"},{label:"Past",bg:"#e5e7eb",text:"#6b7280",border:"#d1d5db"}].map(l=>(
+          <div key={l.label} style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <div style={{ width:14, height:14, borderRadius:3, background:l.bg, border:`1px solid ${l.border}` }}/>
+            <span style={{ fontSize:12, color:T.textMid }}>{l.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* 12-month grid */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+        {MONTHS.map((monthName, mIdx) => {
+          const monthNum = String(mIdx+1).padStart(2,"0");
+          const firstDay = new Date(`${year}-${monthNum}-01`);
+          const daysInMonth = new Date(yearInt, mIdx+1, 0).getDate();
+          // Monday=0 offset
+          let startDow = (firstDay.getDay()+6)%7;
+
+          const cells = [];
+          for (let i=0; i<startDow; i++) cells.push(null);
+          for (let d=1; d<=daysInMonth; d++) cells.push(d);
+
+          return (
+            <div key={monthName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div style={{ padding:"10px 14px", background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
+                <span style={{ fontSize:14, fontWeight:700, color:T.midBlue }}>{monthName} {year}</span>
+              </div>
+              <div style={{ padding:"8px 10px" }}>
+                {/* Day headers */}
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, marginBottom:4 }}>
+                  {DOW.map(d=><div key={d} style={{ textAlign:"center", fontSize:9, fontWeight:700, color:T.textLight, letterSpacing:.5, padding:"2px 0" }}>{d}</div>)}
+                </div>
+                {/* Day cells */}
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1 }}>
+                  {cells.map((day, ci) => {
+                    if (!day) return <div key={`e${ci}`}/>;
+                    const dateStr = `${year}-${monthNum}-${String(day).padStart(2,"0")}`;
+                    const dayBookings = byDate[dateStr] || [];
+                    const isToday = dateStr === today;
+                    const hasPast = dayBookings.some(b=>b.date<today);
+                    const hasConfirmed = dayBookings.some(b=>b.date>=today&&b.status==="Confirmed");
+                    const hasHolding = dayBookings.some(b=>b.date>=today&&b.status==="Holding");
+                    const cellBg = hasPast ? "#e5e7eb" : hasConfirmed ? "#dcfce7" : hasHolding ? "#fef9c3" : "transparent";
+                    const cellBorder = hasPast ? "#d1d5db" : hasConfirmed ? "#86efac" : hasHolding ? "#fcd34d" : "transparent";
+                    const cellText = hasPast ? "#6b7280" : (hasConfirmed||hasHolding) ? (hasConfirmed?"#166534":"#854d0e") : T.text;
+                    const isSun = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 6;
+                    const isSat = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 5;
+
+                    return (
+                      <div key={day} title={dayBookings.map(b=>b.couple).join(", ")}
+                        style={{ position:"relative", textAlign:"center", padding:"3px 1px", borderRadius:4, background:cellBg, border:`1px solid ${cellBorder}`, cursor:dayBookings.length?"pointer":"default" }}>
+                        <span style={{ fontSize:10, fontWeight:dayBookings.length?700:400, color:isToday?T.accent:isSat||isSun?T.textLight:cellText }}>
+                          {day}
+                        </span>
+                        {isToday && <div style={{ position:"absolute", bottom:1, left:"50%", transform:"translateX(-50%)", width:4, height:4, borderRadius:"50%", background:T.accent }}/>}
+                        {dayBookings.length>0 && (
+                          <div style={{ position:"absolute", top:1, right:2, fontSize:8, fontWeight:700, color:cellText }}>{dayBookings.length>1?dayBookings.length:""}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Booking list for this month */}
+                {Object.entries(byDate).filter(([d])=>d.startsWith(`${year}-${monthNum}`)).sort().map(([d, bks])=>(
+                  bks.map(b => {
+                    const s = getBookingStyle(b);
+                    return (
+                      <div key={b.id} style={{ marginTop:4, padding:"2px 6px", borderRadius:4, background:s.bg, border:`1px solid ${s.border}`, display:"flex", alignItems:"center", gap:4 }}>
+                        <span style={{ fontSize:10, fontWeight:700, color:s.text, flexShrink:0 }}>{new Date(d+"T00:00:00").getDate()}</span>
+                        <span style={{ fontSize:10, color:s.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.couple}</span>
+                      </div>
+                    );
+                  })
+                ))}
               </div>
             </div>
           );
@@ -708,9 +936,9 @@ function RevenueReport({ bookings }) {
 
 function AccommodationReport({ bookings }) {
   const rows=bookings.filter(b=>b.couple&&b.date);
-  const amlyRows=rows.filter(b=>b.amlyBooked);
-  const hamletRows=rows.filter(b=>b.hamletBooked);
-  const campingRows=rows.filter(b=>b.campingBooked);
+  const amlyRows=rows.filter(b=>b.amlyBooked==="yes");
+  const hamletRows=rows.filter(b=>b.hamletBooked==="yes");
+  const campingRows=rows.filter(b=>b.campingBooked==="yes");
   return (
     <div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
@@ -727,7 +955,13 @@ function AccommodationReport({ bookings }) {
                 <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, fontWeight:500 }}>{b.date}</td>
                 <td style={{ padding:"10px 12px", fontSize:13, fontWeight:500 }}>{b.couple}</td>
                 {[["amlyBooked","amlyFee"],["hamletBooked","hamletFee"],["campingBooked","campingFee"]].map(([bk,fk])=>[
-                  <td key={bk} style={{ padding:"10px 12px" }}><span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:b[bk]?T.greenBg:T.redBg, color:b[bk]?T.green:T.red, fontWeight:700 }}>{b[bk]?"Yes":"No"}</span></td>,
+                  <td key={bk} style={{ padding:"10px 12px" }}>
+                    {b[bk]==="yes"
+                      ? <span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:T.greenBg, color:T.green, fontWeight:700 }}>Yes</span>
+                      : b[bk]==="no"
+                        ? <span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:T.redBg, color:T.red, fontWeight:700 }}>No</span>
+                        : <span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:T.amberBg, color:T.amber, fontWeight:700 }}>TBC</span>}
+                  </td>,
                   <td key={fk} style={{ padding:"10px 12px", fontSize:13, color:parseMoney(b[fk])>0?T.text:T.textLight }}>{parseMoney(b[fk])>0?`£${parseMoney(b[fk]).toLocaleString()}`:"—"}</td>
                 ])}
               </tr>
@@ -1240,9 +1474,11 @@ function BarView() {
   const [products, setProducts] = useState([]);
   const [events, setEvents]     = useState([]);
   const [loaded, setLoaded]     = useState(false);
-  const [barView, setBarView]   = useState("stock"); // stock | order | stocktake | report | products
+  const [barView, setBarView]   = useState("stock");
   const [editProduct, setEditProduct] = useState(null);
   const [productForm, setProductForm] = useState(null);
+  const [editingEvent, setEditingEvent] = useState(null);
+  const [confirmDlg, setConfirmDlg]   = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -1255,6 +1491,32 @@ function BarView() {
   const saveProducts = async p => { setProducts(p); try { await window.storage.set(BAR_PRODUCTS_KEY, JSON.stringify(p)); } catch(e) { console.error(e); } };
   const saveEvents   = async e => { setEvents(e);   try { await window.storage.set(BAR_EVENTS_KEY,   JSON.stringify(e)); } catch(e) { console.error(e); } };
 
+  const handleDeleteEvent = async id => {
+    const ev = events.find(e=>e.id===id);
+    setConfirmDlg({
+      message: `Delete this ${ev?.type || "entry"}?`,
+      subMessage: `"${ev?.label||ev?.date}" will be permanently removed. This will affect current stock calculations.`,
+      onConfirm: async () => { setConfirmDlg(null); await saveEvents(events.filter(e => e.id !== id)); }
+    });
+  };
+
+  const handleEditEvent = ev => {
+    setEditingEvent(ev);
+    setBarView(ev.type === "order" ? "order" : "stocktake");
+  };
+
+  const handleSaveEvent = async ev => {
+    let updated;
+    if (editingEvent) {
+      updated = events.map(e => e.id === editingEvent.id ? { ...ev, id: editingEvent.id } : e);
+    } else {
+      updated = [...events, ev];
+    }
+    await saveEvents(updated);
+    setEditingEvent(null);
+    setBarView("history");
+  };
+
   const stock = computeStock(products, events);
 
   if (!loaded) return <div style={{ padding:40, color:T.textLight }}>Loading bar data…</div>;
@@ -1263,6 +1525,7 @@ function BarView() {
     { id:"stock",      label:"Current Stock" },
     { id:"order",      label:"+ New Order" },
     { id:"stocktake",  label:"+ New Stocktake" },
+    { id:"history",    label:"History" },
     { id:"report",     label:"Usage Report" },
     { id:"products",   label:"Products" },
   ];
@@ -1272,19 +1535,21 @@ function BarView() {
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:22 }}>
         <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Bar Management</h2>
       </div>
+      {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
 
       {/* Sub-navigation */}
       <div style={{ display:"flex", gap:6, marginBottom:24, flexWrap:"wrap" }}>
         {subTabs.map(t => (
-          <button key={t.id} onClick={() => setBarView(t.id)} style={{ background: barView===t.id ? T.midBlue : "#fff", color: barView===t.id ? "#fff" : T.textMid, border:`1.5px solid ${barView===t.id ? T.midBlue : T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:barView===t.id?700:400 }}>
+          <button key={t.id} onClick={() => { setEditingEvent(null); setBarView(t.id); }} style={{ background: barView===t.id ? T.midBlue : "#fff", color: barView===t.id ? "#fff" : T.textMid, border:`1.5px solid ${barView===t.id ? T.midBlue : T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:barView===t.id?700:400 }}>
             {t.label}
           </button>
         ))}
       </div>
 
       {barView === "stock"     && <StockView products={products} stock={stock} events={events}/>}
-      {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} onSave={async ev => { await saveEvents([...events, ev]); setBarView("stock"); }}/>}
-      {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} onSave={async ev => { await saveEvents([...events, ev]); setBarView("stock"); }}/>}
+      {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
+      {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
+      {barView === "history"   && <EventHistoryView events={events} products={products} onEdit={handleEditEvent} onDelete={handleDeleteEvent}/>}
       {barView === "report"    && <BarReportView  products={products} events={events}/>}
       {barView === "products"  && <ProductsView   products={products} onSave={saveProducts}/>}
     </div>
@@ -1409,22 +1674,22 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder }) {
   );
 }
 
-function EventEntryView({ type, products, stock, onSave }) {
+function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent }) {
   const today = new Date().toISOString().slice(0,10);
-  const [date,  setDate]  = useState(today);
-  const [label, setLabel] = useState("");
-  const [lines, setLines] = useState({});
+  const [date,  setDate]  = useState(editingEvent?.date  || today);
+  const [label, setLabel] = useState(editingEvent?.label || "");
+  const [lines, setLines] = useState(editingEvent?.lines || {});
   const [saving, setSaving] = useState(false);
 
-  // For stocktake: pre-populate with current stock as a starting point
   const initStocktake = () => {
+    if (editingEvent) return; // editing: lines already pre-filled above
     const init = {};
     products.forEach(p => { init[p.id] = stock[p.id] || 0; });
     setLines(init);
   };
 
   useEffect(() => {
-    if (type === "stocktake") initStocktake();
+    if (type === "stocktake" && !editingEvent) initStocktake();
   }, []);
 
   const setLine = (pid, val) => setLines(l => ({ ...l, [pid]: val === "" ? "" : Number(val) }));
@@ -1433,7 +1698,7 @@ function EventEntryView({ type, products, stock, onSave }) {
     if (!date) { alert("Please set a date."); return; }
     setSaving(true);
     const ev = {
-      id:    `ev_${Date.now()}`,
+      id:    editingEvent?.id || `ev_${Date.now()}`,
       type,
       date,
       label: label || (type === "order" ? "Order" : "Stocktake"),
@@ -1443,9 +1708,12 @@ function EventEntryView({ type, products, stock, onSave }) {
     setSaving(false);
   };
 
-  const isOrder = type === "order";
-  const title   = isOrder ? "New Order" : "New Stocktake";
-  const hint    = isOrder
+  const isOrder  = type === "order";
+  const isEditing = !!editingEvent;
+  const title    = isEditing
+    ? `Edit ${isOrder ? "Order" : "Stocktake"}: ${editingEvent.label}`
+    : isOrder ? "New Order" : "New Stocktake";
+  const hint     = isOrder
     ? "Enter quantities ordered for each product. Leave blank or 0 to skip."
     : "Enter actual counted stock for each product.";
 
@@ -1501,7 +1769,7 @@ function EventEntryView({ type, products, stock, onSave }) {
                       <div style={{ padding:"6px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}`, borderTop:`1px solid ${cc.border}`, display:"flex", alignItems:"center", gap:8 }}>
                         <CatBadge cat={cat}/>
                       </div>
-                      <div style={{ padding:"12px 18px", display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(320px,1fr))", gap:"10px 20px" }}>
+                      <div style={{ padding:"12px 18px", display:"grid", gridTemplateColumns:"1fr", gap:"8px" }}>
                         {prods.map(p => <ProductEntryCard key={p.id} p={p} lines={lines} stock={stock} setLine={setLine} isOrder={true}/>)}
                       </div>
                     </div>
@@ -1522,7 +1790,7 @@ function EventEntryView({ type, products, stock, onSave }) {
               <div style={{ padding:"10px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}` }}>
                 <CatBadge cat={cat}/>
               </div>
-              <div style={{ padding:"14px 18px", display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px,1fr))", gap:"10px 20px" }}>
+              <div style={{ padding:"14px 18px", display:"grid", gridTemplateColumns:"1fr", gap:"8px" }}>
                 {prods.map(p => <ProductEntryCard key={p.id} p={p} lines={lines} stock={stock} setLine={setLine} isOrder={false}/>)}
               </div>
             </div>
@@ -1532,8 +1800,116 @@ function EventEntryView({ type, products, stock, onSave }) {
 
       <div style={{ display:"flex", gap:12, marginTop:8, position:"sticky", bottom:20 }}>
         <button onClick={handleSave} disabled={saving} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"13px 36px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>
-          {saving ? "Saving…" : isOrder ? "Save Order" : "Save Stocktake"}
+          {saving ? "Saving…" : isEditing ? "Save Changes" : isOrder ? "Save Order" : "Save Stocktake"}
         </button>
+        {onCancel && (
+          <button onClick={onCancel} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"13px 24px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14 }}>
+            Cancel
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Event History ────────────────────────────────────────────────────────────
+function EventHistoryView({ events, products, onEdit, onDelete }) {
+  const sorted = [...events].sort((a,b) => b.date > a.date ? 1 : -1);
+  const [expanded, setExpanded] = useState(null);
+
+  if (!sorted.length) {
+    return (
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:48, textAlign:"center", color:T.textLight }}>
+        <p style={{ fontSize:16 }}>No orders or stocktakes recorded yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex", gap:16, marginBottom:18 }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:4 }}>Stocktakes</div>
+          <div style={{ fontSize:24, fontWeight:700, color:T.midBlue }}>{sorted.filter(e=>e.type==="stocktake").length}</div>
+        </div>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:4 }}>Orders</div>
+          <div style={{ fontSize:24, fontWeight:700, color:T.midBlue }}>{sorted.filter(e=>e.type==="order").length}</div>
+        </div>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:4 }}>Total Est. Ordered</div>
+          <div style={{ fontSize:24, fontWeight:700, color:T.midBlue }}>
+            {fmt2(sorted.filter(e=>e.type==="order").reduce((sum,ev) =>
+              sum + products.reduce((s,p) => s + (Number(ev.lines?.[p.id]||0)) * (p.costUnit||0), 0), 0
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {sorted.map(ev => {
+          const isOrder     = ev.type === "order";
+          const isExpanded  = expanded === ev.id;
+          const lineCount   = Object.keys(ev.lines||{}).length;
+          const orderCost   = isOrder ? products.reduce((s,p) => s + (Number(ev.lines?.[p.id]||0)) * (p.costUnit||0), 0) : null;
+          const typeColour  = isOrder
+            ? { bg:T.midBlueBg, text:T.midBlue, border:T.border, label:"Order" }
+            : { bg:T.greenBg,   text:T.green,   border:"#86efac", label:"Stocktake" };
+
+          return (
+            <div key={ev.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              {/* Row header */}
+              <div style={{ display:"flex", alignItems:"center", gap:14, padding:"14px 18px", cursor:"pointer" }}
+                onClick={() => setExpanded(isExpanded ? null : ev.id)}>
+                {/* Type badge */}
+                <span style={{ fontSize:11, fontWeight:700, padding:"3px 10px", borderRadius:10, background:typeColour.bg, color:typeColour.text, border:`1px solid ${typeColour.border}`, flexShrink:0 }}>
+                  {typeColour.label}
+                </span>
+                {/* Date */}
+                <span style={{ fontSize:14, fontWeight:700, color:T.accent, flexShrink:0 }}>
+                  {new Date(ev.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
+                </span>
+                <span style={{ fontSize:12, color:T.textLight, flexShrink:0 }}>
+                  {dayOfWeek(ev.date)}
+                </span>
+                {/* Label */}
+                <span style={{ fontSize:14, color:T.text, fontWeight:500, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {ev.label}
+                </span>
+                {/* Meta */}
+                <span style={{ fontSize:12, color:T.textLight, flexShrink:0 }}>{lineCount} product{lineCount!==1?"s":""}</span>
+                {orderCost > 0 && <span style={{ fontSize:13, fontWeight:600, color:T.midBlue, flexShrink:0 }}>{fmt2(orderCost)}</span>}
+                {/* Actions */}
+                <div style={{ display:"flex", gap:6, flexShrink:0 }} onClick={e=>e.stopPropagation()}>
+                  <button onClick={()=>onEdit(ev)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"4px 12px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>Edit</button>
+                  <button onClick={()=>onDelete(ev.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
+                </div>
+                <span style={{ fontSize:14, color:T.textLight }}>{isExpanded?"▲":"▼"}</span>
+              </div>
+
+              {/* Expanded product lines */}
+              {isExpanded && (
+                <div style={{ borderTop:`1px solid ${T.border}`, background:T.bg, padding:"12px 18px" }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(240px,1fr))", gap:"8px 16px" }}>
+                    {Object.entries(ev.lines||{}).map(([pid, qty]) => {
+                      const prod = products.find(p=>p.id===pid);
+                      if (!prod) return null;
+                      const lineVal = isOrder && prod.costUnit ? qty * prod.costUnit : null;
+                      return (
+                        <div key={pid} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#fff", borderRadius:6, border:`1px solid ${T.border}` }}>
+                          <CatBadge cat={prod.category}/>
+                          <span style={{ flex:1, fontSize:12, fontWeight:500, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{prod.name}</span>
+                          <span style={{ fontSize:13, fontWeight:700, color:T.midBlue, flexShrink:0 }}>{qty}</span>
+                          {lineVal != null && <span style={{ fontSize:11, color:T.textLight, flexShrink:0 }}>{fmt2(lineVal)}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1677,7 +2053,11 @@ function ProductsView({ products, onSave }) {
 
   const handleEdit = p => { setForm({...p}); setEditId(p.id); };
   const handleNew  = () => { setForm(emptyProduct()); setEditId("new"); };
-  const handleDelete = id => { if (!confirm("Delete this product?")) return; onSave(products.filter(p=>p.id!==id)); };
+  const handleDelete = id => {
+    const p = products.find(x=>x.id===id);
+    if (!confirm(`Delete "${p?.name||"this product"}"? This cannot be undone.`)) return;
+    onSave(products.filter(p=>p.id!==id));
+  };
   const handleSubmit = () => {
     if (!form.name) { alert("Product name required."); return; }
     let updated;
@@ -1752,6 +2132,1592 @@ function ProductsView({ products, onSave }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENQUIRIES MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ENQUIRIES_STORAGE = "hbf_enquiries_v1";
+
+const INITIAL_ENQUIRIES = [
+  {
+    "id": "enq_1",
+    "name": "Chelsea Nokes & Kai",
+    "eventType": "Wedding",
+    "numbers": "50",
+    "datePreference": "2026-27",
+    "email": "chelsea.nokes@icloud.com",
+    "phone": "",
+    "source": "Bridebook - WF",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2025-01-22",
+        "method": "email",
+        "note": "Chelsea replied to my email to say that they love HF and nothing compares but their dog is unwell and they are having to cover  expensive vet bills - now looking at end of life.l  Will plan wedding again when they can."
+      },
+      {
+        "date": "2025-11-05",
+        "method": "email",
+        "note": "Chelsea and partner are still looking at venues - aiming to see 2 per month!"
+      },
+      {
+        "date": "2025-11-05",
+        "method": "email",
+        "note": "Sent a follow up today."
+      },
+      {
+        "date": "2025-10-09",
+        "method": "email",
+        "note": "Chelsea sent email following visiting the wedding fayre.  Have sent all the info."
+      }
+    ]
+  },
+  {
+    "id": "enq_2",
+    "name": "Tom Manktelow",
+    "eventType": "Wedding party",
+    "numbers": "90",
+    "datePreference": "2027",
+    "email": "tmanktelow21@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-15",
+        "method": "email",
+        "note": "Sent a follow up after sending Tom the party package info."
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Semt a follow up - move to no longer interested if don't hear back."
+      },
+      {
+        "date": "2026-01-08",
+        "method": "email",
+        "note": "Tom replied - they are now thinking about a midweek wedding - have sent details."
+      },
+      {
+        "date": "2026-01-06",
+        "method": "email",
+        "note": "Sent a follow up"
+      },
+      {
+        "date": "2025-12-01",
+        "method": "email",
+        "note": "Tom emailed back.  Have said we're not able to do viewings for 2027 weddings until Spring but we can hold a preffered date with £100 deposit.  Await his response."
+      },
+      {
+        "date": "2025-10-28",
+        "method": "email",
+        "note": "Have sent all the info - given full prices but said we can offer a slightly different package for parties out of the wedding season."
+      }
+    ]
+  },
+  {
+    "id": "enq_3",
+    "name": "Alex Krolak",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2027/2028",
+    "email": "alexmkrolak@gmail.com",
+    "phone": "",
+    "source": "Friends married at the farm",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a final follow up."
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Sent a follow up."
+      },
+      {
+        "date": "2026-02-03",
+        "method": "email",
+        "note": "sent a follow up."
+      },
+      {
+        "date": "2026-01-27",
+        "method": "email",
+        "note": "Have sent all the details."
+      }
+    ]
+  },
+  {
+    "id": "enq_4",
+    "name": "Kristina & Isaac",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "?",
+    "email": "kristinaquantrell@gmail.com",
+    "phone": "",
+    "source": "UK BRIDES",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a final follow up"
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Sent a follow up."
+      },
+      {
+        "date": "2026-02-03",
+        "method": "email",
+        "note": "sent a follow up."
+      },
+      {
+        "date": "2026-01-30",
+        "method": "email",
+        "note": "Have sent all the details."
+      }
+    ]
+  },
+  {
+    "id": "enq_5",
+    "name": "Jess Greenwood",
+    "eventType": "10 Year Wedding Anniversary",
+    "numbers": "",
+    "datePreference": "Thur 24 June 2027",
+    "email": "jessica.blackman@live.co.uk",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a final follow up"
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Sent a follow up."
+      },
+      {
+        "date": "2026-02-10",
+        "method": "email",
+        "note": "Have asked Jess for a bit more info"
+      }
+    ]
+  },
+  {
+    "id": "enq_6",
+    "name": "Sam & Bex",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2026 or 2027",
+    "email": "sam.and.bex.thomas@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a follow up"
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Sent a follow up."
+      },
+      {
+        "date": "2026-02-20",
+        "method": "email",
+        "note": "Have sent all the info."
+      }
+    ]
+  },
+  {
+    "id": "enq_7",
+    "name": "Lottie & Andy",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "",
+    "email": "charlottecurtisdesign@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a follow up"
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Sent a follow up."
+      },
+      {
+        "date": "2026-02-25",
+        "method": "email",
+        "note": "Lottie would like to arrange a viewing - have asked when they're looking to get married as she wanted a viewing sooner rather than later."
+      },
+      {
+        "date": "2026-02-23",
+        "method": "email",
+        "note": "Sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_8",
+    "name": "Michael Trew",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2026",
+    "email": "mtrew222@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a follow up and let him know we have one weekend now available"
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Sent a follow up."
+      },
+      {
+        "date": "2026-02-23",
+        "method": "email",
+        "note": "Michael and his boyfriend want to marry in 2026 - have asked when they are looking to marry and sent all the info."
+      }
+    ]
+  },
+  {
+    "id": "enq_9",
+    "name": "Caroline Kinderman",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2026 - happy with midweek in summer holidays",
+    "email": "",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a follow up"
+      },
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Sent a follow up. 23..02.20 sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_10",
+    "name": "Charlotte Edwards",
+    "eventType": "Wedding",
+    "numbers": "100-120",
+    "datePreference": "2028",
+    "email": "charlotteedwards023@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a follow up"
+      },
+      {
+        "date": "2026-03-03",
+        "method": "email",
+        "note": "Charlotte is looking for a wedding venue that can allow a relaxed set up with perhaps food vendors etc rather than traditional set up - I've sent all the info."
+      }
+    ]
+  },
+  {
+    "id": "enq_11",
+    "name": "Jennifer MacDonald",
+    "eventType": "",
+    "numbers": "",
+    "datePreference": "",
+    "email": "jenmac2@hotmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a follow up"
+      },
+      {
+        "date": "2026-03-10",
+        "method": "email",
+        "note": "Interested poss in a date this year, or otherwise 2027.  Have sent all info."
+      }
+    ]
+  },
+  {
+    "id": "enq_12",
+    "name": "Jemma Stolworthy",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2027",
+    "email": "stolworthyjemma@yahoo.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "Sent a follow up"
+      },
+      {
+        "date": "2026-03-20",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_13",
+    "name": "Grace & Charlie",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2027",
+    "email": "gracedellar4@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-14",
+        "method": "email",
+        "note": "CHASE UP WK BEG 20 APRIL"
+      },
+      {
+        "date": "2026-04-13",
+        "method": "email",
+        "note": "Grace has finally replied - she said that they'd like to visit on 2nd May.  Have explained fully booked and offered different dates."
+      },
+      {
+        "date": "2026-03-27",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_14",
+    "name": "Sarah Jane Leaver",
+    "eventType": "Wedding",
+    "numbers": "?",
+    "datePreference": "?",
+    "email": "sarahjaneleaver@icloud.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-07",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_15",
+    "name": "Holly",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "?",
+    "email": "hollymariesherwood@icloud.com",
+    "phone": "",
+    "source": "UK BRIDES",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-20",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_16",
+    "name": "Megan Scott",
+    "eventType": "Wedding",
+    "numbers": "?",
+    "datePreference": "?",
+    "email": "megan.scott6@icloud.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-05",
+        "method": "email",
+        "note": "Have sent all the info - Megan wanted to visit over the weekend."
+      }
+    ]
+  },
+  {
+    "id": "enq_17",
+    "name": "Ross Hawkes",
+    "eventType": "Wedding",
+    "numbers": "?",
+    "datePreference": "?",
+    "email": "rosshawkes@yahoo.co.uk",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-05",
+        "method": "email",
+        "note": "Have sent all the info."
+      }
+    ]
+  },
+  {
+    "id": "enq_18",
+    "name": "Judith Panugaling",
+    "eventType": "Wedding",
+    "numbers": "200",
+    "datePreference": "2028-07-01 00:00:00",
+    "email": "judithpanugaling25@gmail.com",
+    "phone": "",
+    "source": "UK BRIDES",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": []
+  },
+  {
+    "id": "enq_19",
+    "name": "Francesca Skinner-Clark",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "15/07/2028 - 2028",
+    "email": "frankiiee12@googlemail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": []
+  },
+  {
+    "id": "enq_20",
+    "name": "Charlotte",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2026-08-27 00:00:00",
+    "email": "velsaunders@icloud.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": []
+  },
+  {
+    "id": "enq_21",
+    "name": "Charlotte",
+    "eventType": "",
+    "numbers": "",
+    "datePreference": "",
+    "email": "charlotte.mizzi998@gmail.com",
+    "phone": "",
+    "source": "WHITESPACE",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": []
+  },
+  {
+    "id": "enq_22",
+    "name": "Ellie Martin",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "",
+    "email": "",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-15",
+        "method": "email",
+        "note": "Sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_23",
+    "name": "Natalie Arnold",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "",
+    "email": "nataliesarnold@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-15",
+        "method": "email",
+        "note": "Sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_24",
+    "name": "Holly",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2028",
+    "email": "varndellholly@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-18",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_25",
+    "name": "Jon Beach",
+    "eventType": "Wedding",
+    "numbers": "50",
+    "datePreference": "2027-07-01 00:00:00",
+    "email": "on_beach@icloud.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-21",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_26",
+    "name": "Alfie Dale & Marina",
+    "eventType": "Wedding",
+    "numbers": "100",
+    "datePreference": "Poss 26th June 2027",
+    "email": "alfiedale1@gmail.com",
+    "phone": "07515 888 186",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-28",
+        "method": "phone",
+        "note": "Spoke on phone have sent all the info."
+      }
+    ]
+  },
+  {
+    "id": "enq_27",
+    "name": "Emily",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "",
+    "email": "emilyspice@icloud.com",
+    "phone": "",
+    "source": "WHITESPACE",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-28",
+        "method": "email",
+        "note": "Sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_28",
+    "name": "Ellie Martin",
+    "eventType": "Wedding",
+    "numbers": "?",
+    "datePreference": "?",
+    "email": "ellieemartinn@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-20",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_29",
+    "name": "Stephanie",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "",
+    "email": "stephanieltoogood@yahoo.com",
+    "phone": "",
+    "source": "WHITEPACE",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-06-03",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_31",
+    "name": "Vicki Marie",
+    "eventType": "Camping",
+    "numbers": "",
+    "datePreference": "",
+    "email": "vickimariecossar@outlook.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": []
+  },
+  {
+    "id": "enq_32",
+    "name": "Robyn Mills",
+    "eventType": "Camping",
+    "numbers": "",
+    "datePreference": "",
+    "email": "robyn_mills86@hotmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "",
+    "viewingTime": "",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2025-11-14",
+        "method": "email",
+        "note": "Follow up - meant to be booking for the same weekend as Yas and Jack"
+      }
+    ]
+  },
+  {
+    "id": "enq_36",
+    "name": "Michelle",
+    "eventType": "Retreat",
+    "numbers": "",
+    "datePreference": "",
+    "email": "michelle@tribestronger.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "29th May",
+    "viewingTime": "14:00:00",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-13",
+        "method": "email",
+        "note": "Retreat enquiry"
+      }
+    ]
+  },
+  {
+    "id": "enq_38",
+    "name": "Jessie Rosenburt",
+    "eventType": "Wedding",
+    "numbers": "200",
+    "datePreference": "2028-06-01 00:00:00",
+    "email": "rosenberg.l.jessie@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "5th June",
+    "viewingTime": "10:30 tbc",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "",
+        "method": "email",
+        "note": "Brough forward the viewing - Jessie said our venue is top of their list!"
+      }
+    ]
+  },
+  {
+    "id": "enq_40",
+    "name": "Jason & Becky",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2027",
+    "email": "jasonmcgeorge39@yahoo.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "Thursday 11th June",
+    "viewingTime": "10",
+    "viewingForm": "NEED TO SEND",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-21",
+        "method": "phone",
+        "note": "Spoken to Jason today - sounds really nice.  Re-scheduling due to the work going on in the barn"
+      }
+    ]
+  },
+  {
+    "id": "enq_41",
+    "name": "Emma Poole",
+    "eventType": "Wedding duplicate",
+    "numbers": "",
+    "datePreference": "",
+    "email": "emmapoole@hotmail.co.uk",
+    "phone": "",
+    "source": "",
+    "firstViewing": "Thursday 11th June",
+    "viewingTime": "11am tbc",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": []
+  },
+  {
+    "id": "enq_42",
+    "name": "Kat & Troy",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "",
+    "email": "bearbugwedding@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "19th June",
+    "viewingTime": "14",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": []
+  },
+  {
+    "id": "enq_43",
+    "name": "Gabby",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2027/28",
+    "email": "gabriellabiazotti@gmail.com>",
+    "phone": "",
+    "source": "",
+    "firstViewing": "Saturday 27th June",
+    "viewingTime": "11.30am",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-04-07",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_46",
+    "name": "Tania Stebbing & Bruno Rodrigues",
+    "eventType": "Wedding",
+    "numbers": "120",
+    "datePreference": "31st July - 2nd August",
+    "email": "Tania.Stebbing@sweatybetty.com",
+    "phone": "",
+    "source": "Internet Search",
+    "firstViewing": "Saturday 17th may",
+    "viewingTime": "11.3",
+    "viewingForm": "RECEIVED VIEWING FORM BACK",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "",
+        "method": "email",
+        "note": "CONTACT IN JAN/FEB 2026"
+      },
+      {
+        "date": "2025-05-25",
+        "method": "email",
+        "note": "Taniia and partner have decided to hold off booking untl they have moved as they are in the process of hopefully buying a house.  She says the defo want to book Hawthbush for 20"
+      },
+      {
+        "date": "2025-03-27",
+        "method": "email",
+        "note": "Taniia is keen to book a viewing - she sounds very keen."
+      },
+      {
+        "date": "2025-03-25",
+        "method": "email",
+        "note": "Have sent all details"
+      }
+    ]
+  },
+  {
+    "id": "enq_47",
+    "name": "Chloe Dawes & Jamie",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2027-07-17 00:00:00",
+    "email": "chloe-dawes1@hotmail.co.uk",
+    "phone": "",
+    "source": "Google search",
+    "firstViewing": "Friday 29th August",
+    "viewingTime": "tbc",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2025-11-18",
+        "method": "email",
+        "note": "Have emailed Chloe again today as not heard back from her since confirming the Harley"
+      },
+      {
+        "date": "205-07-22",
+        "method": "email",
+        "note": "Have confirmed re the Harley.  Waiting to hear if they are coming back for another viewing on 29th August. NEED TO LET CHLOE KNOW ABOUT THE HARLEY DAVIDSON"
+      },
+      {
+        "date": "2025-07-10",
+        "method": "email",
+        "note": "Sent follow up  Really loely couple - she is an occupational therapist and he is a roofer - they have two small children.  Big family.  They absolutely love the venue - I think they will book.  I have sent a follow up and said we'll confirm the 27 prices."
+      },
+      {
+        "date": "2025-06-20",
+        "method": "email",
+        "note": "Chloe has now received all the info - they love the Gun Pub and are very excited to have found us close by."
+      }
+    ]
+  },
+  {
+    "id": "enq_48",
+    "name": "Natalie Bryrant & Richard",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "Sept 2026",
+    "email": "byrnes_n@yahoo.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "Saturday 2nd August",
+    "viewingTime": "11.3",
+    "viewingForm": "RECEIVED VIEWING FORM",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "",
+        "method": "email",
+        "note": "CONTACT IN JAN/FEB 2026 ABOUT 2027"
+      },
+      {
+        "date": "2025-10-04",
+        "method": "email",
+        "note": "Richard emailed to say they had decided to put their wedding back to 2027 as they have had an offer accepted on a house."
+      },
+      {
+        "date": "2025-09-25",
+        "method": "email",
+        "note": "They are v interested in booking the 29th August."
+      },
+      {
+        "date": "2025-08-13",
+        "method": "email",
+        "note": "Have sent another follow up.  Last weekend in August is the date they'd like - Lovely couple - she's American works as a project manager and he was lovely (wearing a baseball cap - workis in Pharma) They loved the venue.  Have sent follow up."
+      },
+      {
+        "date": "2025-06-16",
+        "method": "email",
+        "note": "Have emailed Natalie to say I can do 11.30 on August 2nd for a viewing."
+      },
+      {
+        "date": "2025-06-04",
+        "method": "email",
+        "note": "Sent all the info - they go to the brewery and would like food trucks for their main food."
+      }
+    ]
+  },
+  {
+    "id": "enq_49",
+    "name": "Harriet Francis & James DUPLICATE",
+    "eventType": "Wedding",
+    "numbers": "120",
+    "datePreference": "July or August 2027",
+    "email": "harriet.francis94@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "Tuesday 31st March",
+    "viewingTime": "10:00:00",
+    "viewingForm": "SENT BOOKING FORM",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "",
+        "method": "email",
+        "note": "Harriet seems keen - has pushed for an earlier viewing - still wants to keep the 26th March booking as well."
+      },
+      {
+        "date": "2027-03-03",
+        "method": "email",
+        "note": "Have sent all the info"
+      }
+    ]
+  },
+  {
+    "id": "enq_50",
+    "name": "Johnny Healey & Hannah",
+    "eventType": "Wedding",
+    "numbers": "75",
+    "datePreference": "Sept - poss 19/20",
+    "email": "healeyjohnny1987@gmail.com",
+    "phone": "",
+    "source": "",
+    "firstViewing": "2026-03-17 00:00:00",
+    "viewingTime": "9.30 - virtual tour",
+    "viewingForm": "",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-03-24",
+        "method": "email",
+        "note": "Hannah loved the farm - hopeful she will book.  Came with her mum Kim and little baby girl Romey"
+      },
+      {
+        "date": "2026-03-17",
+        "method": "email",
+        "note": "They're very int in Fri 19 Sept - in discussions re pricing against another venue."
+      },
+      {
+        "date": "2026-03-05",
+        "method": "email",
+        "note": "Johnny looking for a venue for this year - have offered 19/20 - arranging a viewing."
+      }
+    ]
+  },
+  {
+    "id": "enq_51",
+    "name": "Rebecca Talbot and Tom Harper (Becky & Tom)",
+    "eventType": "",
+    "numbers": "",
+    "datePreference": "21/22nd August 2027 SEND HOLDING DEPOSIT INVOICE",
+    "email": "saltdeanbeach@gmail.com",
+    "phone": "",
+    "source": "Regulars of the brewery",
+    "firstViewing": "Sunday 26th April",
+    "viewingTime": "10.30am",
+    "viewingForm": "RECIEVED",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-02",
+        "method": "email",
+        "note": "Sent a follow up as not heard back from them since their viewing."
+      },
+      {
+        "date": "2026-04-26",
+        "method": "email",
+        "note": "Viewing went well, hopeful they will proceed. Sent follow up email.  Follow up early May if no contact."
+      },
+      {
+        "date": "2026-02-03",
+        "method": "email",
+        "note": "sent a follow up."
+      },
+      {
+        "date": "2026-01-30",
+        "method": "email",
+        "note": "They seem keen - have given me three different weekends in August and September."
+      },
+      {
+        "date": "2026-01-27",
+        "method": "email",
+        "note": "Have sent all the details"
+      }
+    ]
+  },
+  {
+    "id": "enq_52",
+    "name": "Henry & Gemma",
+    "eventType": "Wedding",
+    "numbers": "",
+    "datePreference": "2028",
+    "email": "",
+    "phone": "",
+    "source": "",
+    "firstViewing": "Sunday 26th April",
+    "viewingTime": "16:00:00",
+    "viewingForm": "SENT",
+    "outcome": "undecided",
+    "didNotBookReason": "",
+    "temperature": "cold",
+    "contacts": [
+      {
+        "date": "2026-05-02",
+        "method": "email",
+        "note": "Sent a follow up."
+      },
+      {
+        "date": "2026-04-27",
+        "method": "email",
+        "note": "Sent a follow up - nice couple - she's Irish and has quite alot of Irish family that would come over and need accommodation."
+      },
+      {
+        "date": "2026-03-17",
+        "method": "email",
+        "note": "Have asked if they send me their email address so that I can send the viewing booking form."
+      }
+    ]
+  }
+];
+
+const TEMP_CONFIG = {
+  cold: { label:"Cold", bg:"#e0f2fe", text:"#075985", border:"#7dd3fc" },
+  warm: { label:"Warm", bg:"#fef3c7", text:"#92400e", border:"#fcd34d" },
+  hot:  { label:"Hot",  bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
+};
+const OUTCOME_CONFIG = {
+  undecided:    { label:"Undecided",    bg:"#f5f9ff", text:"#3d5a7a", border:"#c8d9ef" },
+  booked:       { label:"Booked",       bg:"#dcfce7", text:"#166534", border:"#86efac" },
+  didnotbook:   { label:"Did Not Book", bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
+};
+const METHOD_CONFIG = {
+  email: { label:"Email", icon:"✉" },
+  phone: { label:"Phone", icon:"📞" },
+  other: { label:"Other", icon:"💬" },
+};
+
+function TempBadge({ temp }) {
+  const c = TEMP_CONFIG[temp] || TEMP_CONFIG.cold;
+  return <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:c.bg, color:c.text, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>{c.label}</span>;
+}
+function OutcomeBadge({ outcome }) {
+  const c = OUTCOME_CONFIG[outcome] || OUTCOME_CONFIG.undecided;
+  return <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:c.bg, color:c.text, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>{c.label}</span>;
+}
+
+// ─── EnquiriesView (top-level) ────────────────────────────────────────────────
+function EnquiriesView() {
+  const [enquiries, setEnquiries] = useState([]);
+  const [loaded, setLoaded]       = useState(false);
+  const [selected, setSelected]   = useState(null); // id of open enquiry
+  const [adding, setAdding]       = useState(false);
+  const [filter, setFilter]       = useState("undecided"); // undecided | all | booked | didnotbook
+  const [tempFilter, setTempFilter] = useState("all");
+  const [search, setSearch]       = useState("");
+  const [confirmDlg, setConfirmDlg] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get(ENQUIRIES_STORAGE);
+        setEnquiries(r?.value ? JSON.parse(r.value) : INITIAL_ENQUIRIES);
+      } catch { setEnquiries(INITIAL_ENQUIRIES); }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const save = async data => {
+    setEnquiries(data);
+    try { await window.storage.set(ENQUIRIES_STORAGE, JSON.stringify(data)); } catch(e) { console.error(e); }
+  };
+
+  const updateEnquiry = async updated => {
+    await save(enquiries.map(e => e.id === updated.id ? updated : e));
+  };
+
+  const deleteEnquiry = id => {
+    const e = enquiries.find(x=>x.id===id);
+    setConfirmDlg({
+      message: "Delete this enquiry?",
+      subMessage: `"${e?.name}" will be permanently removed.`,
+      onConfirm: async () => { setConfirmDlg(null); setSelected(null); await save(enquiries.filter(x=>x.id!==id)); }
+    });
+  };
+
+  const addNew = () => {
+    const id = `enq_${Date.now()}`;
+    const blank = { id, name:"", eventType:"Wedding", numbers:"", datePreference:"", email:"", phone:"", source:"", firstViewing:"", viewingTime:"", viewingForm:"", outcome:"undecided", didNotBookReason:"", temperature:"cold", contacts:[] };
+    save([...enquiries, blank]);
+    setSelected(id);
+    setAdding(true);
+  };
+
+  if (!loaded) return <div style={{ padding:40, color:T.textLight }}>Loading enquiries…</div>;
+
+  // If an enquiry is selected, show detail view
+  if (selected) {
+    const enq = enquiries.find(e=>e.id===selected);
+    if (!enq) { setSelected(null); return null; }
+    return (
+      <EnquiryDetail
+        enq={enq}
+        onUpdate={updateEnquiry}
+        onDelete={()=>deleteEnquiry(enq.id)}
+        onBack={()=>{ setSelected(null); setAdding(false); }}
+        isNew={adding}
+        confirmDlg={confirmDlg}
+        setConfirmDlg={setConfirmDlg}
+      />
+    );
+  }
+
+  const TEMP_ORDER = { hot:0, warm:1, cold:2 };
+  const filtered = enquiries.filter(e => {
+    if (filter !== "all" && e.outcome !== filter) return false;
+    if (tempFilter !== "all" && e.temperature !== tempFilter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return (e.name||"").toLowerCase().includes(q) || (e.email||"").toLowerCase().includes(q) || (e.datePreference||"").toLowerCase().includes(q);
+    }
+    return true;
+  }).sort((a,b) => (TEMP_ORDER[a.temperature]??2) - (TEMP_ORDER[b.temperature]??2));
+
+  return (
+    <div style={{ paddingTop:28 }}>
+      {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
+
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
+        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Enquiries</h2>
+        <button onClick={addNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>+ New Enquiry</button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+        {/* Outcome filter */}
+        <div style={{ display:"flex", gap:4 }}>
+          {[["undecided","Undecided"],["booked","Booked"],["didnotbook","Did Not Book"],["all","All"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setFilter(v)} style={{ background:filter===v?T.midBlue:"#fff", color:filter===v?"#fff":T.textMid, border:`1.5px solid ${filter===v?T.midBlue:T.border}`, padding:"6px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:filter===v?700:400 }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ width:1, height:24, background:T.border }}/>
+        {/* Temperature filter */}
+        {[["all","All"],["cold","Cold"],["warm","Warm"],["hot","Hot"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setTempFilter(v)} style={{ background:tempFilter===v?(TEMP_CONFIG[v]?.bg||T.midBlue):"#fff", color:tempFilter===v?(TEMP_CONFIG[v]?.text||"#fff"):T.textMid, border:`1.5px solid ${tempFilter===v?(TEMP_CONFIG[v]?.border||T.midBlue):T.border}`, padding:"6px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:tempFilter===v?700:400 }}>{l}</button>
+        ))}
+        <div style={{ flex:1 }}/>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or email…"
+          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 12px", outline:"none", width:220 }}/>
+        <span style={{ fontSize:12, color:T.textLight }}>{filtered.length} of {enquiries.length}</span>
+      </div>
+
+      {/* List */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr style={{ background:"#eef4fd" }}>
+              {["Name","Event","Date Preference","First Viewing","Contacts","Temp","Outcome",""].map(h=>(
+                <th key={h} style={{ padding:"10px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length===0 && (
+              <tr><td colSpan={8} style={{ padding:40, textAlign:"center", color:T.textLight }}>No enquiries match this filter.</td></tr>
+            )}
+            {filtered.map((e,i)=>{
+              const lastContact = [...(e.contacts||[])].filter(c=>c.date).sort((a,b)=>b.date>a.date?1:-1)[0];
+              return (
+                <tr key={e.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", cursor:"pointer", transition:"background .12s" }}
+                  onClick={()=>{ setSelected(e.id); setAdding(false); }}
+                  onMouseEnter={ev=>ev.currentTarget.style.background="#f0f6ff"}
+                  onMouseLeave={ev=>ev.currentTarget.style.background="transparent"}>
+                  <td style={{ padding:"11px 14px" }}>
+                    <div style={{ fontWeight:700, color:T.text, fontSize:14 }}>{e.name||"—"}</div>
+                  </td>
+                  <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.eventType||"—"}</td>
+                  <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.datePreference||"—"}</td>
+                  <td style={{ padding:"11px 14px", fontSize:13, color:T.accent, fontWeight:500 }}>{e.firstViewing||"—"}</td>
+                  <td style={{ padding:"11px 14px", fontSize:13 }}>
+                    <span style={{ color:(e.contacts||[]).length>0?T.midBlue:T.textLight, fontWeight:600 }}>{(e.contacts||[]).length}</span>
+                    {lastContact && <div style={{ fontSize:10, color:T.textLight }}>{lastContact.date}</div>}
+                  </td>
+                  <td style={{ padding:"11px 14px" }}><TempBadge temp={e.temperature}/></td>
+                  <td style={{ padding:"11px 14px" }}><OutcomeBadge outcome={e.outcome}/></td>
+                  <td style={{ padding:"11px 14px", whiteSpace:"nowrap" }} onClick={ev=>ev.stopPropagation()}>
+                    <button onClick={()=>deleteEnquiry(e.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:12 }}>✕</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Enquiry Detail ────────────────────────────────────────────────────────────
+function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg }) {
+  const [form, setForm]         = useState({...enq});
+  const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+  const [addingContact, setAddingContact] = useState(false);
+  const [dirty, setDirty]       = useState(isNew);
+
+  const update = (k,v) => { setForm(f=>({...f,[k]:v})); setDirty(true); };
+
+  const save = async () => { await onUpdate(form); setDirty(false); };
+
+  const addContact = () => {
+    if (!newContact.note.trim()) return;
+    const c = [...(form.contacts||[]), { ...newContact }];
+    setForm(f=>({...f, contacts:c})); setDirty(true);
+    setNewContact({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+    setAddingContact(false);
+  };
+
+  const deleteContact = idx => {
+    const c = (form.contacts||[]).filter((_,i)=>i!==idx);
+    setForm(f=>({...f, contacts:c})); setDirty(true);
+  };
+
+  const sortedContacts = [...(form.contacts||[])].sort((a,b)=>{
+    if (!a.date) return 1; if (!b.date) return -1;
+    return b.date > a.date ? 1 : -1;
+  });
+
+  const FRow = ({ label, children }) => (
+    <div>
+      <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>{label}</label>
+      {children}
+    </div>
+  );
+
+  const inp = (k, type="text", placeholder="") => (
+    <input type={type} value={form[k]||""} onChange={e=>update(k,e.target.value)} placeholder={placeholder}
+      style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/>
+  );
+  const sel = (k, opts) => (
+    <select value={form[k]||""} onChange={e=>update(k,e.target.value)}
+      style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
+      {opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+    </select>
+  );
+
+  return (
+    <div style={{ paddingTop:28 }}>
+      {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
+
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22 }}>
+        <button onClick={onBack} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, cursor:"pointer", fontSize:13, padding:"6px 14px", borderRadius:6, fontFamily:"inherit" }}>← Back</button>
+        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:20, flex:1 }}>{form.name||"New Enquiry"}</h2>
+        <TempBadge temp={form.temperature}/>
+        <OutcomeBadge outcome={form.outcome}/>
+        {dirty && <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save Changes</button>}
+        <button onClick={onDelete} style={{ background:T.redBg, border:"none", color:T.red, padding:"9px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Delete</button>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20 }}>
+        {/* Left column: core info */}
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          {/* Core details */}
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Enquiry Details</h3>
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              <FRow label="Name"><input value={form.name||""} onChange={e=>update("name",e.target.value)} placeholder="Full name" style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <FRow label="Event Type">{inp("eventType")}</FRow>
+                <FRow label="Numbers">{inp("numbers")}</FRow>
+                <FRow label="Date Preference">{inp("datePreference")}</FRow>
+                <FRow label="Source">{inp("source")}</FRow>
+                <FRow label="Email">{inp("email","email")}</FRow>
+                <FRow label="Phone">{inp("phone","tel")}</FRow>
+              </div>
+            </div>
+          </div>
+
+          {/* Viewing */}
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>First Viewing</h3>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <FRow label="Date / Description">{inp("firstViewing")}</FRow>
+              <FRow label="Time">{inp("viewingTime")}</FRow>
+              <div style={{ gridColumn:"1/-1" }}><FRow label="Viewing Form">{inp("viewingForm")}</FRow></div>
+            </div>
+          </div>
+
+          {/* Outcome */}
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Status</h3>
+
+            {/* Temperature - radio buttons */}
+            <div style={{ marginBottom:16 }}>
+              <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:8, fontWeight:600 }}>Temperature</label>
+              <div style={{ display:"flex", gap:8 }}>
+                {Object.entries(TEMP_CONFIG).map(([v,c])=>(
+                  <label key={v} style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", padding:"8px 14px", borderRadius:8, background:form.temperature===v?c.bg:"#fff", border:`1.5px solid ${form.temperature===v?c.border:T.border}`, transition:"all .15s" }}>
+                    <input type="radio" name="temp" value={v} checked={form.temperature===v} onChange={()=>update("temperature",v)} style={{ accentColor:c.text }}/>
+                    <span style={{ fontSize:13, fontWeight:700, color:form.temperature===v?c.text:T.textMid }}>{c.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Outcome dropdown */}
+            <FRow label="Outcome">
+              {sel("outcome", Object.entries(OUTCOME_CONFIG).map(([v,c])=>[v,c.label]))}
+            </FRow>
+
+            {/* Did not book reason */}
+            {form.outcome==="didnotbook" && (
+              <div style={{ marginTop:12 }}>
+                <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>Reason Did Not Book</label>
+                <textarea value={form.didNotBookReason||""} onChange={e=>update("didNotBookReason",e.target.value)} rows={3}
+                  style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", resize:"vertical", boxSizing:"border-box" }}/>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right column: contact history */}
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.border}`, paddingBottom:10, marginBottom:4 }}>
+            <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Contact History <span style={{ fontSize:12, color:T.textLight, fontWeight:400 }}>({(form.contacts||[]).length})</span></h3>
+            <button onClick={()=>setAddingContact(true)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>+ Add Contact</button>
+          </div>
+
+          {/* New contact form */}
+          {addingContact && (
+            <div style={{ background:T.accentLight, border:`1.5px solid ${T.accentMid}`, borderRadius:8, padding:14 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+                <div>
+                  <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Date</label>
+                  <input type="date" value={newContact.date} onChange={e=>setNewContact(n=>({...n,date:e.target.value}))}
+                    style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
+                </div>
+                <div>
+                  <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
+                  <select value={newContact.method} onChange={e=>setNewContact(n=>({...n,method:e.target.value}))}
+                    style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none" }}>
+                    <option value="email">Email</option>
+                    <option value="phone">Phone</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+              <textarea value={newContact.note} onChange={e=>setNewContact(n=>({...n,note:e.target.value}))} placeholder="Contact note…" rows={3}
+                style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 9px", outline:"none", resize:"vertical", boxSizing:"border-box", marginBottom:10 }}/>
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={addContact} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Add</button>
+                <button onClick={()=>setAddingContact(false)} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"7px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Contact list */}
+          <div style={{ overflowY:"auto", maxHeight:520, display:"flex", flexDirection:"column", gap:10 }}>
+            {sortedContacts.length===0 && !addingContact && (
+              <p style={{ color:T.textLight, fontSize:13, textAlign:"center", padding:20 }}>No contacts yet.</p>
+            )}
+            {sortedContacts.map((c,i)=>{
+              const mc = METHOD_CONFIG[c.method]||METHOD_CONFIG.email;
+              return (
+                <div key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 14px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
+                    <span style={{ fontSize:13, fontWeight:700, color:T.accent }}>{c.date||"No date"}</span>
+                    <span style={{ fontSize:11, background:T.accentLight, color:T.accent, border:`1px solid ${T.border}`, borderRadius:4, padding:"1px 7px", fontWeight:600 }}>{mc.icon} {mc.label}</span>
+                    <button onClick={()=>deleteContact(i)} style={{ marginLeft:"auto", background:"none", border:"none", color:T.textLight, cursor:"pointer", fontSize:13, padding:"0 4px" }}>✕</button>
+                  </div>
+                  <p style={{ margin:0, fontSize:13, color:T.text, lineHeight:1.5 }}>{c.note}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          {dirty && (
+            <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, marginTop:"auto" }}>Save Changes</button>
+          )}
+        </div>
       </div>
     </div>
   );
