@@ -185,6 +185,22 @@ function StaffChip({ initials, staff, size="sm" }) {
   );
 }
 
+
+// ─── GMAIL LINK ───────────────────────────────────────────────────────────────
+function GmailLink({ email }) {
+  if (!email) return null;
+  const url = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(email)}`;
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer"
+      title={`Search Gmail for ${email}`}
+      style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:11, fontWeight:600, color:"#db4437", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:4, padding:"2px 8px", textDecoration:"none", flexShrink:0, whiteSpace:"nowrap" }}
+      onClick={e=>e.stopPropagation()}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.910 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/></svg>
+      Gmail
+    </a>
+  );
+}
+
 // ─── STAFF PICKER ─────────────────────────────────────────────────────────────
 function StaffPicker({ label, value=[], onChange, staff }) {
   const [open, setOpen] = useState(false);
@@ -355,11 +371,13 @@ export default function App() {
       <Header view={view} setView={setView} onNew={handleNew}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff}/>}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff}
+          onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
+        />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
         {view==="enquiries"  && <EnquiriesView/>}
-        {view==="viewings"   && <ViewingsView bookings={bookings}/>}
+        {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={id=>{/* handled inside EnquiriesView */}}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries}/>}
       </div>
     </div>
@@ -368,7 +386,7 @@ export default function App() {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 function Header({ view, setView, onNew }) {
-  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"viewings",label:"Viewings"},{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
+  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -531,7 +549,7 @@ const FORM_SECTIONS = {
   viewings:      { label:"Viewings" },
 };
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave }) {
   const [activeSection, setActiveSection] = useState("core");
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
 
@@ -636,7 +654,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) 
           )}
 
           {activeSection==="viewings" && (
-            <BookingViewingsSection formData={formData} update={update}/>
+            <BookingViewingsSection formData={formData} update={update} onAutoSave={onAutoSave}/>
           )}
 
           {activeSection!=="staffing" && activeSection!=="accommodation" && activeSection!=="hours" && activeSection!=="viewings" && (
@@ -655,7 +673,12 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) 
                     </select>
                   ) : field.type==="textarea"
                     ? <FTextarea value={formData[field.key]} onChange={v=>update(field.key,v)}/>
-                    : <FInput type={field.type} value={formData[field.key]} onChange={v=>update(field.key,v)}/>
+                    : field.type==="email" ? (
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <FInput type="email" value={formData[field.key]} onChange={v=>update(field.key,v)}/>
+                        <GmailLink email={formData[field.key]}/>
+                      </div>
+                    ) : <FInput type={field.type} value={formData[field.key]} onChange={v=>update(field.key,v)}/>
                   }
                 </div>
               ))}
@@ -731,7 +754,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
                   <button onClick={()=>onDelete(s.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"3px 8px", borderRadius:5, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>✕</button>
                 </div>
               </div>
-              {s.email&&<div style={{ fontSize:12, color:T.textLight, marginBottom:3 }}>{s.email}</div>}
+              {s.email&&<div style={{ fontSize:12, color:T.textLight, marginBottom:3, display:"flex", alignItems:"center", gap:8 }}>{s.email} <GmailLink email={s.email}/></div>}
               {s.phone&&<div style={{ fontSize:12, color:T.textLight, marginBottom:3 }}>{s.phone}</div>}
               {s.rate&&<div style={{ fontSize:12, color:T.accent, marginBottom:8, fontWeight:600 }}>{s.rate}</div>}
               {s.notes&&<div style={{ fontSize:11, color:T.textMid, marginBottom:8, fontStyle:"italic" }}>{s.notes}</div>}
@@ -3736,7 +3759,7 @@ function ViewingsList({ viewings, onEdit, onDelete }) {
 }
 
 // Viewings section inside booking FormView
-function BookingViewingsSection({ formData, update }) {
+function BookingViewingsSection({ formData, update, onAutoSave }) {
   const [adding, setAdding] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
   const [newV, setNewV] = useState({ date: new Date().toISOString().slice(0,10), time:"", notes:"" });
@@ -3744,11 +3767,16 @@ function BookingViewingsSection({ formData, update }) {
 
   const viewings = formData.viewings || [];
 
-  const addViewing = () => {
+  const [savedFlash, setSavedFlash] = useState(false);
+  const flash = () => { setSavedFlash(true); setTimeout(()=>setSavedFlash(false), 2000); };
+
+  const addViewing = async () => {
     if (!newV.date) return;
-    update("viewings", [...viewings, { ...newV }]);
+    const updated = [...viewings, { ...newV }];
+    update("viewings", updated);
     setNewV({ date: new Date().toISOString().slice(0,10), time:"", notes:"" });
     setAdding(false);
+    if (onAutoSave) { await onAutoSave({ ...formData, viewings: updated }); flash(); }
   };
 
   const startEdit = (i) => {
@@ -3757,21 +3785,25 @@ function BookingViewingsSection({ formData, update }) {
     setEditIdx(actual); setEditV({ ...sorted[i] });
   };
 
-  const saveEdit = () => {
-    update("viewings", viewings.map((v,i)=>i===editIdx?editV:v));
+  const saveEdit = async () => {
+    const updated = viewings.map((v,i)=>i===editIdx?editV:v);
+    update("viewings", updated);
     setEditIdx(null); setEditV(null);
+    if (onAutoSave) { await onAutoSave({ ...formData, viewings: updated }); flash(); }
   };
 
-  const deleteViewing = (i) => {
+  const deleteViewing = async (i) => {
     const sorted = [...viewings].sort((a,b)=>a.date>b.date?1:-1);
     const actual = viewings.indexOf(sorted[i]);
-    update("viewings", viewings.filter((_,ii)=>ii!==actual));
+    const updated = viewings.filter((_,ii)=>ii!==actual);
+    update("viewings", updated);
+    if (onAutoSave) { await onAutoSave({ ...formData, viewings: updated }); flash(); }
   };
 
   return (
     <div>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
-        <span style={{ fontSize:13, color:T.textMid }}>{viewings.length} viewing{viewings.length!==1?"s":""} recorded</span>
+        <span style={{ fontSize:13, color:T.textMid }}>{viewings.length} viewing{viewings.length!==1?"s":""} recorded {savedFlash && <span style={{ color:T.green, fontWeight:600, fontSize:11 }}>✓ Saved</span>}</span>
         {!adding && <button onClick={()=>setAdding(true)} style={{ background:"#f3e8ff", border:"none", color:"#6d28d9", padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>+ Add Viewing</button>}
       </div>
       {adding && <div style={{ marginBottom:12 }}><ViewingForm viewing={newV} onChange={setNewV} onSave={addViewing} onCancel={()=>setAdding(false)}/></div>}
@@ -3843,7 +3875,7 @@ function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
 }
 
 // ─── VIEWINGS TAB VIEW ────────────────────────────────────────────────────────
-function ViewingsView({ bookings }) {
+function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry }) {
   const [enquiries, setEnquiries] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState("upcoming"); // upcoming | all | past
@@ -3861,12 +3893,12 @@ function ViewingsView({ bookings }) {
   const allViewings = [];
   bookings.forEach(b=>{
     (b.viewings||[]).forEach(v=>{
-      allViewings.push({ ...v, sourceType:"booking", sourceName:b.couple||"Unnamed Booking", sourceId:b.id });
+      allViewings.push({ ...v, sourceType:"booking", sourceName:b.couple||"Unnamed Booking", sourceId:b.id, sourcePhone:b.phone||b.email||"" });
     });
   });
   enquiries.forEach(e=>{
     (e.viewings||[]).forEach(v=>{
-      allViewings.push({ ...v, sourceType:"enquiry", sourceName:e.name||"Unnamed Enquiry", sourceId:e.id });
+      allViewings.push({ ...v, sourceType:"enquiry", sourceName:e.name||"Unnamed Enquiry", sourceId:e.id, sourcePhone:e.phone||e.email||"" });
     });
   });
 
@@ -3905,14 +3937,20 @@ function ViewingsView({ bookings }) {
               <div style={{ fontSize:10, color:"#7c3aed" }}>{v.date ? new Date(v.date+"T00:00:00").getFullYear() : ""}</div>
             </div>
             <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4, flexWrap:"wrap" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
                 {v.time && <span style={{ fontSize:13, fontWeight:600, color:T.text }}>🕐 {v.time}</span>}
                 <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, background:v.sourceType==="booking"?T.greenBg:"#f3e8ff", color:v.sourceType==="booking"?T.green:"#6d28d9", border:`1px solid ${v.sourceType==="booking"?"#86efac":"#c4b5fd"}`, fontWeight:600 }}>
                   {v.sourceType==="booking" ? "Booking" : "Enquiry"}
                 </span>
                 {v.date < today && <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, background:"#e5e7eb", color:"#6b7280", border:"1px solid #d1d5db", fontWeight:600 }}>Past</span>}
               </div>
-              <div style={{ fontWeight:700, color:T.text, fontSize:15, marginBottom:v.notes?6:0 }}>{v.sourceName}</div>
+              <div
+                onClick={()=>{ if(v.sourceType==="booking"&&onEditBooking){ onEditBooking(v.sourceId); setView("form"); } else if(v.sourceType==="enquiry"&&onSelectEnquiry){ onSelectEnquiry(v.sourceId); setView("enquiries"); } }}
+                style={{ fontWeight:700, color:T.accent, fontSize:15, marginBottom:4, cursor:"pointer", textDecoration:"underline", textDecorationColor:"transparent", transition:"text-decoration-color .15s" }}
+                onMouseEnter={e=>e.currentTarget.style.textDecorationColor=T.accent}
+                onMouseLeave={e=>e.currentTarget.style.textDecorationColor="transparent"}
+              >{v.sourceName}</div>
+              {v.sourcePhone && <div style={{ fontSize:12, color:T.textMid, marginBottom:v.notes?4:0 }}>📞 {v.sourcePhone}</div>}
               {v.notes && <p style={{ margin:0, fontSize:13, color:T.textMid, lineHeight:1.5 }}>{v.notes}</p>}
             </div>
           </div>
@@ -4162,7 +4200,12 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
                 <FRow label="Numbers"><input type="text" value={form.numbers||""} onChange={e=>update("numbers",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
                 <FRow label="Date Preference"><input type="text" value={form.datePreference||""} onChange={e=>update("datePreference",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
                 <FRow label="Source"><input type="text" value={form.source||""} onChange={e=>update("source",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
-                <FRow label="Email"><input type="email" value={form.email||""} onChange={e=>update("email",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
+                <FRow label="Email">
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <input type="email" value={form.email||""} onChange={e=>update("email",e.target.value)} style={{ flex:1, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/>
+                    <GmailLink email={form.email}/>
+                  </div>
+                </FRow>
                 <FRow label="Phone"><input type="tel" value={form.phone||""} onChange={e=>update("phone",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
               </div>
             </div>
