@@ -1683,7 +1683,7 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder }) {
           <button onClick={()=>setLine(p.id, Math.max(0,(Number(val)||0)-1))} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
         )}
         <input
-          type="number" min="0" step={isOrder?1:0.5}
+          type="number" min="0" step={isOrder ? 1 : (p.category === "Softs" ? 1 : 0.5)}
           value={val ?? (isOrder ? "" : (stock[p.id]||0))}
           onChange={e => setLine(p.id, e.target.value)}
           style={{ width:64, textAlign:"center", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
@@ -3530,11 +3530,14 @@ function EnquiriesView() {
             )}
             {filtered.map((e,i)=>{
               const lastContact = [...(e.contacts||[])].filter(c=>c.date).sort((a,b)=>b.date>a.date?1:-1)[0];
+              const tc = TEMP_CONFIG[e.temperature];
+              const rowBg = tc ? tc.bg : "transparent";
+              const rowHover = tc ? tc.bg : "#f0f6ff";
               return (
-                <tr key={e.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", cursor:"pointer", transition:"background .12s" }}
+                <tr key={e.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", cursor:"pointer", transition:"background .12s", background:rowBg }}
                   onClick={()=>{ setSelected(e.id); setAdding(false); }}
-                  onMouseEnter={ev=>ev.currentTarget.style.background="#f0f6ff"}
-                  onMouseLeave={ev=>ev.currentTarget.style.background="transparent"}>
+                  onMouseEnter={ev=>ev.currentTarget.style.background=rowHover}
+                  onMouseLeave={ev=>ev.currentTarget.style.background=rowBg}>
                   <td style={{ padding:"11px 14px" }}>
                     <div style={{ fontWeight:700, color:T.text, fontSize:14 }}>{e.name||"—"}</div>
                   </td>
@@ -3565,6 +3568,8 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
   const [form, setForm]         = useState({...enq});
   const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
   const [addingContact, setAddingContact] = useState(false);
+  const [editingContactIdx, setEditingContactIdx] = useState(null);
+  const [editContactForm, setEditContactForm] = useState(null);
   const [dirty, setDirty]       = useState(isNew);
 
   const update = (k,v) => { setForm(f=>({...f,[k]:v})); setDirty(true); };
@@ -3582,6 +3587,24 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
   const deleteContact = idx => {
     const c = (form.contacts||[]).filter((_,i)=>i!==idx);
     setForm(f=>({...f, contacts:c})); setDirty(true);
+  };
+
+  const startEditContact = (idx) => {
+    const real = form.contacts.findIndex((_,i) => {
+      const sorted = [...(form.contacts||[])].sort((a,b)=>{ if(!a.date)return 1;if(!b.date)return -1;return b.date>a.date?1:-1; });
+      return form.contacts.indexOf(sorted[idx]) === i;
+    });
+    // find the actual index in the unsorted array by matching the sorted item
+    const sorted = [...(form.contacts||[])].sort((a,b)=>{ if(!a.date)return 1;if(!b.date)return -1;return b.date>a.date?1:-1; });
+    const actualIdx = (form.contacts||[]).indexOf(sorted[idx]);
+    setEditingContactIdx(actualIdx);
+    setEditContactForm({ ...sorted[idx] });
+  };
+
+  const saveEditContact = () => {
+    const updated = (form.contacts||[]).map((c,i) => i===editingContactIdx ? editContactForm : c);
+    setForm(f=>({...f, contacts:updated})); setDirty(true);
+    setEditingContactIdx(null); setEditContactForm(null);
   };
 
   const sortedContacts = [...(form.contacts||[])].sort((a,b)=>{
@@ -3724,12 +3747,42 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
             )}
             {sortedContacts.map((c,i)=>{
               const mc = METHOD_CONFIG[c.method]||METHOD_CONFIG.email;
+              const isEditing = editingContactIdx !== null && (form.contacts||[]).indexOf(c) === editingContactIdx;
+              if (isEditing && editContactForm) {
+                return (
+                  <div key={i} style={{ background:T.accentLight, border:`1.5px solid ${T.accentMid}`, borderRadius:8, padding:14 }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+                      <div>
+                        <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Date</label>
+                        <input type="date" value={editContactForm.date||""} onChange={e=>setEditContactForm(f=>({...f,date:e.target.value}))}
+                          style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
+                      </div>
+                      <div>
+                        <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
+                        <select value={editContactForm.method||"email"} onChange={e=>setEditContactForm(f=>({...f,method:e.target.value}))}
+                          style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none" }}>
+                          <option value="email">Email</option>
+                          <option value="phone">Phone</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                    </div>
+                    <textarea value={editContactForm.note||""} onChange={e=>setEditContactForm(f=>({...f,note:e.target.value}))} rows={3}
+                      style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 9px", outline:"none", resize:"vertical", boxSizing:"border-box", marginBottom:10 }}/>
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={saveEditContact} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Save</button>
+                      <button onClick={()=>{ setEditingContactIdx(null); setEditContactForm(null); }} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"7px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+                      <button onClick={()=>{ const actualIdx=(form.contacts||[]).indexOf(c); const updated=(form.contacts||[]).filter((_,ii)=>ii!==actualIdx); setForm(f=>({...f,contacts:updated})); setDirty(true); setEditingContactIdx(null); setEditContactForm(null); }} style={{ marginLeft:"auto", background:T.redBg, border:"none", color:T.red, padding:"7px 12px", borderRadius:5, cursor:"pointer", fontSize:12, fontWeight:600 }}>Delete</button>
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <div key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 14px" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
                     <span style={{ fontSize:13, fontWeight:700, color:T.accent }}>{c.date||"No date"}</span>
                     <span style={{ fontSize:11, background:T.accentLight, color:T.accent, border:`1px solid ${T.border}`, borderRadius:4, padding:"1px 7px", fontWeight:600 }}>{mc.icon} {mc.label}</span>
-                    <button onClick={()=>deleteContact(i)} style={{ marginLeft:"auto", background:"none", border:"none", color:T.textLight, cursor:"pointer", fontSize:13, padding:"0 4px" }}>✕</button>
+                    <button onClick={()=>startEditContact(i)} style={{ marginLeft:"auto", background:T.midBlueBg, border:"none", color:T.midBlue, cursor:"pointer", fontSize:12, fontWeight:600, padding:"2px 10px", borderRadius:4 }}>Edit</button>
                   </div>
                   <p style={{ margin:0, fontSize:13, color:T.text, lineHeight:1.5 }}>{c.note}</p>
                 </div>
