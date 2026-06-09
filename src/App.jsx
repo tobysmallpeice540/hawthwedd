@@ -541,11 +541,11 @@ const FORM_SECTIONS = {
   guests:        { label:"Guests" },
   contact:       { label:"Contact" },
   staffing:      { label:"Staffing" },
+  hours:         { label:"Staff Hours Worked" },
   logistics:     { label:"Logistics" },
   vendors:       { label:"Vendors" },
   accommodation: { label:"Accommodation" },
   extras:        { label:"Extras & Notes" },
-  hours:         { label:"Hours Worked" },
   viewings:      { label:"Viewings" },
 };
 
@@ -650,7 +650,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           )}
 
           {activeSection==="hours" && (
-            <HoursSection formData={formData} update={update} staff={staff}/>
+            <HoursSection formData={formData} update={update} staff={staff} staffShifts={formData.staffShifts||{}}/>
           )}
 
           {activeSection==="viewings" && (
@@ -1219,7 +1219,7 @@ function StaffWorkloadReport({ bookings, staff }) {
 }
 
 // ─── HOURS SECTION (in booking form) ─────────────────────────────────────────
-function HoursSection({ formData, update, staff }) {
+function HoursSection({ formData, update, staff, staffShifts }) {
   const hw = formData.hoursWorked || {};
   const updateHours = (id, val) => {
     const updated = { ...hw };
@@ -1255,9 +1255,16 @@ function HoursSection({ formData, update, staff }) {
         <div style={{ marginBottom:20 }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>Assigned Staff</div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
-            {assignedStaff.map(s => (
-              <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} highlighted />
-            ))}
+            {assignedStaff.map(s => {
+              const sh = staffShifts[s.id];
+              let expectedHrs = null;
+              if (sh?.start && sh?.end) {
+                const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+                const diff = toMins(sh.end) - toMins(sh.start);
+                if (diff > 0) expectedHrs = +(diff/60).toFixed(2);
+              }
+              return <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} highlighted expectedHrs={expectedHrs}/>;
+            })}
           </div>
         </div>
       )}
@@ -1266,9 +1273,16 @@ function HoursSection({ formData, update, staff }) {
         <div>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:700, marginBottom:10 }}>Other Staff</div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
-            {otherStaff.map(s => (
-              <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} />
-            ))}
+            {otherStaff.map(s => {
+              const sh = staffShifts[s.id];
+              let expectedHrs = null;
+              if (sh?.start && sh?.end) {
+                const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+                const diff = toMins(sh.end) - toMins(sh.start);
+                if (diff > 0) expectedHrs = +(diff/60).toFixed(2);
+              }
+              return <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} expectedHrs={expectedHrs}/>;
+            })}
           </div>
         </div>
       )}
@@ -1283,13 +1297,19 @@ function HoursSection({ formData, update, staff }) {
   );
 }
 
-function HoursRow({ s, hw, updateHours, highlighted }) {
+function HoursRow({ s, hw, updateHours, highlighted, expectedHrs }) {
   const [f, setF] = useState(false);
   const val = hw[s.id] || "";
   return (
     <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background: highlighted ? T.accentLight : T.bgInput, border:`1.5px solid ${f ? T.borderFocus : highlighted && val ? T.accentMid : T.border}`, borderRadius:8, transition:"all .15s" }}>
       <StaffChip initials={s.id} staff={[s]} />
       <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500 }}>{s.name}</span>
+      {expectedHrs !== null && (
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", marginRight:4 }}>
+          <span style={{ fontSize:9, letterSpacing:.8, textTransform:"uppercase", color:T.textLight, fontWeight:600 }}>Expected</span>
+          <span style={{ fontSize:14, fontWeight:700, color:T.midBlue }}>{expectedHrs}h</span>
+        </div>
+      )}
       <div style={{ display:"flex", alignItems:"center", gap:6 }}>
         <input
           type="number"
