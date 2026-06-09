@@ -281,6 +281,7 @@ export default function App() {
   const [search, setSearch]     = useState("");
   const [reportType, setReportType] = useState("summary");
   const [loaded, setLoaded]     = useState(false);
+  const [enquiries, setEnquiries] = useState([]);
   const [editStaffId, setEditStaffId] = useState(null);
   const [staffForm, setStaffForm]     = useState(null);
 
@@ -298,6 +299,7 @@ export default function App() {
         setBookings(migrated);
       } catch { setBookings(INITIAL_BOOKINGS); }
       try { const r = await sbGet(STAFF_STORAGE); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
+      try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r || []); } catch { setEnquiries([]); }
       setLoaded(true);
     })();
   },[]);
@@ -357,7 +359,8 @@ export default function App() {
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
         {view==="enquiries"  && <EnquiriesView/>}
-        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType}/>}
+        {view==="viewings"   && <ViewingsView bookings={bookings}/>}
+        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries}/>}
       </div>
     </div>
   );
@@ -365,7 +368,7 @@ export default function App() {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 function Header({ view, setView, onNew }) {
-  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
+  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"viewings",label:"Viewings"},{id:"list",label:"Bookings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -413,7 +416,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment",""].map(h=>(
+              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment","Viewings",""].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -454,6 +457,18 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                   </td>
                   <td style={{ padding:"10px 12px" }}>
                     {total>0?(<span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:isFullyPaid?T.greenBg:balance>0?T.amberBg:T.redBg, color:isFullyPaid?T.green:balance>0?T.amber:T.red, fontWeight:600 }}>{isFullyPaid?"✓ Paid":balance>0?`£${balance.toLocaleString()} due`:"Overpaid"}</span>):<span style={{ color:T.textLight,fontSize:11 }}>—</span>}
+                  </td>
+                  <td style={{ padding:"10px 12px", minWidth:120 }}>
+                    {(b.viewings||[]).length===0
+                      ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
+                      : <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                          {[...(b.viewings||[])].sort((a,z)=>a.date>z.date?1:-1).map((v,i)=>(
+                            <div key={i} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", whiteSpace:"nowrap", fontWeight:600 }}>
+                              📅 {v.date}{v.time?" "+v.time:""}
+                            </div>
+                          ))}
+                        </div>
+                    }
                   </td>
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }} onClick={e=>e.stopPropagation()}>
                     <button onClick={()=>onDelete(b.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
@@ -513,6 +528,7 @@ const FORM_SECTIONS = {
   accommodation: { label:"Accommodation" },
   extras:        { label:"Extras & Notes" },
   hours:         { label:"Hours Worked" },
+  viewings:      { label:"Viewings" },
 };
 
 function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) {
@@ -522,11 +538,13 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) 
   const countFilled = s => {
     if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
     if(s==="accommodation") return ["amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]==="yes"||formData[k]==="no").length;
+    if(s==="viewings") return (formData.viewings||[]).length;
     return TEXT_FIELDS.filter(f=>f.section===s&&formData[f.key]).length;
   };
   const countTotal = s => {
     if(s==="staffing") return 1+STAFFING_FIELDS.length;
     if(s==="accommodation") return 3;
+    if(s==="viewings") return (formData.viewings||[]).length || 1;
     return TEXT_FIELDS.filter(f=>f.section===s).length;
   };
 
@@ -564,6 +582,43 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) 
               {STAFFING_FIELDS.map(key=>(
                 <StaffPicker key={key} label={STAFFING_LABELS[key]} value={formData[key]||[]} onChange={val=>update(key,val)} staff={staff}/>
               ))}
+              {/* Shift times per person */}
+              {(() => {
+                const allIds = [...new Set(["setup",...STAFFING_FIELDS].flatMap(k=>formData[k]||[]))];
+                if (allIds.length === 0) return null;
+                const shifts = formData.staffShifts || {};
+                const updateShift = (id, field, val) => {
+                  const updated = { ...shifts, [id]: { ...(shifts[id]||{}), [field]: val } };
+                  update("staffShifts", updated);
+                };
+                return (
+                  <div>
+                    <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12, marginTop:4, borderTop:`1px solid ${T.border}`, paddingTop:16 }}>Shift Times (optional)</div>
+                    <p style={{ fontSize:12, color:T.textLight, margin:"0 0 12px" }}>Set start and end times for each assigned staff member — used for the Staff Timeline report.</p>
+                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      {allIds.map(id => {
+                        const person = staff.find(s=>s.id===id);
+                        const sh = shifts[id] || {};
+                        const tStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px", outline:"none", width:100 };
+                        return (
+                          <div key={id} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 12px", background:T.bgInput, borderRadius:8, border:`1px solid ${T.border}` }}>
+                            <StaffChip initials={id} staff={staff}/>
+                            <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500 }}>{person?.name||id}</span>
+                            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                              <label style={{ fontSize:11, color:T.textLight, fontWeight:600 }}>FROM</label>
+                              <input type="time" value={sh.start||""} onChange={e=>updateShift(id,"start",e.target.value)} style={tStyle}/>
+                            </div>
+                            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                              <label style={{ fontSize:11, color:T.textLight, fontWeight:600 }}>TO</label>
+                              <input type="time" value={sh.end||""} onChange={e=>updateShift(id,"end",e.target.value)} style={tStyle}/>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -580,7 +635,11 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff }) 
             <HoursSection formData={formData} update={update} staff={staff}/>
           )}
 
-          {activeSection!=="staffing" && activeSection!=="accommodation" && activeSection!=="hours" && (
+          {activeSection==="viewings" && (
+            <BookingViewingsSection formData={formData} update={update}/>
+          )}
+
+          {activeSection!=="staffing" && activeSection!=="accommodation" && activeSection!=="hours" && activeSection!=="viewings" && (
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px 22px" }}>
               {TEXT_FIELDS.filter(f=>f.section===activeSection).map(field=>(
                 <div key={field.key} style={{ gridColumn:field.type==="textarea"?"1 / -1":"auto" }}>
@@ -699,8 +758,8 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
-function ReportsView({ bookings, staff, reportType, setReportType }) {
-  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Staffing Rota"},{id:"pipeline",label:"Payment Pipeline"},{id:"staffload",label:"Staff Workload"},{id:"hours",label:"Hours Worked"}];
+function ReportsView({ bookings, staff, reportType, setReportType, enquiries }) {
+  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Staffing Rota"},{id:"pipeline",label:"Payment Pipeline"},{id:"staffload",label:"Staff Workload"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Staff Timeline"}];
   return (
     <div style={{ paddingTop:28 }}>
       <div style={{ marginBottom:22, display:"flex", gap:8, flexWrap:"wrap" }}>
@@ -709,13 +768,14 @@ function ReportsView({ bookings, staff, reportType, setReportType }) {
         ))}
       </div>
       {reportType==="summary"       && <SummaryReport bookings={bookings}/>}
-      {reportType==="calendar"       && <CalendarReport bookings={bookings}/>}
+      {reportType==="calendar"       && <CalendarReport bookings={bookings} enquiries={enquiries||[]}/>}
       {reportType==="revenue"       && <RevenueReport bookings={bookings}/>}
       {reportType==="accommodation" && <AccommodationReport bookings={bookings}/>}
       {reportType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
       {reportType==="pipeline"      && <PipelineReport bookings={bookings}/>}
       {reportType==="staffload"     && <StaffWorkloadReport bookings={bookings} staff={staff}/>}
       {reportType==="hours"          && <HoursReport bookings={bookings} staff={staff}/>}
+      {reportType==="timeline"        && <StaffTimelineReport bookings={bookings} staff={staff}/>}
     </div>
   );
 }
@@ -789,10 +849,11 @@ function SummaryReport({ bookings }) {
 }
 
 // ─── YEAR CALENDAR REPORT ─────────────────────────────────────────────────────
-function CalendarReport({ bookings }) {
+function CalendarReport({ bookings, enquiries }) {
   const allYears = [...new Set(bookings.filter(b=>b.date).map(b=>b.date.slice(0,4)))].sort();
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
+  const [showViewings, setShowViewings] = useState(true);
   const today = new Date().toISOString().slice(0,10);
 
   // Index bookings by date string
@@ -800,6 +861,25 @@ function CalendarReport({ bookings }) {
   bookings.filter(b=>b.date&&b.couple&&b.date.startsWith(year)).forEach(b=>{
     byDate[b.date] = byDate[b.date] || [];
     byDate[b.date].push(b);
+  });
+
+  // Collect all viewings from bookings and enquiries
+  const viewingsByDate = {};
+  bookings.forEach(b=>{
+    (b.viewings||[]).forEach(v=>{
+      if(v.date&&v.date.startsWith(year)){
+        viewingsByDate[v.date] = viewingsByDate[v.date]||[];
+        viewingsByDate[v.date].push({ label:b.couple||"Booking", source:"booking" });
+      }
+    });
+  });
+  (enquiries||[]).forEach(e=>{
+    (e.viewings||[]).forEach(v=>{
+      if(v.date&&v.date.startsWith(year)){
+        viewingsByDate[v.date] = viewingsByDate[v.date]||[];
+        viewingsByDate[v.date].push({ label:e.name||"Enquiry", source:"enquiry" });
+      }
+    });
   });
 
   const prevYear = allYears[allYears.indexOf(year)-1];
@@ -831,14 +911,23 @@ function CalendarReport({ bookings }) {
         <button onClick={()=>setYear(String(yearInt+1))} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.midBlue, width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>›</button>
       </div>
 
-      {/* Legend */}
-      <div style={{ display:"flex", gap:16, marginBottom:20, flexWrap:"wrap" }}>
+      {/* Legend + toggle */}
+      <div style={{ display:"flex", gap:16, marginBottom:20, flexWrap:"wrap", alignItems:"center" }}>
         {[{label:"Confirmed",bg:"#dcfce7",text:"#166534",border:"#86efac"},{label:"Holding",bg:"#fef9c3",text:"#854d0e",border:"#fcd34d"},{label:"Past",bg:"#e5e7eb",text:"#6b7280",border:"#d1d5db"}].map(l=>(
           <div key={l.label} style={{ display:"flex", alignItems:"center", gap:6 }}>
             <div style={{ width:14, height:14, borderRadius:3, background:l.bg, border:`1px solid ${l.border}` }}/>
             <span style={{ fontSize:12, color:T.textMid }}>{l.label}</span>
           </div>
         ))}
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
+          <label style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:13, color:T.textMid, userSelect:"none" }}>
+            <input type="checkbox" checked={showViewings} onChange={e=>setShowViewings(e.target.checked)} style={{ accentColor:"#7c3aed", width:15, height:15, cursor:"pointer" }}/>
+            <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+              <span style={{ width:10, height:10, borderRadius:"50%", background:"#7c3aed", display:"inline-block" }}/>
+              Show Viewings
+            </span>
+          </label>
+        </div>
       </div>
 
       {/* 12-month grid */}
@@ -887,6 +976,9 @@ function CalendarReport({ bookings }) {
                           {day}
                         </span>
                         {isToday && <div style={{ position:"absolute", bottom:1, left:"50%", transform:"translateX(-50%)", width:4, height:4, borderRadius:"50%", background:T.accent }}/>}
+                        {showViewings && (viewingsByDate[dateStr]||[]).length>0 && (
+                          <div style={{ position:"absolute", top:1, left:2, width:5, height:5, borderRadius:"50%", background:"#7c3aed" }} title={(viewingsByDate[dateStr]||[]).map(v=>v.label).join(", ")}/>
+                        )}
                         {dayBookings.length>0 && (
                           <div style={{ position:"absolute", top:1, right:2, fontSize:8, fontWeight:700, color:cellText }}>{dayBookings.length>1?dayBookings.length:""}</div>
                         )}
@@ -905,6 +997,15 @@ function CalendarReport({ bookings }) {
                       </div>
                     );
                   })
+                ))}
+                {showViewings && Object.entries(viewingsByDate).filter(([d])=>d.startsWith(`${year}-${monthNum}`)).sort().map(([d, views])=>(
+                  views.map((v,vi) => (
+                    <div key={d+vi} style={{ marginTop:3, padding:"2px 6px", borderRadius:4, background:"#f3e8ff", border:"1px solid #c4b5fd", display:"flex", alignItems:"center", gap:4 }}>
+                      <span style={{ fontSize:9, width:7, height:7, borderRadius:"50%", background:"#7c3aed", flexShrink:0, display:"inline-block" }}/>
+                      <span style={{ fontSize:10, fontWeight:700, color:"#6d28d9", flexShrink:0 }}>{new Date(d+"T00:00:00").getDate()}</span>
+                      <span style={{ fontSize:10, color:"#6d28d9", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{v.label}</span>
+                    </div>
+                  ))
                 ))}
               </div>
             </div>
@@ -2165,6 +2266,7 @@ function ProductsView({ products, onSave }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ENQUIRIES_STORAGE = "hbf_enquiries_v1";
+const VIEWINGS_STORAGE  = "hbf_viewings_v1";
 
 const INITIAL_ENQUIRIES = [
   {
@@ -3409,6 +3511,417 @@ function OutcomeBadge({ outcome }) {
   return <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:c.bg, color:c.text, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>{c.label}</span>;
 }
 
+
+
+// ─── STAFF TIMELINE REPORT ────────────────────────────────────────────────────
+const TIMELINE_COLOURS = [
+  { bg:"#0f766e", text:"#ffffff" }, // teal
+  { bg:"#dc2626", text:"#ffffff" }, // red
+  { bg:"#d97706", text:"#ffffff" }, // amber
+  { bg:"#2563eb", text:"#ffffff" }, // blue
+  { bg:"#7c3aed", text:"#ffffff" }, // purple
+  { bg:"#db2777", text:"#ffffff" }, // pink
+  { bg:"#16a34a", text:"#ffffff" }, // green
+  { bg:"#0284c7", text:"#ffffff" }, // sky
+  { bg:"#9333ea", text:"#ffffff" }, // violet
+  { bg:"#ea580c", text:"#ffffff" }, // orange
+];
+
+function StaffTimelineReport({ bookings, staff }) {
+  const today = new Date().toISOString().slice(0,10);
+  const upcoming = bookings.filter(b => b.date >= today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
+  const past     = bookings.filter(b => b.date <  today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
+
+  const [selectedBooking, setSelectedBooking] = useState(upcoming[0]?.id || past[0]?.id || null);
+
+  const allWithShifts = [...upcoming, ...past];
+  const booking = allWithShifts.find(b => b.id === selectedBooking);
+
+  if (allWithShifts.length === 0) {
+    return (
+      <div style={{ textAlign:"center", padding:60, color:T.textLight }}>
+        <div style={{ fontSize:32, marginBottom:16 }}>📅</div>
+        <div style={{ fontSize:16, marginBottom:8 }}>No shift times recorded yet.</div>
+        <div style={{ fontSize:13 }}>Add start and end times in the Staffing section of a booking to see the timeline here.</div>
+      </div>
+    );
+  }
+
+  const renderTimeline = (b) => {
+    if (!b) return null;
+    const shifts = b.staffShifts || {};
+    const entries = Object.entries(shifts).filter(([,sh]) => sh.start && sh.end);
+    if (entries.length === 0) return <p style={{ color:T.textLight, fontSize:13 }}>No shift times set for this booking.</p>;
+
+    // Parse time to minutes from midnight
+    const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+
+    const allMins = entries.flatMap(([,sh]) => [toMins(sh.start), toMins(sh.end)]);
+    const minTime = Math.floor(Math.min(...allMins) / 60) * 60; // round down to hour
+    const maxTime = Math.ceil(Math.max(...allMins) / 60) * 60;  // round up to hour
+    const totalSpan = maxTime - minTime;
+
+    const hours = [];
+    for (let m = minTime; m <= maxTime; m += 60) {
+      hours.push(m);
+    }
+
+    return (
+      <div>
+        {/* Hour ruler */}
+        <div style={{ display:"flex", marginLeft:160, marginBottom:8 }}>
+          {hours.map(m => (
+            <div key={m} style={{ flex:1, fontSize:11, color:T.textLight, fontWeight:600, textAlign:"left", borderLeft:`1px solid ${T.border}`, paddingLeft:4 }}>
+              {String(Math.floor(m/60)).padStart(2,"0")}:00
+            </div>
+          ))}
+        </div>
+
+        {/* Grid lines + bars */}
+        <div style={{ position:"relative" }}>
+          {/* Vertical grid lines */}
+          <div style={{ position:"absolute", left:160, right:0, top:0, bottom:0, display:"flex", pointerEvents:"none" }}>
+            {hours.map(m => (
+              <div key={m} style={{ flex:1, borderLeft:`1px solid ${T.border}` }}/>
+            ))}
+          </div>
+
+          {/* Staff rows */}
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {entries.map(([id, sh], i) => {
+              const person = staff.find(s => s.id === id);
+              const name = person?.name || id;
+              const startM = toMins(sh.start);
+              const endM   = toMins(sh.end);
+              const leftPct  = ((startM - minTime) / totalSpan) * 100;
+              const widthPct = ((endM - startM) / totalSpan) * 100;
+              const col = TIMELINE_COLOURS[i % TIMELINE_COLOURS.length];
+
+              // Find this person's role on the booking
+              const role = ["setup",...STAFFING_FIELDS].find(f => (b[f]||[]).includes(id));
+              const roleLabel = role === "setup" ? "Set-Up" : role ? STAFFING_LABELS[role] : "";
+
+              return (
+                <div key={id} style={{ display:"flex", alignItems:"center", height:44 }}>
+                  {/* Name label */}
+                  <div style={{ width:160, flexShrink:0, paddingRight:12, display:"flex", flexDirection:"column", alignItems:"flex-end" }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:150 }}>{name}</span>
+                    {roleLabel && <span style={{ fontSize:10, color:T.textLight, fontWeight:500 }}>{roleLabel}</span>}
+                  </div>
+                  {/* Bar area */}
+                  <div style={{ flex:1, position:"relative", height:36 }}>
+                    <div style={{
+                      position:"absolute",
+                      left:`${leftPct}%`,
+                      width:`${Math.max(widthPct, 2)}%`,
+                      height:"100%",
+                      background:col.bg,
+                      borderRadius:8,
+                      display:"flex",
+                      alignItems:"center",
+                      paddingLeft:10,
+                      boxShadow:"0 2px 6px rgba(0,0,0,.18)",
+                      overflow:"hidden",
+                      cursor:"default",
+                    }}
+                    title={`${name}: ${sh.start}–${sh.end}`}>
+                      <span style={{ fontSize:12, fontWeight:700, color:col.text, whiteSpace:"nowrap" }}>
+                        {sh.start}–{sh.end}
+                        {widthPct > 20 && <span style={{ fontWeight:400, marginLeft:6 }}>{name}</span>}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Now line (if today) */}
+        {b.date === today && (() => {
+          const now = new Date();
+          const nowMins = now.getHours()*60 + now.getMinutes();
+          if (nowMins < minTime || nowMins > maxTime) return null;
+          const leftPct = ((nowMins - minTime) / totalSpan) * 100;
+          return (
+            <div style={{ position:"relative", marginLeft:160, marginTop:-((entries.length*50)+8) }}>
+              <div style={{ position:"absolute", left:`${leftPct}%`, top:0, bottom:0, width:2, background:T.red, opacity:.7, zIndex:10 }}>
+                <div style={{ position:"absolute", top:-4, left:-20, fontSize:10, background:T.red, color:"#fff", borderRadius:3, padding:"1px 5px", whiteSpace:"nowrap" }}>Now</div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:22, flexWrap:"wrap" }}>
+        <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:17 }}>Staff Timeline</h3>
+        <select value={selectedBooking||""} onChange={e=>setSelectedBooking(Number(e.target.value)||e.target.value)}
+          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 12px", outline:"none", flex:1, maxWidth:400 }}>
+          {upcoming.length > 0 && <optgroup label="Upcoming">
+            {upcoming.map(b=><option key={b.id} value={b.id}>{b.date} — {b.couple}</option>)}
+          </optgroup>}
+          {past.length > 0 && <optgroup label="Past">
+            {past.map(b=><option key={b.id} value={b.id}>{b.date} — {b.couple}</option>)}
+          </optgroup>}
+        </select>
+      </div>
+
+      {booking && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ marginBottom:20, paddingBottom:14, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
+            <div>
+              <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{booking.couple}</div>
+              <div style={{ fontSize:13, color:T.textLight }}>{booking.date ? new Date(booking.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</div>
+            </div>
+          </div>
+          {renderTimeline(booking)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── VIEWINGS COMPONENTS ──────────────────────────────────────────────────────
+
+const VIEWING_STORAGE_KEY = "hbf_viewings_v1";
+
+function ViewingForm({ viewing, onChange, onSave, onCancel, saveLabel="Add" }) {
+  const iStyle = { width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 9px", outline:"none", boxSizing:"border-box" };
+  return (
+    <div style={{ background:T.accentLight, border:`1.5px solid ${T.accentMid}`, borderRadius:8, padding:14 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+        <div>
+          <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Date</label>
+          <input type="date" value={viewing.date||""} onChange={e=>onChange({...viewing,date:e.target.value})} style={iStyle}/>
+        </div>
+        <div>
+          <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Time</label>
+          <input type="time" value={viewing.time||""} onChange={e=>onChange({...viewing,time:e.target.value})} style={iStyle}/>
+        </div>
+      </div>
+      <div style={{ marginBottom:10 }}>
+        <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Notes</label>
+        <textarea value={viewing.notes||""} onChange={e=>onChange({...viewing,notes:e.target.value})} rows={2}
+          style={{ ...iStyle, resize:"vertical" }} placeholder="Viewing notes…"/>
+      </div>
+      <div style={{ display:"flex", gap:8 }}>
+        <button onClick={onSave} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>{saveLabel}</button>
+        <button onClick={onCancel} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"7px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function ViewingsList({ viewings, onEdit, onDelete }) {
+  if (!viewings || viewings.length === 0) return <p style={{ color:T.textLight, fontSize:13, textAlign:"center", padding:"12px 0" }}>No viewings yet.</p>;
+  const sorted = [...viewings].sort((a,b)=>a.date>b.date?1:-1);
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+      {sorted.map((v,i)=>(
+        <div key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 14px" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom: v.notes ? 6 : 0 }}>
+            <span style={{ fontSize:13, fontWeight:700, color:"#6d28d9" }}>📅 {v.date||"No date"}{v.time ? " · "+v.time : ""}</span>
+            {onEdit && <button onClick={()=>onEdit(i)} style={{ marginLeft:"auto", background:"#f3e8ff", border:"none", color:"#6d28d9", cursor:"pointer", fontSize:12, fontWeight:600, padding:"2px 10px", borderRadius:4 }}>Edit</button>}
+            {onDelete && <button onClick={()=>onDelete(i)} style={{ background:T.redBg, border:"none", color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, padding:"2px 8px", borderRadius:4 }}>✕</button>}
+          </div>
+          {v.notes && <p style={{ margin:0, fontSize:13, color:T.text, lineHeight:1.5 }}>{v.notes}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Viewings section inside booking FormView
+function BookingViewingsSection({ formData, update }) {
+  const [adding, setAdding] = useState(false);
+  const [editIdx, setEditIdx] = useState(null);
+  const [newV, setNewV] = useState({ date: new Date().toISOString().slice(0,10), time:"", notes:"" });
+  const [editV, setEditV] = useState(null);
+
+  const viewings = formData.viewings || [];
+
+  const addViewing = () => {
+    if (!newV.date) return;
+    update("viewings", [...viewings, { ...newV }]);
+    setNewV({ date: new Date().toISOString().slice(0,10), time:"", notes:"" });
+    setAdding(false);
+  };
+
+  const startEdit = (i) => {
+    const sorted = [...viewings].sort((a,b)=>a.date>b.date?1:-1);
+    const actual = viewings.indexOf(sorted[i]);
+    setEditIdx(actual); setEditV({ ...sorted[i] });
+  };
+
+  const saveEdit = () => {
+    update("viewings", viewings.map((v,i)=>i===editIdx?editV:v));
+    setEditIdx(null); setEditV(null);
+  };
+
+  const deleteViewing = (i) => {
+    const sorted = [...viewings].sort((a,b)=>a.date>b.date?1:-1);
+    const actual = viewings.indexOf(sorted[i]);
+    update("viewings", viewings.filter((_,ii)=>ii!==actual));
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+        <span style={{ fontSize:13, color:T.textMid }}>{viewings.length} viewing{viewings.length!==1?"s":""} recorded</span>
+        {!adding && <button onClick={()=>setAdding(true)} style={{ background:"#f3e8ff", border:"none", color:"#6d28d9", padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>+ Add Viewing</button>}
+      </div>
+      {adding && <div style={{ marginBottom:12 }}><ViewingForm viewing={newV} onChange={setNewV} onSave={addViewing} onCancel={()=>setAdding(false)}/></div>}
+      {editIdx !== null && editV && <div style={{ marginBottom:12 }}><ViewingForm viewing={editV} onChange={setEditV} onSave={saveEdit} onCancel={()=>{setEditIdx(null);setEditV(null);}} saveLabel="Save"/></div>}
+      <ViewingsList viewings={[...viewings].sort((a,b)=>a.date>b.date?1:-1)} onEdit={editIdx===null ? startEdit : null} onDelete={editIdx===null ? deleteViewing : null}/>
+    </div>
+  );
+}
+
+// Viewings section inside EnquiryDetail
+function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
+  const [adding, setAdding] = useState(false);
+  const [editIdx, setEditIdx] = useState(null);
+  const [newV, setNewV] = useState({ date: new Date().toISOString().slice(0,10), time:"", notes:"" });
+  const [editV, setEditV] = useState(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  const viewings = form.viewings || [];
+
+  const persist = async (updatedForm) => {
+    await onSave(updatedForm);
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 2000);
+  };
+
+  const addViewing = async () => {
+    if (!newV.date) return;
+    const updated = { ...form, viewings:[...(form.viewings||[]), {...newV}] };
+    setForm(updated); setDirty(false);
+    setNewV({ date: new Date().toISOString().slice(0,10), time:"", notes:"" }); setAdding(false);
+    await persist(updated);
+  };
+
+  const startEdit = (i) => {
+    const sorted = [...viewings].sort((a,b)=>a.date>b.date?1:-1);
+    const actual = viewings.indexOf(sorted[i]);
+    setEditIdx(actual); setEditV({...sorted[i]});
+  };
+
+  const saveEdit = async () => {
+    const updated = { ...form, viewings:(form.viewings||[]).map((v,i)=>i===editIdx?editV:v) };
+    setForm(updated); setDirty(false);
+    setEditIdx(null); setEditV(null);
+    await persist(updated);
+  };
+
+  const deleteViewing = async (i) => {
+    const sorted = [...viewings].sort((a,b)=>a.date>b.date?1:-1);
+    const actual = viewings.indexOf(sorted[i]);
+    const updated = { ...form, viewings:(form.viewings||[]).filter((_,ii)=>ii!==actual) };
+    setForm(updated); setDirty(false);
+    await persist(updated);
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.border}`, paddingBottom:10, marginBottom:14 }}>
+        <h3 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:15 }}>Viewings <span style={{ fontSize:12, color:T.textLight, fontWeight:400 }}>({viewings.length})</span></h3>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          {savedFlash && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ Saved to cloud</span>}
+          {!adding && editIdx===null && <button onClick={()=>setAdding(true)} style={{ background:"#f3e8ff", border:"none", color:"#6d28d9", padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>+ Add Viewing</button>}
+        </div>
+      </div>
+      {adding && <div style={{ marginBottom:12 }}><ViewingForm viewing={newV} onChange={setNewV} onSave={addViewing} onCancel={()=>setAdding(false)}/></div>}
+      {editIdx !== null && editV && <div style={{ marginBottom:12 }}><ViewingForm viewing={editV} onChange={setEditV} onSave={saveEdit} onCancel={()=>{setEditIdx(null);setEditV(null);}} saveLabel="Save"/></div>}
+      <ViewingsList viewings={[...viewings].sort((a,b)=>a.date>b.date?1:-1)} onEdit={editIdx===null?startEdit:null} onDelete={editIdx===null?deleteViewing:null}/>
+    </div>
+  );
+}
+
+// ─── VIEWINGS TAB VIEW ────────────────────────────────────────────────────────
+function ViewingsView({ bookings }) {
+  const [enquiries, setEnquiries] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [filter, setFilter] = useState("upcoming"); // upcoming | all | past
+
+  useEffect(()=>{
+    (async()=>{
+      try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r||[]); } catch { setEnquiries([]); }
+      setLoaded(true);
+    })();
+  },[]);
+
+  const today = new Date().toISOString().slice(0,10);
+
+  // Gather all viewings from both bookings and enquiries
+  const allViewings = [];
+  bookings.forEach(b=>{
+    (b.viewings||[]).forEach(v=>{
+      allViewings.push({ ...v, sourceType:"booking", sourceName:b.couple||"Unnamed Booking", sourceId:b.id });
+    });
+  });
+  enquiries.forEach(e=>{
+    (e.viewings||[]).forEach(v=>{
+      allViewings.push({ ...v, sourceType:"enquiry", sourceName:e.name||"Unnamed Enquiry", sourceId:e.id });
+    });
+  });
+
+  const sorted = [...allViewings].sort((a,b)=>a.date>b.date?1:-1);
+  const filtered = sorted.filter(v=>{
+    if (filter==="upcoming") return v.date >= today;
+    if (filter==="past")     return v.date < today;
+    return true;
+  });
+
+  if (!loaded) return <div style={{ padding:40, color:T.textLight }}>Loading viewings…</div>;
+
+  return (
+    <div style={{ paddingTop:28 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
+        <h2 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:22 }}>Viewings</h2>
+        <span style={{ fontSize:13, color:T.textLight }}>{filtered.length} viewing{filtered.length!==1?"s":""}</span>
+      </div>
+
+      <div style={{ display:"flex", gap:6, marginBottom:20 }}>
+        {[["upcoming","Upcoming"],["all","All"],["past","Past"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setFilter(v)} style={{ background:filter===v?"#6d28d9":"#fff", color:filter===v?"#fff":T.textMid, border:`1.5px solid ${filter===v?"#6d28d9":T.border}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:filter===v?700:400 }}>{l}</button>
+        ))}
+      </div>
+
+      {filtered.length === 0 && (
+        <div style={{ textAlign:"center", padding:60, color:T.textLight, fontSize:15 }}>No {filter==="all"?"":""+filter+" "}viewings found.</div>
+      )}
+
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {filtered.map((v,i)=>(
+          <div key={i} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 18px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", alignItems:"flex-start", gap:16 }}>
+            <div style={{ flexShrink:0, background:"#f3e8ff", border:"1px solid #c4b5fd", borderRadius:8, padding:"10px 14px", textAlign:"center", minWidth:60 }}>
+              <div style={{ fontSize:18, fontWeight:700, color:"#6d28d9", lineHeight:1 }}>{v.date ? new Date(v.date+"T00:00:00").getDate() : "—"}</div>
+              <div style={{ fontSize:10, color:"#7c3aed", fontWeight:600, marginTop:2 }}>{v.date ? new Date(v.date+"T00:00:00").toLocaleDateString("en-GB",{month:"short"}) : ""}</div>
+              <div style={{ fontSize:10, color:"#7c3aed" }}>{v.date ? new Date(v.date+"T00:00:00").getFullYear() : ""}</div>
+            </div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4, flexWrap:"wrap" }}>
+                {v.time && <span style={{ fontSize:13, fontWeight:600, color:T.text }}>🕐 {v.time}</span>}
+                <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, background:v.sourceType==="booking"?T.greenBg:"#f3e8ff", color:v.sourceType==="booking"?T.green:"#6d28d9", border:`1px solid ${v.sourceType==="booking"?"#86efac":"#c4b5fd"}`, fontWeight:600 }}>
+                  {v.sourceType==="booking" ? "Booking" : "Enquiry"}
+                </span>
+                {v.date < today && <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, background:"#e5e7eb", color:"#6b7280", border:"1px solid #d1d5db", fontWeight:600 }}>Past</span>}
+              </div>
+              <div style={{ fontWeight:700, color:T.text, fontSize:15, marginBottom:v.notes?6:0 }}>{v.sourceName}</div>
+              {v.notes && <p style={{ margin:0, fontSize:13, color:T.textMid, lineHeight:1.5 }}>{v.notes}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── EnquiriesView (top-level) ────────────────────────────────────────────────
 function EnquiriesView() {
   const [enquiries, setEnquiries] = useState([]);
@@ -3786,6 +4299,11 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
           {dirty && (
             <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, marginTop:"auto" }}>Save Changes</button>
           )}
+        </div>
+
+        {/* Viewings card (spans below right column, shown as 3rd card) */}
+        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <EnquiryViewingsSection form={form} setForm={setForm} setDirty={setDirty} onSave={onUpdate}/>
         </div>
       </div>
     </div>
