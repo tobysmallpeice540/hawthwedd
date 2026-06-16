@@ -1869,7 +1869,7 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent 
       type,
       date,
       label: label || (type === "order" ? "Order" : "Stocktake"),
-      lines: Object.fromEntries(Object.entries(lines).filter(([,v]) => v !== "" && v !== 0 && v != null)),
+      lines: Object.fromEntries(Object.entries(lines).filter(([,v]) => v !== "" && v != null && (type === "stocktake" || v !== 0))),
     };
     await onSave(ev);
     setSaving(false);
