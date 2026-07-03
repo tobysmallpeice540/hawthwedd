@@ -258,7 +258,7 @@ function FCheck({ checked, onChange, label, bold }) {
 }
 
 // ─── ACCOMMODATION FIELD ──────────────────────────────────────────────────────
-function AccomField({ bookedKey, feeKey, label, formData, update }) {
+function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData, update }) {
   const [f,setF] = useState(false);
   const val = formData[bookedKey] || "undecided";
   const isYes = val === "yes";
@@ -266,7 +266,7 @@ function AccomField({ bookedKey, feeKey, label, formData, update }) {
   const borderMap = { yes: T.accentMid, no: "#fca5a5", undecided: "#fcd34d" };
   return (
     <div style={{ background:bgMap[val]||T.bgInput, border:`1.5px solid ${borderMap[val]||T.border}`, borderRadius:8, padding:"14px 16px", transition:"all .2s" }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+      <div style={{ display:"flex", alignItems:"center", flexWrap:"wrap", gap:12 }}>
         <span style={{ fontSize:15, fontWeight:600, color:T.text, minWidth:70 }}>{label}</span>
         <select value={val} onChange={e=>update(bookedKey,e.target.value)}
           style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"6px 10px", outline:"none", cursor:"pointer" }}>
@@ -276,11 +276,23 @@ function AccomField({ bookedKey, feeKey, label, formData, update }) {
         </select>
         {isYes && (
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ fontSize:13, color:T.textMid, fontWeight:500 }}>Fee agreed: £</span>
+            <span style={{ fontSize:13, color:T.textMid, fontWeight:500 }}>Fee: £</span>
             <input type="number" value={formData[feeKey]||""} onChange={e=>update(feeKey,e.target.value)} placeholder="0"
               onFocus={()=>setF(true)} onBlur={()=>setF(false)}
-              style={{ width:100, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"6px 10px", outline:"none", boxShadow:f?"0 0 0 3px #dbeafe":"none" }} />
+              style={{ width:90, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"6px 10px", outline:"none", boxShadow:f?"0 0 0 3px #dbeafe":"none" }} />
           </div>
+        )}
+        {isYes && paid50Key && (
+          <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
+            <input type="checkbox" checked={!!formData[paid50Key]} onChange={e=>update(paid50Key,e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
+            50% paid
+          </label>
+        )}
+        {isYes && paid100Key && (
+          <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
+            <input type="checkbox" checked={!!formData[paid100Key]} onChange={e=>update(paid100Key,e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
+            100% paid
+          </label>
         )}
       </div>
     </div>
@@ -305,29 +317,13 @@ export default function App() {
     (async()=>{
       try {
         const raw = (await sbGet(BOOKING_STORAGE)) || INITIAL_BOOKINGS;
-        const migrated = raw.map(b => {
-          // Migrate payment2/finalPayment into paymentComments
-          let paymentComments = b.paymentComments || "";
-          if (!paymentComments && (b.payment2 || b.finalPayment)) {
-            const parts = [];
-            if (b.payment2) parts.push(`2nd payment £${b.payment2}`);
-            if (b.finalPayment) parts.push(`Final payment £${b.finalPayment}`);
-            paymentComments = parts.join(", ");
-          }
-          return {
-            ...b,
-            amlyBooked:    b.amlyBooked === true ? "yes" : b.amlyBooked === false ? "no" : b.amlyBooked || "no",
-            hamletBooked:  b.hamletBooked === true ? "yes" : b.hamletBooked === false ? "no" : b.hamletBooked || "no",
-            campingBooked: b.campingBooked === true ? "yes" : b.campingBooked === false ? "no" : b.campingBooked || "no",
-            status: b.status || "Confirmed",
-            eventType: b.eventType || "Wedding (Peak)",
-            paymentComments,
-            depositPaid: b.depositPaid || false,
-            venueFee50Paid: b.venueFee50Paid || false,
-            venueFee100Paid: b.venueFee100Paid || false,
-            corkagePaid: b.corkagePaid || false,
-          };
-        });
+        const migrated = raw.map(b => ({
+          ...b,
+          amlyBooked:    b.amlyBooked === true ? "yes" : b.amlyBooked === false ? "no" : b.amlyBooked || "no",
+          hamletBooked:  b.hamletBooked === true ? "yes" : b.hamletBooked === false ? "no" : b.hamletBooked || "no",
+          campingBooked: b.campingBooked === true ? "yes" : b.campingBooked === false ? "no" : b.campingBooked || "no",
+          status: b.status || "Confirmed",
+        }));
         setBookings(migrated);
       } catch { setBookings(INITIAL_BOOKINGS); }
       try { const r = await sbGet(STAFF_STORAGE); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
@@ -339,7 +335,7 @@ export default function App() {
   const saveBookings = useCallback(async data=>{ setBookings(data); try{await sbSet(BOOKING_STORAGE, data);}catch(e){console.error(e);} },[]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
 
-  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", hamletBooked:"undecided", hamletFee:"", campingBooked:"undecided", campingFee:"", nonStandard:"", venueFee:"", deposit:"", depositPaid:false, venueFee50Paid:false, venueFee100Paid:false, corkagePaid:false, paymentComments:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -450,14 +446,15 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Type","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment","Viewings",""].map(h=>(
+              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment","Viewings",""].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.map((b,i)=>{
-              const total=parseMoney(b.venueFee), dep=parseMoney(b.deposit), isFullyPaid=b.venueFee100Paid||false, is50Paid=b.venueFee50Paid||false;
+              const paid=parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment);
+              const total=parseMoney(b.venueFee), balance=total-paid, isFullyPaid=total>0&&balance<=0;
               const accomBadges = [];
               if(b.amlyBooked==="yes")    accomBadges.push("Amly");
               if(b.hamletBooked==="yes")  accomBadges.push("Hamlet");
@@ -471,9 +468,6 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date}/></td>
                   <td style={{ padding:"10px 12px", maxWidth:180 }}>
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
-                  </td>
-                  <td style={{ padding:"10px 12px" }}>
-                    {b.eventType ? <span style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 7px", fontWeight:600, whiteSpace:"nowrap" }}>{b.eventType}</span> : <span style={{ color:T.textLight, fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.mealGuests||"—"}</td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.eveGuests||"—"}</td>
@@ -492,7 +486,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                         : <span style={{ color:T.textLight, fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 12px" }}>
-                    {total>0?(<span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:isFullyPaid?T.greenBg:is50Paid?"#ede9fe":dep>0?T.amberBg:"#f9fafb", color:isFullyPaid?T.green:is50Paid?"#7c3aed":dep>0?T.amber:T.textLight, fontWeight:600 }}>{isFullyPaid?"✓ Paid":is50Paid?"50% paid":dep>0?"Dep. paid":"Awaiting"}</span>):<span style={{ color:T.textLight,fontSize:11 }}>—</span>}
+                    {total>0?(<span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:isFullyPaid?T.greenBg:balance>0?T.amberBg:T.redBg, color:isFullyPaid?T.green:balance>0?T.amber:T.red, fontWeight:600 }}>{isFullyPaid?"✓ Paid":balance>0?`£${balance.toLocaleString()} due`:"Overpaid"}</span>):<span style={{ color:T.textLight,fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 12px", minWidth:120 }}>
                     {(b.viewings||[]).length===0
@@ -520,50 +514,44 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
 }
 
 // ─── FORM ─────────────────────────────────────────────────────────────────────
-const EVENT_TYPES = ["Wedding (Peak)","Wedding (Off Peak)","Party","Wake","Other"];
-
 const TEXT_FIELDS = [
-  { key:"couple",           label:"Couple / Event Name",   type:"text",     section:"core",     required:true },
-  { key:"date",             label:"Event Date",             type:"date",     section:"core",     required:true },
-  { key:"status",           label:"Status",                 type:"select",   section:"core",     options:["Confirmed","Holding"] },
-  { key:"eventType",        label:"Event Type",             type:"select",   section:"core",     options:EVENT_TYPES },
-  { key:"pets",             label:"Pets",                   type:"text",     section:"core" },
-  { key:"notes",            label:"Internal Notes",         type:"textarea", section:"core" },
-  { key:"mealGuests",       label:"Adults (meal)",          type:"number",   section:"guests" },
-  { key:"mealChildren",     label:"Children (meal)",        type:"number",   section:"guests" },
-  { key:"mealBabies",       label:"Babies (meal)",          type:"number",   section:"guests" },
-  { key:"eveGuests",        label:"Evening Guests (total)", type:"number",   section:"guests" },
-  { key:"phone",            label:"Phone",                  type:"text",     section:"contact" },
-  { key:"email",            label:"Email",                  type:"email",    section:"contact" },
-  { key:"email2",           label:"2nd Email",              type:"email",    section:"contact" },
-  { key:"ceremony",         label:"Ceremony / Clearing",    type:"text",     section:"logistics" },
-  { key:"guestArrivalTime", label:"Guest Arrival Time",     type:"text",     section:"logistics" },
-  { key:"caterers",         label:"Caterers",               type:"text",     section:"vendors" },
-  { key:"foodTruck",        label:"Food Truck",             type:"text",     section:"vendors" },
-  { key:"eveFood",          label:"Evening Food",           type:"text",     section:"vendors" },
-  { key:"otherVendors",     label:"Other Vendors",          type:"text",     section:"vendors" },
-  { key:"florist",          label:"Florist",                type:"text",     section:"vendors" },
-  { key:"band",             label:"Band / Entertainment",   type:"text",     section:"vendors" },
-  { key:"paSystem",         label:"PA System",              type:"text",     section:"vendors" },
-  { key:"hairdresser",      label:"Hairdresser",            type:"text",     section:"vendors" },
-  { key:"corkage",          label:"Corkage",                type:"text",     section:"financials" },
-  { key:"barTakeGross",     label:"Bar Take Gross (£)",     type:"number",   section:"financials" },
-  { key:"circaCommission",  label:"Circa Commission (£)",   type:"number",   section:"financials" },
-  { key:"nonStandard",      label:"Non-Standard / Extras",  type:"textarea", section:"extras" },
+  { key:"couple",          label:"Couple / Event Name",  type:"text",     section:"core",     required:true },
+  { key:"date",            label:"Wedding Date",          type:"date",     section:"core",     required:true },
+  { key:"status",          label:"Status",                type:"select",   section:"core",     options:["Confirmed","Holding"] },
+  { key:"venueFee",        label:"Venue Fee (£)",         type:"number",   section:"financials" },
+  { key:"deposit",         label:"Deposit (£)",           type:"number",   section:"financials" },
+  { key:"payment2",        label:"2nd Payment (£)",       type:"number",   section:"financials" },
+  { key:"finalPayment",    label:"Final Payment (£)",     type:"number",   section:"financials" },
+  { key:"mealGuests",      label:"Adults (meal)",         type:"number",   section:"guests" },
+  { key:"mealChildren",    label:"Children (meal)",       type:"number",   section:"guests" },
+  { key:"mealBabies",      label:"Babies (meal)",         type:"number",   section:"guests" },
+  { key:"eveGuests",       label:"Evening Guests",        type:"number",   section:"guests" },
+  { key:"phone",           label:"Phone",                 type:"text",     section:"contact" },
+  { key:"email",           label:"Email",                 type:"email",    section:"contact" },
+  { key:"email2",          label:"2nd Email",             type:"email",    section:"contact" },
+  { key:"ceremony",        label:"Ceremony / Clearing",   type:"text",     section:"vendors" },
+  { key:"guestArrivalTime",label:"Guest Arrival Time",    type:"text",     section:"vendors" },
+  { key:"caterers",        label:"Caterers",              type:"text",     section:"vendors" },
+  { key:"foodTruck",       label:"Food Truck",            type:"text",     section:"vendors" },
+  { key:"eveFood",         label:"Evening Food",          type:"text",     section:"vendors" },
+  { key:"otherVendors",    label:"Other Vendors",         type:"text",     section:"vendors" },
+  { key:"florist",         label:"Florist",               type:"text",     section:"vendors" },
+  { key:"band",            label:"Band / Entertainment",  type:"text",     section:"vendors" },
+  { key:"paSystem",        label:"PA System",             type:"text",     section:"vendors" },
+  { key:"hairdresser",     label:"Hairdresser",           type:"text",     section:"vendors" },
+  { key:"corkage",          label:"Corkage",               type:"text",     section:"financials" },
+  { key:"barTakeGross",     label:"Bar Take Gross (£)",    type:"number",   section:"financials" },
+  { key:"circaCommission",  label:"Circa Commission (£)",  type:"number",   section:"financials" },
 ];
 
 const FORM_SECTIONS = {
-  core:          { label:"Event Details" },
-  financials:    { label:"Financials" },
-  guests:        { label:"Guests" },
-  contact:       { label:"Contact" },
-  staffing:      { label:"Staffing" },
-  hours:         { label:"Staff Hours Worked" },
-  logistics:     { label:"Logistics" },
-  vendors:       { label:"Vendors" },
-  accommodation: { label:"Accommodation" },
-  extras:        { label:"Extras & Notes" },
-  viewings:      { label:"Viewings" },
+  core:       { label:"Event Details" },
+  financials: { label:"Financials & Accom" },
+  guests:     { label:"Guests" },
+  contact:    { label:"Contact" },
+  staffing:   { label:"Staffing" },
+  vendors:    { label:"Vendors & Logistics" },
+  viewings:   { label:"Viewings" },
 };
 
 function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave }) {
@@ -572,16 +560,14 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
   const countFilled = s => {
     if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
-    if(s==="accommodation") return ["amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]==="yes"||formData[k]==="no").length;
     if(s==="viewings") return (formData.viewings||[]).length;
-    if(s==="financials") return ["venueFee","deposit","corkage","barTakeGross","circaCommission","paymentComments"].filter(k=>formData[k]).length;
+    if(s==="financials") return ["venueFee","deposit","corkage","barTakeGross","circaCommission","nonStandard","amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]&&formData[k]!=="undecided").length;
     return TEXT_FIELDS.filter(f=>f.section===s&&formData[f.key]).length;
   };
   const countTotal = s => {
     if(s==="staffing") return 1+STAFFING_FIELDS.length;
-    if(s==="accommodation") return 3;
     if(s==="viewings") return (formData.viewings||[]).length || 1;
-    if(s==="financials") return 6;
+    if(s==="financials") return 9;
     return TEXT_FIELDS.filter(f=>f.section===s).length;
   };
 
@@ -656,25 +642,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   </div>
                 );
               })()}
-              {/* Hours worked below staffing */}
-              <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:20, marginTop:4 }}>
-                <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12 }}>Hours Worked</div>
-                <HoursSection formData={formData} update={update} staff={staff} staffShifts={formData.staffShifts||{}}/>
-              </div>
             </div>
-          )}
-
-          {activeSection==="accommodation" && (
-            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-              <p style={{ margin:"0 0 8px", fontSize:13, color:T.textMid }}>Tick to confirm booked, then enter the agreed fee.</p>
-              <AccomField bookedKey="amlyBooked"    feeKey="amlyFee"    label="Amly"    formData={formData} update={update}/>
-              <AccomField bookedKey="hamletBooked"  feeKey="hamletFee"  label="Hamlet"  formData={formData} update={update}/>
-              <AccomField bookedKey="campingBooked" feeKey="campingFee" label="Camping" formData={formData} update={update}/>
-            </div>
-          )}
-
-          {activeSection==="hours" && (
-            <HoursSection formData={formData} update={update} staff={staff} staffShifts={formData.staffShifts||{}}/>
           )}
 
           {activeSection==="viewings" && (
@@ -683,51 +651,25 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="financials" && (
             <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
-              {/* Venue Fee with 50%/100% paid tickboxes */}
+              {/* Non-standard / extras at top */}
               <div>
-                <FLabel>Venue Fee (£)</FLabel>
-                <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-                  <div style={{ flex:1, minWidth:120 }}>
-                    <FInput type="number" value={formData.venueFee||""} onChange={v=>update("venueFee",v)}/>
-                  </div>
-                  <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-                    <input type="checkbox" checked={!!formData.venueFee50Paid} onChange={e=>update("venueFee50Paid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent, cursor:"pointer" }}/>
-                    50% paid
-                  </label>
-                  <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-                    <input type="checkbox" checked={!!formData.venueFee100Paid} onChange={e=>update("venueFee100Paid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent, cursor:"pointer" }}/>
-                    100% paid
-                  </label>
-                </div>
+                <FLabel>Non-Standard / Extras</FLabel>
+                <FTextarea value={formData.nonStandard||""} onChange={v=>update("nonStandard",v)} rows={3}/>
               </div>
-              {/* Deposit with paid tickbox */}
-              <div>
-                <FLabel>Deposit (£)</FLabel>
-                <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                  <div style={{ flex:1, minWidth:120 }}>
-                    <FInput type="number" value={formData.deposit||""} onChange={v=>update("deposit",v)}/>
-                  </div>
-                  <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-                    <input type="checkbox" checked={!!formData.depositPaid} onChange={e=>update("depositPaid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent, cursor:"pointer" }}/>
-                    Paid
-                  </label>
+              {/* Core financials */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"14px 22px" }}>
+                <div>
+                  <FLabel>Venue Fee (£)</FLabel>
+                  <FInput type="number" value={formData.venueFee||""} onChange={v=>update("venueFee",v)}/>
                 </div>
-              </div>
-              {/* Corkage with paid tickbox */}
-              <div>
-                <FLabel>Corkage</FLabel>
-                <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                  <div style={{ flex:1 }}>
-                    <FInput type="text" value={formData.corkage||""} onChange={v=>update("corkage",v)}/>
-                  </div>
-                  <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-                    <input type="checkbox" checked={!!formData.corkagePaid} onChange={e=>update("corkagePaid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent, cursor:"pointer" }}/>
-                    Paid
-                  </label>
+                <div>
+                  <FLabel>Deposit (£)</FLabel>
+                  <FInput type="number" value={formData.deposit||""} onChange={v=>update("deposit",v)}/>
                 </div>
-              </div>
-              {/* Bar Take & Circa Commission */}
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px 22px" }}>
+                <div>
+                  <FLabel>Corkage</FLabel>
+                  <FInput type="text" value={formData.corkage||""} onChange={v=>update("corkage",v)}/>
+                </div>
                 <div>
                   <FLabel>Bar Take Gross (£)</FLabel>
                   <FInput type="number" value={formData.barTakeGross||""} onChange={v=>update("barTakeGross",v)}/>
@@ -737,15 +679,24 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   <FInput type="number" value={formData.circaCommission||""} onChange={v=>update("circaCommission",v)}/>
                 </div>
               </div>
-              {/* Payment comments */}
+              {/* Accommodation */}
+              <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
+                <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12 }}>Accommodation</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <AccomField bookedKey="amlyBooked"    feeKey="amlyFee"    paid50Key="amly50Paid"    paid100Key="amly100Paid"    label="Amly"    formData={formData} update={update}/>
+                  <AccomField bookedKey="hamletBooked"  feeKey="hamletFee"  paid50Key="hamlet50Paid"  paid100Key="hamlet100Paid"  label="Hamlet"  formData={formData} update={update}/>
+                  <AccomField bookedKey="campingBooked" feeKey="campingFee" paid50Key="camping50Paid" paid100Key="camping100Paid" label="Camping" formData={formData} update={update}/>
+                </div>
+              </div>
+              {/* Payment notes */}
               <div>
-                <FLabel>Payment Comments</FLabel>
-                <FTextarea value={formData.paymentComments||""} onChange={v=>update("paymentComments",v)} rows={3}/>
+                <FLabel>Payment Notes</FLabel>
+                <FTextarea value={formData.paymentNotes||""} onChange={v=>update("paymentNotes",v)} rows={2}/>
               </div>
             </div>
           )}
 
-          {activeSection!=="staffing" && activeSection!=="accommodation" && activeSection!=="hours" && activeSection!=="viewings" && activeSection!=="financials" && (
+          {activeSection!=="staffing" && activeSection!=="financials" && activeSection!=="viewings" && (
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px 22px" }}>
               {TEXT_FIELDS.filter(f=>f.section===activeSection).map(field=>(
                 <div key={field.key} style={{ gridColumn:field.type==="textarea"?"1 / -1":"auto" }}>
@@ -871,6 +822,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
 function ReportsView({ bookings, staff, reportType, setReportType, enquiries }) {
   const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Staffing Rota"},{id:"pipeline",label:"Payment Pipeline"},{id:"staffload",label:"Staff Workload"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Staff Timeline"}];
+  // Note: hours report kept for reference, accommodation report kept
   return (
     <div style={{ paddingTop:28 }}>
       <div style={{ marginBottom:22, display:"flex", gap:8, flexWrap:"wrap" }}>
@@ -905,29 +857,46 @@ function SummaryReport({ bookings }) {
   const allYears = [...new Set(bookings.filter(b=>b.date).map(b=>b.date.slice(0,4)))].sort();
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
+  const [printMode, setPrintMode] = useState(false);
 
   const yearBookings = bookings.filter(b=>b.couple&&b.date&&b.date.startsWith(year));
   const today = new Date().toISOString().slice(0,10);
   const upcoming = yearBookings.filter(b=>b.date>=today);
-  const totalRevenue = yearBookings.reduce((s,b)=>s+parseMoney(b.venueFee),0);
-  const totalCollected = yearBookings.reduce((s,b)=>s+parseMoney(b.deposit),0);
+  const totalVenueFees = yearBookings.reduce((s,b)=>s+parseMoney(b.venueFee),0);
+  const totalAccom = yearBookings.reduce((s,b)=>s+parseMoney(b.amlyFee)+parseMoney(b.hamletFee)+parseMoney(b.campingFee),0);
+  const totalRevenue = totalVenueFees + totalAccom;
+  const totalDeposits = yearBookings.reduce((s,b)=>s+parseMoney(b.deposit),0);
   const monthCounts = {};
   yearBookings.forEach(b=>{ const m=b.date.slice(0,7); monthCounts[m]=(monthCounts[m]||0)+1; });
-
-  // Bookings by event type
-  const byType = {};
-  yearBookings.forEach(b=>{
-    const t = b.eventType || "Other";
-    if(!byType[t]) byType[t]={count:0,revenue:0};
-    byType[t].count++;
-    byType[t].revenue+=parseMoney(b.venueFee);
-  });
-
   const prevYear = allYears[allYears.indexOf(year)-1];
   const nextYear = allYears[allYears.indexOf(year)+1];
 
+  const printText = [
+    `Annual Summary — ${year}`,
+    `Bookings: ${yearBookings.length} (${upcoming.length} upcoming)`,
+    `Venue Fees: £${totalVenueFees.toLocaleString()}`,
+    `Accommodation Revenue: £${totalAccom.toLocaleString()}`,
+    `Total Revenue: £${totalRevenue.toLocaleString()}`,
+    `Deposits Held (advance on venue fees): £${totalDeposits.toLocaleString()}`,
+    `Confirmed: ${yearBookings.filter(b=>b.status==="Confirmed").length} | Holding: ${yearBookings.filter(b=>b.status==="Holding").length}`,
+    `Accommodation — Amly: ${yearBookings.filter(b=>b.amlyBooked==="yes").length} | Hamlet: ${yearBookings.filter(b=>b.hamletBooked==="yes").length} | Camping: ${yearBookings.filter(b=>b.campingBooked==="yes").length}`,
+    "",
+    "Bookings by Month:",
+    ...Object.entries(monthCounts).sort().map(([m,c])=>`  ${new Date(m+"-01").toLocaleDateString("en-GB",{month:"long"})}: ${c}`)
+  ].join("\n");
+
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
+  );
+
   return (
     <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
       {/* Year navigator */}
       <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:16, marginBottom:24 }}>
         <button onClick={()=>setYear(prevYear)} disabled={!prevYear} style={{ background:prevYear?"#fff":"#f5f5f5", border:`1px solid ${T.border}`, color:prevYear?T.midBlue:T.textLight, width:36, height:36, borderRadius:8, cursor:prevYear?"pointer":"default", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>‹</button>
@@ -941,29 +910,13 @@ function SummaryReport({ bookings }) {
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:28 }}>
         <StatCard label="Bookings" value={yearBookings.length} sub={`${upcoming.length} upcoming`}/>
-        <StatCard label="Venue Revenue" value={`£${totalRevenue.toLocaleString()}`} sub={`${year}`}/>
-        <StatCard label="Deposits Collected" value={`£${totalCollected.toLocaleString()}`} sub={`£${(totalRevenue-totalCollected).toLocaleString()} outstanding`}/>
+        <StatCard label="Venue Fees" value={`£${totalVenueFees.toLocaleString()}`} sub={`${year}`}/>
+        <StatCard label="Accom Revenue" value={`£${totalAccom.toLocaleString()}`} sub={`Total: £${totalRevenue.toLocaleString()}`}/>
+        <StatCard label="Deposits Held" value={`£${totalDeposits.toLocaleString()}`} sub="Advance on venue fees — not additional"/>
         <StatCard label="Confirmed" value={yearBookings.filter(b=>b.status==="Confirmed").length} sub="Confirmed bookings"/>
         <StatCard label="Holding" value={yearBookings.filter(b=>b.status==="Holding").length} sub="Holding bookings"/>
         <StatCard label="Amly / Hamlet / Camping" value={`${yearBookings.filter(b=>b.amlyBooked==="yes").length} / ${yearBookings.filter(b=>b.hamletBooked==="yes").length} / ${yearBookings.filter(b=>b.campingBooked==="yes").length}`} sub="Accommodation bookings"/>
       </div>
-
-      {/* Bookings by event type */}
-      {Object.keys(byType).length > 0 && (
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-          <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Bookings by Type</h3>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:12 }}>
-            {Object.entries(byType).sort((a,b)=>b[1].count-a[1].count).map(([type,data])=>(
-              <div key={type} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 16px" }}>
-                <div style={{ fontSize:12, color:T.textLight, fontWeight:600, marginBottom:4 }}>{type}</div>
-                <div style={{ fontSize:22, fontWeight:700, color:T.midBlue }}>{data.count}</div>
-                {data.revenue>0 && <div style={{ fontSize:12, color:T.green, fontWeight:600, marginTop:2 }}>£{data.revenue.toLocaleString()}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
         <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Bookings by Month</h3>
         {Object.entries(monthCounts).sort().map(([month,count])=>{
@@ -1131,7 +1084,6 @@ function CalendarReport({ bookings, enquiries }) {
                       <div key={b.id} style={{ marginTop:4, padding:"2px 6px", borderRadius:4, background:s.bg, border:`1px solid ${s.border}`, display:"flex", alignItems:"center", gap:4 }}>
                         <span style={{ fontSize:10, fontWeight:700, color:s.text, flexShrink:0 }}>{new Date(d+"T00:00:00").getDate()}</span>
                         <span style={{ fontSize:10, color:s.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.couple}</span>
-                        {b.eventType && <span style={{ fontSize:9, color:s.text, opacity:.75, flexShrink:0, fontStyle:"italic" }}>· {b.eventType}</span>}
                       </div>
                     );
                   })
@@ -1155,45 +1107,52 @@ function CalendarReport({ bookings, enquiries }) {
 }
 
 function RevenueReport({ bookings }) {
+  const [printMode, setPrintMode] = useState(false);
   const rows=bookings.filter(b=>b.couple&&parseMoney(b.venueFee)>0).sort((a,b)=>a.date>b.date?1:-1);
-  const total=rows.reduce((s,b)=>s+parseMoney(b.venueFee),0);
+  const totalFees=rows.reduce((s,b)=>s+parseMoney(b.venueFee),0);
   const totalDeposits=rows.reduce((s,b)=>s+parseMoney(b.deposit),0);
-  const fullyPaid=rows.filter(b=>b.venueFee100Paid).length;
+  // Deposit is an advance on venue fee — balance = fee - deposit (remaining to collect)
+  const totalBalance=rows.reduce((s,b)=>s+Math.max(0,parseMoney(b.venueFee)-parseMoney(b.deposit)),0);
+  const printText = ["Revenue Tracker","","Date | Couple | Venue Fee | Deposit Paid | Balance",
+    ...rows.map(b=>{ const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),bal=Math.max(0,fee-dep); return `${b.date} | ${b.couple} | £${fee.toLocaleString()} | £${dep.toLocaleString()} | £${bal.toLocaleString()}`; }),
+    `","Total: £${totalFees.toLocaleString()} fees | £${totalDeposits.toLocaleString()} deposits | £${totalBalance.toLocaleString()} outstanding`].join("
+");
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.7, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
+  );
   return (
     <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
-        <StatCard label="Total Venue Fees" value={`£${total.toLocaleString()}`}/>
-        <StatCard label="Total Deposits" value={`£${totalDeposits.toLocaleString()}`}/>
-        <StatCard label="Fully Paid" value={fullyPaid} sub={`${rows.length - fullyPaid} outstanding`}/>
+        <StatCard label="Total Venue Fees" value={`£${totalFees.toLocaleString()}`} sub="Sum of all venue fees"/>
+        <StatCard label="Deposits Paid" value={`£${totalDeposits.toLocaleString()}`} sub="Advances on venue fees"/>
+        <StatCard label="Balance Outstanding" value={`£${totalBalance.toLocaleString()}`} sub="Remaining after deposits"/>
       </div>
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple / Type","Venue Fee","Deposit","Deposit Paid","50% Paid","100% Paid","Corkage Paid","Comments"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Venue Fee","Deposit (advance)","Balance Remaining"].map(h=><th key={h} style={{ padding:"10px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
           <tbody>
             {rows.map((b,i)=>{
-              const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit);
-              const tick = (v) => v ? <span style={{ color:T.green, fontWeight:700, fontSize:14 }}>✓</span> : <span style={{ color:T.textLight }}>—</span>;
+              const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep);
               return <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
-                <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, fontWeight:500, whiteSpace:"nowrap" }}>{b.date}</td>
-                <td style={{ padding:"10px 12px", fontSize:13, fontWeight:500 }}>
-                  <div>{b.couple}</div>
-                  {b.eventType && <div style={{ fontSize:11, color:T.textLight, fontStyle:"italic" }}>{b.eventType}</div>}
-                </td>
-                <td style={{ padding:"10px 12px", fontSize:13 }}>£{fee.toLocaleString()}</td>
-                <td style={{ padding:"10px 12px", fontSize:13, color:dep>0?T.text:T.textLight }}>{dep>0?`£${dep.toLocaleString()}`:"—"}</td>
-                <td style={{ padding:"10px 12px", textAlign:"center" }}>{tick(b.depositPaid)}</td>
-                <td style={{ padding:"10px 12px", textAlign:"center" }}>{tick(b.venueFee50Paid)}</td>
-                <td style={{ padding:"10px 12px", textAlign:"center" }}>{tick(b.venueFee100Paid)}</td>
-                <td style={{ padding:"10px 12px", textAlign:"center" }}>{tick(b.corkagePaid)}</td>
-                <td style={{ padding:"10px 12px", fontSize:12, color:T.textMid, maxWidth:200 }}>{b.paymentComments||"—"}</td>
+                <td style={{ padding:"10px 14px", fontSize:12, color:T.accent, fontWeight:500 }}>{b.date}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:500 }}>{b.couple}</td>
+                <td style={{ padding:"10px 14px", fontSize:13 }}>£{fee.toLocaleString()}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, color:dep>0?T.green:T.textLight }}>{dep>0?`£${dep.toLocaleString()}`:"—"}</td>
+                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:balance===0?T.green:T.amber }}>{balance===0?"✓ Paid in full":`£${balance.toLocaleString()}`}</td>
               </tr>;
             })}
           </tbody>
           <tfoot><tr style={{ borderTop:`2px solid ${T.border}`, background:"#eef4fd" }}>
-            <td colSpan={2} style={{ padding:"10px 12px", fontSize:13, color:T.midBlue, fontWeight:700 }}>TOTALS</td>
-            <td style={{ padding:"10px 12px", fontSize:13, color:T.midBlue, fontWeight:700 }}>£{total.toLocaleString()}</td>
-            <td style={{ padding:"10px 12px", fontSize:13, color:T.green, fontWeight:600 }}>£{totalDeposits.toLocaleString()}</td>
-            <td colSpan={5} style={{ padding:"10px 12px", fontSize:12, color:T.textLight }}>{fullyPaid} of {rows.length} fully paid</td>
+            <td colSpan={2} style={{ padding:"10px 14px", fontSize:13, color:T.midBlue, fontWeight:700 }}>TOTALS</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.midBlue, fontWeight:700 }}>£{totalFees.toLocaleString()}</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.green, fontWeight:600 }}>£{totalDeposits.toLocaleString()}</td>
+            <td style={{ padding:"10px 14px", fontSize:13, color:T.amber, fontWeight:700 }}>£{totalBalance.toLocaleString()}</td>
           </tr></tfoot>
         </table>
       </div>
@@ -1202,12 +1161,31 @@ function RevenueReport({ bookings }) {
 }
 
 function AccommodationReport({ bookings }) {
+  const [printMode, setPrintMode] = useState(false);
   const rows=bookings.filter(b=>b.couple&&b.date);
   const amlyRows=rows.filter(b=>b.amlyBooked==="yes");
   const hamletRows=rows.filter(b=>b.hamletBooked==="yes");
   const campingRows=rows.filter(b=>b.campingBooked==="yes");
+  const printText = [
+    "Accommodation Report",
+    `Amly: ${amlyRows.length} bookings — £${amlyRows.reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()}`,
+    `Hamlet: ${hamletRows.length} bookings — £${hamletRows.reduce((s,b)=>s+parseMoney(b.hamletFee),0).toLocaleString()}`,
+    `Camping: ${campingRows.length} bookings — £${campingRows.reduce((s,b)=>s+parseMoney(b.campingFee),0).toLocaleString()}`,
+    "",
+    "Date | Couple | Amly | Amly Fee | Hamlet | Hamlet Fee | Camping | Camping Fee",
+    ...rows.map(b=>`${b.date} | ${b.couple} | ${b.amlyBooked==="yes"?"Yes":b.amlyBooked==="no"?"No":"TBC"} | ${parseMoney(b.amlyFee)>0?"£"+parseMoney(b.amlyFee).toLocaleString():"—"} | ${b.hamletBooked==="yes"?"Yes":b.hamletBooked==="no"?"No":"TBC"} | ${parseMoney(b.hamletFee)>0?"£"+parseMoney(b.hamletFee).toLocaleString():"—"} | ${b.campingBooked==="yes"?"Yes":b.campingBooked==="no"?"No":"TBC"} | ${parseMoney(b.campingFee)>0?"£"+parseMoney(b.campingFee).toLocaleString():"—"}`)
+  ].join("\n");
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
+  );
   return (
     <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
         <StatCard label="Amly Booked"    value={amlyRows.length}    sub={`£${amlyRows.reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()} confirmed`}/>
         <StatCard label="Hamlet Booked"  value={hamletRows.length}  sub={`£${hamletRows.reduce((s,b)=>s+parseMoney(b.hamletFee),0).toLocaleString()} confirmed`}/>
@@ -1241,9 +1219,35 @@ function AccommodationReport({ bookings }) {
 }
 
 function StaffingRota({ bookings, staff }) {
+  const [printMode, setPrintMode] = useState(false);
   const today=new Date().toISOString().slice(0,10);
   const rows=bookings.filter(b=>b.couple&&b.date&&b.date>=today).sort((a,b)=>a.date>b.date?1:-1);
+  const getNames = (ids) => (ids||[]).map(id=>(staff.find(s=>s.id===id)||{name:id}).name).join(", ") || "—";
+  const printText = [
+    "Staffing Rota — Upcoming Events",
+    "",
+    ...rows.map(b=>[
+      `${b.date} — ${b.couple}`,
+      `  Set-Up: ${getNames(b.setup)}`,
+      `  Day Manager: ${getNames(b.dayManager)}`,
+      `  Bar Supervisor: ${getNames(b.barSupervisor)}`,
+      `  Day Staff: ${getNames(b.dayStaff)}`,
+      `  Bar: ${getNames(b.bar)}`,
+      `  Day Handy: ${getNames(b.dayHandy)}`,
+      `  Eve Handy: ${getNames(b.eveHandy)}`,
+    ].join("\n"))
+  ].join("\n\n");
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
+  );
   return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
     <div style={{ overflowX:"auto" }}>
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
@@ -1264,46 +1268,48 @@ function StaffingRota({ bookings, staff }) {
         </table>
       </div>
     </div>
+    </div>
   );
 }
 
 function PipelineReport({ bookings }) {
+  const [printMode, setPrintMode] = useState(false);
   const today=new Date().toISOString().slice(0,10);
   const rows=bookings.filter(b=>b.couple&&b.date>=today&&parseMoney(b.venueFee)>0);
-  const tick = (label, v) => (
-    <span style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:11, color:v?T.green:T.textLight, fontWeight:v?600:400 }}>
-      {v ? "✓" : "○"} {label}
-    </span>
+  const printText = [
+    "Payment Pipeline — Upcoming Bookings",
+    "",
+    ...rows.map(b=>{
+      const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep);
+      return `${b.date} | ${b.couple}\n  Venue Fee: £${fee.toLocaleString()} | Deposit: £${dep.toLocaleString()} | Balance: ${balance===0?"PAID IN FULL":"£"+balance.toLocaleString()}`;
+    })
+  ].join("\n\n");
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
   );
   return (
     <div>
-      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings with payment status</p>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
+      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings with outstanding balance (deposit is advance on venue fee)</p>
       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
         {rows.map(b=>{
-          const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit);
-          const pct = b.venueFee100Paid ? 100 : b.venueFee50Paid ? 50 : dep>0&&fee>0 ? Math.round((dep/fee)*100) : 0;
+          const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep),pct=fee>0?Math.min(100,Math.round((dep/fee)*100)):0;
           return (
             <div key={b.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
-                <div>
-                  <div style={{ fontWeight:600, color:T.text }}>{b.couple}</div>
-                  <div style={{ fontSize:12, color:T.textLight }}>{b.date}{b.eventType ? ` · ${b.eventType}` : ""}</div>
-                </div>
-                <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:18, color:T.midBlue, fontWeight:700 }}>£{fee.toLocaleString()}</div>
-                  {dep>0&&<div style={{ fontSize:11, color:T.textLight }}>Deposit: £{dep.toLocaleString()}</div>}
-                </div>
+                <div><div style={{ fontWeight:600, color:T.text }}>{b.couple}</div><div style={{ fontSize:12, color:T.textLight }}>{b.date}</div></div>
+                <div style={{ textAlign:"right" }}><div style={{ fontSize:18, color:T.midBlue, fontWeight:700 }}>£{fee.toLocaleString()}</div><div style={{ fontSize:11, color:T.textLight }}>{dep>0?`Deposit: £${dep.toLocaleString()}`:"No deposit"}</div></div>
               </div>
-              <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden", marginBottom:8 }}>
-                <div style={{ background:b.venueFee100Paid?T.green:T.accentMid, height:"100%", width:`${Math.min(100,pct)}%`, borderRadius:4 }}/>
+              <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}><div style={{ background:balance===0?T.green:T.accentMid, height:"100%", width:`${pct}%`, borderRadius:4 }}/></div>
+              <div style={{ display:"flex", justifyContent:"space-between", marginTop:6, fontSize:11, color:T.textLight }}>
+                <span>Balance remaining: {balance===0?"✓ Paid in full":`£${balance.toLocaleString()}`}</span>
+                <span style={{ color:balance===0?T.green:T.accent, fontWeight:700 }}>{pct}% deposit paid</span>
               </div>
-              <div style={{ display:"flex", gap:14, flexWrap:"wrap" }}>
-                {tick("Deposit paid", b.depositPaid)}
-                {tick("50% paid", b.venueFee50Paid)}
-                {tick("100% paid", b.venueFee100Paid)}
-                {tick("Corkage paid", b.corkagePaid)}
-              </div>
-              {b.paymentComments && <div style={{ marginTop:8, fontSize:12, color:T.textMid, fontStyle:"italic" }}>{b.paymentComments}</div>}
             </div>
           );
         })}
@@ -1313,6 +1319,7 @@ function PipelineReport({ bookings }) {
 }
 
 function StaffWorkloadReport({ bookings, staff }) {
+  const [printMode, setPrintMode] = useState(false);
   const today=new Date().toISOString().slice(0,10);
   const upcoming=bookings.filter(b=>b.date>=today);
   const workload=staff.filter(s=>s.active).map(s=>{
@@ -1322,8 +1329,22 @@ function StaffWorkloadReport({ bookings, staff }) {
     return {...s, count:assigned.length, roles};
   }).sort((a,b)=>b.count-a.count);
   const max=Math.max(1,...workload.map(w=>w.count));
+  const printText = [
+    "Staff Workload — Upcoming Events",
+    "",
+    ...workload.filter(w=>w.count>0).map(w=>`${w.name} (${w.role}): ${w.count} upcoming\n  ${Object.entries(w.roles).map(([r,c])=>`${r==="setup"?"Set-Up":STAFFING_LABELS[r]}: ${c}`).join(", ")}`)
+  ].join("\n\n");
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
+  );
   return (
     <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
       <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings per active staff member</p>
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
         {workload.map(w=>(
@@ -1430,24 +1451,6 @@ function HoursSection({ formData, update, staff, staffShifts }) {
           <span style={{ fontSize:20, color:T.midBlue, fontWeight:700 }}>{totalHours.toLocaleString()}h</span>
         </div>
       )}
-
-      {totalHours > 0 && (() => {
-        const lines = [...assignedStaff, ...otherStaff].filter(s => hw[s.id] > 0);
-        const emailText = lines.map(s => `${s.name}: ${hw[s.id]}h`).join("\n") + `\n\nTotal: ${totalHours}h`;
-        return (
-          <div style={{ marginTop:12 }}>
-            <button
-              onClick={() => { navigator.clipboard.writeText(emailText).catch(()=>{}); }}
-              style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"8px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}
-            >
-              📋 Copy Hours for Email
-            </button>
-            <pre style={{ marginTop:10, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 16px", fontSize:13, color:T.text, fontFamily:"inherit", lineHeight:1.7, whiteSpace:"pre-wrap" }}>
-              {emailText}
-            </pre>
-          </div>
-        );
-      })()}
     </div>
   );
 }
@@ -1520,12 +1523,35 @@ function HoursReport({ bookings, staff }) {
 
   // Per-event detail for each staff member
   const [expandedStaff, setExpandedStaff] = useState(null);
+  const [printMode, setPrintMode] = useState(false);
   const eventsForStaff = (id) => filtered.filter(b => (b.hoursWorked||{})[id] > 0).sort((a,b)=>a.date>b.date?1:-1);
 
   const monthLabel = m => new Date(m+"-01").toLocaleDateString("en-GB",{month:"short",year:"numeric"});
 
+  const printText = grandTotal === 0 ? "No hours logged in this period." : [
+    `Hours Worked Report — ${from} to ${to}`,
+    `Total: ${grandTotal}h across ${filtered.length} events`,
+    "",
+    ...sortedStaff.map(s => {
+      const events = eventsForStaff(s.id);
+      const rate = parseFloat((s.rate||"").replace(/[^0-9.]/g,"")) || 0;
+      const est = rate > 0 ? ` (~£${(totals[s.id]*rate).toFixed(2)})` : "";
+      return `${s.name}: ${totals[s.id]}h${est}\n${events.map(b=>`  ${b.date} — ${b.couple}: ${(b.hoursWorked||{})[s.id]}h`).join("\n")}`;
+    })
+  ].join("\n\n");
+
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
+  );
+
   return (
     <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
       {/* Date range controls */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
         <span style={{ fontSize:13, color:T.textMid, fontWeight:600 }}>Date range:</span>
@@ -2136,8 +2162,25 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent 
 
 // ─── Event History ────────────────────────────────────────────────────────────
 function EventHistoryView({ events, products, onEdit, onDelete }) {
+  const [printMode, setPrintMode] = useState(false);
   const sorted = [...events].sort((a,b) => b.date > a.date ? 1 : -1);
   const [expanded, setExpanded] = useState(null);
+
+  const printText = sorted.map(ev => {
+    const isOrder = ev.type === "order";
+    const lines = Object.entries(ev.lines||{}).map(([pid,qty]) => {
+      const prod = products.find(p=>p.id===pid);
+      return `  ${prod ? prod.name : pid}: ${qty}`;
+    });
+    return [`${ev.date} — ${isOrder?"ORDER":"STOCKTAKE"}: ${ev.label||""}`, ...lines].join("\n");
+  }).join("\n\n");
+
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText||"No history yet."}</pre>
+    </div>
+  );
 
   if (!sorted.length) {
     return (
@@ -2149,6 +2192,9 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
 
   return (
     <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
       <div style={{ display:"flex", gap:16, marginBottom:18 }}>
         <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:4 }}>Stocktakes</div>
@@ -3726,6 +3772,7 @@ const TIMELINE_COLOURS = [
 ];
 
 function StaffTimelineReport({ bookings, staff }) {
+  const [printMode, setPrintMode] = useState(false);
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b => b.date >= today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
   const past     = bookings.filter(b => b.date <  today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
@@ -3853,8 +3900,26 @@ function StaffTimelineReport({ bookings, staff }) {
     );
   };
 
+  const timelineRows = bookings.filter(b=>b.couple&&b.date).sort((a,b)=>a.date>b.date?1:-1);
+  const printText = [
+    "Staff Timeline Report",
+    "",
+    ...timelineRows.map(b => {
+      const getNames = (ids) => (ids||[]).map(id=>(staff.find(s=>s.id===id)||{name:id}).name).join(", ") || "—";
+      return `${b.date} — ${b.couple}\n  Manager: ${getNames(b.dayManager)} | Bar Sup: ${getNames(b.barSupervisor)}\n  Day Staff: ${getNames(b.dayStaff)} | Bar: ${getNames(b.bar)}`;
+    })
+  ].join("\n\n");
+  if(printMode) return (
+    <div>
+      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
+      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+    </div>
+  );
   return (
     <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+      </div>
       <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:22, flexWrap:"wrap" }}>
         <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:17 }}>Staff Timeline</h3>
         <select value={selectedBooking||""} onChange={e=>setSelectedBooking(Number(e.target.value)||e.target.value)}
