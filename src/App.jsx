@@ -1113,10 +1113,13 @@ function RevenueReport({ bookings }) {
   const totalDeposits=rows.reduce((s,b)=>s+parseMoney(b.deposit),0);
   // Deposit is an advance on venue fee — balance = fee - deposit (remaining to collect)
   const totalBalance=rows.reduce((s,b)=>s+Math.max(0,parseMoney(b.venueFee)-parseMoney(b.deposit)),0);
-  const printText = ["Revenue Tracker","","Date | Couple | Venue Fee | Deposit Paid | Balance",
-    ...rows.map(b=>{ const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),bal=Math.max(0,fee-dep); return `${b.date} | ${b.couple} | £${fee.toLocaleString()} | £${dep.toLocaleString()} | £${bal.toLocaleString()}`; }),
-    `","Total: £${totalFees.toLocaleString()} fees | £${totalDeposits.toLocaleString()} deposits | £${totalBalance.toLocaleString()} outstanding`].join("
-");
+  const printText = [
+    "Revenue Tracker", "",
+    "Date | Couple | Venue Fee | Deposit Paid | Balance",
+    ...rows.map(b=>{ const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),bal=Math.max(0,fee-dep); return b.date+" | "+b.couple+" | £"+fee.toLocaleString()+" | £"+dep.toLocaleString()+" | £"+bal.toLocaleString(); }),
+    "",
+    "Total: £"+totalFees.toLocaleString()+" fees | £"+totalDeposits.toLocaleString()+" deposits | £"+totalBalance.toLocaleString()+" outstanding",
+  ].join("\n");
   if(printMode) return (
     <div>
       <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
