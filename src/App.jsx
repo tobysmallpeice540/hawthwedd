@@ -4057,7 +4057,10 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   const id = entityId || formData.id || formData.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
   const files = formData.files || [];
 
-  const isImage = (name) => /\.(jpe?g|png|gif|webp|svg)$/i.test(name);
+  const isImage = (file) => {
+    if (file.type && file.type.startsWith("image/")) return true;
+    return /\.(jpe?g|png|gif|webp|svg)$/i.test(file.name || "");
+  };
 
   const handleUpload = async (e) => {
     const picked = Array.from(e.target.files);
@@ -4069,7 +4072,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
         const url = await sbUploadFile(path, file);
-        newFiles.push({ name: file.name, url, path, type: file.type, uploadedAt: new Date().toISOString().slice(0,10) });
+        newFiles.push({ name: file.name, url, path, type: file.type || "", uploadedAt: new Date().toISOString().slice(0,10) });
       }
       update("files", newFiles);
       if (onAutoSave) { await onAutoSave({ ...formData, files: newFiles }); flash(); }
@@ -4116,17 +4119,26 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
         {files.map((file, idx) => (
           <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
-            {isImage(file.name) ? (
+            {isImage(file) ? (
               <div>
-                <img src={file.url} alt={file.name}
-                  style={{ width:"100%", maxHeight:320, objectFit:"contain", background:"#f8fafd", display:"block" }}
-                  onError={e=>{ e.target.style.display="none"; }}/>
+                <a href={file.url} target="_blank" rel="noreferrer" style={{ display:"block" }}>
+                  <img
+                    src={file.url}
+                    alt={file.name}
+                    style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}
+                    onLoad={e=>{ e.target.style.opacity=1; }}
+                    onError={e=>{ e.target.closest("a").style.display="none"; e.target.closest("div").querySelector(".file-fallback").style.display="flex"; }}
+                  />
+                </a>
+                <div className="file-fallback" style={{ display:"none", alignItems:"center", gap:8, padding:"12px 16px", background:"#fef9c3", fontSize:12, color:"#92400e" }}>
+                  ⚠ Preview unavailable — <a href={file.url} target="_blank" rel="noreferrer" style={{ color:T.midBlue, fontWeight:600 }}>open in new tab</a>
+                </div>
                 <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderTop:`1px solid ${T.border}` }}>
                   <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</span>
                   {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
-                  <a href={file.url} download={file.name} target="_blank" rel="noreferrer"
+                  <a href={file.url} target="_blank" rel="noreferrer"
                     style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>
-                    ⬇ Download
+                    ⬇ Open
                   </a>
                   <button onClick={()=>handleDelete(idx)}
                     style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
