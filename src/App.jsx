@@ -4062,6 +4062,26 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
     return /\.(jpe?g|png|gif|webp|svg)$/i.test(file.name || "");
   };
 
+  // Fetch image as blob to bypass Supabase Content-Disposition: attachment header
+  const [blobUrls, setBlobUrls] = useState({});
+  useEffect(() => {
+    const imageFiles = files.filter(f => isImage(f));
+    imageFiles.forEach(file => {
+      if (blobUrls[file.url]) return; // already fetched
+      fetch(file.url, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+      })
+        .then(r => r.blob())
+        .then(blob => {
+          const blobUrl = URL.createObjectURL(blob);
+          setBlobUrls(prev => ({ ...prev, [file.url]: blobUrl }));
+        })
+        .catch(e => console.warn("Preview fetch failed:", e));
+    });
+    // Cleanup blob URLs on unmount
+    return () => { Object.values(blobUrls).forEach(u => URL.revokeObjectURL(u)); };
+  }, [files]);
+
   const handleUpload = async (e) => {
     const picked = Array.from(e.target.files);
     if (!picked.length) return;
@@ -4121,18 +4141,19 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
           <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
             {isImage(file) ? (
               <div>
-                <a href={file.url} target="_blank" rel="noreferrer" style={{ display:"block" }}>
-                  <img
-                    src={file.url}
-                    alt={file.name}
-                    style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}
-                    onLoad={e=>{ e.target.style.opacity=1; }}
-                    onError={e=>{ e.target.closest("a").style.display="none"; e.target.closest("div").querySelector(".file-fallback").style.display="flex"; }}
-                  />
-                </a>
-                <div className="file-fallback" style={{ display:"none", alignItems:"center", gap:8, padding:"12px 16px", background:"#fef9c3", fontSize:12, color:"#92400e" }}>
-                  ⚠ Preview unavailable — <a href={file.url} target="_blank" rel="noreferrer" style={{ color:T.midBlue, fontWeight:600 }}>open in new tab</a>
-                </div>
+                {blobUrls[file.url] ? (
+                  <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
+                    <img
+                      src={blobUrls[file.url]}
+                      alt={file.name}
+                      style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}
+                    />
+                  </a>
+                ) : (
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}>
+                    <span style={{ animation:"spin 1s linear infinite", display:"inline-block" }}>⟳</span> Loading preview…
+                  </div>
+                )}
                 <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderTop:`1px solid ${T.border}` }}>
                   <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</span>
                   {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
