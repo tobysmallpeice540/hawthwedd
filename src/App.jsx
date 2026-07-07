@@ -478,7 +478,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment","Viewings",""].map(h=>(
+              {["Date","Day","Couple / Event","Day Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Viewings","Files"].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -508,8 +508,6 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                     {accomBadges.length===0 ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
                       : accomBadges.map(a=><span key={a} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600 }}>{a}</span>)}
                   </td>
-                  <td style={{ padding:"10px 12px" }}>{(b.setup||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
-                  <td style={{ padding:"10px 12px" }}>{(b.dayManager||[]).length===0?<span style={{ color:T.textLight,fontSize:11 }}>—</span>:(b.dayManager||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
                   <td style={{ padding:"10px 12px" }}>
                     {b.status==="Holding"
                       ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:"#fef9c3", color:"#854d0e", fontWeight:600 }}>Holding</span>
@@ -532,8 +530,19 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                         </div>
                     }
                   </td>
-                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }} onClick={e=>e.stopPropagation()}>
-                    <button onClick={()=>onDelete(b.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
+                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                    {(()=>{
+                      const bFiles = b.files||[];
+                      const has = (type) => bFiles.some(f=>f.docType===type);
+                      const Tick = ({label,short}) => (
+                        <span title={label} style={{ display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:20,borderRadius:4,marginRight:2,fontSize:9,fontWeight:700,background:has(label)?T.greenBg:"#f1f5f9",color:has(label)?T.green:T.textLight,border:`1px solid ${has(label)?"#86efac":T.border}` }}>{short}</span>
+                      );
+                      return <div style={{display:"flex",alignItems:"center",gap:1}}>
+                        <Tick label="Event Booking Form" short="EBF"/>
+                        <Tick label="Accommodation Booking Form" short="ABF"/>
+                        <Tick label="Event Timesheet" short="TS"/>
+                      </div>;
+                    })()}
                   </td>
                 </tr>
               );
@@ -4048,52 +4057,52 @@ function ViewingsList({ viewings, onEdit, onDelete }) {
 // Viewings section inside booking FormView
 
 // ─── FILE ATTACHMENT SECTION ───────────────────────────────────────────────────
+const FILE_DOC_TYPES = ["Event Booking Form", "Accommodation Booking Form", "Event Timesheet", "Other"];
+
+const guessDocType = (filename) => {
+  const n = (filename||"").toLowerCase();
+  if (n.includes("timesheet") || n.includes("time sheet") || n.includes("hours")) return "Event Timesheet";
+  if (n.includes("accom") || n.includes("accommodation") || n.includes("hamlet") || n.includes("amly") || n.includes("camping")) return "Accommodation Booking Form";
+  if (n.includes("booking") || n.includes("event") || n.includes("wedding") || n.includes("contract") || n.includes("form")) return "Event Booking Form";
+  return "Other";
+};
+
 function BookingFilesSection({ formData, update, onAutoSave, entityId, entityType="booking" }) {
-  const [uploading, setUploading] = useState(false);
-  const [error, setError]         = useState(null);
+  const [uploading, setUploading]   = useState(false);
+  const [error, setError]           = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [dragOver, setDragOver]     = useState(false);
   const flash = () => { setSavedFlash(true); setTimeout(()=>setSavedFlash(false), 2000); };
 
   const id = entityId || formData.id || formData.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
   const files = formData.files || [];
 
-  // File type helpers
-  const isPdf  = (file) => /\.pdf$/i.test(file.name||"") || file.type==="application/pdf";
-  const isHeic = (file) => /\.heic$/i.test(file.name||"") || file.type==="image/heic" || file.type==="image/heif";
   const isImage = (file) => {
-    if (isHeic(file)) return false; // handled separately
     if (file.type && file.type.startsWith("image/")) return true;
     return /\.(jpe?g|png|gif|webp|svg)$/i.test(file.name || "");
   };
 
-  // Fetch rasterisable images as blobs to bypass Supabase Content-Disposition: attachment
+  // Fetch image as blob to bypass Supabase Content-Disposition: attachment header
   const [blobUrls, setBlobUrls] = useState({});
   useEffect(() => {
-    files.filter(f => isImage(f)).forEach(file => {
-      if (blobUrls[file.url]) return;
-      fetch(file.url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
+    const imageFiles = files.filter(f => isImage(f));
+    imageFiles.forEach(file => {
+      if (blobUrls[file.url]) return; // already fetched
+      fetch(file.url, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+      })
         .then(r => r.blob())
-        .then(blob => setBlobUrls(prev => ({ ...prev, [file.url]: URL.createObjectURL(blob) })))
+        .then(blob => {
+          const blobUrl = URL.createObjectURL(blob);
+          setBlobUrls(prev => ({ ...prev, [file.url]: blobUrl }));
+        })
         .catch(e => console.warn("Preview fetch failed:", e));
     });
+    // Cleanup blob URLs on unmount
     return () => { Object.values(blobUrls).forEach(u => URL.revokeObjectURL(u)); };
   }, [files]);
 
-  // Fetch PDFs as blob URLs so the iframe src works cross-origin
-  const [pdfUrls, setPdfUrls] = useState({});
-  useEffect(() => {
-    files.filter(f => isPdf(f)).forEach(file => {
-      if (pdfUrls[file.url]) return;
-      fetch(file.url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
-        .then(r => r.blob())
-        .then(blob => setPdfUrls(prev => ({ ...prev, [file.url]: URL.createObjectURL(blob) })))
-        .catch(e => console.warn("PDF fetch failed:", e));
-    });
-    return () => { Object.values(pdfUrls).forEach(u => URL.revokeObjectURL(u)); };
-  }, [files]);
-
-  const handleUpload = async (e) => {
-    const picked = Array.from(e.target.files);
+  const processFiles = async (picked) => {
     if (!picked.length) return;
     setUploading(true); setError(null);
     try {
@@ -4102,7 +4111,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
         const url = await sbUploadFile(path, file);
-        newFiles.push({ name: file.name, url, path, type: file.type || "", uploadedAt: new Date().toISOString().slice(0,10) });
+        newFiles.push({ name: file.name, url, path, type: file.type || "", docType: guessDocType(file.name), uploadedAt: new Date().toISOString().slice(0,10) });
       }
       update("files", newFiles);
       if (onAutoSave) { await onAutoSave({ ...formData, files: newFiles }); flash(); }
@@ -4110,9 +4119,26 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       setError("Upload failed: " + err.message);
     } finally {
       setUploading(false);
-      e.target.value = "";
     }
   };
+
+  const handleUpload    = async (e) => { await processFiles(Array.from(e.target.files)); e.target.value = ""; };
+  const handleDrop      = async (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); await processFiles(Array.from(e.dataTransfer.files)); };
+  const handleDragOver  = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); };
+  const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); };
+
+  const updateDocType = (idx, docType) => {
+    const updated = files.map((f,i) => i===idx ? {...f, docType} : f);
+    update("files", updated);
+    if (onAutoSave) onAutoSave({ ...formData, files: updated });
+  };
+
+  const DocTypeSelect = ({file, idx}) => (
+    <select value={file.docType||"Other"} onChange={e=>updateDocType(idx,e.target.value)} onClick={e=>e.stopPropagation()}
+      style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:5, color:T.text, fontFamily:"inherit", fontSize:11, padding:"3px 7px", cursor:"pointer", flexShrink:0 }}>
+      {FILE_DOC_TYPES.map(t=><option key={t}>{t}</option>)}
+    </select>
+  );
 
   const handleDelete = async (idx) => {
     const file = files[idx];
@@ -4139,87 +4165,58 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
 
       {error && <div style={{ background:T.redBg, border:`1px solid #fca5a5`, borderRadius:6, padding:"8px 12px", color:T.red, fontSize:13, marginBottom:12 }}>{error}</div>}
 
-      {files.length === 0 && !uploading && (
-        <div style={{ textAlign:"center", padding:"40px 20px", color:T.textLight, border:`2px dashed ${T.border}`, borderRadius:10 }}>
-          <div style={{ fontSize:28, marginBottom:8 }}>📎</div>
-          <div style={{ fontSize:13 }}>No files attached yet. Click Upload Files to add.</div>
+      <label
+        onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
+        style={{ display:"block", textAlign:"center", padding:files.length===0?"44px 20px":"14px 20px", color:dragOver?T.midBlue:T.textLight, border:`2px dashed ${dragOver?T.midBlue:T.border}`, borderRadius:10, background:dragOver?T.accentLight:"transparent", cursor:"pointer", transition:"all .15s", marginBottom:files.length>0?12:0 }}>
+        <div style={{ fontSize:files.length===0?30:16, marginBottom:4 }}>{dragOver?"⬇":"📎"}</div>
+        <div style={{ fontSize:13, fontWeight:dragOver?600:400 }}>
+          {dragOver?"Drop to upload":files.length===0?"Drag files here, or click Upload Files above":"Drag more files here to upload"}
         </div>
-      )}
+        <input type="file" multiple onChange={handleUpload} disabled={uploading} style={{ display:"none" }}/>
+      </label>
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {files.map((file, idx) => {
-          // Shared footer for all file types
-          const Footer = ({docTypeEl}) => (
-            <div style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-              <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
-              {docTypeEl}
-              {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
-              <a href={file.url} target="_blank" rel="noreferrer"
-                style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"5px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>
-                ⬇ Open
-              </a>
-              <button onClick={()=>handleDelete(idx)}
-                style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
-                ✕ Remove
-              </button>
-            </div>
-          );
-
-          // ── IMAGE (jpg, png, gif, webp, svg) ──────────────────────────────
-          if (isImage(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
-              {blobUrls[file.url]
-                ? <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
-                    <img src={blobUrls[file.url]} alt={file.name}
-                      style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}/>
+        {files.map((file, idx) => (
+          <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            {isImage(file) ? (
+              <div>
+                {blobUrls[file.url] ? (
+                  <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
+                    <img
+                      src={blobUrls[file.url]}
+                      alt={file.name}
+                      style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}
+                    />
                   </a>
-                : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}>
-                    <span>⟳</span> Loading preview…
+                ) : (
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}>
+                    <span style={{ animation:"spin 1s linear infinite", display:"inline-block" }}>⟳</span> Loading preview…
                   </div>
-              }
-              <Footer/>
-            </div>
-          );
-
-          // ── PDF ────────────────────────────────────────────────────────────
-          if (isPdf(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
-              {pdfUrls[file.url]
-                ? <iframe src={pdfUrls[file.url]} title={file.name}
-                    style={{ width:"100%", height:500, border:"none", background:"#f8fafd", display:"block" }}/>
-                : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}>
-                    <span>⟳</span> Loading PDF…
-                  </div>
-              }
-              <Footer/>
-            </div>
-          );
-
-          // ── HEIC (no browser support — show friendly message) ──────────────
-          if (isHeic(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:12, padding:"16px", background:"#fffbeb", borderBottom:`1px solid #fde68a` }}>
-                <span style={{ fontSize:24 }}>📷</span>
-                <div>
-                  <div style={{ fontSize:13, fontWeight:600, color:"#92400e" }}>HEIC preview not supported in browsers</div>
-                  <div style={{ fontSize:12, color:"#a16207", marginTop:2 }}>Use the Open button to download and view in Photos or another app</div>
+                )}
+                <div style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+                  <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
+                  <DocTypeSelect file={file} idx={idx}/>
+                  {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
+                  <a href={file.url} target="_blank" rel="noreferrer"
+                    style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>
+                    ⬇ Open
+                  </a>
+                  <button onClick={()=>handleDelete(idx)}
+                    style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
+                    ✕ Remove
+                  </button>
                 </div>
               </div>
-              <Footer/>
-            </div>
-          );
-
-          // ── EVERYTHING ELSE (doc, xls, etc.) ──────────────────────────────
-          return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            ) : (
               <div style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px" }}>
                 <div style={{ fontSize:26, flexShrink:0 }}>
-                  {/\.(doc|docx)$/i.test(file.name)?"📝":/\.(xls|xlsx)$/i.test(file.name)?"📊":"📎"}
+                  {/\.pdf$/i.test(file.name) ? "📄" : /\.(doc|docx)$/i.test(file.name) ? "📝" : /\.(xls|xlsx)$/i.test(file.name) ? "📊" : "📎"}
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</div>
                   {file.uploadedAt && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Uploaded {file.uploadedAt}</div>}
                 </div>
+                <DocTypeSelect file={file} idx={idx}/>
                 <a href={file.url} target="_blank" rel="noreferrer"
                   style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
                   ⬇ Open
@@ -4229,9 +4226,9 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                   ✕ Remove
                 </button>
               </div>
-            </div>
-          );
-        })}
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
