@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
@@ -478,7 +478,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Meal Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Viewings","Files",""].map(h=>(
+              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment","Viewings",""].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -508,7 +508,8 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                     {accomBadges.length===0 ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
                       : accomBadges.map(a=><span key={a} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600 }}>{a}</span>)}
                   </td>
-
+                  <td style={{ padding:"10px 12px" }}>{(b.setup||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
+                  <td style={{ padding:"10px 12px" }}>{(b.dayManager||[]).length===0?<span style={{ color:T.textLight,fontSize:11 }}>—</span>:(b.dayManager||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
                   <td style={{ padding:"10px 12px" }}>
                     {b.status==="Holding"
                       ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:"#fef9c3", color:"#854d0e", fontWeight:600 }}>Holding</span>
@@ -530,20 +531,6 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                           ))}
                         </div>
                     }
-                  </td>
-                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                    {(()=>{
-                      const bFiles = b.files||[];
-                      const has = (type) => bFiles.some(f=>f.docType===type);
-                      const Tick = ({label,short}) => (
-                        <span title={label} style={{ display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:20,borderRadius:4,marginRight:2,fontSize:9,fontWeight:700,background:has(label)?T.greenBg:"#f1f5f9",color:has(label)?T.green:T.textLight,border:`1px solid ${has(label)?"#86efac":T.border}` }}>{short}</span>
-                      );
-                      return <div style={{display:"flex",alignItems:"center",gap:1}}>
-                        <Tick label="Event Booking Form" short="EBF"/>
-                        <Tick label="Accommodation Booking Form" short="ABF"/>
-                        <Tick label="Event Timesheet" short="TS"/>
-                      </div>;
-                    })()}
                   </td>
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }} onClick={e=>e.stopPropagation()}>
                     <button onClick={()=>onDelete(b.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
@@ -3832,9 +3819,7 @@ const TIMELINE_COLOURS = [
 ];
 
 function StaffTimelineReport({ bookings, staff }) {
-  const [printMode, setPrintMode]       = useState(false);
-  const [downloading, setDownloading]   = useState(false);
-  const timelineRef                     = useRef(null);
+  const [printMode, setPrintMode] = useState(false);
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b => b.date >= today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
   const past     = bookings.filter(b => b.date <  today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
@@ -3995,59 +3980,17 @@ function StaffTimelineReport({ bookings, staff }) {
         </select>
       </div>
 
-      {booking && (() => {
-        const handleDownload = async () => {
-          setDownloading(true);
-          try {
-            if (!window.html2canvas) {
-              await new Promise((resolve, reject) => {
-                const s = document.createElement("script");
-                s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-                s.onload = resolve; s.onerror = reject;
-                document.head.appendChild(s);
-              });
-            }
-            const el = timelineRef.current;
-            if (!el) return;
-            const canvas = await window.html2canvas(el, { backgroundColor:"#ffffff", scale:2, useCORS:true });
-            // Convert to JPEG
-            const jpegUrl = canvas.toDataURL("image/jpeg", 0.92);
-            const a = document.createElement("a");
-            const safeName = (booking.couple||"rota").replace(/[^a-z0-9]/gi,"-").toLowerCase();
-            a.href = jpegUrl;
-            a.download = `rota-${safeName}-${booking.date||"undated"}.jpg`;
-            a.click();
-          } catch(err) {
-            console.error("Download failed:", err);
-            alert("Download failed — please try again.");
-          } finally {
-            setDownloading(false);
-          }
-        };
-
-        return (
-          <div>
-            {/* Download button row */}
-            <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-              <button onClick={handleDownload} disabled={downloading}
-                style={{ background:T.green, color:"#fff", border:"none", padding:"8px 18px", borderRadius:6, cursor:downloading?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, display:"flex", alignItems:"center", gap:7, opacity:downloading?0.7:1 }}>
-                {downloading ? "Preparing…" : "⬇ Download as JPG"}
-              </button>
-            </div>
-
-            {/* Timeline card — wrapped in ref for screenshot */}
-            <div ref={timelineRef} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-              <div style={{ marginBottom:20, paddingBottom:14, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
-                <div>
-                  <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{booking.couple}</div>
-                  <div style={{ fontSize:13, color:T.textLight }}>{booking.date ? new Date(booking.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</div>
-                </div>
-              </div>
-              {renderTimeline(booking)}
+      {booking && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ marginBottom:20, paddingBottom:14, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
+            <div>
+              <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{booking.couple}</div>
+              <div style={{ fontSize:13, color:T.textLight }}>{booking.date ? new Date(booking.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</div>
             </div>
           </div>
-        );
-      })()}
+          {renderTimeline(booking)}
+        </div>
+      )}
     </div>
   );
 }
@@ -4114,29 +4057,39 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   const id = entityId || formData.id || formData.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
   const files = formData.files || [];
 
+  // File type helpers
+  const isPdf  = (file) => /\.pdf$/i.test(file.name||"") || file.type==="application/pdf";
+  const isHeic = (file) => /\.heic$/i.test(file.name||"") || file.type==="image/heic" || file.type==="image/heif";
   const isImage = (file) => {
+    if (isHeic(file)) return false; // handled separately
     if (file.type && file.type.startsWith("image/")) return true;
     return /\.(jpe?g|png|gif|webp|svg)$/i.test(file.name || "");
   };
 
-  // Fetch image as blob to bypass Supabase Content-Disposition: attachment header
+  // Fetch rasterisable images as blobs to bypass Supabase Content-Disposition: attachment
   const [blobUrls, setBlobUrls] = useState({});
   useEffect(() => {
-    const imageFiles = files.filter(f => isImage(f));
-    imageFiles.forEach(file => {
-      if (blobUrls[file.url]) return; // already fetched
-      fetch(file.url, {
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-      })
+    files.filter(f => isImage(f)).forEach(file => {
+      if (blobUrls[file.url]) return;
+      fetch(file.url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
         .then(r => r.blob())
-        .then(blob => {
-          const blobUrl = URL.createObjectURL(blob);
-          setBlobUrls(prev => ({ ...prev, [file.url]: blobUrl }));
-        })
+        .then(blob => setBlobUrls(prev => ({ ...prev, [file.url]: URL.createObjectURL(blob) })))
         .catch(e => console.warn("Preview fetch failed:", e));
     });
-    // Cleanup blob URLs on unmount
     return () => { Object.values(blobUrls).forEach(u => URL.revokeObjectURL(u)); };
+  }, [files]);
+
+  // Fetch PDFs as blob URLs so the iframe src works cross-origin
+  const [pdfUrls, setPdfUrls] = useState({});
+  useEffect(() => {
+    files.filter(f => isPdf(f)).forEach(file => {
+      if (pdfUrls[file.url]) return;
+      fetch(file.url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
+        .then(r => r.blob())
+        .then(blob => setPdfUrls(prev => ({ ...prev, [file.url]: URL.createObjectURL(blob) })))
+        .catch(e => console.warn("PDF fetch failed:", e));
+    });
+    return () => { Object.values(pdfUrls).forEach(u => URL.revokeObjectURL(u)); };
   }, [files]);
 
   const handleUpload = async (e) => {
@@ -4194,57 +4147,91 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       )}
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {files.map((file, idx) => (
-          <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
-            {isImage(file) ? (
-              <div>
-                {blobUrls[file.url] ? (
-                  <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
-                    <img
-                      src={blobUrls[file.url]}
-                      alt={file.name}
-                      style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}
-                    />
+        {files.map((file, idx) => {
+          // Shared footer for all file types
+          const Footer = ({docTypeEl}) => (
+            <div style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+              <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
+              {docTypeEl}
+              {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
+              <a href={file.url} target="_blank" rel="noreferrer"
+                style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"5px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>
+                ⬇ Open
+              </a>
+              <button onClick={()=>handleDelete(idx)}
+                style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
+                ✕ Remove
+              </button>
+            </div>
+          );
+
+          // ── IMAGE (jpg, png, gif, webp, svg) ──────────────────────────────
+          if (isImage(file)) return (
+            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+              {blobUrls[file.url]
+                ? <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
+                    <img src={blobUrls[file.url]} alt={file.name}
+                      style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}/>
                   </a>
-                ) : (
-                  <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}>
-                    <span style={{ animation:"spin 1s linear infinite", display:"inline-block" }}>⟳</span> Loading preview…
+                : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}>
+                    <span>⟳</span> Loading preview…
                   </div>
-                )}
-                <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderTop:`1px solid ${T.border}` }}>
-                  <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</span>
-                  {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
-                  <a href={file.url} target="_blank" rel="noreferrer"
-                    style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>
-                    ⬇ Open
-                  </a>
-                  <button onClick={()=>handleDelete(idx)}
-                    style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
-                    ✕ Remove
-                  </button>
+              }
+              <Footer/>
+            </div>
+          );
+
+          // ── PDF ────────────────────────────────────────────────────────────
+          if (isPdf(file)) return (
+            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+              {pdfUrls[file.url]
+                ? <iframe src={pdfUrls[file.url]} title={file.name}
+                    style={{ width:"100%", height:500, border:"none", background:"#f8fafd", display:"block" }}/>
+                : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}>
+                    <span>⟳</span> Loading PDF…
+                  </div>
+              }
+              <Footer/>
+            </div>
+          );
+
+          // ── HEIC (no browser support — show friendly message) ──────────────
+          if (isHeic(file)) return (
+            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12, padding:"16px", background:"#fffbeb", borderBottom:`1px solid #fde68a` }}>
+                <span style={{ fontSize:24 }}>📷</span>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#92400e" }}>HEIC preview not supported in browsers</div>
+                  <div style={{ fontSize:12, color:"#a16207", marginTop:2 }}>Use the Open button to download and view in Photos or another app</div>
                 </div>
               </div>
-            ) : (
+              <Footer/>
+            </div>
+          );
+
+          // ── EVERYTHING ELSE (doc, xls, etc.) ──────────────────────────────
+          return (
+            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               <div style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px" }}>
                 <div style={{ fontSize:26, flexShrink:0 }}>
-                  {/\.pdf$/i.test(file.name) ? "📄" : /\.(doc|docx)$/i.test(file.name) ? "📝" : /\.(xls|xlsx)$/i.test(file.name) ? "📊" : "📎"}
+                  {/\.(doc|docx)$/i.test(file.name)?"📝":/\.(xls|xlsx)$/i.test(file.name)?"📊":"📎"}
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</div>
                   {file.uploadedAt && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Uploaded {file.uploadedAt}</div>}
                 </div>
-                <a href={file.url} download={file.name} target="_blank" rel="noreferrer"
+                <a href={file.url} target="_blank" rel="noreferrer"
                   style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
-                  ⬇ Download
+                  ⬇ Open
                 </a>
                 <button onClick={()=>handleDelete(idx)}
                   style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>
                   ✕ Remove
                 </button>
               </div>
-            )}
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
