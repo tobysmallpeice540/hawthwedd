@@ -355,6 +355,8 @@ export default function App() {
           campingBooked: b.campingBooked === true ? "yes" : b.campingBooked === false ? "no" : b.campingBooked || "no",
           status: b.status || "Confirmed",
           eventType: b.eventType || "Wedding (Peak)",
+          depositPaid: b.depositPaid || false,
+          xeroInvoices: b.xeroInvoices || [],
         }));
         setBookings(migrated);
       } catch { setBookings(INITIAL_BOOKINGS); }
@@ -367,7 +369,7 @@ export default function App() {
   const saveBookings = useCallback(async data=>{ setBookings(data); try{await sbSet(BOOKING_STORAGE, data);}catch(e){console.error(e);} },[]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
 
-  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{}, xeroInvoices:[] });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -478,7 +480,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Day Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Viewings","Files"].map(h=>(
+              {["Date","Day","Couple / Event","Adults","Eve Guests","Venue Fee","Accommodation","Set-Up","Day Manager","Status","Payment","Viewings",""].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -508,6 +510,8 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                     {accomBadges.length===0 ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
                       : accomBadges.map(a=><span key={a} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600 }}>{a}</span>)}
                   </td>
+                  <td style={{ padding:"10px 12px" }}>{(b.setup||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
+                  <td style={{ padding:"10px 12px" }}>{(b.dayManager||[]).length===0?<span style={{ color:T.textLight,fontSize:11 }}>—</span>:(b.dayManager||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}</td>
                   <td style={{ padding:"10px 12px" }}>
                     {b.status==="Holding"
                       ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:"#fef9c3", color:"#854d0e", fontWeight:600 }}>Holding</span>
@@ -530,19 +534,8 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                         </div>
                     }
                   </td>
-                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                    {(()=>{
-                      const bFiles = b.files||[];
-                      const has = (type) => bFiles.some(f=>f.docType===type);
-                      const Tick = ({label,short}) => (
-                        <span title={label} style={{ display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:20,borderRadius:4,marginRight:2,fontSize:9,fontWeight:700,background:has(label)?T.greenBg:"#f1f5f9",color:has(label)?T.green:T.textLight,border:`1px solid ${has(label)?"#86efac":T.border}` }}>{short}</span>
-                      );
-                      return <div style={{display:"flex",alignItems:"center",gap:1}}>
-                        <Tick label="Event Booking Form" short="EBF"/>
-                        <Tick label="Accommodation Booking Form" short="ABF"/>
-                        <Tick label="Event Timesheet" short="TS"/>
-                      </div>;
-                    })()}
+                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }} onClick={e=>e.stopPropagation()}>
+                    <button onClick={()=>onDelete(b.id)} style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>✕</button>
                   </td>
                 </tr>
               );
@@ -709,15 +702,23 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <FLabel>Non-Standard / Extras</FLabel>
                 <FTextarea value={formData.nonStandard||""} onChange={v=>update("nonStandard",v)} rows={3}/>
               </div>
+
               {/* Core financials */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"14px 22px" }}>
                 <div>
                   <FLabel>Venue Fee (£)</FLabel>
                   <FInput type="number" value={formData.venueFee||""} onChange={v=>update("venueFee",v)}/>
                 </div>
+                {/* Deposit with paid tickbox */}
                 <div>
-                  <FLabel>Deposit (£)</FLabel>
-                  <FInput type="number" value={formData.deposit||""} onChange={v=>update("deposit",v)}/>
+                  <FLabel>Deposit (£) <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>— advance on venue fee</span></FLabel>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ flex:1 }}><FInput type="number" value={formData.deposit||""} onChange={v=>update("deposit",v)}/></div>
+                    <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
+                      <input type="checkbox" checked={!!formData.depositPaid} onChange={e=>update("depositPaid",e.target.checked)} style={{ width:15, height:15, accentColor:T.green, cursor:"pointer" }}/>
+                      Paid
+                    </label>
+                  </div>
                 </div>
                 <div>
                   <FLabel>Corkage</FLabel>
@@ -732,6 +733,78 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   <FInput type="number" value={formData.circaCommission||""} onChange={v=>update("circaCommission",v)}/>
                 </div>
               </div>
+
+              {/* Balance summary */}
+              {(() => {
+                const fee = parseMoney(formData.venueFee);
+                const dep = parseMoney(formData.deposit);
+                const balance = Math.max(0, fee - dep);
+                if (!fee) return null;
+                return (
+                  <div style={{ background:balance===0?T.greenBg:T.amberBg, border:`1px solid ${balance===0?"#86efac":"#fcd34d"}`, borderRadius:8, padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <span style={{ fontSize:13, color:balance===0?T.green:"#92400e", fontWeight:600 }}>
+                      {balance===0 ? "✓ Venue fee fully paid" : `Balance remaining: £${balance.toLocaleString()}`}
+                    </span>
+                    <span style={{ fontSize:12, color:T.textMid }}>Fee £{fee.toLocaleString()} − Deposit £{dep.toLocaleString()}</span>
+                  </div>
+                );
+              })()}
+
+              {/* Xero Invoices */}
+              <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+                  <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Xero Invoices</div>
+                  {(formData.xeroInvoices||[]).length < 5 && (
+                    <button type="button" onClick={()=>{ const inv=[...(formData.xeroInvoices||[]),{number:"",paid:false}]; update("xeroInvoices",inv); }}
+                      style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"4px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
+                      + Add Invoice
+                    </button>
+                  )}
+                </div>
+                {(formData.xeroInvoices||[]).length === 0 && (
+                  <p style={{ fontSize:12, color:T.textLight, margin:0 }}>No invoices linked yet. Click + Add Invoice to link a Xero invoice number.</p>
+                )}
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {(formData.xeroInvoices||[]).map((inv, i) => {
+                    const xeroUrl = inv.number ? `https://go.xero.com/AccountsReceivable/Search.aspx?invoiceNumber=${encodeURIComponent(inv.number.trim())}` : null;
+                    const updateInv = (field, val) => {
+                      const updated = (formData.xeroInvoices||[]).map((x,j) => j===i ? {...x,[field]:val} : x);
+                      update("xeroInvoices", updated);
+                    };
+                    const removeInv = () => {
+                      const updated = (formData.xeroInvoices||[]).filter((_,j)=>j!==i);
+                      update("xeroInvoices", updated);
+                    };
+                    return (
+                      <div key={i} style={{ display:"flex", alignItems:"center", gap:8, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px" }}>
+                        <span style={{ fontSize:12, color:T.textLight, fontWeight:600, minWidth:20 }}>#{i+1}</span>
+                        <input
+                          type="text"
+                          value={inv.number||""}
+                          onChange={e=>updateInv("number",e.target.value)}
+                          placeholder="e.g. INV-0042"
+                          style={{ flex:1, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 10px", outline:"none" }}
+                        />
+                        <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>
+                          <input type="checkbox" checked={!!inv.paid} onChange={e=>updateInv("paid",e.target.checked)} style={{ width:14, height:14, accentColor:T.green, cursor:"pointer" }}/>
+                          Paid
+                        </label>
+                        {xeroUrl && (
+                          <a href={xeroUrl} target="_blank" rel="noreferrer"
+                            style={{ background:"#13B5EA", color:"#fff", border:"none", borderRadius:5, padding:"5px 11px", fontSize:12, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
+                            Open in Xero ↗
+                          </a>
+                        )}
+                        <button type="button" onClick={removeInv}
+                          style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 9px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>
+                          ✕
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Accommodation */}
               <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
                 <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12 }}>Accommodation</div>
@@ -741,6 +814,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   <AccomField bookedKey="campingBooked" feeKey="campingFee" paid50Key="camping50Paid" paid100Key="camping100Paid" label="Camping" formData={formData} update={update}/>
                 </div>
               </div>
+
               {/* Payment notes */}
               <div>
                 <FLabel>Payment Notes</FLabel>
@@ -4057,21 +4131,10 @@ function ViewingsList({ viewings, onEdit, onDelete }) {
 // Viewings section inside booking FormView
 
 // ─── FILE ATTACHMENT SECTION ───────────────────────────────────────────────────
-const FILE_DOC_TYPES = ["Event Booking Form", "Accommodation Booking Form", "Event Timesheet", "Other"];
-
-const guessDocType = (filename) => {
-  const n = (filename||"").toLowerCase();
-  if (n.includes("timesheet") || n.includes("time sheet") || n.includes("hours")) return "Event Timesheet";
-  if (n.includes("accom") || n.includes("accommodation") || n.includes("hamlet") || n.includes("amly") || n.includes("camping")) return "Accommodation Booking Form";
-  if (n.includes("booking") || n.includes("event") || n.includes("wedding") || n.includes("contract") || n.includes("form")) return "Event Booking Form";
-  return "Other";
-};
-
 function BookingFilesSection({ formData, update, onAutoSave, entityId, entityType="booking" }) {
-  const [uploading, setUploading]   = useState(false);
-  const [error, setError]           = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError]         = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
-  const [dragOver, setDragOver]     = useState(false);
   const flash = () => { setSavedFlash(true); setTimeout(()=>setSavedFlash(false), 2000); };
 
   const id = entityId || formData.id || formData.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
@@ -4102,7 +4165,8 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
     return () => { Object.values(blobUrls).forEach(u => URL.revokeObjectURL(u)); };
   }, [files]);
 
-  const processFiles = async (picked) => {
+  const handleUpload = async (e) => {
+    const picked = Array.from(e.target.files);
     if (!picked.length) return;
     setUploading(true); setError(null);
     try {
@@ -4111,7 +4175,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
         const url = await sbUploadFile(path, file);
-        newFiles.push({ name: file.name, url, path, type: file.type || "", docType: guessDocType(file.name), uploadedAt: new Date().toISOString().slice(0,10) });
+        newFiles.push({ name: file.name, url, path, type: file.type || "", uploadedAt: new Date().toISOString().slice(0,10) });
       }
       update("files", newFiles);
       if (onAutoSave) { await onAutoSave({ ...formData, files: newFiles }); flash(); }
@@ -4119,26 +4183,9 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       setError("Upload failed: " + err.message);
     } finally {
       setUploading(false);
+      e.target.value = "";
     }
   };
-
-  const handleUpload    = async (e) => { await processFiles(Array.from(e.target.files)); e.target.value = ""; };
-  const handleDrop      = async (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); await processFiles(Array.from(e.dataTransfer.files)); };
-  const handleDragOver  = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); };
-  const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); };
-
-  const updateDocType = (idx, docType) => {
-    const updated = files.map((f,i) => i===idx ? {...f, docType} : f);
-    update("files", updated);
-    if (onAutoSave) onAutoSave({ ...formData, files: updated });
-  };
-
-  const DocTypeSelect = ({file, idx}) => (
-    <select value={file.docType||"Other"} onChange={e=>updateDocType(idx,e.target.value)} onClick={e=>e.stopPropagation()}
-      style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:5, color:T.text, fontFamily:"inherit", fontSize:11, padding:"3px 7px", cursor:"pointer", flexShrink:0 }}>
-      {FILE_DOC_TYPES.map(t=><option key={t}>{t}</option>)}
-    </select>
-  );
 
   const handleDelete = async (idx) => {
     const file = files[idx];
@@ -4165,15 +4212,12 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
 
       {error && <div style={{ background:T.redBg, border:`1px solid #fca5a5`, borderRadius:6, padding:"8px 12px", color:T.red, fontSize:13, marginBottom:12 }}>{error}</div>}
 
-      <label
-        onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
-        style={{ display:"block", textAlign:"center", padding:files.length===0?"44px 20px":"14px 20px", color:dragOver?T.midBlue:T.textLight, border:`2px dashed ${dragOver?T.midBlue:T.border}`, borderRadius:10, background:dragOver?T.accentLight:"transparent", cursor:"pointer", transition:"all .15s", marginBottom:files.length>0?12:0 }}>
-        <div style={{ fontSize:files.length===0?30:16, marginBottom:4 }}>{dragOver?"⬇":"📎"}</div>
-        <div style={{ fontSize:13, fontWeight:dragOver?600:400 }}>
-          {dragOver?"Drop to upload":files.length===0?"Drag files here, or click Upload Files above":"Drag more files here to upload"}
+      {files.length === 0 && !uploading && (
+        <div style={{ textAlign:"center", padding:"40px 20px", color:T.textLight, border:`2px dashed ${T.border}`, borderRadius:10 }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>📎</div>
+          <div style={{ fontSize:13 }}>No files attached yet. Click Upload Files to add.</div>
         </div>
-        <input type="file" multiple onChange={handleUpload} disabled={uploading} style={{ display:"none" }}/>
-      </label>
+      )}
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
         {files.map((file, idx) => (
@@ -4193,9 +4237,8 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                     <span style={{ animation:"spin 1s linear infinite", display:"inline-block" }}>⟳</span> Loading preview…
                   </div>
                 )}
-                <div style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-                  <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
-                  <DocTypeSelect file={file} idx={idx}/>
+                <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderTop:`1px solid ${T.border}` }}>
+                  <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</span>
                   {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
                   <a href={file.url} target="_blank" rel="noreferrer"
                     style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>
@@ -4216,10 +4259,9 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</div>
                   {file.uploadedAt && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Uploaded {file.uploadedAt}</div>}
                 </div>
-                <DocTypeSelect file={file} idx={idx}/>
-                <a href={file.url} target="_blank" rel="noreferrer"
+                <a href={file.url} download={file.name} target="_blank" rel="noreferrer"
                   style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
-                  ⬇ Open
+                  ⬇ Download
                 </a>
                 <button onClick={()=>handleDelete(idx)}
                   style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>
