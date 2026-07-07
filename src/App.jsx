@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
@@ -3819,7 +3819,9 @@ const TIMELINE_COLOURS = [
 ];
 
 function StaffTimelineReport({ bookings, staff }) {
-  const [printMode, setPrintMode] = useState(false);
+  const [printMode, setPrintMode]       = useState(false);
+  const [downloading, setDownloading]   = useState(false);
+  const timelineRef                     = useRef(null);
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b => b.date >= today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
   const past     = bookings.filter(b => b.date <  today && b.couple && (b.staffShifts && Object.keys(b.staffShifts).length > 0));
@@ -3980,17 +3982,59 @@ function StaffTimelineReport({ bookings, staff }) {
         </select>
       </div>
 
-      {booking && (
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-          <div style={{ marginBottom:20, paddingBottom:14, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
-            <div>
-              <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{booking.couple}</div>
-              <div style={{ fontSize:13, color:T.textLight }}>{booking.date ? new Date(booking.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</div>
+      {booking && (() => {
+        const handleDownload = async () => {
+          setDownloading(true);
+          try {
+            if (!window.html2canvas) {
+              await new Promise((resolve, reject) => {
+                const s = document.createElement("script");
+                s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+                s.onload = resolve; s.onerror = reject;
+                document.head.appendChild(s);
+              });
+            }
+            const el = timelineRef.current;
+            if (!el) return;
+            const canvas = await window.html2canvas(el, { backgroundColor:"#ffffff", scale:2, useCORS:true });
+            // Convert to JPEG
+            const jpegUrl = canvas.toDataURL("image/jpeg", 0.92);
+            const a = document.createElement("a");
+            const safeName = (booking.couple||"rota").replace(/[^a-z0-9]/gi,"-").toLowerCase();
+            a.href = jpegUrl;
+            a.download = `rota-${safeName}-${booking.date||"undated"}.jpg`;
+            a.click();
+          } catch(err) {
+            console.error("Download failed:", err);
+            alert("Download failed — please try again.");
+          } finally {
+            setDownloading(false);
+          }
+        };
+
+        return (
+          <div>
+            {/* Download button row */}
+            <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+              <button onClick={handleDownload} disabled={downloading}
+                style={{ background:T.green, color:"#fff", border:"none", padding:"8px 18px", borderRadius:6, cursor:downloading?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, display:"flex", alignItems:"center", gap:7, opacity:downloading?0.7:1 }}>
+                {downloading ? "Preparing…" : "⬇ Download as JPG"}
+              </button>
+            </div>
+
+            {/* Timeline card — wrapped in ref for screenshot */}
+            <div ref={timelineRef} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div style={{ marginBottom:20, paddingBottom:14, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
+                <div>
+                  <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{booking.couple}</div>
+                  <div style={{ fontSize:13, color:T.textLight }}>{booking.date ? new Date(booking.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</div>
+                </div>
+              </div>
+              {renderTimeline(booking)}
             </div>
           </div>
-          {renderTimeline(booking)}
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -4052,7 +4096,6 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   const [uploading, setUploading] = useState(false);
   const [error, setError]         = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
-  const [dragOver, setDragOver]   = useState(false);
   const flash = () => { setSavedFlash(true); setTimeout(()=>setSavedFlash(false), 2000); };
 
   const id = entityId || formData.id || formData.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
@@ -4083,7 +4126,8 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
     return () => { Object.values(blobUrls).forEach(u => URL.revokeObjectURL(u)); };
   }, [files]);
 
-  const processFiles = async (picked) => {
+  const handleUpload = async (e) => {
+    const picked = Array.from(e.target.files);
     if (!picked.length) return;
     setUploading(true); setError(null);
     try {
@@ -4092,7 +4136,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
         const url = await sbUploadFile(path, file);
-        newFiles.push({ name: file.name, url, path, type: file.type || "", docType: guessDocType(file.name), uploadedAt: new Date().toISOString().slice(0,10) });
+        newFiles.push({ name: file.name, url, path, type: file.type || "", uploadedAt: new Date().toISOString().slice(0,10) });
       }
       update("files", newFiles);
       if (onAutoSave) { await onAutoSave({ ...formData, files: newFiles }); flash(); }
@@ -4100,13 +4144,9 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       setError("Upload failed: " + err.message);
     } finally {
       setUploading(false);
+      e.target.value = "";
     }
   };
-
-  const handleUpload = async (e) => { await processFiles(Array.from(e.target.files)); e.target.value = ""; };
-  const handleDrop = async (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); await processFiles(Array.from(e.dataTransfer.files)); };
-  const handleDragOver  = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); };
-  const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); };
 
   const handleDelete = async (idx) => {
     const file = files[idx];
@@ -4133,35 +4173,12 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
 
       {error && <div style={{ background:T.redBg, border:`1px solid #fca5a5`, borderRadius:6, padding:"8px 12px", color:T.red, fontSize:13, marginBottom:12 }}>{error}</div>}
 
-      {/* Drop zone — large when empty, compact when files exist */}
-      <label
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        style={{
-          display:"block",
-          textAlign:"center",
-          padding: files.length === 0 ? "44px 20px" : "18px 20px",
-          color: dragOver ? T.midBlue : T.textLight,
-          border: `2px dashed ${dragOver ? T.midBlue : T.border}`,
-          borderRadius:10,
-          background: dragOver ? T.accentLight : "transparent",
-          cursor:"pointer",
-          transition:"all .15s",
-          marginBottom: files.length > 0 ? 14 : 0,
-        }}>
-        <div style={{ fontSize: files.length === 0 ? 32 : 20, marginBottom:6 }}>
-          {dragOver ? "⬇" : "📎"}
+      {files.length === 0 && !uploading && (
+        <div style={{ textAlign:"center", padding:"40px 20px", color:T.textLight, border:`2px dashed ${T.border}`, borderRadius:10 }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>📎</div>
+          <div style={{ fontSize:13 }}>No files attached yet. Click Upload Files to add.</div>
         </div>
-        <div style={{ fontSize:13, fontWeight: dragOver ? 600 : 400 }}>
-          {dragOver
-            ? "Drop to upload"
-            : files.length === 0
-              ? "Drag files here, or click Upload Files above"
-              : "Drag more files here to upload"}
-        </div>
-        <input type="file" multiple onChange={handleUpload} disabled={uploading} style={{ display:"none" }}/>
-      </label>
+      )}
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
         {files.map((file, idx) => (
