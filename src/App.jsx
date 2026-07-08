@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
@@ -945,7 +945,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
 function ReportsView({ bookings, staff, reportType, setReportType, enquiries }) {
-  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Staffing Rota"},{id:"pipeline",label:"Payment Pipeline"},{id:"staffload",label:"Staff Workload"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Staff Timeline"}];
+  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Rota Overview"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Event Rota"}];
   // Note: hours report kept for reference, accommodation report kept
   return (
     <div style={{ paddingTop:28 }}>
@@ -959,8 +959,6 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries }) 
       {reportType==="revenue"       && <RevenueReport bookings={bookings}/>}
       {reportType==="accommodation" && <AccommodationReport bookings={bookings}/>}
       {reportType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
-      {reportType==="pipeline"      && <PipelineReport bookings={bookings}/>}
-      {reportType==="staffload"     && <StaffWorkloadReport bookings={bookings} staff={staff}/>}
       {reportType==="hours"          && <HoursReport bookings={bookings} staff={staff}/>}
       {reportType==="timeline"        && <StaffTimelineReport bookings={bookings} staff={staff}/>}
     </div>
