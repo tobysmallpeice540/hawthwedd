@@ -812,13 +812,15 @@ const FORM_SECTIONS = {
 };
 
 // ─── GMAIL THREAD PANEL ──────────────────────────────────────────────────────
-function GmailThreadPanel({ emails, gmailToken }) {
-  const [threads, setThreads]   = useState(null);
-  const [loading, setLoading]   = useState(false);
-  const [error,   setError]     = useState(null);
-  const [expanded, setExpanded] = useState({});
+function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, entityId, entityType="booking" }) {
+  const [threads,      setThreads]      = useState(null);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState(null);
+  const [expanded,     setExpanded]     = useState({});
+  const [fullMsgs,     setFullMsgs]     = useState({}); // threadId -> full messages
+  const [importing,    setImporting]    = useState({}); // attachmentKey -> bool
+  const [importedKeys, setImportedKeys] = useState({}); // attachmentKey -> true
 
-  // Decode HTML entities like &#39; → '
   const decodeEntities = (str) => {
     if (!str) return "";
     return str.replace(/&#(\d+);/g, (_,n)=>String.fromCharCode(n))
@@ -833,7 +835,6 @@ function GmailThreadPanel({ emails, gmailToken }) {
     if (!token || !emailList.length) return;
     setLoading(true); setError(null);
     try {
-      // Build query for all email addresses combined
       const query = emailList.map(e => `from:${e} OR to:${e}`).join(" OR ");
       const searchRes = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/threads?q=${encodeURIComponent(query)}&maxResults=15`,
@@ -842,11 +843,9 @@ function GmailThreadPanel({ emails, gmailToken }) {
       if (!searchRes.ok) throw new Error(`Gmail search failed: ${searchRes.status}`);
       const searchData = await searchRes.json();
       const threadList = searchData.threads || [];
-
-      // Fetch snippet + metadata for each thread
       const detailed = await Promise.all(threadList.map(async t => {
         const res = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
+          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date&metadataHeaders=Content-Type`,
           { headers: { Authorization: `Bearer ${token.access_token}` } }
         );
         if (!res.ok) return t;
@@ -859,12 +858,98 @@ function GmailThreadPanel({ emails, gmailToken }) {
 
   useEffect(() => { if (gmailToken) load(); }, [emails?.join(","), gmailToken?.access_token]);
 
+  const loadFullThread = async (threadId) => {
+    if (fullMsgs[threadId]) return; // already loaded
+    const token = gmailGetValidToken();
+    if (!token) return;
+    try {
+      const res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
+        { headers: { Authorization: `Bearer ${token.access_token}` } }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      setFullMsgs(prev => ({ ...prev, [threadId]: data.messages || [] }));
+    } catch(e) { console.warn("Full thread fetch failed:", e); }
+  };
+
+  const handleExpand = (threadId) => {
+    const nowOpen = !expanded[threadId];
+    setExpanded(e => ({ ...e, [threadId]: nowOpen }));
+    if (nowOpen) loadFullThread(threadId);
+  };
+
+  // Get all attachment parts from a message recursively
+  const getAttachments = (parts) => {
+    if (!parts) return [];
+    const atts = [];
+    for (const part of parts) {
+      if (part.filename && part.filename.length > 0 && part.body?.attachmentId) {
+        atts.push({ filename: part.filename, mimeType: part.mimeType, attachmentId: part.body.attachmentId, size: part.body.size || 0 });
+      }
+      if (part.parts) atts.push(...getAttachments(part.parts));
+    }
+    return atts;
+  };
+
+  const importAttachment = async (msgId, att) => {
+    const key = `${msgId}_${att.attachmentId}`;
+    if (importing[key] || importedKeys[key]) return;
+    const token = gmailGetValidToken();
+    if (!token) { alert("Gmail token expired — please reconnect Gmail."); return; }
+    setImporting(p => ({ ...p, [key]: true }));
+    try {
+      // Fetch the attachment data
+      const res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/attachments/${att.attachmentId}`,
+        { headers: { Authorization: `Bearer ${token.access_token}` } }
+      );
+      if (!res.ok) throw new Error(`Attachment fetch failed: ${res.status}`);
+      const data = await res.json();
+      // Decode base64url
+      const b64 = (data.data || "").replace(/-/g, "+").replace(/_/g, "/");
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: att.mimeType || "application/octet-stream" });
+      // Upload to Supabase Storage
+      const id = entityId || formData?.id || formData?.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
+      const safeName = att.filename.replace(/[^a-zA-Z0-9._-]/g,"_");
+      const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
+      const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": att.mimeType || "application/octet-stream", "x-upsert": "true" },
+        body: blob,
+      });
+      if (!uploadRes.ok) throw new Error(await uploadRes.text());
+      const url = `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`;
+      // Add to booking files
+      const newFile = { name: att.filename, url, path, type: att.mimeType || "", docType: guessDocType(att.filename), uploadedAt: new Date().toISOString().slice(0,10) };
+      const currentFiles = formData?.files || [];
+      const updatedFiles = [...currentFiles, newFile];
+      if (update) update("files", updatedFiles);
+      if (onAutoSave && formData) await onAutoSave({ ...formData, files: updatedFiles });
+      setImportedKeys(p => ({ ...p, [key]: true }));
+    } catch(err) {
+      alert("Import failed: " + err.message);
+    } finally {
+      setImporting(p => ({ ...p, [key]: false }));
+    }
+  };
+
   const getHeader = (msg, name) => msg?.payload?.headers?.find(h=>h.name===name)?.value || "";
   const decodeBody = (msg) => {
     const parts = msg?.payload?.parts || [msg?.payload];
-    for (const part of parts) {
+    for (const part of (parts||[])) {
       if (part?.mimeType === "text/plain" && part?.body?.data) {
         try { return atob(part.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch {}
+      }
+      if (part?.parts) {
+        for (const sub of part.parts) {
+          if (sub?.mimeType === "text/plain" && sub?.body?.data) {
+            try { return atob(sub.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch {}
+          }
+        }
       }
     }
     return msg?.snippet || "";
@@ -904,15 +989,19 @@ function GmailThreadPanel({ emails, gmailToken }) {
           const snippet  = thread.snippet || "";
           const isOpen   = expanded[thread.id];
           const msgCount = thread.messages?.length || 1;
+          const fullMessages = fullMsgs[thread.id];
           const gmailUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(emailList.map(e=>`from:${e} OR to:${e}`).join(" OR "))}/${thread.id}`;
+          // Count attachments across all full messages
+          const totalAtts = fullMessages ? fullMessages.reduce((s,m) => s + getAttachments(m?.payload?.parts).length, 0) : 0;
           return (
             <div key={thread.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,.05)" }}>
-              <div onClick={()=>setExpanded(e=>({...e,[thread.id]:!e[thread.id]}))}
+              <div onClick={()=>handleExpand(thread.id)}
                 style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 14px", cursor:"pointer" }}>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
                     <span style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{subject}</span>
                     {msgCount > 1 && <span style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:10, padding:"1px 6px", fontWeight:600, flexShrink:0 }}>{msgCount}</span>}
+                    {totalAtts > 0 && <span style={{ fontSize:10, background:"#fef9c3", color:"#92400e", borderRadius:10, padding:"1px 6px", fontWeight:600, flexShrink:0 }}>📎 {totalAtts}</span>}
                   </div>
                   <div style={{ fontSize:11, color:T.textLight, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{from}</div>
                   {!isOpen && <div style={{ fontSize:11, color:T.textMid, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{decodeEntities(snippet)}</div>}
@@ -924,17 +1013,50 @@ function GmailThreadPanel({ emails, gmailToken }) {
                   <span style={{ color:T.textLight, fontSize:12 }}>{isOpen?"▲":"▼"}</span>
                 </div>
               </div>
-              {isOpen && thread.messages && (
+              {isOpen && (
                 <div style={{ borderTop:`1px solid ${T.border}`, background:"#f8fafd" }}>
-                  {thread.messages.map((msg,mi) => (
-                    <div key={msg.id} style={{ padding:"10px 14px", borderBottom:mi<thread.messages.length-1?`1px solid ${T.border}`:"none" }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                        <span style={{ fontSize:11, fontWeight:600, color:T.text }}>{getHeader(msg,"From")}</span>
-                        <span style={{ fontSize:10, color:T.textLight }}>{new Date(getHeader(msg,"Date")).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                  {(fullMessages || thread.messages || []).map((msg, mi) => {
+                    const atts = getAttachments(msg?.payload?.parts);
+                    const msgs = fullMessages || thread.messages || [];
+                    return (
+                      <div key={msg.id} style={{ padding:"10px 14px", borderBottom:mi<msgs.length-1?`1px solid ${T.border}`:"none" }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                          <span style={{ fontSize:11, fontWeight:600, color:T.text }}>{getHeader(msg,"From")}</span>
+                          <span style={{ fontSize:10, color:T.textLight }}>{new Date(getHeader(msg,"Date")).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                        </div>
+                        <div style={{ fontSize:12, color:T.textMid, whiteSpace:"pre-wrap", lineHeight:1.5, maxHeight:200, overflow:"auto" }}>{decodeEntities(decodeBody(msg)||msg.snippet)}</div>
+                        {atts.length > 0 && (
+                          <div style={{ marginTop:10, display:"flex", flexDirection:"column", gap:6 }}>
+                            <div style={{ fontSize:11, color:T.textMid, fontWeight:600, textTransform:"uppercase", letterSpacing:0.8 }}>Attachments</div>
+                            {atts.map((att, ai) => {
+                              const key = `${msg.id}_${att.attachmentId}`;
+                              const isImporting = importing[key];
+                              const isImported  = importedKeys[key] || (formData?.files||[]).some(f=>f.name===att.filename);
+                              const sizeKb = Math.round(att.size / 1024);
+                              return (
+                                <div key={ai} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:6 }}>
+                                  <span style={{ fontSize:18 }}>{/\.pdf$/i.test(att.filename)?"📄":/\.(doc|docx)$/i.test(att.filename)?"📝":/\.(xls|xlsx)$/i.test(att.filename)?"📊":/\.(jpe?g|png|gif|webp)$/i.test(att.filename)?"🖼":"📎"}</span>
+                                  <div style={{ flex:1, minWidth:0 }}>
+                                    <div style={{ fontSize:12, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{att.filename}</div>
+                                    <div style={{ fontSize:10, color:T.textLight }}>{sizeKb > 0 ? `${sizeKb} KB` : ""} · {guessDocType(att.filename)}</div>
+                                  </div>
+                                  {isImported
+                                    ? <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ In Files</span>
+                                    : formData
+                                      ? <button onClick={()=>importAttachment(msg.id, att)} disabled={isImporting}
+                                          style={{ background:T.midBlue, color:"#fff", border:"none", padding:"4px 10px", borderRadius:5, cursor:isImporting?"wait":"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600, opacity:isImporting?0.6:1, flexShrink:0 }}>
+                                          {isImporting ? "Saving…" : "⬆ Add to Files"}
+                                        </button>
+                                      : null
+                                  }
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                      <div style={{ fontSize:12, color:T.textMid, whiteSpace:"pre-wrap", lineHeight:1.5, maxHeight:200, overflow:"auto" }}>{decodeEntities(decodeBody(msg)||msg.snippet)}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1244,7 +1366,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           )}
 
           {activeSection==="contact" && (formData.email || formData.email2) && (
-            <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken}/>
+            <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken} formData={formData} update={update} onAutoSave={onAutoSave}/>
           )}
         </div>
       </div>
@@ -5227,7 +5349,7 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
           {form.email && (
             <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
               <h3 style={{ margin:"0 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Gmail</h3>
-              <GmailThreadPanel emails={[form.email].filter(Boolean)} gmailToken={gmailToken}/>
+              <GmailThreadPanel emails={[form.email].filter(Boolean)} gmailToken={gmailToken} formData={form} update={(k,v)=>{ setForm(f=>({...f,[k]:v})); setDirty(true); }} onAutoSave={onUpdate} entityId={form.id||form.name?.replace(/[^a-z0-9]/gi,"_").toLowerCase()} entityType="enquiry"/>
             </div>
           )}
           {/* Contact history */}
