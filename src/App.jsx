@@ -812,27 +812,38 @@ const FORM_SECTIONS = {
 };
 
 // ─── GMAIL THREAD PANEL ──────────────────────────────────────────────────────
-function GmailThreadPanel({ email, gmailToken }) {
+function GmailThreadPanel({ emails, gmailToken }) {
   const [threads, setThreads]   = useState(null);
   const [loading, setLoading]   = useState(false);
   const [error,   setError]     = useState(null);
   const [expanded, setExpanded] = useState({});
 
+  // Decode HTML entities like &#39; → '
+  const decodeEntities = (str) => {
+    if (!str) return "";
+    return str.replace(/&#(\d+);/g, (_,n)=>String.fromCharCode(n))
+              .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+              .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&apos;/g,"'");
+  };
+
+  const emailList = Array.isArray(emails) ? emails.filter(Boolean) : [emails].filter(Boolean);
+
   const load = async () => {
     const token = gmailGetValidToken();
-    if (!token) return;
+    if (!token || !emailList.length) return;
     setLoading(true); setError(null);
     try {
-      // Search for threads involving this email address
+      // Build query for all email addresses combined
+      const query = emailList.map(e => `from:${e} OR to:${e}`).join(" OR ");
       const searchRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/threads?q=${encodeURIComponent(`from:${email} OR to:${email}`)}&maxResults=10`,
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads?q=${encodeURIComponent(query)}&maxResults=15`,
         { headers: { Authorization: `Bearer ${token.access_token}` } }
       );
       if (!searchRes.ok) throw new Error(`Gmail search failed: ${searchRes.status}`);
       const searchData = await searchRes.json();
       const threadList = searchData.threads || [];
 
-      // Fetch snippet for each thread
+      // Fetch snippet + metadata for each thread
       const detailed = await Promise.all(threadList.map(async t => {
         const res = await fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
@@ -864,6 +875,7 @@ function GmailThreadPanel({ email, gmailToken }) {
       Connect Gmail (button in nav bar) to see email threads here.
     </div>
   );
+  if (!emailList.length) return null;
   if (loading) return <div style={{ marginTop:16, padding:"12px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>Loading emails from Gmail…</div>;
   if (error) return (
     <div style={{ marginTop:16, padding:"10px 14px", background:T.redBg, border:"1px solid #fca5a5", borderRadius:8, fontSize:12, color:T.red, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -873,13 +885,13 @@ function GmailThreadPanel({ email, gmailToken }) {
   );
   if (!threads) return null;
   if (threads.length === 0) return (
-    <div style={{ marginTop:16, padding:"10px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>No emails found for {email}.</div>
+    <div style={{ marginTop:16, padding:"10px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>No emails found for {emailList.join(", ")}.</div>
   );
 
   return (
     <div style={{ marginTop:16 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>📧 {threads.length} email thread{threads.length!==1?"s":""} with {email}</span>
+        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>📧 {threads.length} email thread{threads.length!==1?"s":""} with {emailList.join(", ")}</span>
         <button onClick={load} style={{ background:"none", border:"none", color:T.midBlue, cursor:"pointer", fontSize:11, fontWeight:600 }}>↻ Refresh</button>
       </div>
       <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
@@ -892,7 +904,7 @@ function GmailThreadPanel({ email, gmailToken }) {
           const snippet  = thread.snippet || "";
           const isOpen   = expanded[thread.id];
           const msgCount = thread.messages?.length || 1;
-          const gmailUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(`from:${email} OR to:${email}`)}/${thread.id}`;
+          const gmailUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(emailList.map(e=>`from:${e} OR to:${e}`).join(" OR "))}/${thread.id}`;
           return (
             <div key={thread.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,.05)" }}>
               <div onClick={()=>setExpanded(e=>({...e,[thread.id]:!e[thread.id]}))}
@@ -903,7 +915,7 @@ function GmailThreadPanel({ email, gmailToken }) {
                     {msgCount > 1 && <span style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:10, padding:"1px 6px", fontWeight:600, flexShrink:0 }}>{msgCount}</span>}
                   </div>
                   <div style={{ fontSize:11, color:T.textLight, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{from}</div>
-                  {!isOpen && <div style={{ fontSize:11, color:T.textMid, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{snippet}</div>}
+                  {!isOpen && <div style={{ fontSize:11, color:T.textMid, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{decodeEntities(snippet)}</div>}
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
                   <span style={{ fontSize:10, color:T.textLight, whiteSpace:"nowrap" }}>{new Date(date).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</span>
@@ -920,7 +932,7 @@ function GmailThreadPanel({ email, gmailToken }) {
                         <span style={{ fontSize:11, fontWeight:600, color:T.text }}>{getHeader(msg,"From")}</span>
                         <span style={{ fontSize:10, color:T.textLight }}>{new Date(getHeader(msg,"Date")).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
                       </div>
-                      <div style={{ fontSize:12, color:T.textMid, whiteSpace:"pre-wrap", lineHeight:1.5, maxHeight:200, overflow:"auto" }}>{decodeBody(msg)||msg.snippet}</div>
+                      <div style={{ fontSize:12, color:T.textMid, whiteSpace:"pre-wrap", lineHeight:1.5, maxHeight:200, overflow:"auto" }}>{decodeEntities(decodeBody(msg)||msg.snippet)}</div>
                     </div>
                   ))}
                 </div>
@@ -1115,6 +1127,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <BookingViewingsSection formData={formData} update={update} onAutoSave={onAutoSave}/>
           )}
 
+          {activeSection==="contact" && (formData.email || formData.email2) && (
+            <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken}/>
+          )}
+
           {activeSection==="files" && (
             <BookingFilesSection formData={formData} update={update} onAutoSave={onAutoSave}/>
           )}
@@ -1201,10 +1217,6 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <FTextarea value={formData.paymentNotes||""} onChange={v=>update("paymentNotes",v)} rows={2}/>
               </div>
             </div>
-          )}
-
-          {activeSection==="contact" && formData.email && (
-            <GmailThreadPanel email={formData.email} gmailToken={gmailToken}/>
           )}
 
           {activeSection!=="staffing" && activeSection!=="financials" && activeSection!=="viewings" && activeSection!=="files" && (
