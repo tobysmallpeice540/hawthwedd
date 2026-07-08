@@ -202,6 +202,79 @@ const STAFFING_FIELDS = ["dayManager","dayStaff","barSupervisor","sunday","bar",
 const STAFFING_LABELS = { dayManager:"Day Manager", dayStaff:"Day Staff", barSupervisor:"Bar Supervisor", sunday:"Sunday", bar:"Bar", dayHandy:"Day Handy", eveHandy:"Eve Handy" };
 
 const BOOKING_STORAGE = "hawthbush_bookings_v6";
+
+// ─── XERO OAUTH2 PKCE ────────────────────────────────────────────────────────
+const XERO_CLIENT_ID    = "1A9309CF747A493E8CF63296422C5D86";
+const XERO_SCOPES       = "openid profile email accounting.contacts.read accounting.invoices.read offline_access";
+const XERO_REDIRECT_URI = window.location.origin + "/";
+
+const xeroGenerateCodeVerifier = () => {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return btoa(String.fromCharCode(...array)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+};
+
+const xeroGenerateCodeChallenge = async (verifier) => {
+  const data = new TextEncoder().encode(verifier);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+};
+
+const xeroGetToken = () => {
+  try { return JSON.parse(sessionStorage.getItem("xero_token") || "null"); } catch { return null; }
+};
+const xeroSetToken = (t) => sessionStorage.setItem("xero_token", JSON.stringify(t));
+const xeroClearToken = () => sessionStorage.removeItem("xero_token");
+
+const xeroRefreshToken = async (refreshToken) => {
+  const res = await fetch("https://identity.xero.com/connect/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: XERO_CLIENT_ID,
+    }),
+  });
+  if (!res.ok) throw new Error("Token refresh failed");
+  const data = await res.json();
+  const token = { ...data, expires_at: Date.now() + data.expires_in * 1000 };
+  xeroSetToken(token);
+  return token;
+};
+
+const xeroGetValidToken = async () => {
+  let token = xeroGetToken();
+  if (!token) return null;
+  if (Date.now() > token.expires_at - 60000) {
+    try { token = await xeroRefreshToken(token.refresh_token); } catch { xeroClearToken(); return null; }
+  }
+  return token;
+};
+
+const xeroFetch = async (path) => {
+  const token = await xeroGetValidToken();
+  if (!token) throw new Error("Not connected to Xero");
+  // Get tenant ID first if we don't have it
+  if (!token.tenant_id) {
+    const tenantsRes = await fetch("https://api.xero.com/connections", {
+      headers: { Authorization: `Bearer ${token.access_token}`, "Content-Type": "application/json" }
+    });
+    const tenants = await tenantsRes.json();
+    if (!tenants.length) throw new Error("No Xero organisations found");
+    token.tenant_id = tenants[0].tenantId;
+    xeroSetToken(token);
+  }
+  const res = await fetch(`https://api.xero.com/api.xro/2.0/${path}`, {
+    headers: {
+      Authorization: `Bearer ${token.access_token}`,
+      "Xero-tenant-id": token.tenant_id,
+      Accept: "application/json",
+    }
+  });
+  if (!res.ok) throw new Error(`Xero API error: ${res.status}`);
+  return res.json();
+};
 const STAFF_STORAGE   = "hawthbush_staff_v5";
 
 // ─── STAFF CHIP ───────────────────────────────────────────────────────────────
@@ -335,6 +408,63 @@ export default function App() {
   const [bookings, setBookings] = useState([]);
   const [staff, setStaff]       = useState([]);
   const [view, setView]         = useState("list");
+  const [xeroToken, setXeroToken] = useState(() => xeroGetToken());
+
+  // Handle Xero OAuth2 callback — runs once on load if ?code= is in URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    if (!code) return;
+    const savedState    = sessionStorage.getItem("xero_state");
+    const codeVerifier  = sessionStorage.getItem("xero_code_verifier");
+    if (state !== savedState) { console.error("Xero state mismatch"); return; }
+    // Clean URL immediately
+    window.history.replaceState({}, document.title, window.location.pathname);
+    // Exchange code for token
+    (async () => {
+      try {
+        const res = await fetch("https://identity.xero.com/connect/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            code,
+            redirect_uri: XERO_REDIRECT_URI,
+            client_id: XERO_CLIENT_ID,
+            code_verifier: codeVerifier,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const token = { ...data, expires_at: Date.now() + data.expires_in * 1000 };
+        xeroSetToken(token);
+        setXeroToken(token);
+        sessionStorage.removeItem("xero_state");
+        sessionStorage.removeItem("xero_code_verifier");
+      } catch(err) { console.error("Xero token exchange failed:", err); }
+    })();
+  }, []);
+
+  const handleXeroConnect = async () => {
+    const verifier  = xeroGenerateCodeVerifier();
+    const challenge = await xeroGenerateCodeChallenge(verifier);
+    const state     = xeroGenerateCodeVerifier(); // reuse as random state
+    sessionStorage.setItem("xero_code_verifier", verifier);
+    sessionStorage.setItem("xero_state", state);
+    const url = "https://login.xero.com/identity/connect/authorize?" + new URLSearchParams({
+      response_type: "code",
+      client_id: XERO_CLIENT_ID,
+      redirect_uri: XERO_REDIRECT_URI,
+      scope: XERO_SCOPES,
+      state,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    });
+    window.location.href = url;
+  };
+
+  const handleXeroDisconnect = () => { xeroClearToken(); setXeroToken(null); };
   const [editId, setEditId]     = useState(null);
   const [formData, setFormData] = useState(null);
   const [search, setSearch]     = useState("");
@@ -414,10 +544,10 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
-      <Header view={view} setView={setView} onNew={handleNew}/>
+      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} onDelete={editId ? ()=>handleDelete(editId) : null}
           onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
@@ -431,8 +561,9 @@ export default function App() {
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
-function Header({ view, setView, onNew }) {
+function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect }) {
   const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
+  const isXeroConnected = !!xeroToken;
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -442,6 +573,12 @@ function Header({ view, setView, onNew }) {
         {tabs.map(t=>(
           <button key={t.id} onClick={()=>setView(t.id)} style={{ background:"none", border:"none", color:view===t.id?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:view===t.id?700:400, padding:"22px 20px 18px", cursor:"pointer", borderBottom:view===t.id?`3px solid ${T.accent}`:"3px solid transparent", transition:"all .2s", letterSpacing:.2 }}>{t.label}</button>
         ))}
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", paddingRight:8 }}>
+          {isXeroConnected
+            ? <button onClick={onXeroDisconnect} title="Disconnect Xero" style={{ background:"#e6f7fd", border:"1px solid #13B5EA", color:"#0e8ab0", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}><span style={{ color:"#13B5EA" }}>✓</span> Xero</button>
+            : <button onClick={onXeroConnect} style={{ background:"#13B5EA", border:"none", color:"#fff", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Connect Xero</button>
+          }
+        </div>
       </nav>
       <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)", flexShrink:0 }}>
         + New Booking
@@ -603,7 +740,82 @@ const FORM_SECTIONS = {
   files:      { label:"Files" },
 };
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave }) {
+// ─── XERO LIVE INVOICES PANEL ────────────────────────────────────────────────
+function XeroInvoicesPanel({ contactId, xeroToken }) {
+  const [invoices, setInvoices] = useState(null);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState(null);
+
+  const load = async () => {
+    if (!xeroToken) return;
+    setLoading(true); setError(null);
+    try {
+      const data = await xeroFetch(`Invoices?ContactIDs=${contactId}&order=Date DESC`);
+      setInvoices(data.Invoices || []);
+    } catch(err) { setError(err.message); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { if (xeroToken) load(); }, [contactId, xeroToken?.access_token]);
+
+  if (!xeroToken) return (
+    <div style={{ marginTop:12, padding:"10px 14px", background:"#fffbeb", border:"1px solid #fde68a", borderRadius:8, fontSize:12, color:"#92400e" }}>
+      Connect Xero (button in nav bar) to see live invoices here.
+    </div>
+  );
+  if (loading) return <div style={{ marginTop:12, padding:"12px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>Loading invoices from Xero…</div>;
+  if (error) return (
+    <div style={{ marginTop:12, padding:"10px 14px", background:T.redBg, border:"1px solid #fca5a5", borderRadius:8, fontSize:12, color:T.red, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+      <span>⚠ {error}</span>
+      <button onClick={load} style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, textDecoration:"underline" }}>Retry</button>
+    </div>
+  );
+  if (!invoices) return null;
+  if (invoices.length === 0) return <div style={{ marginTop:12, padding:"10px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>No invoices found for this contact in Xero.</div>;
+
+  const statusColour = (s) => {
+    if (s==="PAID") return { bg:T.greenBg, text:T.green, border:"#86efac" };
+    if (s==="VOIDED") return { bg:"#f3f4f6", text:T.textLight, border:T.border };
+    if (s==="AUTHORISED") return { bg:T.amberBg, text:"#92400e", border:"#fcd34d" };
+    return { bg:T.midBlueBg, text:T.midBlue, border:T.border };
+  };
+
+  return (
+    <div style={{ marginTop:14 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{invoices.length} invoice{invoices.length!==1?"s":""} in Xero</span>
+        <button onClick={load} style={{ background:"none", border:"none", color:T.midBlue, cursor:"pointer", fontSize:11, fontWeight:600 }}>↻ Refresh</button>
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        {invoices.map(inv => {
+          const sc = statusColour(inv.Status);
+          return (
+            <div key={inv.InvoiceID} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:8, fontSize:12 }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontWeight:600, color:T.text }}>{inv.InvoiceNumber}</div>
+                {inv.Reference && <div style={{ color:T.textLight, fontSize:11 }}>{inv.Reference}</div>}
+                {inv.DueDateString && <div style={{ color:T.textLight, fontSize:11 }}>Due: {inv.DueDateString}</div>}
+              </div>
+              <div style={{ textAlign:"right", flexShrink:0 }}>
+                <div style={{ fontWeight:700, color:inv.AmountDue>0?"#92400e":T.green }}>
+                  {inv.AmountDue>0 ? `£${inv.AmountDue.toLocaleString("en-GB",{minimumFractionDigits:2})} due` : "Paid"}
+                </div>
+                <div style={{ color:T.textLight, fontSize:11 }}>Total: £{(inv.Total||0).toLocaleString("en-GB",{minimumFractionDigits:2})}</div>
+              </div>
+              <span style={{ fontSize:10, fontWeight:700, padding:"3px 8px", borderRadius:4, background:sc.bg, color:sc.text, border:`1px solid ${sc.border}`, flexShrink:0 }}>
+                {inv.Status==="AUTHORISED"?"UNPAID":inv.Status}
+              </span>
+              <a href={`https://go.xero.com/app/!qhzr2/invoicing/view/${inv.InvoiceID}`} target="_blank" rel="noreferrer"
+                style={{ color:T.midBlue, fontSize:11, fontWeight:600, textDecoration:"none", flexShrink:0 }}>↗</a>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken }) {
   const [activeSection, setActiveSection] = useState("core");
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
 
@@ -752,21 +964,20 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 </div>
               </div>
 
-              {/* Xero Contact */}
+              {/* Xero Contact + Live Invoices */}
               <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
                 <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>Xero</div>
                 <div>
-                  <FLabel>Xero Contact ID <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>— paste the contact UUID from the Xero URL</span></FLabel>
+                  <FLabel>Xero Contact ID <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>— paste the UUID from the customer URL in Xero</span></FLabel>
                   <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                     <div style={{ flex:1 }}>
                       <FInput type="text" value={formData.xeroContactId||""} onChange={v=>update("xeroContactId",v)} placeholder="e.g. 959587a8-1369-474b-a13e-1eb3a819fd02"/>
                     </div>
                     {formData.xeroContactId && formData.xeroContactId.trim() && (
-                      <a
-                        href={`https://go.xero.com/app/!qhzr2/contacts/contact/${formData.xeroContactId.trim()}/activity/invoices?pageNumber=1&pageSize=25&searchTerm=&sortByDirection=DESC&sortByField=AmountDue&startDate=&endDate=&status=&searchDateBy=any&includeDeletedAndVoid=false`}
+                      <a href={`https://go.xero.com/app/!qhzr2/contacts/contact/${formData.xeroContactId.trim()}/activity/invoices?pageNumber=1&pageSize=25&searchTerm=&sortByDirection=DESC&sortByField=AmountDue&startDate=&endDate=&status=&searchDateBy=any&includeDeletedAndVoid=false`}
                         target="_blank" rel="noreferrer"
                         style={{ background:"#13B5EA", color:"#fff", borderRadius:6, padding:"8px 14px", fontSize:13, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
-                        View Invoices in Xero ↗
+                        Open in Xero ↗
                       </a>
                     )}
                   </div>
@@ -776,6 +987,9 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                     </p>
                   )}
                 </div>
+                {formData.xeroContactId && formData.xeroContactId.trim() && (
+                  <XeroInvoicesPanel contactId={formData.xeroContactId.trim()} xeroToken={xeroToken}/>
+                )}
               </div>
 
               {/* Accommodation */}
