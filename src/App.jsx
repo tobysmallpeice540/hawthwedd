@@ -204,7 +204,7 @@ const STAFFING_LABELS = { dayManager:"Day Manager", dayStaff:"Day Staff", barSup
 const BOOKING_STORAGE = "hawthbush_bookings_v6";
 
 // ─── XERO OAUTH2 PKCE ────────────────────────────────────────────────────────
-const XERO_CLIENT_ID    = "bed767cb-9b93-4e5f-9ead-52c7cc90ae23";
+const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
 const XERO_SCOPES       = "openid profile email accounting.contacts.read accounting.invoices.read offline_access";
 const XERO_REDIRECT_URI = window.location.origin + "/";
 
