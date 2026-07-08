@@ -1241,9 +1241,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 </div>
               ))}
             </div>
-            {activeSection==="contact" && (formData.email || formData.email2) && (
-              <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken}/>
-            )}
+          )}
+
+          {activeSection==="contact" && (formData.email || formData.email2) && (
+            <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken}/>
           )}
         </div>
       </div>
