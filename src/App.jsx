@@ -203,6 +203,23 @@ const STAFFING_LABELS = { dayManager:"Day Manager", dayStaff:"Day Staff", barSup
 
 const BOOKING_STORAGE = "hawthbush_bookings_v6";
 
+// ─── GMAIL OAUTH2 ────────────────────────────────────────────────────────────
+const GMAIL_CLIENT_ID   = "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
+const GMAIL_REDIRECT    = "https://cool-sorbet-b1d599.netlify.app/";
+const GMAIL_SCOPE       = "https://www.googleapis.com/auth/gmail.readonly";
+
+const gmailGetToken  = () => { try { return JSON.parse(sessionStorage.getItem("gmail_token")||"null"); } catch { return null; } };
+const gmailSetToken  = (t) => sessionStorage.setItem("gmail_token", JSON.stringify(t));
+const gmailClearToken = () => sessionStorage.removeItem("gmail_token");
+
+const gmailGetValidToken = () => {
+  const t = gmailGetToken();
+  if (!t) return null;
+  // Token expired?
+  if (Date.now() > t.expires_at - 60000) { gmailClearToken(); return null; }
+  return t;
+};
+
 // ─── XERO OAUTH2 PKCE ────────────────────────────────────────────────────────
 const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
 const XERO_SCOPES       = "openid profile email accounting.contacts.read accounting.invoices.read offline_access";
@@ -421,7 +438,42 @@ export default function App() {
   const [bookings, setBookings] = useState([]);
   const [staff, setStaff]       = useState([]);
   const [view, setView]         = useState("list");
-  const [xeroToken, setXeroToken] = useState(() => xeroGetToken());
+  const [xeroToken, setXeroToken]   = useState(() => xeroGetToken());
+  const [gmailToken, setGmailToken] = useState(() => gmailGetToken());
+
+  // Handle Gmail OAuth2 implicit flow callback — reads access_token from URL hash
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.includes("access_token")) return;
+    const params = new URLSearchParams(hash.replace("#",""));
+    const accessToken = params.get("access_token");
+    const expiresIn   = parseInt(params.get("expires_in")||"3600");
+    const state       = params.get("state");
+    if (!accessToken) return;
+    if (state !== sessionStorage.getItem("gmail_state")) return;
+    // Clean URL
+    window.history.replaceState({}, document.title, window.location.pathname);
+    const token = { access_token: accessToken, expires_at: Date.now() + expiresIn * 1000 };
+    gmailSetToken(token);
+    setGmailToken(token);
+    sessionStorage.removeItem("gmail_state");
+  }, []);
+
+  const handleGmailConnect = () => {
+    const state = Math.random().toString(36).slice(2);
+    sessionStorage.setItem("gmail_state", state);
+    const url = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
+      client_id:     GMAIL_CLIENT_ID,
+      redirect_uri:  GMAIL_REDIRECT,
+      response_type: "token",
+      scope:         GMAIL_SCOPE,
+      state,
+      include_granted_scopes: "true",
+    });
+    window.location.href = url;
+  };
+
+  const handleGmailDisconnect = () => { gmailClearToken(); setGmailToken(null); };
 
   // Handle Xero OAuth2 callback — runs once on load if ?code= is in URL
   useEffect(() => {
@@ -557,10 +609,10 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
-      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect}/>
+      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} onDelete={editId ? ()=>handleDelete(editId) : null}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null}
           onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
@@ -574,9 +626,10 @@ export default function App() {
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
-function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect }) {
+function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
   const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
-  const isXeroConnected = !!xeroToken;
+  const isXeroConnected  = !!xeroToken;
+  const isGmailConnected = !!gmailToken;
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -590,6 +643,11 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
           {isXeroConnected
             ? <button onClick={onXeroDisconnect} title="Disconnect Xero" style={{ background:"#e6f7fd", border:"1px solid #13B5EA", color:"#0e8ab0", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}><span style={{ color:"#13B5EA" }}>✓</span> Xero</button>
             : <button onClick={onXeroConnect} style={{ background:"#13B5EA", border:"none", color:"#fff", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Connect Xero</button>
+          }
+          <div style={{ width:1, height:20, background:T.border, margin:"0 6px" }}/>
+          {isGmailConnected
+            ? <button onClick={onGmailDisconnect} title="Disconnect Gmail" style={{ background:"#fef2f2", border:"1px solid #fca5a5", color:"#dc2626", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}><span style={{ color:"#ea4335" }}>✓</span> Gmail</button>
+            : <button onClick={onGmailConnect} style={{ background:"#ea4335", border:"none", color:"#fff", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Connect Gmail</button>
           }
         </div>
       </nav>
@@ -753,6 +811,128 @@ const FORM_SECTIONS = {
   files:      { label:"Files" },
 };
 
+// ─── GMAIL THREAD PANEL ──────────────────────────────────────────────────────
+function GmailThreadPanel({ email, gmailToken }) {
+  const [threads, setThreads]   = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [error,   setError]     = useState(null);
+  const [expanded, setExpanded] = useState({});
+
+  const load = async () => {
+    const token = gmailGetValidToken();
+    if (!token) return;
+    setLoading(true); setError(null);
+    try {
+      // Search for threads involving this email address
+      const searchRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads?q=${encodeURIComponent(`from:${email} OR to:${email}`)}&maxResults=10`,
+        { headers: { Authorization: `Bearer ${token.access_token}` } }
+      );
+      if (!searchRes.ok) throw new Error(`Gmail search failed: ${searchRes.status}`);
+      const searchData = await searchRes.json();
+      const threadList = searchData.threads || [];
+
+      // Fetch snippet for each thread
+      const detailed = await Promise.all(threadList.map(async t => {
+        const res = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
+          { headers: { Authorization: `Bearer ${token.access_token}` } }
+        );
+        if (!res.ok) return t;
+        return res.json();
+      }));
+      setThreads(detailed);
+    } catch(err) { setError(err.message); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { if (gmailToken) load(); }, [email, gmailToken?.access_token]);
+
+  const getHeader = (msg, name) => msg?.payload?.headers?.find(h=>h.name===name)?.value || "";
+  const decodeBody = (msg) => {
+    const parts = msg?.payload?.parts || [msg?.payload];
+    for (const part of parts) {
+      if (part?.mimeType === "text/plain" && part?.body?.data) {
+        try { return atob(part.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch {}
+      }
+    }
+    return msg?.snippet || "";
+  };
+
+  if (!gmailToken) return (
+    <div style={{ marginTop:16, padding:"10px 14px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, fontSize:12, color:"#dc2626" }}>
+      Connect Gmail (button in nav bar) to see email threads here.
+    </div>
+  );
+  if (loading) return <div style={{ marginTop:16, padding:"12px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>Loading emails from Gmail…</div>;
+  if (error) return (
+    <div style={{ marginTop:16, padding:"10px 14px", background:T.redBg, border:"1px solid #fca5a5", borderRadius:8, fontSize:12, color:T.red, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+      <span>⚠ {error}</span>
+      <button onClick={load} style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, textDecoration:"underline" }}>Retry</button>
+    </div>
+  );
+  if (!threads) return null;
+  if (threads.length === 0) return (
+    <div style={{ marginTop:16, padding:"10px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>No emails found for {email}.</div>
+  );
+
+  return (
+    <div style={{ marginTop:16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>📧 {threads.length} email thread{threads.length!==1?"s":""} with {email}</span>
+        <button onClick={load} style={{ background:"none", border:"none", color:T.midBlue, cursor:"pointer", fontSize:11, fontWeight:600 }}>↻ Refresh</button>
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        {threads.map(thread => {
+          const lastMsg  = thread.messages?.[thread.messages.length-1];
+          const firstMsg = thread.messages?.[0];
+          const subject  = getHeader(firstMsg, "Subject") || "(no subject)";
+          const from     = getHeader(lastMsg, "From") || "";
+          const date     = getHeader(lastMsg, "Date") || "";
+          const snippet  = thread.snippet || "";
+          const isOpen   = expanded[thread.id];
+          const msgCount = thread.messages?.length || 1;
+          const gmailUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(`from:${email} OR to:${email}`)}/${thread.id}`;
+          return (
+            <div key={thread.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,.05)" }}>
+              <div onClick={()=>setExpanded(e=>({...e,[thread.id]:!e[thread.id]}))}
+                style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 14px", cursor:"pointer" }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{subject}</span>
+                    {msgCount > 1 && <span style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:10, padding:"1px 6px", fontWeight:600, flexShrink:0 }}>{msgCount}</span>}
+                  </div>
+                  <div style={{ fontSize:11, color:T.textLight, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{from}</div>
+                  {!isOpen && <div style={{ fontSize:11, color:T.textMid, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{snippet}</div>}
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+                  <span style={{ fontSize:10, color:T.textLight, whiteSpace:"nowrap" }}>{new Date(date).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</span>
+                  <a href={gmailUrl} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()}
+                    style={{ color:T.midBlue, fontSize:11, fontWeight:600, textDecoration:"none" }}>↗</a>
+                  <span style={{ color:T.textLight, fontSize:12 }}>{isOpen?"▲":"▼"}</span>
+                </div>
+              </div>
+              {isOpen && thread.messages && (
+                <div style={{ borderTop:`1px solid ${T.border}`, background:"#f8fafd" }}>
+                  {thread.messages.map((msg,mi) => (
+                    <div key={msg.id} style={{ padding:"10px 14px", borderBottom:mi<thread.messages.length-1?`1px solid ${T.border}`:"none" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:T.text }}>{getHeader(msg,"From")}</span>
+                        <span style={{ fontSize:10, color:T.textLight }}>{new Date(getHeader(msg,"Date")).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                      </div>
+                      <div style={{ fontSize:12, color:T.textMid, whiteSpace:"pre-wrap", lineHeight:1.5, maxHeight:200, overflow:"auto" }}>{decodeBody(msg)||msg.snippet}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── XERO LIVE INVOICES PANEL ────────────────────────────────────────────────
 function XeroInvoicesPanel({ contactId, xeroToken }) {
   const [invoices, setInvoices] = useState(null);
@@ -828,7 +1008,7 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken }) {
   const [activeSection, setActiveSection] = useState("core");
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
 
@@ -1021,6 +1201,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <FTextarea value={formData.paymentNotes||""} onChange={v=>update("paymentNotes",v)} rows={2}/>
               </div>
             </div>
+          )}
+
+          {activeSection==="contact" && formData.email && (
+            <GmailThreadPanel email={formData.email} gmailToken={gmailToken}/>
           )}
 
           {activeSection!=="staffing" && activeSection!=="financials" && activeSection!=="viewings" && activeSection!=="files" && (
