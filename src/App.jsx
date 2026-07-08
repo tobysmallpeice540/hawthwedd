@@ -264,7 +264,10 @@ const xeroFetch = async (path) => {
         "Content-Type": "application/json",
       },
     });
-    if (!tenantsRes.ok) throw new Error("Could not fetch Xero organisations");
+    if (!tenantsRes.ok) {
+      const txt = await tenantsRes.text();
+      throw new Error(`Could not fetch Xero organisations (${tenantsRes.status}): ${txt.slice(0,100)}`);
+    }
     const tenants = await tenantsRes.json();
     if (!tenants.length) throw new Error("No Xero organisations found");
     token.tenant_id = tenants[0].tenantId;
@@ -272,14 +275,17 @@ const xeroFetch = async (path) => {
   }
 
   // Call Accounting API via Netlify proxy
-  const res = await fetch(`/api/xero/${path}`, {
+  const res = await fetch(`/api/xero-api/${path}`, {
     headers: {
       Authorization: `Bearer ${token.access_token}`,
       "Xero-tenant-id": token.tenant_id,
       Accept: "application/json",
     },
   });
-  if (!res.ok) throw new Error(`Xero API error: ${res.status}`);
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Xero API error (${res.status}): ${txt.slice(0,100)}`);
+  }
   return res.json();
 };
 const STAFF_STORAGE   = "hawthbush_staff_v5";
