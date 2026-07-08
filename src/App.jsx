@@ -163,7 +163,7 @@ const INITIAL_STAFF = [
 ];
 
 const INITIAL_BOOKINGS = [
-  { id:1,  status:"Confirmed", couple:"Alice Smith Birthday party Barn",         date:"2025-01-24", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"44 7557 598 231", email:"alicelouise90@hotmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"yes", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"yes", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroInvoices:[], payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:1,  status:"Confirmed", couple:"Alice Smith Birthday party Barn",         date:"2025-01-24", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"100", mealChildren:"", mealBabies:"", eveGuests:"", phone:"44 7557 598 231", email:"alicelouise90@hotmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"yes", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"yes", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   { id:2,  status:"Confirmed", couple:"Jason Lindfield & Lindy Anderson",        date:"2026-05-23", setup:["TF"], dayManager:["TF"], dayStaff:["RM","AK","OH"], barSupervisor:["TM"], sunday:["KN"], bar:["AK","RM","EP"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"120", mealChildren:"20", mealBabies:"", eveGuests:"120", phone:"", email:"jasonlindfield@ohmenergy.co.uk", email2:"lindyclaire@hotmail.com", ceremony:"NO", guestArrivalTime:"13:00", caterers:"12:00 External caterers arrive, 14:00 Food served 15:00-17:00 Ice Cream & Bubbles Van", foodTruck:"Miky Dough Pizzas", eveFood:"Bucking Broncho", otherVendors:"YES £760", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"3270", deposit:"1000", payment2:"1015", finalPayment:"3095", extras:"Food trucks: up to 3 vendors, waive usual £100 per vendor fee. ALL INVOICES PAID", corkage:"£9 per adult - 100 guests invoiced", pets:"", hairdresser:"", florist:"", band:"16:00-17:00 live music, DJ from 17:00", paSystem:"", notes:"", hoursWorked:{} },
   { id:3,  status:"Confirmed", couple:"Sam Adams & Sarah Precious",              date:"2026-05-30", setup:["BW"], dayManager:["BW"], dayStaff:["JD","BoW","OH"], barSupervisor:["TM"], sunday:[], bar:["AK","OH"], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"62", mealChildren:"", mealBabies:"", eveGuests:"62", phone:"07551 801563", email:"sarahp001@hotmail.co.uk", email2:"", ceremony:"Clearing 15:00PM", guestArrivalTime:"14:00 for canapes & drinks", caterers:"12:00 Circa", foodTruck:"none", eveFood:"CIRCA", otherVendors:"", amlyBooked:"yes", amlyFee:"980", hamletBooked:"yes", hamletFee:"2790", campingBooked:"no", campingFee:"", nonStandard:"Round tables being delivered day tbc with Circa.", venueFee:"5100", deposit:"1000", payment2:"3935", finalPayment:"4641.8", extras:"Need to find quiet place for Sam to do interview with registrars", corkage:"£9.50 - they are supplying the coffee and tea", pets:"", hairdresser:"9:30 on the day", florist:"10:00 am on the set up Mother-in-law", band:"21:00 Duke of Havoc", paSystem:"", notes:"", hoursWorked:{} },
   { id:4,  status:"Confirmed", couple:"Natalia Szczepanska & Simon Rosenhead",   date:"2026-06-06", setup:["BW"], dayManager:["JD"], dayStaff:["CK","BoW","AK"], barSupervisor:["TM"], sunday:[], bar:["AK","EP","OH"], dayHandy:["TF"], eveHandy:["AP"], mealGuests:"80", mealChildren:"2", mealBabies:"", eveGuests:"80", phone:"7972280260", email:"Natalia_kim@hotmail.com", email2:"", ceremony:"Clearing 13:00", guestArrivalTime:"13:00", caterers:"Circa", foodTruck:"Circa Pizza", eveFood:"CIRCA", otherVendors:"", amlyBooked:"yes", amlyFee:"950", hamletBooked:"yes", hamletFee:"2678", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"4950", deposit:"1000", payment2:"3289", finalPayment:"5481", extras:"", corkage:"£12 plus VAT per guest if 80-90 guests", pets:"", hairdresser:"", florist:"Big Field Flowers", band:"Steel Pan Man", paSystem:"SENT TO JAMES", notes:"", hoursWorked:{} },
@@ -186,8 +186,8 @@ const INITIAL_BOOKINGS = [
   { id:21, status:"Confirmed", couple:"Emily Cave & Daniel",                     date:"2026-11-28", setup:["BW"], dayManager:["BW"], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:["AP"], eveHandy:["AP"], mealGuests:"80", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7479043253", email:"thebookgirlandgamerguy26@outlook.com", email2:"", ceremony:"Clearing", guestArrivalTime:"", caterers:"TBC", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"780", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"£500 discount", venueFee:"4140", deposit:"", payment2:"1460", finalPayment:"", extras:"", corkage:"", pets:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   // ── 2027 bookings ──────────────────────────────────────────────────────────
   { id:200, status:"Confirmed", couple:"Liz Newall TBC",           date:"2027-06-03", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"betcarter@hotmail.co.uk", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"600", deposit:"600", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:201, status:"Holding",   couple:"Jason McGeorge & Becky",   date:"2027-07-05", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"Becky 07796 138545", email:"jasonmcgeorge45@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroInvoices:[], payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:202, status:"Confirmed", couple:"Imogen Parr & Jack",       date:"2027-06-12", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"07766998811", email:"jackmeach@hotmail.com", email2:"imogenfjparr@gmail.com", ceremony:"13:00", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroInvoices:[], payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:201, status:"Holding",   couple:"Jason McGeorge & Becky",   date:"2027-07-05", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"Becky 07796 138545", email:"jasonmcgeorge45@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:202, status:"Confirmed", couple:"Imogen Parr & Jack",       date:"2027-06-12", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"07766998811", email:"jackmeach@hotmail.com", email2:"imogenfjparr@gmail.com", ceremony:"13:00", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   { id:203, status:"Confirmed", couple:"Tessa Taylor & Isaac",     date:"2027-06-19", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"66 adults + 3 or 4 children", mealChildren:"", mealBabies:"", eveGuests:"110 in total", phone:"", email:"tessa-taylor@hotmail.co.uk", email2:"", ceremony:"12:30 tbc", guestArrivalTime:"", caterers:"Cashew Catering or Isaac's brother", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"1.45pm drinks, food 3-4.30/5. Eve guests ~5-6pm", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"£9.50 daytime, £5.00+VAT evening", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   { id:204, status:"Confirmed", couple:"Chloé & Ewan",             date:"2027-07-03", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"50 + 20 children", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"chloe-louiseb@hotmail.co.uk", email2:"", ceremony:"1:00pm", guestArrivalTime:"", caterers:"Bay Tree (10% commission)", foodTruck:"£150+VAT pizza van", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"£150 for cake cutting", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   { id:205, status:"Confirmed", couple:"Lydia and Rob",            date:"2027-07-10", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"tbc", mealChildren:"", mealBabies:"", eveGuests:"tbc", phone:"", email:"lydsandrobwedding@gmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"yes", hamletFee:"", campingBooked:"yes", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
@@ -356,7 +356,7 @@ export default function App() {
           status: b.status || "Confirmed",
           eventType: b.eventType || "Wedding (Peak)",
           depositPaid: b.depositPaid || false,
-          xeroInvoices: b.xeroInvoices || [],
+          xeroContactId: b.xeroContactId || "",
         }));
         setBookings(migrated);
       } catch { setBookings(INITIAL_BOOKINGS); }
@@ -369,7 +369,7 @@ export default function App() {
   const saveBookings = useCallback(async data=>{ setBookings(data); try{await sbSet(BOOKING_STORAGE, data);}catch(e){console.error(e);} },[]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
 
-  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroInvoices:[], payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -752,53 +752,29 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 </div>
               </div>
 
-              {/* Xero Invoices */}
+              {/* Xero Contact */}
               <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
-                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-                  <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Xero Invoices</div>
-                  {(formData.xeroInvoices||[]).length < 5 && (
-                    <button type="button" onClick={()=>update("xeroInvoices",[...(formData.xeroInvoices||[]),{number:"",paid:false}])}
-                      style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"4px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
-                      + Add Invoice
-                    </button>
+                <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>Xero</div>
+                <div>
+                  <FLabel>Xero Contact ID <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>— paste the contact UUID from the Xero URL</span></FLabel>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ flex:1 }}>
+                      <FInput type="text" value={formData.xeroContactId||""} onChange={v=>update("xeroContactId",v)} placeholder="e.g. 959587a8-1369-474b-a13e-1eb3a819fd02"/>
+                    </div>
+                    {formData.xeroContactId && formData.xeroContactId.trim() && (
+                      <a
+                        href={`https://go.xero.com/app/!qhzr2/contacts/contact/${formData.xeroContactId.trim()}/activity/invoices?pageNumber=1&pageSize=25&searchTerm=&sortByDirection=DESC&sortByField=AmountDue&startDate=&endDate=&status=&searchDateBy=any&includeDeletedAndVoid=false`}
+                        target="_blank" rel="noreferrer"
+                        style={{ background:"#13B5EA", color:"#fff", borderRadius:6, padding:"8px 14px", fontSize:13, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
+                        View Invoices in Xero ↗
+                      </a>
+                    )}
+                  </div>
+                  {!formData.xeroContactId && (
+                    <p style={{ fontSize:11, color:T.textLight, margin:"6px 0 0" }}>
+                      To find the ID: open the customer in Xero → copy the UUID from the URL (the part after /contact/)
+                    </p>
                   )}
-                </div>
-                {(formData.xeroInvoices||[]).length === 0 && (
-                  <p style={{ fontSize:12, color:T.textLight, margin:0 }}>No invoices linked yet — click + Add Invoice to link a Xero invoice number.</p>
-                )}
-                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                  {(formData.xeroInvoices||[]).map((inv, i) => {
-                    const num = (inv.number||"").trim();
-                    const xeroUrl = num
-                      ? `https://go.xero.com/AccountsReceivable/Search.aspx?graphSearch=False&invoiceRef=${encodeURIComponent(num)}&ref=${encodeURIComponent(num)}&toSearch=${encodeURIComponent(num)}&dateWithin=any&pageSize=200&unsentOnly=False`
-                      : null;
-                    const updateInv = (field, val) => {
-                      const updated = (formData.xeroInvoices||[]).map((x,j)=>j===i?{...x,[field]:val}:x);
-                      update("xeroInvoices", updated);
-                    };
-                    return (
-                      <div key={i} style={{ display:"flex", alignItems:"center", gap:8, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px" }}>
-                        <span style={{ fontSize:12, color:T.textLight, fontWeight:600, minWidth:20 }}>#{i+1}</span>
-                        <input type="text" value={inv.number||""} onChange={e=>updateInv("number",e.target.value)}
-                          placeholder="e.g. INV-0303"
-                          style={{ flex:1, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 10px", outline:"none" }}/>
-                        <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>
-                          <input type="checkbox" checked={!!inv.paid} onChange={e=>updateInv("paid",e.target.checked)} style={{ width:14, height:14, accentColor:T.green, cursor:"pointer" }}/>
-                          Paid
-                        </label>
-                        {xeroUrl && (
-                          <a href={xeroUrl} target="_blank" rel="noreferrer"
-                            style={{ background:"#13B5EA", color:"#fff", borderRadius:5, padding:"5px 11px", fontSize:12, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
-                            Open in Xero ↗
-                          </a>
-                        )}
-                        <button type="button" onClick={()=>update("xeroInvoices",(formData.xeroInvoices||[]).filter((_,j)=>j!==i))}
-                          style={{ background:T.redBg, border:"none", color:T.red, padding:"5px 9px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>
-                          ✕
-                        </button>
-                      </div>
-                    );
-                  })}
                 </div>
               </div>
 
