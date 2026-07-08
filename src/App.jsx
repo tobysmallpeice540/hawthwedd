@@ -617,7 +617,7 @@ export default function App() {
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="enquiries"  && <EnquiriesView/>}
+        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={id=>{/* handled inside EnquiriesView */}}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries}/>}
       </div>
@@ -1127,10 +1127,6 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <BookingViewingsSection formData={formData} update={update} onAutoSave={onAutoSave}/>
           )}
 
-          {activeSection==="contact" && (formData.email || formData.email2) && (
-            <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken}/>
-          )}
-
           {activeSection==="files" && (
             <BookingFilesSection formData={formData} update={update} onAutoSave={onAutoSave}/>
           )}
@@ -1245,6 +1241,9 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 </div>
               ))}
             </div>
+            {activeSection==="contact" && (formData.email || formData.email2) && (
+              <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken}/>
+            )}
           )}
         </div>
       </div>
@@ -4937,7 +4936,7 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry }) {
 }
 
 // ─── EnquiriesView (top-level) ────────────────────────────────────────────────
-function EnquiriesView() {
+function EnquiriesView({ gmailToken }) {
   const [enquiries, setEnquiries] = useState([]);
   const [loaded, setLoaded]       = useState(false);
   const [selected, setSelected]   = useState(null); // id of open enquiry
@@ -4998,6 +4997,7 @@ function EnquiriesView() {
         isNew={adding}
         confirmDlg={confirmDlg}
         setConfirmDlg={setConfirmDlg}
+        gmailToken={gmailToken}
       />
     );
   }
@@ -5100,7 +5100,7 @@ function FRow({ label, children }) {
   );
 }
 
-function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg }) {
+function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken }) {
   const [form, setForm]         = useState({...enq});
   const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
   const [addingContact, setAddingContact] = useState(false);
@@ -5187,16 +5187,6 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
             </div>
           </div>
 
-          {/* Viewing */}
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-            <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>First Viewing</h3>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-              <FRow label="Date / Description"><input type="text" value={form.firstViewing||""} onChange={e=>update("firstViewing",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
-              <FRow label="Time"><input type="text" value={form.viewingTime||""} onChange={e=>update("viewingTime",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
-              <div style={{ gridColumn:"1/-1" }}><FRow label="Viewing Form"><input type="text" value={form.viewingForm||""} onChange={e=>update("viewingForm",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow></div>
-            </div>
-          </div>
-
           {/* Outcome */}
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
             <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Status</h3>
@@ -5230,8 +5220,17 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
           </div>
         </div>
 
-        {/* Right column: contact history */}
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", flexDirection:"column", gap:14 }}>
+        {/* Right column: gmail + contact history */}
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          {/* Gmail threads */}
+          {form.email && (
+            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <h3 style={{ margin:"0 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Gmail</h3>
+              <GmailThreadPanel emails={[form.email].filter(Boolean)} gmailToken={gmailToken}/>
+            </div>
+          )}
+          {/* Contact history */}
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", flexDirection:"column", gap:14 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.border}`, paddingBottom:10, marginBottom:4 }}>
             <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Contact History <span style={{ fontSize:12, color:T.textLight, fontWeight:400 }}>({(form.contacts||[]).length})</span></h3>
             <button onClick={()=>setAddingContact(true)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>+ Add Contact</button>
@@ -5318,6 +5317,7 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
           {dirty && (
             <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, marginTop:"auto" }}>Save Changes</button>
           )}
+          </div>
         </div>
 
         {/* Viewings card */}
