@@ -252,25 +252,30 @@ const xeroGetValidToken = async () => {
   return token;
 };
 
+const XERO_PROXY = "/.netlify/functions/xero-proxy";
+
 const xeroFetch = async (path) => {
   const token = await xeroGetValidToken();
   if (!token) throw new Error("Not connected to Xero");
-  // Get tenant ID first if we don't have it
+
+  // Get tenant ID via proxy if we don't have it yet
   if (!token.tenant_id) {
-    const tenantsRes = await fetch("https://api.xero.com/connections", {
-      headers: { Authorization: `Bearer ${token.access_token}`, "Content-Type": "application/json" }
+    const tenantsRes = await fetch(`${XERO_PROXY}?path=connections`, {
+      headers: { "x-xero-token": token.access_token, "x-xero-tenant-id": "" },
     });
+    if (!tenantsRes.ok) throw new Error("Could not fetch Xero organisations");
     const tenants = await tenantsRes.json();
     if (!tenants.length) throw new Error("No Xero organisations found");
     token.tenant_id = tenants[0].tenantId;
     xeroSetToken(token);
   }
-  const res = await fetch(`https://api.xero.com/api.xro/2.0/${path}`, {
+
+  // Call Accounting API via proxy
+  const res = await fetch(`${XERO_PROXY}?path=${encodeURIComponent(path)}`, {
     headers: {
-      Authorization: `Bearer ${token.access_token}`,
-      "Xero-tenant-id": token.tenant_id,
-      Accept: "application/json",
-    }
+      "x-xero-token": token.access_token,
+      "x-xero-tenant-id": token.tenant_id,
+    },
   });
   if (!res.ok) throw new Error(`Xero API error: ${res.status}`);
   return res.json();
