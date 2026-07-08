@@ -2,16 +2,16 @@
   command = "npm run build"
   publish = "dist"
 
+# Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"
   to = "https://api.xero.com/connections"
   status = 200
   force = true
-  [redirects.headers]
-    X-From = "netlify-proxy"
 
+# Proxy Xero accounting API — :splat captures path + query string
 [[redirects]]
-  from = "/api/xero/*"
+  from = "/api/xero-api/*"
   to = "https://api.xero.com/api.xro/2.0/:splat"
   status = 200
   force = true
