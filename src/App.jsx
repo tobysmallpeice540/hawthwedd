@@ -252,7 +252,7 @@ const xeroGetValidToken = async () => {
   return token;
 };
 
-const XERO_PROXY = "/.netlify/functions/xero-proxy";
+const XERO_PROXY = "/api/xero";
 
 const xeroFetch = async (path) => {
   const token = await xeroGetValidToken();
