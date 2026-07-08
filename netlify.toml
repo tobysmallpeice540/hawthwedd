@@ -3,6 +3,20 @@
   publish = "dist"
 
 [[redirects]]
+  from = "/api/xero-connections"
+  to = "https://api.xero.com/connections"
+  status = 200
+  force = true
+  [redirects.headers]
+    X-From = "netlify-proxy"
+
+[[redirects]]
+  from = "/api/xero/*"
+  to = "https://api.xero.com/api.xro/2.0/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
