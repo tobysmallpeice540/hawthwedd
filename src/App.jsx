@@ -857,7 +857,7 @@ function GmailThreadPanel({ emails, gmailToken }) {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { if (gmailToken) load(); }, [email, gmailToken?.access_token]);
+  useEffect(() => { if (gmailToken) load(); }, [emails?.join(","), gmailToken?.access_token]);
 
   const getHeader = (msg, name) => msg?.payload?.headers?.find(h=>h.name===name)?.value || "";
   const decodeBody = (msg) => {
