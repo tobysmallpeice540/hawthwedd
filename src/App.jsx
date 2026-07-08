@@ -206,7 +206,7 @@ const BOOKING_STORAGE = "hawthbush_bookings_v6";
 // ─── XERO OAUTH2 PKCE ────────────────────────────────────────────────────────
 const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
 const XERO_SCOPES       = "openid profile email accounting.contacts.read accounting.invoices.read offline_access";
-const XERO_REDIRECT_URI = window.location.origin + "/";
+const XERO_REDIRECT_URI = "https://cool-sorbet-b1d599.netlify.app/";
 
 const xeroGenerateCodeVerifier = () => {
   const array = new Uint8Array(32);
