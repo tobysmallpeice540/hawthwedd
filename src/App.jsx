@@ -1201,13 +1201,14 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="staffing" && (
             <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
-              <StaffPicker label="Set-Up (who sets up the venue)" value={formData.setup||[]} onChange={val=>update("setup",val)} staff={staff}/>
+              <StaffPicker label="Friday Set-Up (who sets up the venue)" value={formData.setup||[]} onChange={val=>update("setup",val)} staff={staff}/>
               {STAFFING_FIELDS.map(key=>(
                 <StaffPicker key={key} label={STAFFING_LABELS[key]} value={formData[key]||[]} onChange={val=>update(key,val)} staff={staff}/>
               ))}
               {/* Shift times per person */}
               {(() => {
-                const allIds = [...new Set(["setup",...STAFFING_FIELDS].flatMap(k=>formData[k]||[]))];
+                // Exclude setup staff — they work the day before, not the event day
+                const allIds = [...new Set(STAFFING_FIELDS.flatMap(k=>formData[k]||[]))];
                 if (allIds.length === 0) return null;
                 const shifts = formData.staffShifts || {};
                 const updateShift = (id, field, val) => {
@@ -1897,7 +1898,7 @@ function StaffingRota({ bookings, staff }) {
     <div style={{ overflowX:"auto" }}>
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Set-Up","Day Manager","Bar Sup","Day Staff","Bar","Day Handy","Eve Handy"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Friday Set-Up","Day Manager","Bar Sup","Day Staff","Bar","Day Handy","Eve Handy"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
           <tbody>
             {rows.map((b,i)=>(
               <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
@@ -1978,7 +1979,7 @@ function StaffWorkloadReport({ bookings, staff }) {
   const printText = [
     "Staff Workload — Upcoming Events",
     "",
-    ...workload.filter(w=>w.count>0).map(w=>`${w.name} (${w.role}): ${w.count} upcoming\n  ${Object.entries(w.roles).map(([r,c])=>`${r==="setup"?"Set-Up":STAFFING_LABELS[r]}: ${c}`).join(", ")}`)
+    ...workload.filter(w=>w.count>0).map(w=>`${w.name} (${w.role}): ${w.count} upcoming\n  ${Object.entries(w.roles).map(([r,c])=>`${r==="setup"?"Friday Set-Up":STAFFING_LABELS[r]}: ${c}`).join(", ")}`)
   ].join("\n\n");
   if(printMode) return (
     <div>
@@ -2011,7 +2012,7 @@ function StaffWorkloadReport({ bookings, staff }) {
             {w.count>0&&(
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                 {Object.entries(w.roles).map(([role,cnt])=>(
-                  <span key={role} style={{ fontSize:11, background:T.accentLight, border:`1px solid ${T.border}`, borderRadius:4, padding:"2px 8px", color:T.accent, fontWeight:600 }}>{role==="setup"?"Set-Up":STAFFING_LABELS[role]}: {cnt}</span>
+                  <span key={role} style={{ fontSize:11, background:T.accentLight, border:`1px solid ${T.border}`, borderRadius:4, padding:"2px 8px", color:T.accent, fontWeight:600 }}>{role==="setup"?"Friday Friday Set-Up":STAFFING_LABELS[role]}: {cnt}</span>
                 ))}
               </div>
             )}
@@ -4443,15 +4444,24 @@ function StaffTimelineReport({ bookings, staff }) {
   const renderTimeline = (b) => {
     if (!b) return null;
     const shifts = b.staffShifts || {};
-    const entries = Object.entries(shifts).filter(([,sh]) => sh.start && sh.end);
+    // Exclude Friday Set-Up staff — they work the day before, not the event day
+    const setupIds = new Set(b.setup || []);
+    const entries = Object.entries(shifts).filter(([id,sh]) => sh.start && sh.end && !setupIds.has(id));
     if (entries.length === 0) return <p style={{ color:T.textLight, fontSize:13 }}>No shift times set for this booking.</p>;
 
-    // Parse time to minutes from midnight
-    const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+    // Parse time to minutes from a base of 08:00.
+    // Times < 06:00 are treated as next-day (i.e. 00:30 = 24:30 = 1470 mins)
+    // This handles typical event spans of 08:00 to ~01:00 next day.
+    const toMins = t => {
+      const [h,m] = t.split(":").map(Number);
+      const mins = h*60 + m;
+      // If hour < 6, assume it's past midnight (next day)
+      return mins < 360 ? mins + 1440 : mins;
+    };
 
     const allMins = entries.flatMap(([,sh]) => [toMins(sh.start), toMins(sh.end)]);
-    const minTime = Math.floor(Math.min(...allMins) / 60) * 60; // round down to hour
-    const maxTime = Math.ceil(Math.max(...allMins) / 60) * 60;  // round up to hour
+    const minTime = Math.floor(Math.min(...allMins) / 60) * 60;
+    const maxTime = Math.ceil(Math.max(...allMins) / 60) * 60;
     const totalSpan = maxTime - minTime;
 
     const hours = [];
@@ -4463,11 +4473,15 @@ function StaffTimelineReport({ bookings, staff }) {
       <div>
         {/* Hour ruler */}
         <div style={{ display:"flex", marginLeft:160, marginBottom:8 }}>
-          {hours.map(m => (
-            <div key={m} style={{ flex:1, fontSize:11, color:T.textLight, fontWeight:600, textAlign:"left", borderLeft:`1px solid ${T.border}`, paddingLeft:4 }}>
-              {String(Math.floor(m/60)).padStart(2,"0")}:00
-            </div>
-          ))}
+          {hours.map(m => {
+            const displayH = Math.floor(m/60) % 24; // wrap past midnight
+            const isNextDay = Math.floor(m/60) >= 24;
+            return (
+              <div key={m} style={{ flex:1, fontSize:11, color:isNextDay?T.accent:T.textLight, fontWeight:600, textAlign:"left", borderLeft:`1px solid ${T.border}`, paddingLeft:4 }}>
+                {String(displayH).padStart(2,"0")}:00{isNextDay?" +1":""}
+              </div>
+            );
+          })}
         </div>
 
         {/* Grid lines + bars */}
@@ -4492,7 +4506,7 @@ function StaffTimelineReport({ bookings, staff }) {
 
               // Find this person's role on the booking
               const role = ["setup",...STAFFING_FIELDS].find(f => (b[f]||[]).includes(id));
-              const roleLabel = role === "setup" ? "Set-Up" : role ? STAFFING_LABELS[role] : "";
+              const roleLabel = role === "setup" ? "Friday Set-Up" : role ? STAFFING_LABELS[role] : "";
 
               return (
                 <div key={id} style={{ display:"flex", alignItems:"center", height:44 }}>
