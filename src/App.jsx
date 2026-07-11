@@ -535,7 +535,9 @@ export default function App() {
   const [search, setSearch]     = useState("");
   const [reportType, setReportType] = useState("summary");
   const [loaded, setLoaded]     = useState(false);
-  const [enquiries, setEnquiries] = useState([]);
+  const [enquiries, setEnquiries]         = useState([]);
+  const [viewingRequests, setViewingRequests] = useState([]);
+  const [viewingBlocks,   setViewingBlocks]   = useState([]);
   const [editStaffId, setEditStaffId] = useState(null);
   const [staffForm, setStaffForm]     = useState(null);
 
@@ -557,6 +559,8 @@ export default function App() {
       } catch { setBookings(INITIAL_BOOKINGS); }
       try { const r = await sbGet(STAFF_STORAGE); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
       try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r || []); } catch { setEnquiries([]); }
+        try { const r = await sbGet(VR_STORAGE); setViewingRequests(r || []); } catch { setViewingRequests([]); }
+        try { const r = await sbGet(VB_STORAGE); setViewingBlocks(r || []); } catch { setViewingBlocks([]); }
       setLoaded(true);
     })();
   },[]);
@@ -618,7 +622,12 @@ export default function App() {
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken}/>}
-        {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={id=>{/* handled inside EnquiriesView */}}/>}
+        {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} onEditBooking={handleEdit}
+          viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
+          viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
+          enquiries={enquiries} setEnquiries={setEnquiries}
+          saveEnquiries={async(e)=>{ setEnquiries(e); await sbSet(ENQUIRIES_STORAGE,e); }}
+          onSelectEnquiry={id=>{/* handled inside EnquiriesView */}}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries}/>}
       </div>
     </div>
@@ -3158,6 +3167,8 @@ function ProductsView({ products, onSave }) {
 
 const ENQUIRIES_STORAGE = "hbf_enquiries_v1";
 const VIEWINGS_STORAGE  = "hbf_viewings_v1";
+const VR_STORAGE        = "hbf_viewing_requests_v1";
+const VB_STORAGE        = "hbf_viewing_blocks_v1";
 
 const INITIAL_ENQUIRIES = [
   {
@@ -4987,18 +4998,246 @@ function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
 }
 
 // ─── VIEWINGS TAB VIEW ────────────────────────────────────────────────────────
-function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry }) {
-  const [enquiries, setEnquiries] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const [filter, setFilter] = useState("upcoming"); // upcoming | all | past
 
-  useEffect(()=>{
-    (async()=>{
-      try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r||[]); } catch { setEnquiries([]); }
-      setLoaded(true);
-    })();
-  },[]);
+// ─── VIEWING REQUESTS INBOX ───────────────────────────────────────────────────
+const VIEWING_SLOTS = ["10:00","12:00","14:00","16:00","18:00"];
 
+function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries }) {
+  const [tab, setTab]           = useState("pending");
+  const [acting, setActing]     = useState(null);
+  const [blockDate,   setBlockDate]   = useState("");
+  const [blockDateTo, setBlockDateTo] = useState("");
+  const [blockSlot,   setBlockSlot]   = useState("");
+  const [blockNote,   setBlockNote]   = useState("");
+  const [flash, setFlash]       = useState(null);
+
+  const showFlash = (msg, col=T.green) => { setFlash({msg,col}); setTimeout(()=>setFlash(null),3000); };
+
+  const saveRequests = async (updated) => {
+    setRequests(updated);
+    await sbSet(VR_STORAGE, updated);
+  };
+  const saveBlocks = async (updated) => {
+    setBlocks(updated);
+    await sbSet(VB_STORAGE, updated);
+  };
+
+  const handleAction = async (req, action) => {
+    setActing(req.id);
+    try {
+      // Call Netlify function to send email
+      const res = await fetch("/.netlify/functions/handle-viewing", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ id: req.id, action }),
+      });
+      if (!res.ok) throw new Error("Function failed");
+
+      // Update request status
+      const updatedRequests = requests.map(r => r.id===req.id ? {...r, status: action==="confirm"?"confirmed":"declined"} : r);
+      await saveRequests(updatedRequests);
+
+      // If confirming — create enquiry + viewing
+      if (action === "confirm") {
+        const enqId = `enq_${Date.now()}`;
+        const newEnq = {
+          id: enqId,
+          name: req.name,
+          email: req.email,
+          phone: req.phone || "",
+          eventType: "Wedding",
+          numbers: req.guests || "",
+          datePreference: req.preferredDate || "",
+          source: "Website viewing request",
+          notes: req.notes || "",
+          temperature: "warm",
+          outcome: "undecided",
+          contacts: [],
+          viewings: [{
+            id: `v_${Date.now()}`,
+            date: req.date,
+            time: req.time,
+            notes: `Confirmed from website request. ${req.notes||""}`.trim(),
+            outcome: "pending",
+          }],
+        };
+        const updatedEnq = [...(enquiries||[]), newEnq];
+        await saveEnquiries(updatedEnq);
+        showFlash("Confirmed - enquiry created for " + req.name);
+      } else {
+        showFlash("Declined - apology email sent to " + req.name, T.amber);
+      }
+    } catch(e) {
+      showFlash("Something went wrong: " + e.message, T.red);
+    } finally { setActing(null); }
+  };
+
+  const addBlock = async () => {
+    if (!blockDate) return;
+    const newBlocks = [];
+    if (blockDateTo && blockDateTo > blockDate) {
+      // Expand date range into individual day blocks
+      const cur = new Date(blockDate + "T00:00:00");
+      const end = new Date(blockDateTo + "T00:00:00");
+      while (cur <= end) {
+        const ds = cur.toISOString().slice(0,10);
+        newBlocks.push({ id:`blk_${Date.now()}_${ds}`, date:ds, slot:blockSlot||null, note:blockNote||"", addedAt:new Date().toISOString() });
+        cur.setDate(cur.getDate()+1);
+      }
+    } else {
+      newBlocks.push({ id:`blk_${Date.now()}`, date:blockDate, slot:blockSlot||null, note:blockNote||"", addedAt:new Date().toISOString() });
+    }
+    const updated = [...blocks, ...newBlocks];
+    await saveBlocks(updated);
+    setBlockDate(""); setBlockDateTo(""); setBlockSlot(""); setBlockNote("");
+    showFlash(newBlocks.length > 1 ? "Blocked " + newBlocks.length + " days" : "Block added");
+  };
+
+  const removeBlock = async (id) => {
+    await saveBlocks(blocks.filter(b=>b.id!==id));
+  };
+
+  const pending   = requests.filter(r=>r.status==="pending");
+  const confirmed = requests.filter(r=>r.status==="confirmed");
+  const declined  = requests.filter(r=>r.status==="declined");
+
+  const statusBadge = (s) => {
+    const styles = {
+      pending:   { bg:"#fef9c3", color:"#92400e", label:"Pending" },
+      confirmed: { bg:T.greenBg, color:T.green,   label:"Confirmed" },
+      declined:  { bg:T.redBg,   color:T.red,     label:"Declined" },
+    };
+    const st = styles[s] || styles.pending;
+    return <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:10, background:st.bg, color:st.color }}>{st.label}</span>;
+  };
+
+  const tabData = { pending, confirmed, declined };
+  const tabRows = tabData[tab] || [];
+  const tabCounts = { pending:pending.length, confirmed:confirmed.length, declined:declined.length };
+
+  return (
+    <div>
+      {flash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:flash.col, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>{flash.msg}</div>}
+
+      {/* Tab bar */}
+      <div style={{ display:"flex", gap:8, marginBottom:20 }}>
+        {["pending","confirmed","declined"].map(t=>(
+          <button key={t} onClick={()=>setTab(t)}
+            style={{ background:tab===t?T.midBlue:"#fff", color:tab===t?"#fff":T.textMid, border:`1.5px solid ${tab===t?T.midBlue:T.border}`, padding:"7px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:tab===t?700:400, textTransform:"capitalize", display:"flex", alignItems:"center", gap:7 }}>
+            {t}
+            {tabCounts[t]>0 && <span style={{ background:tab===t?"rgba(255,255,255,.3)":T.midBlueBg, color:tab===t?"#fff":T.midBlue, borderRadius:10, padding:"1px 7px", fontSize:11, fontWeight:700 }}>{tabCounts[t]}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* Request cards */}
+      {tabRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"20px 0" }}>No {tab} requests.</div>}
+      <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:32 }}>
+        {tabRows.sort((a,b)=>a.date>b.date?1:-1).map(req=>{
+          const niceDate = new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});
+          return (
+            <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 6px rgba(37,99,235,.06)" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
+                    <span style={{ fontWeight:700, fontSize:15, color:T.text }}>{req.name}</span>
+                    {statusBadge(req.status)}
+                    <span style={{ fontSize:12, color:T.textLight }}>{req.submittedAt ? new Date(req.submittedAt).toLocaleDateString("en-GB") : ""}</span>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))", gap:"4px 16px", fontSize:13, color:T.textMid }}>
+                    <span>📅 {niceDate} at {req.time}</span>
+                    <span>✉ {req.email}</span>
+                    {req.phone && <span>📞 {req.phone}</span>}
+                    {req.guests && <span>👥 {req.guests} guests</span>}
+                    {req.preferredDate && <span>🗓 {req.preferredDate}</span>}
+                  </div>
+                  {req.notes && <div style={{ marginTop:8, fontSize:12, color:T.textMid, fontStyle:"italic", background:T.bgInput, borderRadius:5, padding:"6px 10px" }}>{req.notes}</div>}
+                </div>
+                {req.status==="pending" && (
+                  <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+                    <button onClick={()=>handleAction(req,"confirm")} disabled={acting===req.id}
+                      style={{ background:T.green, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:acting===req.id?0.7:1 }}>
+                      {acting===req.id?"…":"✓ Confirm"}
+                    </button>
+                    <button onClick={()=>handleAction(req,"decline")} disabled={acting===req.id}
+                      style={{ background:T.redBg, color:T.red, border:`1px solid #fca5a5`, padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                      ✕ Decline
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Block management */}
+      <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:24 }}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Manage Blocked Dates / Slots</div>
+        <p style={{ fontSize:12, color:T.textLight, marginBottom:14 }}>Block a whole day (leave slot empty) or a specific time slot. Events/weddings are automatically blocked.</p>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10, alignItems:"center" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <label style={{ fontSize:11, color:T.textLight, fontWeight:600, whiteSpace:"nowrap" }}>From</label>
+            <input type="date" value={blockDate} onChange={e=>setBlockDate(e.target.value)}
+              style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <label style={{ fontSize:11, color:T.textLight, fontWeight:600, whiteSpace:"nowrap" }}>To</label>
+            <input type="date" value={blockDateTo} onChange={e=>setBlockDateTo(e.target.value)} min={blockDate||undefined}
+              style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
+          </div>
+          <select value={blockSlot} onChange={e=>setBlockSlot(e.target.value)}
+            style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}>
+            <option value="">All day</option>
+            {VIEWING_SLOTS.map(s=><option key={s}>{s}</option>)}
+          </select>
+          <input type="text" value={blockNote} onChange={e=>setBlockNote(e.target.value)} placeholder="Reason e.g. Holiday"
+            style={{ flex:1, minWidth:120, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
+          <button onClick={addBlock} disabled={!blockDate}
+            style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:6, cursor:blockDate?"pointer":"not-allowed", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+            + Add Block
+          </button>
+        </div>
+        {blocks.length>0 && (
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {(()=>{
+              // Group consecutive dates with same note/slot into ranges for display
+              const sorted = [...blocks].sort((a,b)=>a.date>b.date?1:-1);
+              const groups = [];
+              sorted.forEach(b => {
+                const last = groups[groups.length-1];
+                const prevDate = last ? new Date(last.dateTo+"T00:00:00") : null;
+                const thisDate = new Date(b.date+"T00:00:00");
+                if (last && last.note===b.note && last.slot===b.slot && prevDate) {
+                  const diff = (thisDate - prevDate) / 86400000;
+                  if (diff === 1) { last.dateTo = b.date; last.ids.push(b.id); return; }
+                }
+                groups.push({ dateFrom:b.date, dateTo:b.date, note:b.note, slot:b.slot, ids:[b.id] });
+              });
+              return groups.map((g,i) => (
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:7, fontSize:13 }}>
+                  <span style={{ fontWeight:600, color:T.text }}>
+                    {g.dateFrom === g.dateTo ? g.dateFrom : `${g.dateFrom} → ${g.dateTo}`}
+                  </span>
+                  <span style={{ color:T.textMid }}>{g.slot || "All day"}</span>
+                  {g.note && <span style={{ color:T.textLight, fontStyle:"italic", flex:1 }}>{g.note}</span>}
+                  {g.ids.length > 1 && <span style={{ fontSize:11, color:T.textLight }}>({g.ids.length} days)</span>}
+                  <button onClick={()=>{ g.ids.forEach(id=>removeBlock(id)); }}
+                    style={{ background:T.redBg, border:"none", color:T.red, padding:"3px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>✕</button>
+                </div>
+              ));
+            })()}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries }) {
+  const [filter, setFilter]   = useState("upcoming");
+  const [viewTab, setViewTab] = useState("requests");
+  const loaded = true; // data loaded by parent App
   const today = new Date().toISOString().slice(0,10);
 
   // Gather all viewings from both bookings and enquiries
@@ -5025,15 +5264,38 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry }) {
 
   return (
     <div style={{ paddingTop:28 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
-        <h2 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:22 }}>Viewings</h2>
-        <span style={{ fontSize:13, color:T.textLight }}>{filtered.length} viewing{filtered.length!==1?"s":""}</span>
+      {/* Top-level tab: Requests | Viewings | Blocks */}
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24, flexWrap:"wrap" }}>
+        <h2 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:22, marginRight:8 }}>Viewings</h2>
+        {[["requests","Requests"],["calendar","Calendar"],["blocks","Blocks"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setViewTab(v)} style={{ background:viewTab===v?T.midBlue:"#fff", color:viewTab===v?"#fff":T.textMid, border:`1.5px solid ${viewTab===v?T.midBlue:T.border}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:viewTab===v?700:400 }}>
+            {v==="requests" && (viewingRequests||[]).filter(r=>r.status==="pending").length>0 ? "Requests ("+( viewingRequests||[]).filter(r=>r.status==="pending").length+")" : l}
+          </button>
+        ))}
       </div>
 
+      {viewTab==="requests" && (
+        <ViewingRequestsInbox
+          requests={viewingRequests||[]} setRequests={setViewingRequests}
+          blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries}
+        />
+      )}
+
+      {viewTab==="blocks" && (
+        <ViewingRequestsInbox
+          requests={[]} setRequests={()=>{}}
+          blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries}
+        />
+      )}
+
+      {viewTab==="calendar" && (<>
       <div style={{ display:"flex", gap:6, marginBottom:20 }}>
         {[["upcoming","Upcoming"],["all","All"],["past","Past"]].map(([v,l])=>(
           <button key={v} onClick={()=>setFilter(v)} style={{ background:filter===v?"#6d28d9":"#fff", color:filter===v?"#fff":T.textMid, border:`1.5px solid ${filter===v?"#6d28d9":T.border}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:filter===v?700:400 }}>{l}</button>
         ))}
+        <span style={{ fontSize:13, color:T.textLight, marginLeft:"auto", alignSelf:"center" }}>{filtered.length} viewing{filtered.length!==1?"s":""}</span>
       </div>
 
       {filtered.length === 0 && (
@@ -5068,6 +5330,7 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry }) {
           </div>
         ))}
       </div>
+    </>)}
     </div>
   );
 }
