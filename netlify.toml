@@ -5,12 +5,14 @@
 [build.environment]
   SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY"
 
+# Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"
   to = "https://api.xero.com/connections"
   status = 200
   force = true
 
+# Proxy Xero accounting API — :splat captures path + query string
 [[redirects]]
   from = "/api/xero-api/*"
   to = "https://api.xero.com/api.xro/2.0/:splat"
