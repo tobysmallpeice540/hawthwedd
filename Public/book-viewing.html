@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Book a Viewing — Hawthbush Farm</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Georgia, 'Times New Roman', serif; background: transparent; color: #2c2c2c; }
+    .container { max-width: 680px; margin: 0 auto; padding: 24px 16px 60px; }
+    .intro { text-align:center; margin-bottom:28px; }
+    .intro h1 { font-size:26px; font-weight:400; color:#1e3a2f; letter-spacing:.5px; margin-bottom:8px; }
+    .intro p { font-size:14px; color:#666; line-height:1.7; max-width:480px; margin:0 auto; }
+    .card { background:#fff; border-radius:10px; padding:24px; box-shadow:0 2px 12px rgba(0,0,0,.07); margin-bottom:18px; border:1px solid #e8e4df; }
+    .card h2 { font-size:17px; font-weight:600; color:#1e3a2f; margin-bottom:16px; }
+    .step-label { font-size:10px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:#7a9e8a; margin-bottom:4px; }
+    label { display:block; font-size:12px; font-weight:600; color:#555; margin-bottom:5px; letter-spacing:.2px; }
+    input, textarea, select { width:100%; border:1.5px solid #d4cfc9; border-radius:6px; padding:9px 12px; font-size:14px; font-family:Georgia,serif; color:#2c2c2c; background:#fdfcfb; outline:none; transition:border-color .15s; }
+    input:focus, textarea:focus { border-color:#1e3a2f; }
+    textarea { resize:vertical; min-height:72px; }
+    .field { margin-bottom:14px; }
+    .field-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    @media(max-width:480px){ .field-row{ grid-template-columns:1fr; } }
+    .required { color:#c0392b; }
+
+    /* Calendar */
+    .date-nav { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+    .date-nav button { background:none; border:1.5px solid #d4cfc9; border-radius:5px; width:30px; height:30px; cursor:pointer; font-size:15px; color:#555; display:flex; align-items:center; justify-content:center; }
+    .date-nav button:hover { border-color:#1e3a2f; color:#1e3a2f; }
+    .date-nav span { font-size:15px; font-weight:600; color:#1e3a2f; }
+    .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+    .day-hdr { font-size:10px; font-weight:700; text-align:center; color:#aaa; padding:3px 0; }
+    .day-btn { aspect-ratio:1; border:none; border-radius:6px; font-size:12px; cursor:pointer; background:#f5f3f0; color:#2c2c2c; transition:all .12s; font-family:Georgia,serif; display:flex; align-items:center; justify-content:center; }
+    .day-btn:hover:not(:disabled){ background:#d4e8dc; color:#1e3a2f; }
+    .day-btn.selected { background:#1e3a2f; color:#fff; font-weight:700; }
+    .day-btn:disabled { opacity:.28; cursor:not-allowed; }
+    .day-btn.blocked { background:#fde8e8; color:#c0392b; cursor:not-allowed; }
+    .day-empty { aspect-ratio:1; }
+
+    /* Time slots */
+    .time-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin-top:6px; }
+    .time-btn { padding:9px 4px; border:1.5px solid #d4cfc9; border-radius:7px; background:#fdfcfb; font-size:13px; cursor:pointer; font-family:Georgia,serif; color:#2c2c2c; transition:all .12s; text-align:center; }
+    .time-btn:hover:not(:disabled){ border-color:#1e3a2f; background:#f0f7f3; }
+    .time-btn.selected { background:#1e3a2f; color:#fff; border-color:#1e3a2f; font-weight:700; }
+    .time-btn:disabled { opacity:.3; cursor:not-allowed; }
+
+    .submit-btn { width:100%; background:#1e3a2f; color:#fff; border:none; padding:13px; border-radius:7px; font-size:16px; font-family:Georgia,serif; cursor:pointer; transition:background .15s; letter-spacing:.3px; margin-top:4px; }
+    .submit-btn:hover:not(:disabled){ background:#2d5441; }
+    .submit-btn:disabled { opacity:.6; cursor:wait; }
+    .err { background:#fde8e8; border:1px solid #fca5a5; border-radius:6px; padding:9px 13px; color:#c0392b; font-size:13px; margin-bottom:14px; }
+    .success { text-align:center; padding:40px 20px; }
+    .success .icon { font-size:44px; margin-bottom:14px; }
+    .success h2 { color:#1e3a2f; font-size:22px; font-weight:400; margin-bottom:10px; }
+    .success p { color:#555; font-size:14px; line-height:1.7; }
+    .chosen-date { font-size:12px; color:#7a9e8a; font-style:italic; margin-bottom:10px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="intro">
+    <h1>Book a Viewing</h1>
+    <p>We'd love to show you around Hawthbush Farm. Choose a date and time and we'll confirm your visit.</p>
+  </div>
+
+  <div id="form-area">
+    <div id="err" class="err" style="display:none"></div>
+
+    <!-- Date -->
+    <div class="card">
+      <div class="step-label">Step 1</div>
+      <h2>Choose a Date</h2>
+      <div class="date-nav">
+        <button onclick="changeMonth(-1)">‹</button>
+        <span id="month-lbl"></span>
+        <button onclick="changeMonth(1)">›</button>
+      </div>
+      <div class="cal-grid">
+        <div class="day-hdr">M</div><div class="day-hdr">T</div><div class="day-hdr">W</div>
+        <div class="day-hdr">T</div><div class="day-hdr">F</div><div class="day-hdr">S</div>
+        <div class="day-hdr">S</div>
+        <div id="cal-days" style="display:contents"></div>
+      </div>
+    </div>
+
+    <!-- Time -->
+    <div class="card" id="time-card" style="display:none">
+      <div class="step-label">Step 2</div>
+      <h2>Choose a Time</h2>
+      <p class="chosen-date" id="chosen-date-lbl"></p>
+      <div class="time-grid" id="time-slots"></div>
+    </div>
+
+    <!-- Details -->
+    <div class="card" id="details-card" style="display:none">
+      <div class="step-label">Step 3</div>
+      <h2>Your Details</h2>
+      <div class="field-row">
+        <div class="field"><label>Full Name <span class="required">*</span></label><input type="text" id="f-name" autocomplete="name"/></div>
+        <div class="field"><label>Email <span class="required">*</span></label><input type="email" id="f-email" autocomplete="email"/></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Phone</label><input type="tel" id="f-phone" autocomplete="tel"/></div>
+        <div class="field"><label>Approx. Guest Numbers</label><input type="text" id="f-guests" placeholder="e.g. 80–120"/></div>
+      </div>
+      <div class="field"><label>Year / Date in Mind</label><input type="text" id="f-date" placeholder="e.g. Summer 2027"/></div>
+      <div class="field"><label>Anything else you'd like us to know?</label><textarea id="f-notes"></textarea></div>
+      <button class="submit-btn" id="sub-btn" onclick="submitRequest()">Request This Viewing</button>
+    </div>
+  </div>
+
+  <div id="success" class="success" style="display:none">
+    <div class="icon">🌿</div>
+    <h2>Request Received!</h2>
+    <p>Thank you <strong id="s-name"></strong> — we've received your viewing request for<br><strong id="s-dt"></strong>.</p>
+    <p style="margin-top:12px">We'll be in touch at <strong id="s-email"></strong> to confirm shortly.</p>
+    <p style="margin-top:20px;font-size:12px;color:#aaa">Hawthbush Farm · hello@hawthbushfarm.co.uk</p>
+  </div>
+</div>
+
+<script>
+const SB_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+const SB_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+const SLOTS   = ["10:00","12:00","14:00","16:00","18:00"];
+const OK_DAYS = [2,3,4,5,6]; // Tue–Sat
+
+let cur = new Date(), selDate = null, selTime = null;
+let data = { requests:[], blocks:[], bookings:[] };
+
+const sbGet = async k => {
+  const r = await fetch(`${SB_URL}/rest/v1/app_data?key=eq.${k}&select=value`,
+    { headers:{ apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}` }});
+  const j = await r.json(); return j?.[0]?.value ?? [];
+};
+
+async function load() {
+  const [req, blk, bks] = await Promise.all([
+    sbGet("hbf_viewing_requests_v1"), sbGet("hbf_viewing_blocks_v1"), sbGet("hawthbush_bookings_v6")
+  ]);
+  data = { requests:req||[], blocks:blk||[], bookings:bks||[] };
+}
+
+function dayBlocked(ds) {
+  if (data.blocks.some(b=>b.date===ds&&!b.slot)) return true;
+  if (data.bookings.some(b=>b.date===ds&&b.couple)) return true;
+  const taken = data.requests.filter(r=>r.date===ds&&r.status==="confirmed").map(r=>r.time);
+  const bSlots = data.blocks.filter(b=>b.date===ds&&b.slot).map(b=>b.slot);
+  return SLOTS.every(s=>taken.includes(s)||bSlots.includes(s));
+}
+function slotBlocked(ds, s) {
+  return data.blocks.some(b=>b.date===ds&&b.slot===s) ||
+         data.requests.some(r=>r.date===ds&&r.time===s&&r.status==="confirmed");
+}
+
+function renderCal() {
+  const y=cur.getFullYear(), m=cur.getMonth();
+  const today=new Date(); today.setHours(0,0,0,0);
+  const minD=new Date(today); minD.setDate(minD.getDate()+2);
+  document.getElementById("month-lbl").textContent =
+    new Date(y,m,1).toLocaleDateString("en-GB",{month:"long",year:"numeric"});
+  const firstDow = new Date(y,m,1).getDay();
+  const offset = (firstDow+6)%7;
+  const days = new Date(y,m+1,0).getDate();
+  const c = document.getElementById("cal-days");
+  c.innerHTML="";
+  for(let i=0;i<offset;i++){const d=document.createElement("div");d.className="day-empty";c.appendChild(d);}
+  for(let d=1;d<=days;d++){
+    const dt=new Date(y,m,d);
+    const ds=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    const dow=dt.getDay();
+    const past=dt<minD, ok=OK_DAYS.includes(dow), blk=!past&&ok&&dayBlocked(ds);
+    const b=document.createElement("button");
+    b.textContent=d; b.className="day-btn"+(ds===selDate?" selected":"")+(blk?" blocked":"");
+    b.disabled=past||!ok||blk;
+    if(!b.disabled) b.onclick=()=>pickDate(ds,dt);
+    c.appendChild(b);
+  }
+}
+
+function pickDate(ds,dt) {
+  selDate=ds; selTime=null; renderCal();
+  document.getElementById("chosen-date-lbl").textContent =
+    dt.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+  document.getElementById("time-card").style.display="block";
+  document.getElementById("details-card").style.display="none";
+  renderSlots();
+  document.getElementById("time-card").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+function renderSlots() {
+  const c=document.getElementById("time-slots"); c.innerHTML="";
+  SLOTS.forEach(s=>{
+    const blk=slotBlocked(selDate,s);
+    const b=document.createElement("button");
+    b.textContent=s; b.className="time-btn"+(selTime===s?" selected":""); b.disabled=blk;
+    if(!blk) b.onclick=()=>pickSlot(s);
+    c.appendChild(b);
+  });
+}
+
+function pickSlot(s) {
+  selTime=s; renderSlots();
+  document.getElementById("details-card").style.display="block";
+  document.getElementById("details-card").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+function changeMonth(d){ cur.setMonth(cur.getMonth()+d); renderCal(); }
+
+async function submitRequest() {
+  const name=document.getElementById("f-name").value.trim();
+  const email=document.getElementById("f-email").value.trim();
+  const errEl=document.getElementById("err");
+  if(!name||!email||!selDate||!selTime){
+    errEl.textContent="Please fill in your name, email, and select a date and time.";
+    errEl.style.display="block"; errEl.scrollIntoView({behavior:"smooth"}); return;
+  }
+  const btn=document.getElementById("sub-btn");
+  btn.disabled=true; btn.textContent="Sending…"; errEl.style.display="none";
+  try {
+    const res=await fetch("https://cool-sorbet-b1d599.netlify.app/.netlify/functions/submit-viewing",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        name, email,
+        phone:document.getElementById("f-phone").value.trim(),
+        guests:document.getElementById("f-guests").value.trim(),
+        preferredDate:document.getElementById("f-date").value.trim(),
+        notes:document.getElementById("f-notes").value.trim(),
+        date:selDate, time:selTime
+      })
+    });
+    if(!res.ok) throw new Error();
+    document.getElementById("form-area").style.display="none";
+    document.getElementById("success").style.display="block";
+    document.getElementById("s-name").textContent=name;
+    document.getElementById("s-email").textContent=email;
+    const nd=new Date(selDate+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+    document.getElementById("s-dt").textContent=`${nd} at ${selTime}`;
+  } catch {
+    btn.disabled=false; btn.textContent="Request This Viewing";
+    errEl.textContent="Something went wrong — please try again or email us directly.";
+    errEl.style.display="block";
+  }
+}
+
+load().then(()=>{ renderCal(); });
+</script>
+</body>
+</html>
