@@ -5235,9 +5235,25 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
 }
 
 function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries }) {
-  const [filter, setFilter]   = useState("upcoming");
-  const [viewTab, setViewTab] = useState("requests");
-  const loaded = true; // data loaded by parent App
+  const [filter,    setFilter]    = useState("upcoming");
+  const [viewTab,   setViewTab]   = useState("requests");
+  const [refreshing, setRefreshing] = useState(false);
+  const loaded = true;
+
+  // Reload viewing requests fresh from Supabase
+  const refreshRequests = async () => {
+    setRefreshing(true);
+    try {
+      const r = await sbGet(VR_STORAGE);
+      setViewingRequests(r || []);
+      const b = await sbGet(VB_STORAGE);
+      setViewingBlocks(b || []);
+    } catch(e) { console.warn("Refresh failed:", e); }
+    finally { setRefreshing(false); }
+  };
+
+  // Auto-refresh when Viewings tab is opened
+  useEffect(() => { refreshRequests(); }, []);
   const today = new Date().toISOString().slice(0,10);
 
   // Gather all viewings from both bookings and enquiries
@@ -5272,6 +5288,10 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
             {v==="requests" && (viewingRequests||[]).filter(r=>r.status==="pending").length>0 ? "Requests ("+( viewingRequests||[]).filter(r=>r.status==="pending").length+")" : l}
           </button>
         ))}
+        <button onClick={refreshRequests} disabled={refreshing}
+          style={{ marginLeft:"auto", background:"none", border:`1px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, opacity:refreshing?0.5:1 }}>
+          {refreshing ? "…" : "↻ Refresh"}
+        </button>
       </div>
 
       {viewTab==="requests" && (
