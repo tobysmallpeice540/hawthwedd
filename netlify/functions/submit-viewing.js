@@ -1,9 +1,6 @@
 // netlify/functions/submit-viewing.js
-// Receives a viewing request from the public booking page,
-// saves it to Supabase, and emails hello@hawthbushfarm.co.uk
-
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const RESEND_KEY   = process.env.RESEND_API_KEY;
 const STORAGE_KEY  = "hbf_viewing_requests_v1";
 const NOTIFY_EMAIL = "hello@hawthbushfarm.co.uk";
@@ -62,31 +59,33 @@ exports.handler = async (event) => {
   await sbSet(STORAGE_KEY, [...existing, request]);
 
   // Email notification to farm
-  await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from: FROM_EMAIL,
-      to: NOTIFY_EMAIL,
-      subject: `New Viewing Request — ${name} — ${date} at ${time}`,
-      html: `
-        <h2>New Viewing Request</h2>
-        <table style="border-collapse:collapse;font-family:sans-serif;font-size:15px">
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Name</td><td>${name}</td></tr>
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Email</td><td>${email}</td></tr>
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Phone</td><td>${phone||"—"}</td></tr>
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Date</td><td>${date}</td></tr>
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Time</td><td>${time}</td></tr>
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Guests</td><td>${guests||"—"}</td></tr>
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Approx Year</td><td>${preferredDate||"—"}</td></tr>
-          <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Notes</td><td>${notes||"—"}</td></tr>
-        </table>
-        <p style="margin-top:20px">
-          <a href="https://cool-sorbet-b1d599.netlify.app" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Open App to Confirm</a>
-        </p>
-      `,
-    }),
-  });
+  if (RESEND_KEY) {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: FROM_EMAIL,
+        to: NOTIFY_EMAIL,
+        subject: `New Viewing Request - ${name} - ${date} at ${time}`,
+        html: `
+          <h2>New Viewing Request</h2>
+          <table style="border-collapse:collapse;font-family:sans-serif;font-size:15px">
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Name</td><td>${name}</td></tr>
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Email</td><td>${email}</td></tr>
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Phone</td><td>${phone||"not provided"}</td></tr>
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Date</td><td>${date}</td></tr>
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Time</td><td>${time}</td></tr>
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Guests</td><td>${guests||"not provided"}</td></tr>
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Year in Mind</td><td>${preferredDate||"not provided"}</td></tr>
+            <tr><td style="padding:6px 16px 6px 0;color:#666;font-weight:600">Notes</td><td>${notes||"none"}</td></tr>
+          </table>
+          <p style="margin-top:20px">
+            <a href="https://cool-sorbet-b1d599.netlify.app" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Open App to Confirm</a>
+          </p>
+        `,
+      }),
+    });
+  }
 
   return { statusCode: 200, headers: cors, body: JSON.stringify({ ok: true, id: request.id }) };
 };
