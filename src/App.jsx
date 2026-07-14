@@ -1599,7 +1599,7 @@ function SummaryReport({ bookings }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       {/* Year navigator */}
       <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:16, marginBottom:24 }}>
@@ -1833,7 +1833,7 @@ function RevenueReport({ bookings }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
         <StatCard label="Total Venue Fees" value={`£${totalFees.toLocaleString()}`} sub="Sum of all venue fees"/>
@@ -1891,7 +1891,7 @@ function AccommodationReport({ bookings }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
         <StatCard label="Amly Booked"    value={amlyRows.length}    sub={`£${amlyRows.reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()} confirmed`}/>
@@ -1953,7 +1953,7 @@ function StaffingRota({ bookings, staff }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
     <div style={{ overflowX:"auto" }}>
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
@@ -2000,7 +2000,7 @@ function PipelineReport({ bookings }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings with outstanding balance (deposit is advance on venue fee)</p>
       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
@@ -2050,7 +2050,7 @@ function StaffWorkloadReport({ bookings, staff }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings per active staff member</p>
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
@@ -2879,7 +2879,7 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       <div style={{ display:"flex", gap:16, marginBottom:18 }}>
         <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
@@ -3010,6 +3010,10 @@ function BarReportView({ products, events }) {
 
   return (
     <div>
+      {/* Print button */}
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
+      </div>
       {/* Controls */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
         <h3 style={{ margin:"0 0 14px", color:T.midBlue, fontWeight:700, fontSize:16 }}>Compare Stocktakes</h3>
@@ -4621,7 +4625,7 @@ function StaffTimelineReport({ bookings, staff }) {
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>setPrintMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>📋 Email-Friendly View</button>
+        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:22, flexWrap:"wrap" }}>
         <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:17 }}>Staff Timeline</h3>
