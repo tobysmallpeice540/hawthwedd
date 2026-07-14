@@ -643,6 +643,7 @@ export default function App() {
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
           enquiries={enquiries} setEnquiries={setEnquiries}
           saveEnquiries={async(e)=>{ setEnquiries(e); await sbSet(ENQUIRIES_STORAGE,e); }}
+          saveBookings={saveBookings}
           onSelectEnquiry={id=>{/* handled inside EnquiriesView */}}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries}/>}
       </div>
@@ -5090,14 +5091,23 @@ function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
 // ─── VIEWING REQUESTS INBOX ───────────────────────────────────────────────────
 const VIEWING_SLOTS = ["10:00","12:00","14:00","16:00","18:00"];
 
-function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries }) {
-  const [tab, setTab]           = useState("pending");
-  const [acting, setActing]     = useState(null);
+function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, saveBookings }) {
+  const [tab, setTab]               = useState("pending");
+  const [acting, setActing]         = useState(null);
   const [blockDate,   setBlockDate]   = useState("");
   const [blockDateTo, setBlockDateTo] = useState("");
   const [blockSlot,   setBlockSlot]   = useState("");
   const [blockNote,   setBlockNote]   = useState("");
-  const [flash, setFlash]       = useState(null);
+  const [flash, setFlash]           = useState(null);
+  // Confirm modal state
+  const [confirmModal, setConfirmModal]   = useState(null); // { req } or null
+  const [enqMode, setEnqMode]             = useState("new");  // "new" | "existing" | "booking"
+  const [enqSearch, setEnqSearch]         = useState("");
+  const [selectedEnqId, setSelectedEnqId] = useState("");
+  const [selectedBkgId, setSelectedBkgId] = useState("");
+  // Decline modal state
+  const [declineModal, setDeclineModal]   = useState(null); // { req } or null
+  const [declineReason, setDeclineReason] = useState("");
 
   const showFlash = (msg, col=T.green) => { setFlash({msg,col}); setTimeout(()=>setFlash(null),3000); };
 
@@ -5110,14 +5120,31 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
     await sbSet(VB_STORAGE, updated);
   };
 
-  const handleAction = async (req, action) => {
+  // Opens the confirm modal instead of acting immediately
+  const handleConfirmClick = (req) => {
+    // Pre-search by email to see if there's likely a match
+    const match = (enquiries||[]).find(e =>
+      e.email && req.email && e.email.toLowerCase() === req.email.toLowerCase()
+    );
+    setEnqMode(match ? "existing" : "new");
+    setSelectedEnqId(match ? match.id : "");
+    setEnqSearch(req.name || "");
+    setConfirmModal({ req });
+  };
+
+  const handleDeclineClick = (req) => {
+    setDeclineReason("");
+    setDeclineModal({ req });
+  };
+
+  const handleAction = async (req, action, mode, existingEnqId, declineMsg) => {
     setActing(req.id);
     try {
-      // Call Netlify function to send email
+      // Send email via Netlify function
       const res = await fetch("/.netlify/functions/handle-viewing", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ id: req.id, action }),
+        body: JSON.stringify({ id: req.id, action, declineReason: declineMsg||"" }),
       });
       if (!res.ok) throw new Error("Function failed");
 
@@ -5125,39 +5152,65 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
       const updatedRequests = requests.map(r => r.id===req.id ? {...r, status: action==="confirm"?"confirmed":"declined"} : r);
       await saveRequests(updatedRequests);
 
-      // If confirming — create enquiry + viewing
       if (action === "confirm") {
-        const enqId = `enq_${Date.now()}`;
-        const newEnq = {
-          id: enqId,
-          name: req.name,
-          email: req.email,
-          phone: req.phone || "",
-          eventType: "Wedding",
-          numbers: req.guests || "",
-          datePreference: req.preferredDate || "",
-          source: "Website viewing request",
-          notes: req.notes || "",
-          temperature: "warm",
-          outcome: "undecided",
-          contacts: [],
-          viewings: [{
-            id: `v_${Date.now()}`,
-            date: req.date,
-            time: req.time,
-            notes: `Confirmed from website request. ${req.notes||""}`.trim(),
-            outcome: "pending",
-          }],
+        const newViewing = {
+          id: `v_${Date.now()}`,
+          date: req.date,
+          time: req.time,
+          notes: ("Confirmed from website request. " + (req.notes||"")).trim(),
+          outcome: "pending",
         };
-        const updatedEnq = [...(enquiries||[]), newEnq];
-        await saveEnquiries(updatedEnq);
-        showFlash("Confirmed - enquiry created for " + req.name);
+
+        if (mode === "booking" && existingEnqId) {
+          // Attach viewing to existing booking
+          const bkgId = Number(existingEnqId) || existingEnqId;
+          const updatedBookings = (bookings||[]).map(b =>
+            (b.id === bkgId || b.id === Number(bkgId))
+              ? { ...b, viewings: [...(b.viewings||[]), newViewing] }
+              : b
+          );
+          if (saveBookings) await saveBookings(updatedBookings);
+          const bkg = (bookings||[]).find(b=>b.id===bkgId||b.id===Number(bkgId));
+          showFlash("Confirmed - viewing added to booking: " + (bkg?.couple||""));
+        } else if (mode === "existing" && existingEnqId) {
+          // Attach viewing to existing enquiry
+          const updatedEnq = (enquiries||[]).map(e =>
+            e.id === existingEnqId
+              ? { ...e, viewings: [...(e.viewings||[]), newViewing] }
+              : e
+          );
+          await saveEnquiries(updatedEnq);
+          const enq = (enquiries||[]).find(e=>e.id===existingEnqId);
+          showFlash("Confirmed - viewing added to " + (enq?.name||"existing enquiry"));
+        } else {
+          // Create new enquiry
+          const newEnq = {
+            id: `enq_${Date.now()}`,
+            name: req.name,
+            email: req.email,
+            phone: req.phone || "",
+            eventType: "Wedding",
+            numbers: (req.dayGuests && req.eveGuests) ? `Day: ${req.dayGuests}, Eve: ${req.eveGuests}` : req.dayGuests || req.eveGuests || "",
+            datePreference: req.preferredDate || "",
+            source: req.source || "Website viewing request",
+            notes: req.notes || "",
+            temperature: "warm",
+            outcome: "undecided",
+            contacts: [],
+            viewings: [newViewing],
+          };
+          await saveEnquiries([...(enquiries||[]), newEnq]);
+          showFlash("Confirmed - new enquiry created for " + req.name);
+        }
       } else {
         showFlash("Declined - apology email sent to " + req.name, T.amber);
       }
     } catch(e) {
       showFlash("Something went wrong: " + e.message, T.red);
-    } finally { setActing(null); }
+    } finally {
+      setActing(null);
+      setConfirmModal(null);
+    }
   };
 
   const addBlock = async () => {
@@ -5207,6 +5260,125 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
     <div>
       {flash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:flash.col, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>{flash.msg}</div>}
 
+      {/* Decline modal */}
+      {declineModal && (() => {
+        const req = declineModal.req;
+        return (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div style={{ background:"#fff", borderRadius:12, padding:28, maxWidth:460, width:"100%", boxShadow:"0 8px 40px rgba(0,0,0,.2)" }}>
+              <h3 style={{ margin:"0 0 6px", fontSize:17, color:T.text }}>Decline Viewing Request</h3>
+              <p style={{ fontSize:13, color:T.textLight, margin:"0 0 18px" }}>
+                {req.name} — {new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})} at {req.time}
+              </p>
+              <div style={{ fontSize:12, fontWeight:700, letterSpacing:1, textTransform:"uppercase", color:T.red, marginBottom:8 }}>Reason for declining</div>
+              <textarea
+                value={declineReason}
+                onChange={e=>setDeclineReason(e.target.value)}
+                placeholder="e.g. Unfortunately we are fully booked on that date. We'd love to find an alternative time..."
+                rows={4}
+                style={{ width:"100%", border:`1.5px solid ${T.border}`, borderRadius:7, padding:"10px 12px", fontFamily:"inherit", fontSize:13, outline:"none", resize:"vertical", marginBottom:16 }}
+              />
+              <p style={{ fontSize:12, color:T.textLight, marginBottom:16 }}>This message will be included in the decline email sent to {req.name}.</p>
+              <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+                <button onClick={()=>setDeclineModal(null)}
+                  style={{ padding:"9px 20px", border:`1px solid ${T.border}`, borderRadius:6, background:"#fff", color:T.textMid, fontFamily:"inherit", fontSize:13, cursor:"pointer" }}>
+                  Cancel
+                </button>
+                <button onClick={()=>{ handleAction(req,"decline","new",null,declineReason); setDeclineModal(null); }} disabled={acting===req.id}
+                  style={{ padding:"9px 20px", background:T.red, border:"none", borderRadius:6, color:"#fff", fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                  {acting===req.id?"Sending...":"Decline & Send Email"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Confirm modal */}
+      {confirmModal && (() => {
+        const req = confirmModal.req;
+        const filteredEnqs = (enquiries||[]).filter(e =>
+          !enqSearch.trim() ||
+          (e.name||"").toLowerCase().includes(enqSearch.toLowerCase()) ||
+          (e.email||"").toLowerCase().includes(enqSearch.toLowerCase())
+        ).slice(0,8);
+        return (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div style={{ background:"#fff", borderRadius:12, padding:28, maxWidth:500, width:"100%", boxShadow:"0 8px 40px rgba(0,0,0,.2)" }}>
+              <h3 style={{ margin:"0 0 6px", fontSize:17, color:T.text }}>Confirm Viewing</h3>
+              <p style={{ fontSize:13, color:T.textLight, margin:"0 0 18px" }}>
+                {req.name} — {new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})} at {req.time}
+              </p>
+              <div style={{ fontSize:12, fontWeight:700, letterSpacing:1, textTransform:"uppercase", color:T.midBlue, marginBottom:10 }}>Enquiry</div>
+              <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap" }}>
+                {[["new","+ New enquiry"],["existing","Existing enquiry"],["booking","Existing booking"]].map(([m,l])=>(
+                  <button key={m} onClick={()=>{ setEnqMode(m); setSelectedEnqId(""); setSelectedBkgId(""); }}
+                    style={{ flex:1, minWidth:120, padding:"9px 0", border:`2px solid ${enqMode===m?T.midBlue:T.border}`, borderRadius:7, background:enqMode===m?T.midBlueBg:"#fff", color:enqMode===m?T.midBlue:T.textMid, fontFamily:"inherit", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+              {enqMode==="existing" && (
+                <div style={{ marginBottom:16 }}>
+                  <input type="text" value={enqSearch} onChange={e=>{ setEnqSearch(e.target.value); setSelectedEnqId(""); }}
+                    placeholder="Search enquiries by name or email..."
+                    style={{ width:"100%", border:`1.5px solid ${T.border}`, borderRadius:6, padding:"8px 11px", fontFamily:"inherit", fontSize:13, outline:"none", marginBottom:8 }}/>
+                  <div style={{ maxHeight:160, overflowY:"auto", border:`1px solid ${T.border}`, borderRadius:7 }}>
+                    {filteredEnqs.length===0 && <div style={{ padding:"10px 14px", fontSize:13, color:T.textLight }}>No enquiries found</div>}
+                    {filteredEnqs.map(e=>(
+                      <div key={e.id} onClick={()=>setSelectedEnqId(e.id)}
+                        style={{ padding:"9px 14px", cursor:"pointer", background:selectedEnqId===e.id?T.midBlueBg:"#fff", borderBottom:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <div>
+                          <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{e.name}</div>
+                          <div style={{ fontSize:11, color:T.textLight }}>{e.email}{e.datePreference?" · "+e.datePreference:""}</div>
+                        </div>
+                        {selectedEnqId===e.id && <span style={{ color:T.midBlue, fontWeight:700 }}>✓</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {enqMode==="booking" && (
+                <div style={{ marginBottom:16 }}>
+                  <input type="text" value={enqSearch} onChange={e=>{ setEnqSearch(e.target.value); setSelectedBkgId(""); }}
+                    placeholder="Search bookings by couple name..."
+                    style={{ width:"100%", border:`1.5px solid ${T.border}`, borderRadius:6, padding:"8px 11px", fontFamily:"inherit", fontSize:13, outline:"none", marginBottom:8 }}/>
+                  <div style={{ maxHeight:160, overflowY:"auto", border:`1px solid ${T.border}`, borderRadius:7 }}>
+                    {(bookings||[]).filter(b=> !enqSearch.trim() || (b.couple||"").toLowerCase().includes(enqSearch.toLowerCase())).slice(0,8).map(b=>(
+                      <div key={b.id} onClick={()=>setSelectedBkgId(String(b.id))}
+                        style={{ padding:"9px 14px", cursor:"pointer", background:selectedBkgId===String(b.id)?T.midBlueBg:"#fff", borderBottom:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <div>
+                          <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{b.couple}</div>
+                          <div style={{ fontSize:11, color:T.textLight }}>{b.date}</div>
+                        </div>
+                        {selectedBkgId===String(b.id) && <span style={{ color:T.midBlue, fontWeight:700 }}>✓</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {enqMode==="new" && (
+                <div style={{ padding:"10px 14px", background:T.bgInput, borderRadius:7, fontSize:13, color:T.textMid, marginBottom:16 }}>
+                  A new enquiry will be created for <strong>{req.name}</strong> with this viewing attached.
+                </div>
+              )}
+              <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+                <button onClick={()=>setConfirmModal(null)}
+                  style={{ padding:"9px 20px", border:`1px solid ${T.border}`, borderRadius:6, background:"#fff", color:T.textMid, fontFamily:"inherit", fontSize:13, cursor:"pointer" }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={()=>handleAction(req,"confirm",enqMode, enqMode==="booking"?selectedBkgId:selectedEnqId, "")}
+                  disabled={(enqMode==="existing"&&!selectedEnqId)||(enqMode==="booking"&&!selectedBkgId)||acting===req.id}
+                  style={{ padding:"9px 20px", background:T.green, border:"none", borderRadius:6, color:"#fff", fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:((enqMode==="existing"&&!selectedEnqId)||(enqMode==="booking"&&!selectedBkgId))||acting===req.id?"not-allowed":"pointer", opacity:((enqMode==="existing"&&!selectedEnqId)||(enqMode==="booking"&&!selectedBkgId))||acting===req.id?0.6:1 }}>
+                  {acting===req.id?"Confirming...":"Confirm & Send Email"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Tab bar */}
       <div style={{ display:"flex", gap:8, marginBottom:20 }}>
         {["pending","confirmed","declined"].map(t=>(
@@ -5247,11 +5419,11 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                 </div>
                 {req.status==="pending" && (
                   <div style={{ display:"flex", gap:8, flexShrink:0 }}>
-                    <button onClick={()=>handleAction(req,"confirm")} disabled={acting===req.id}
+                    <button onClick={()=>handleConfirmClick(req)} disabled={acting===req.id}
                       style={{ background:T.green, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:acting===req.id?0.7:1 }}>
                       {acting===req.id?"…":"✓ Confirm"}
                     </button>
-                    <button onClick={()=>handleAction(req,"decline")} disabled={acting===req.id}
+                    <button onClick={()=>handleDeclineClick(req)} disabled={acting===req.id}
                       style={{ background:T.redBg, color:T.red, border:`1px solid #fca5a5`, padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
                       ✕ Decline
                     </button>
@@ -5326,7 +5498,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   );
 }
 
-function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries }) {
+function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
   const [filter,    setFilter]    = useState("upcoming");
   const [viewTab,   setViewTab]   = useState("requests");
   const [refreshing, setRefreshing] = useState(false);
@@ -5390,7 +5562,7 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
         <ViewingRequestsInbox
           requests={viewingRequests||[]} setRequests={setViewingRequests}
           blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
-          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
         />
       )}
 
@@ -5398,7 +5570,7 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
         <ViewingRequestsInbox
           requests={[]} setRequests={()=>{}}
           blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
-          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
         />
       )}
 
