@@ -3008,11 +3008,65 @@ function BarReportView({ products, events }) {
   const totSale = rows.reduce((s,r) => s + (r.saleVal||0), 0);
   const totUsed = rows.filter(r=>r.used>0).length;
 
+  const handlePrint = () => {
+    const win = window.open("", "_blank");
+    if (!win) return;
+    const tableRows = rows.map(r =>
+      `<tr>
+        <td>${r.name}</td>
+        <td>${r.category}</td>
+        <td>${r.opening}</td>
+        <td>${r.ordered > 0 ? "+"+r.ordered : "0"}</td>
+        <td>${r.closing}</td>
+        <td style="font-weight:700;color:${r.used<0?"#c0392b":r.used>0?"#111":"#aaa"}">${r.used}</td>
+        <td>${r.costUnit!=null?"£"+r.costUnit.toFixed(2):"—"}</td>
+        <td>${r.costVal!=null&&r.used>0?"£"+r.costVal.toFixed(2):"—"}</td>
+        <td>${r.saleVal!=null&&r.used>0?"£"+r.saleVal.toFixed(2):"—"}</td>
+      </tr>`
+    ).join("");
+    win.document.write(`<!DOCTYPE html><html><head><title>Bar Usage Report</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 12px; color: #222; padding: 24px; }
+      h1 { font-size: 20px; margin-bottom: 4px; }
+      .sub { color: #666; font-size: 13px; margin-bottom: 20px; }
+      .summary { display: flex; gap: 32px; margin-bottom: 24px; }
+      .summary div { border: 1px solid #ddd; border-radius: 6px; padding: 12px 18px; min-width: 140px; }
+      .summary .label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 4px; }
+      .summary .val { font-size: 22px; font-weight: 700; color: #1e40af; }
+      table { width: 100%; border-collapse: collapse; }
+      th { background: #f0f4ff; padding: 8px 10px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #555; border-bottom: 2px solid #ddd; }
+      td { padding: 7px 10px; border-bottom: 1px solid #eee; }
+      tr:nth-child(even) td { background: #fafafa; }
+      @media print { button { display: none; } }
+    </style>
+    </head><body>
+    <h1>Bar Usage Report</h1>
+    <div class="sub">${fromST.date} (${fromST.label}) &rarr; ${toST.date} (${toST.label})</div>
+    <div class="summary">
+      <div><div class="label">Products Used</div><div class="val">${totUsed}</div></div>
+      <div><div class="label">Est. Cost of Stock</div><div class="val">£${totCost.toFixed(2)}</div></div>
+      <div><div class="label">Est. Sale Value</div><div class="val">£${totSale.toFixed(2)}</div></div>
+      ${totCost>0?`<div><div class="label">Implied Margin</div><div class="val">${Math.round((1-totCost/totSale)*100)}%</div></div>`:""}
+    </div>
+    <table>
+      <thead><tr>
+        <th>Product</th><th>Category</th><th>Opening</th><th>Ordered</th>
+        <th>Closing</th><th>Used</th><th>Buy Price</th><th>Cost of Usage</th><th>Est. Sale Value</th>
+      </tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table>
+    <p style="margin-top:24px;color:#aaa;font-size:11px">Hawthbush Farm Bar Usage Report — printed ${new Date().toLocaleDateString("en-GB")}</p>
+    </body></html>`);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 500);
+  };
+
   return (
     <div>
       {/* Print button */}
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
+        <button onClick={handlePrint} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       {/* Controls */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
