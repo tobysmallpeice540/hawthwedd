@@ -606,6 +606,45 @@ export default function App() {
     await saveBookings(updated); setView("list");
   };
 
+  const handleConvertEnquiryToBooking = (enq) => {
+    const sortedContacts = [...(enq.contacts||[])].sort((a,b)=> (a.date||"") > (b.date||"") ? 1 : -1);
+    const methodLabel = m => m==="phone" ? "Phone" : m==="other" ? "Other" : "Email";
+    const contactLines = sortedContacts.map(c => `${c.date||"No date"} (${methodLabel(c.method)}): ${c.note||""}`).join("\n\n");
+
+    const extraLines = [];
+    if (enq.source) extraLines.push(`Source: ${enq.source}`);
+    if (enq.eventType) extraLines.push(`Enquiry event type: ${enq.eventType}`);
+    if (enq.numbers) extraLines.push(`Numbers (from enquiry): ${enq.numbers}`);
+    if (enq.datePreference) extraLines.push(`Date preference (from enquiry): ${enq.datePreference}`);
+
+    const notesParts = [`Converted from enquiry${enq.name ? ` — ${enq.name}` : ""}.`];
+    if (extraLines.length) notesParts.push(extraLines.join("\n"));
+    if (contactLines) notesParts.push(`Contact History:\n${contactLines}`);
+
+    // Pick up an ISO date (YYYY-MM-DD) if the date preference happens to contain one
+    const dateMatch = (enq.datePreference||"").match(/\d{4}-\d{2}-\d{2}/);
+
+    const newBooking = {
+      ...emptyBooking(),
+      couple: enq.name || "",
+      date: dateMatch ? dateMatch[0] : "",
+      email: enq.email || "",
+      phone: enq.phone || "",
+      notes: notesParts.join("\n\n"),
+      viewings: enq.viewings || [],
+      files: enq.files || [],
+    };
+
+    const newId = Math.max(0, ...bookings.map(b=>b.id)) + 1;
+    const withId = { ...newBooking, id:newId };
+    const updated = [...bookings, withId].sort((a,b)=>a.date>b.date?1:-1);
+    saveBookings(updated);
+
+    setFormData(withId);
+    setEditId(newId);
+    setView("form");
+  };
+
   const emptyStaff = ()=>({ id:"", name:"", email:"", phone:"", rate:"", role:"Bar Staff", active:true, notes:"" });
   const handleNewStaff    = ()=>{ setStaffForm(emptyStaff()); setEditStaffId(null); };
   const handleEditStaff   = id=>{ const s=staff.find(x=>x.id===id); setStaffForm({...s}); setEditStaffId(id); };
@@ -637,7 +676,7 @@ export default function App() {
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken}/>}
+        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
@@ -5637,7 +5676,7 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
 }
 
 // ─── EnquiriesView (top-level) ────────────────────────────────────────────────
-function EnquiriesView({ gmailToken }) {
+function EnquiriesView({ gmailToken, onConvertToBooking }) {
   const [enquiries, setEnquiries] = useState([]);
   const [loaded, setLoaded]       = useState(false);
   const [selected, setSelected]   = useState(null); // id of open enquiry
@@ -5699,6 +5738,7 @@ function EnquiriesView({ gmailToken }) {
         confirmDlg={confirmDlg}
         setConfirmDlg={setConfirmDlg}
         gmailToken={gmailToken}
+        onConvertToBooking={onConvertToBooking}
       />
     );
   }
@@ -5801,7 +5841,7 @@ function FRow({ label, children }) {
   );
 }
 
-function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken }) {
+function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking }) {
   const [form, setForm]         = useState({...enq});
   const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
   const [addingContact, setAddingContact] = useState(false);
@@ -5812,6 +5852,21 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
   const update = (k,v) => { setForm(f=>({...f,[k]:v})); setDirty(true); };
 
   const save = async () => { await onUpdate(form); setDirty(false); };
+
+  const handleConvertClick = () => {
+    setConfirmDlg({
+      message: "Convert this enquiry to a booking?",
+      subMessage: `A new booking will be created for "${form.name||"this enquiry"}" with name, email, phone, viewings and files copied across, and contact history added to notes. You'll be taken to the new booking to fill in any missing details.`,
+      onConfirm: async () => {
+        setConfirmDlg(null);
+        const updatedForm = { ...form, outcome: "booked" };
+        setForm(updatedForm);
+        setDirty(false);
+        await onUpdate(updatedForm);
+        onConvertToBooking(updatedForm);
+      }
+    });
+  };
 
   const addContact = () => {
     if (!newContact.note.trim()) return;
@@ -5861,6 +5916,7 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
         <TempBadge temp={form.temperature}/>
         <OutcomeBadge outcome={form.outcome}/>
         {dirty && <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save Changes</button>}
+        {onConvertToBooking && <button onClick={handleConvertClick} style={{ background:T.green, color:"#fff", border:"none", padding:"9px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Convert to Booking</button>}
         <button onClick={onDelete} style={{ background:T.redBg, border:"none", color:T.red, padding:"9px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Delete</button>
       </div>
 
