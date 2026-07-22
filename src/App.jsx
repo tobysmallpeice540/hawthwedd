@@ -1170,6 +1170,7 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
 
 function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken }) {
   const [activeSection, setActiveSection] = useState("core");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
 
   const countFilled = s => {
@@ -1429,6 +1430,22 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="contact" && (formData.email || formData.email2) && (
             <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken} formData={formData} update={update} onAutoSave={onAutoSave}/>
+          )}
+
+          {activeSection==="core" && isEdit && onDelete && (
+            <div style={{ marginTop:40, paddingTop:20, borderTop:`1px solid ${T.border}` }}>
+              {!confirmDelete ? (
+                <button onClick={()=>setConfirmDelete(true)} style={{ background:"none", color:T.red, border:`1.5px solid ${T.red}`, padding:"9px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                  Delete Booking
+                </button>
+              ) : (
+                <div style={{ background:"#fff5f5", border:`1.5px solid ${T.red}`, borderRadius:8, padding:"16px 20px", display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+                  <span style={{ color:T.red, fontWeight:600, fontSize:14, flex:1 }}>Are you sure? This cannot be undone.</span>
+                  <button onClick={onDelete} style={{ background:T.red, color:"#fff", border:"none", padding:"9px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Yes, Delete</button>
+                  <button onClick={()=>setConfirmDelete(false)} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"9px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
