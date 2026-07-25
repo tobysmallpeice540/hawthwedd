@@ -1,7 +1,7 @@
 // netlify/functions/calendar-feed.js
 // Hosted iCalendar (.ics) feed exposing Hawthbush Farm events (bookings) and viewings.
 // Subscribe in Google Calendar / Apple Calendar / Outlook using the URL:
-//   https://cool-sorbet-b1d599.netlify.app/calendar.ics
+//   https://hawthbushfarm.netlify.app/calendar.ics
 // (also served directly at /.netlify/functions/calendar-feed)
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
@@ -115,6 +115,8 @@ exports.handler = async () => {
     lines.push("BEGIN:VEVENT");
     lines.push("UID:booking-" + (b.id != null ? b.id : start) + "@hawthbushfarm.co.uk");
     lines.push("DTSTAMP:" + stamp);
+    lines.push("SEQUENCE:0");
+    lines.push("STATUS:CONFIRMED");
     lines.push("DTSTART;VALUE=DATE:" + start);
     lines.push("DTEND;VALUE=DATE:" + addDay(b.date));
     lines.push(fold("SUMMARY:" + esc(summary)));
@@ -133,6 +135,8 @@ exports.handler = async () => {
     lines.push("BEGIN:VEVENT");
     lines.push("UID:" + uid);
     lines.push("DTSTAMP:" + stamp);
+    lines.push("SEQUENCE:0");
+    lines.push("STATUS:CONFIRMED");
     const startT = timeCompact(v.time);
     if (startT) {
       lines.push("DTSTART;TZID=Europe/London:" + start + "T" + startT);
@@ -165,7 +169,6 @@ exports.handler = async () => {
     "VERSION:2.0",
     "PRODID:-//Hawthbush Farm//Venue Ops//EN",
     "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
     "X-WR-CALNAME:Hawthbush Farm",
     "X-WR-TIMEZONE:Europe/London",
     "X-WR-CALDESC:Events and viewings at Hawthbush Farm",

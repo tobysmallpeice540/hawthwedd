@@ -21,7 +21,7 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body); }
   catch { return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "Invalid JSON" }) }; }
 
-  const { name, email, phone, guests, preferredDate, notes, date, time } = body;
+  const { name, email, phone, guests, preferredDate, notes, date, time, eventType } = body;
   if (!name || !email || !date || !time) {
     return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "Missing required fields" }) };
   }
@@ -49,6 +49,7 @@ exports.handler = async (event) => {
   const request = {
     id: `vr_${Date.now()}`,
     name, email,
+    eventType: eventType || "",
     phone: phone || "",
     guests: guests || "",
     preferredDate: preferredDate || "",
@@ -81,12 +82,13 @@ exports.handler = async (event) => {
         subject: `New Viewing Request - ${name} - ${date} at ${time}`,
         html: `<h2>New Viewing Request</h2>
           <p><b>Name:</b> ${name}</p><p><b>Email:</b> ${email}</p>
+          <p><b>Event type:</b> ${eventType||"not provided"}</p>
           <p><b>Phone:</b> ${phone||"not provided"}</p>
           <p><b>Date:</b> ${date} at ${time}</p>
           <p><b>Guests:</b> ${guests||"not provided"}</p>
           <p><b>Year in mind:</b> ${preferredDate||"not provided"}</p>
           <p><b>Notes:</b> ${notes||"none"}</p>
-          <p><a href="https://cool-sorbet-b1d599.netlify.app"
+          <p><a href="${process.env.URL || "https://hawthbushfarm.netlify.app"}"
             style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-block;margin-top:10px">
             Open App to Confirm</a></p>`,
       }),
