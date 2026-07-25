@@ -131,6 +131,14 @@ function parseMoney(val) {
   return isNaN(n) ? 0 : n;
 }
 
+// Standard display format across the app: "25 Aug 26" (DD MMM YY)
+function fmtDate(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(String(dateStr).slice(0,10) + "T00:00:00");
+  if (isNaN(d)) return dateStr;
+  return d.toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"2-digit" });
+}
+
 function dayOfWeek(dateStr) {
   if (!dateStr) return "";
   return new Date(dateStr + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long" });
@@ -221,7 +229,10 @@ const BOOKING_STORAGE = "hawthbush_bookings_v6";
 
 // ─── GMAIL OAUTH2 ────────────────────────────────────────────────────────────
 const GMAIL_CLIENT_ID   = "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
-const GMAIL_REDIRECT    = "https://cool-sorbet-b1d599.netlify.app/";
+// Uses whatever domain the app is served from, so changing the Netlify subdomain
+// won't break OAuth — you only need to add the new URL in the Google/Xero portals.
+const APP_ORIGIN        = (typeof window !== "undefined" && window.location && window.location.origin) ? window.location.origin : "https://hawthbushfarm.netlify.app";
+const GMAIL_REDIRECT    = APP_ORIGIN + "/";
 const GMAIL_SCOPE       = "https://www.googleapis.com/auth/gmail.readonly";
 
 const gmailGetToken  = () => { try { return JSON.parse(sessionStorage.getItem("gmail_token")||"null"); } catch { return null; } };
@@ -239,7 +250,7 @@ const gmailGetValidToken = () => {
 // ─── XERO OAUTH2 PKCE ────────────────────────────────────────────────────────
 const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
 const XERO_SCOPES       = "openid profile email accounting.contacts.read accounting.invoices.read offline_access";
-const XERO_REDIRECT_URI = "https://cool-sorbet-b1d599.netlify.app/";
+const XERO_REDIRECT_URI = APP_ORIGIN + "/";
 
 const xeroGenerateCodeVerifier = () => {
   const array = new Uint8Array(32);
@@ -588,7 +599,7 @@ export default function App() {
   const saveBookings = useCallback(async data=>{ setBookings(data); try{await sbSet(BOOKING_STORAGE, data);}catch(e){console.error(e);} },[]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
 
-  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -681,7 +692,7 @@ export default function App() {
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
-        {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
+        {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
           enquiries={enquiries} setEnquiries={setEnquiries}
@@ -775,7 +786,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                   onClick={()=>onEdit(b.id)}
                   onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                  <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}):"—"}</td>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?fmtDate(b.date):"—"}</td>
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date}/></td>
                   <td style={{ padding:"10px 12px", maxWidth:180 }}>
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
@@ -1241,7 +1252,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           </div>
           {(formData.date || formData.eventType) && (
             <div style={{ fontSize:12, color:T.textMid, marginTop:2, display:"flex", alignItems:"center", gap:8 }}>
-              {formData.date && <span>{new Date(formData.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"long",year:"numeric"})}</span>}
+              {formData.date && <span>{fmtDate(formData.date)}</span>}
               {formData.eventType && <span style={{ background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"1px 7px", fontSize:11, fontWeight:600 }}>{formData.eventType}</span>}
             </div>
           )}
@@ -1386,6 +1397,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <div>
                   <FLabel>Corkage</FLabel>
                   <FInput type="text" value={formData.corkage||""} onChange={v=>update("corkage",v)}/>
+                </div>
+                <div>
+                  <FLabel>Final Total Corkage Amount (£)</FLabel>
+                  <FInput type="number" value={formData.corkageTotal||""} onChange={v=>update("corkageTotal",v)}/>
                 </div>
                 <div>
                   <FLabel>Bar Take Gross (£)</FLabel>
@@ -1631,9 +1646,11 @@ function SummaryReport({ bookings }) {
   const totalAccom = yearBookings.reduce((s,b)=>s+parseMoney(b.amlyFee)+parseMoney(b.hamletFee)+parseMoney(b.campingFee),0);
   const totalRevenue = totalVenueFees + totalAccom;
   const totalDeposits = yearBookings.reduce((s,b)=>s+parseMoney(b.deposit),0);
-  // Bar take = recorded gross bar take + corkage (corkage is parsed from the corkage field)
+  // Bar take = recorded gross bar take + corkage.
+  // Prefer the numeric "Final Total Corkage Amount" field; fall back to a number
+  // parsed from the free-text corkage note only if the numeric box is empty.
   const totalBarGross = yearBookings.reduce((s,b)=>s+parseMoney(b.barTakeGross),0);
-  const totalCorkage  = yearBookings.reduce((s,b)=>s+parseMoney(b.corkage),0);
+  const totalCorkage  = yearBookings.reduce((s,b)=>s+(parseMoney(b.corkageTotal) || parseMoney(b.corkage)),0);
   const totalBarTake  = totalBarGross + totalCorkage;
   const monthCounts = {};
   yearBookings.forEach(b=>{ const m=b.date.slice(0,7); monthCounts[m]=(monthCounts[m]||0)+1; });
@@ -1921,7 +1938,7 @@ function AccommodationReport({ bookings }) {
           <tbody>
             {rows.map((b,i)=>(
               <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
-                <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, fontWeight:500 }}>{b.date}</td>
+                <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, fontWeight:500 }}>{fmtDate(b.date)}</td>
                 <td style={{ padding:"10px 12px", fontSize:13, fontWeight:500 }}>{b.couple}</td>
                 {[["amlyBooked","amlyFee"],["hamletBooked","hamletFee"],["campingBooked","campingFee"]].map(([bk,fk])=>[
                   <td key={bk} style={{ padding:"10px 12px" }}>
@@ -2026,7 +2043,7 @@ function PipelineReport({ bookings }) {
           return (
             <div key={b.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
-                <div><div style={{ fontWeight:600, color:T.text }}>{b.couple}</div><div style={{ fontSize:12, color:T.textLight }}>{b.date}</div></div>
+                <div><div style={{ fontWeight:600, color:T.text }}>{b.couple}</div><div style={{ fontSize:12, color:T.textLight }}>{fmtDate(b.date)}</div></div>
                 <div style={{ textAlign:"right" }}><div style={{ fontSize:18, color:T.midBlue, fontWeight:700 }}>£{fee.toLocaleString()}</div><div style={{ fontSize:11, color:T.textLight }}>{dep>0?`Deposit: £${dep.toLocaleString()}`:"No deposit"}</div></div>
               </div>
               <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}><div style={{ background:balance===0?T.green:T.accentMid, height:"100%", width:`${pct}%`, borderRadius:4 }}/></div>
@@ -2386,7 +2403,7 @@ function HoursReport({ bookings, staff }) {
                             const ep = rate>0?(hrs*rate).toFixed(2):null;
                             return (
                               <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
-                                <td style={{ padding:"8px 16px", fontSize:12, color:T.accent, fontWeight:500 }}>{new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</td>
+                                <td style={{ padding:"8px 16px", fontSize:12, color:T.accent, fontWeight:500 }}>{fmtDate(b.date)}</td>
                                 <td style={{ padding:"8px 16px", fontSize:13 }}>{b.couple}</td>
                                 <td style={{ padding:"8px 16px", fontSize:13, fontWeight:700, color:T.midBlue }}>{hrs}h</td>
                                 <td style={{ padding:"8px 16px", fontSize:13, color:T.green, fontWeight:500 }}>{ep?`£${ep}`:"—"}</td>
@@ -4703,10 +4720,10 @@ function StaffTimelineReport({ bookings, staff }) {
         <select value={selectedBooking||""} onChange={e=>setSelectedBooking(Number(e.target.value)||e.target.value)}
           style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 12px", outline:"none", flex:1, maxWidth:400 }}>
           {upcoming.length > 0 && <optgroup label="Upcoming">
-            {upcoming.map(b=><option key={b.id} value={b.id}>{b.date} — {b.couple}</option>)}
+            {upcoming.map(b=><option key={b.id} value={b.id}>{fmtDate(b.date)} — {b.couple}</option>)}
           </optgroup>}
           {past.length > 0 && <optgroup label="Past">
-            {past.map(b=><option key={b.id} value={b.id}>{b.date} — {b.couple}</option>)}
+            {past.map(b=><option key={b.id} value={b.id}>{fmtDate(b.date)} — {b.couple}</option>)}
           </optgroup>}
         </select>
       </div>
@@ -4743,7 +4760,7 @@ function StaffTimelineReport({ bookings, staff }) {
               <div style={{ marginBottom:20, paddingBottom:14, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
                 <div>
                   <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{booking.couple}</div>
-                  <div style={{ fontSize:13, color:T.textLight }}>{booking.date ? new Date(booking.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</div>
+                  <div style={{ fontSize:13, color:T.textLight }}>{fmtDate(booking.date)}</div>
                 </div>
               </div>
               {renderTimeline(booking)}
@@ -4794,7 +4811,7 @@ function ViewingsList({ viewings, onEdit, onDelete }) {
       {sorted.map((v,i)=>(
         <div key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 14px" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom: v.notes ? 6 : 0 }}>
-            <span style={{ fontSize:13, fontWeight:700, color:"#6d28d9" }}>📅 {v.date||"No date"}{v.time ? " · "+v.time : ""}</span>
+            <span style={{ fontSize:13, fontWeight:700, color:"#6d28d9" }}>📅 {v.date?fmtDate(v.date):"No date"}{v.time ? " · "+v.time : ""}</span>
             {onEdit && <button onClick={()=>onEdit(i)} style={{ marginLeft:"auto", background:"#f3e8ff", border:"none", color:"#6d28d9", cursor:"pointer", fontSize:12, fontWeight:600, padding:"2px 10px", borderRadius:4 }}>Edit</button>}
             {onDelete && <button onClick={()=>onDelete(i)} style={{ background:T.redBg, border:"none", color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, padding:"2px 8px", borderRadius:4 }}>✕</button>}
           </div>
@@ -5217,7 +5234,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             name: req.name,
             email: req.email,
             phone: req.phone || "",
-            eventType: "Wedding",
+            eventType: req.eventType || "Wedding",
             numbers: (req.dayGuests && req.eveGuests) ? `Day: ${req.dayGuests}, Eve: ${req.eveGuests}` : req.dayGuests || req.eveGuests || "",
             datePreference: req.preferredDate || "",
             source: req.source || "Website viewing request",
@@ -5296,7 +5313,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             <div style={{ background:"#fff", borderRadius:12, padding:28, maxWidth:440, width:"100%", boxShadow:"0 8px 40px rgba(0,0,0,.2)" }}>
               <h3 style={{ margin:"0 0 6px", fontSize:17, color:T.text }}>Delete Viewing Request</h3>
               <p style={{ fontSize:13, color:T.textLight, margin:"0 0 18px" }}>
-                {req.name} — {new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})} at {req.time}
+                {req.name} — {fmtDate(req.date)} at {req.time}
               </p>
               <p style={{ fontSize:13, color:T.textMid, margin:"0 0 20px" }}>
                 This permanently removes the request. <strong>No email is sent</strong> to the requester — use this for test or duplicate requests.
@@ -5324,7 +5341,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             <div style={{ background:"#fff", borderRadius:12, padding:28, maxWidth:460, width:"100%", boxShadow:"0 8px 40px rgba(0,0,0,.2)" }}>
               <h3 style={{ margin:"0 0 6px", fontSize:17, color:T.text }}>Decline Viewing Request</h3>
               <p style={{ fontSize:13, color:T.textLight, margin:"0 0 18px" }}>
-                {req.name} — {new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})} at {req.time}
+                {req.name} — {fmtDate(req.date)} at {req.time}
               </p>
               <div style={{ fontSize:12, fontWeight:700, letterSpacing:1, textTransform:"uppercase", color:T.red, marginBottom:8 }}>Reason for declining</div>
               <textarea
@@ -5363,7 +5380,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             <div style={{ background:"#fff", borderRadius:12, padding:28, maxWidth:500, width:"100%", boxShadow:"0 8px 40px rgba(0,0,0,.2)" }}>
               <h3 style={{ margin:"0 0 6px", fontSize:17, color:T.text }}>Confirm Viewing</h3>
               <p style={{ fontSize:13, color:T.textLight, margin:"0 0 18px" }}>
-                {req.name} — {new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})} at {req.time}
+                {req.name} — {fmtDate(req.date)} at {req.time}
               </p>
               <div style={{ fontSize:12, fontWeight:700, letterSpacing:1, textTransform:"uppercase", color:T.midBlue, marginBottom:10 }}>Enquiry</div>
               <div style={{ display:"flex", gap:6, marginBottom:16, flexWrap:"wrap" }}>
@@ -5405,7 +5422,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                         style={{ padding:"9px 14px", cursor:"pointer", background:selectedBkgId===String(b.id)?T.midBlueBg:"#fff", borderBottom:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                         <div>
                           <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{b.couple}</div>
-                          <div style={{ fontSize:11, color:T.textLight }}>{b.date}</div>
+                          <div style={{ fontSize:11, color:T.textLight }}>{fmtDate(b.date)}</div>
                         </div>
                         {selectedBkgId===String(b.id) && <span style={{ color:T.midBlue, fontWeight:700 }}>✓</span>}
                       </div>
@@ -5450,7 +5467,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
       {tabRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"20px 0" }}>No {tab} requests.</div>}
       <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:32 }}>
         {tabRows.sort((a,b)=>a.date>b.date?1:-1).map(req=>{
-          const niceDate = new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});
+          const niceDate = fmtDate(req.date);
           return (
             <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 6px rgba(37,99,235,.06)" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
@@ -5462,6 +5479,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                   </div>
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:"4px 16px", fontSize:13, color:T.textMid }}>
                     <span>Date: {niceDate} at {req.time}</span>
+                    {req.eventType && <span>Event type: {req.eventType}</span>}
                     <span>Email: {req.email}</span>
                     {req.phone && <span>Phone: {req.phone}</span>}
                     {req.dayGuests && <span>Day guests: {req.dayGuests}</span>}
@@ -5558,7 +5576,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   );
 }
 
-function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
+function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
   const [filter,    setFilter]    = useState("upcoming");
   const [viewTab,   setViewTab]   = useState("requests");
   const [refreshing, setRefreshing] = useState(false);
@@ -5570,9 +5588,10 @@ function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelec
 
   const flashSaved = () => { setVFlash(true); setTimeout(()=>setVFlash(false), 2000); };
 
-  // Reload viewing requests + enquiries fresh from Supabase.
-  // Enquiries are reloaded because viewings added on an enquiry page are saved
-  // in that view's own state, so this keeps the confirmed list in sync.
+  // Reload viewing requests + bookings + enquiries fresh from Supabase.
+  // Bookings and enquiries are reloaded because viewings added on a booking or
+  // enquiry page are the same database — this keeps the confirmed list in sync,
+  // including viewings added on another device/session.
   const refreshRequests = async () => {
     setRefreshing(true);
     try {
@@ -5580,6 +5599,8 @@ function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelec
       setViewingRequests(r || []);
       const b = await sbGet(VB_STORAGE);
       setViewingBlocks(b || []);
+      const bk = await sbGet(BOOKING_STORAGE);
+      if (bk && setBookings) setBookings(bk);
       const enq = await sbGet(ENQUIRIES_STORAGE);
       if (enq && setEnquiries) setEnquiries(enq);
     } catch(e) { console.warn("Refresh failed:", e); }
@@ -5649,11 +5670,17 @@ function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelec
       {/* Top-level tab: Requests | Viewings | Blocks */}
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24, flexWrap:"wrap" }}>
         <h2 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:22, marginRight:8 }}>Viewings</h2>
-        {[["requests","Requests"],["calendar","Calendar"],["blocks","Blocks"]].map(([v,l])=>(
+        {[["requests","Requests"],["confirmed","Confirmed"],["blocks","Blocks"]].map(([v,l])=>(
           <button key={v} onClick={()=>setViewTab(v)} style={{ background:viewTab===v?T.midBlue:"#fff", color:viewTab===v?"#fff":T.textMid, border:`1.5px solid ${viewTab===v?T.midBlue:T.border}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:viewTab===v?700:400 }}>
             {v==="requests" && (viewingRequests||[]).filter(r=>r.status==="pending").length>0 ? "Requests ("+( viewingRequests||[]).filter(r=>r.status==="pending").length+")" : l}
           </button>
         ))}
+        {setReportType && (
+          <button onClick={()=>{ setReportType("calendar"); setView("reports"); }}
+            style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+            📅 Year Calendar →
+          </button>
+        )}
         <button onClick={refreshRequests} disabled={refreshing}
           style={{ marginLeft:"auto", background:"none", border:`1px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, opacity:refreshing?0.5:1 }}>
           {refreshing ? "…" : "↻ Refresh"}
@@ -5676,18 +5703,12 @@ function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelec
         />
       )}
 
-      {viewTab==="calendar" && (<>
+      {viewTab==="confirmed" && (<>
       {vFlash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:T.green, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>✓ Saved</div>}
       <div style={{ display:"flex", gap:6, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
         {[["upcoming","Upcoming"],["all","All"],["past","Past"]].map(([v,l])=>(
           <button key={v} onClick={()=>setFilter(v)} style={{ background:filter===v?"#6d28d9":"#fff", color:filter===v?"#fff":T.textMid, border:`1.5px solid ${filter===v?"#6d28d9":T.border}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:filter===v?700:400 }}>{l}</button>
         ))}
-        {setReportType && (
-          <button onClick={()=>{ setReportType("calendar"); setView("reports"); }}
-            style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-            📅 Open Year Calendar →
-          </button>
-        )}
         <span style={{ fontSize:13, color:T.textLight, marginLeft:"auto", alignSelf:"center" }}>{filtered.length} viewing{filtered.length!==1?"s":""}</span>
       </div>
 
@@ -5704,7 +5725,7 @@ function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelec
             <div style={{ flexShrink:0, background:"#f3e8ff", border:"1px solid #c4b5fd", borderRadius:8, padding:"10px 14px", textAlign:"center", minWidth:60 }}>
               <div style={{ fontSize:18, fontWeight:700, color:"#6d28d9", lineHeight:1 }}>{v.date ? new Date(v.date+"T00:00:00").getDate() : "—"}</div>
               <div style={{ fontSize:10, color:"#7c3aed", fontWeight:600, marginTop:2 }}>{v.date ? new Date(v.date+"T00:00:00").toLocaleDateString("en-GB",{month:"short"}) : ""}</div>
-              <div style={{ fontSize:10, color:"#7c3aed" }}>{v.date ? new Date(v.date+"T00:00:00").getFullYear() : ""}</div>
+              <div style={{ fontSize:10, color:"#7c3aed" }}>{v.date ? String(new Date(v.date+"T00:00:00").getFullYear()).slice(2) : ""}</div>
             </div>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
@@ -5716,15 +5737,17 @@ function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelec
                 {!isEditing && (
                   <span style={{ marginLeft:"auto", display:"flex", gap:6 }}>
                     <button onClick={()=>{ setEditKey(key); setEditV({ date:v.date||"", time:v.time||"", notes:v.notes||"" }); }}
-                      style={{ background:"#f3e8ff", border:"none", color:"#6d28d9", cursor:"pointer", fontSize:12, fontWeight:600, padding:"3px 12px", borderRadius:5 }}>Edit</button>
-                    <button onClick={()=>deleteViewing(v)}
-                      style={{ background:T.redBg, border:"none", color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, padding:"3px 10px", borderRadius:5 }}>✕ Delete</button>
+                      style={{ background:"#f3e8ff", border:"none", color:"#6d28d9", cursor:"pointer", fontSize:12, fontWeight:600, padding:"3px 14px", borderRadius:5 }}>✎ Edit</button>
                   </span>
                 )}
               </div>
               {isEditing ? (
                 <div style={{ marginTop:6 }}>
                   <ViewingForm viewing={editV} onChange={setEditV} onSave={()=>saveViewingEdit(v)} onCancel={()=>{ setEditKey(null); setEditV(null); }} saveLabel="Save"/>
+                  <div style={{ marginTop:8, display:"flex", justifyContent:"flex-end" }}>
+                    <button onClick={()=>{ deleteViewing(v); setEditKey(null); setEditV(null); }}
+                      style={{ background:T.redBg, border:`1px solid #fca5a5`, color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, padding:"6px 14px", borderRadius:6 }}>🗑 Delete this viewing</button>
+                  </div>
                 </div>
               ) : (<>
                 <div
