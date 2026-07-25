@@ -20,6 +20,13 @@
   status = 200
   force = true
 
+# Clean URL for the hosted iCalendar feed (events + viewings)
+[[redirects]]
+  from = "/calendar.ics"
+  to = "/.netlify/functions/calendar-feed"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
