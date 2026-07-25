@@ -556,6 +556,10 @@ export default function App() {
   const [viewingBlocks,   setViewingBlocks]   = useState([]);
   const [editStaffId, setEditStaffId] = useState(null);
   const [staffForm, setStaffForm]     = useState(null);
+  const [focusEnquiryId, setFocusEnquiryId] = useState(null);
+
+  // Navigate straight to a specific enquiry's detail page (used from Viewings + Year Calendar)
+  const goToEnquiry = (id) => { setFocusEnquiryId(id); setView("enquiries"); };
 
   useEffect(()=>{
     (async()=>{
@@ -676,15 +680,15 @@ export default function App() {
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking}/>}
-        {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} onEditBooking={handleEdit}
+        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
+        {view==="viewings"   && <ViewingsView bookings={bookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
           enquiries={enquiries} setEnquiries={setEnquiries}
           saveEnquiries={async(e)=>{ setEnquiries(e); await sbSet(ENQUIRIES_STORAGE,e); }}
           saveBookings={saveBookings}
-          onSelectEnquiry={id=>{/* handled inside EnquiriesView */}}/>}
-        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries}/>}
+          onSelectEnquiry={goToEnquiry}/>}
+        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry}/>}
       </div>
     </div>
   );
@@ -1295,12 +1299,12 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 return (
                   <div>
                     <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12, marginTop:4, borderTop:`1px solid ${T.border}`, paddingTop:16 }}>Shift Times &amp; Hours Worked</div>
-                    <div style={{ display:"grid", gridTemplateColumns:"auto 1fr auto auto auto auto", alignItems:"center", gap:"6px 10px", marginBottom:8 }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"44px 1fr 90px 90px 90px 16px", alignItems:"center", gap:"6px 10px", marginBottom:8, padding:"0 11px" }}>
                       <div/>
                       <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase" }}>Name</div>
                       <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>From</div>
                       <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>To</div>
-                      <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>Hrs Worked</div>
+                      <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>Hrs</div>
                       <div/>
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
@@ -1312,7 +1316,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                         const expected = diff > 0 ? +(diff/60).toFixed(2) : null;
                         const tStyle  = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px", outline:"none", width:90 };
                         return (
-                          <div key={id} style={{ display:"grid", gridTemplateColumns:"auto 1fr auto auto auto auto", alignItems:"center", gap:"6px 10px", padding:"7px 10px", background:isSetup?"#fffbeb":T.bgInput, borderRadius:7, border:`1px solid ${isSetup?"#fde68a":T.border}` }}>
+                          <div key={id} style={{ display:"grid", gridTemplateColumns:"44px 1fr 90px 90px 90px 16px", alignItems:"center", gap:"6px 10px", padding:"7px 10px", background:isSetup?"#fffbeb":T.bgInput, borderRadius:7, border:`1px solid ${isSetup?"#fde68a":T.border}` }}>
                             <StaffChip initials={id} staff={staff}/>
                             <span style={{ fontSize:13, color:T.text, fontWeight:500 }}>
                               {person?.name||id}
@@ -1583,23 +1587,23 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
-function ReportsView({ bookings, staff, reportType, setReportType, enquiries }) {
-  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"revenue",label:"Revenue Tracker"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Rota Overview"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Event Rota"}];
-  // Note: hours report kept for reference, accommodation report kept
+function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry }) {
+  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Rota Overview"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Event Rota"}];
+  // If an old/removed report type is still selected, fall back to summary
+  const activeType = types.some(t=>t.id===reportType) ? reportType : "summary";
   return (
     <div style={{ paddingTop:28 }}>
       <div style={{ marginBottom:22, display:"flex", gap:8, flexWrap:"wrap" }}>
         {types.map(t=>(
-          <button key={t.id} onClick={()=>setReportType(t.id)} style={{ background:reportType===t.id?T.midBlue:"#fff", color:reportType===t.id?"#fff":T.textMid, border:`1.5px solid ${reportType===t.id?T.midBlue:T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:reportType===t.id?700:400 }}>{t.label}</button>
+          <button key={t.id} onClick={()=>setReportType(t.id)} style={{ background:activeType===t.id?T.midBlue:"#fff", color:activeType===t.id?"#fff":T.textMid, border:`1.5px solid ${activeType===t.id?T.midBlue:T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:activeType===t.id?700:400 }}>{t.label}</button>
         ))}
       </div>
-      {reportType==="summary"       && <SummaryReport bookings={bookings}/>}
-      {reportType==="calendar"       && <CalendarReport bookings={bookings} enquiries={enquiries||[]}/>}
-      {reportType==="revenue"       && <RevenueReport bookings={bookings}/>}
-      {reportType==="accommodation" && <AccommodationReport bookings={bookings}/>}
-      {reportType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
-      {reportType==="hours"          && <HoursReport bookings={bookings} staff={staff}/>}
-      {reportType==="timeline"        && <StaffTimelineReport bookings={bookings} staff={staff}/>}
+      {activeType==="summary"       && <SummaryReport bookings={bookings}/>}
+      {activeType==="calendar"       && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
+      {activeType==="accommodation" && <AccommodationReport bookings={bookings}/>}
+      {activeType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
+      {activeType==="hours"          && <HoursReport bookings={bookings} staff={staff}/>}
+      {activeType==="timeline"        && <StaffTimelineReport bookings={bookings} staff={staff}/>}
     </div>
   );
 }
@@ -1627,6 +1631,10 @@ function SummaryReport({ bookings }) {
   const totalAccom = yearBookings.reduce((s,b)=>s+parseMoney(b.amlyFee)+parseMoney(b.hamletFee)+parseMoney(b.campingFee),0);
   const totalRevenue = totalVenueFees + totalAccom;
   const totalDeposits = yearBookings.reduce((s,b)=>s+parseMoney(b.deposit),0);
+  // Bar take = recorded gross bar take + corkage (corkage is parsed from the corkage field)
+  const totalBarGross = yearBookings.reduce((s,b)=>s+parseMoney(b.barTakeGross),0);
+  const totalCorkage  = yearBookings.reduce((s,b)=>s+parseMoney(b.corkage),0);
+  const totalBarTake  = totalBarGross + totalCorkage;
   const monthCounts = {};
   yearBookings.forEach(b=>{ const m=b.date.slice(0,7); monthCounts[m]=(monthCounts[m]||0)+1; });
   const prevYear = allYears[allYears.indexOf(year)-1];
@@ -1638,6 +1646,7 @@ function SummaryReport({ bookings }) {
     `Venue Fees: £${totalVenueFees.toLocaleString()}`,
     `Accommodation Revenue: £${totalAccom.toLocaleString()}`,
     `Total Revenue: £${totalRevenue.toLocaleString()}`,
+    `Bar Take (incl. corkage): £${totalBarTake.toLocaleString()} (bar £${totalBarGross.toLocaleString()} + corkage £${totalCorkage.toLocaleString()})`,
     `Deposits Held (advance on venue fees): £${totalDeposits.toLocaleString()}`,
     `Confirmed: ${yearBookings.filter(b=>b.status==="Confirmed").length} | Holding: ${yearBookings.filter(b=>b.status==="Holding").length}`,
     `Accommodation — Amly: ${yearBookings.filter(b=>b.amlyBooked==="yes").length} | Hamlet: ${yearBookings.filter(b=>b.hamletBooked==="yes").length} | Camping: ${yearBookings.filter(b=>b.campingBooked==="yes").length}`,
@@ -1673,6 +1682,7 @@ function SummaryReport({ bookings }) {
         <StatCard label="Bookings" value={yearBookings.length} sub={`${upcoming.length} upcoming`}/>
         <StatCard label="Venue Fees" value={`£${totalVenueFees.toLocaleString()}`} sub={`${year}`}/>
         <StatCard label="Accom Revenue" value={`£${totalAccom.toLocaleString()}`} sub={`Total: £${totalRevenue.toLocaleString()}`}/>
+        <StatCard label="Bar Take (incl. corkage)" value={`£${totalBarTake.toLocaleString()}`} sub={`Bar £${totalBarGross.toLocaleString()} + corkage £${totalCorkage.toLocaleString()}`}/>
         <StatCard label="Deposits Held" value={`£${totalDeposits.toLocaleString()}`} sub="Advance on venue fees — not additional"/>
         <StatCard label="Confirmed" value={yearBookings.filter(b=>b.status==="Confirmed").length} sub="Confirmed bookings"/>
         <StatCard label="Holding" value={yearBookings.filter(b=>b.status==="Holding").length} sub="Holding bookings"/>
@@ -1700,12 +1710,17 @@ function SummaryReport({ bookings }) {
 }
 
 // ─── YEAR CALENDAR REPORT ─────────────────────────────────────────────────────
-function CalendarReport({ bookings, enquiries }) {
+function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectEnquiry }) {
   const allYears = [...new Set(bookings.filter(b=>b.date).map(b=>b.date.slice(0,4)))].sort();
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
   const [showViewings, setShowViewings] = useState(true);
   const today = new Date().toISOString().slice(0,10);
+
+  // Click handlers → jump to the booking form or the enquiry page
+  const openBooking = (id) => { if (onEditBooking) { onEditBooking(id); if (setView) setView("form"); } };
+  const openEnquiry = (id) => { if (onSelectEnquiry) onSelectEnquiry(id); };
+  const openViewing = (v) => { if (v.source==="booking") openBooking(v.sourceId); else openEnquiry(v.sourceId); };
 
   // Index bookings by date string
   const byDate = {};
@@ -1714,13 +1729,13 @@ function CalendarReport({ bookings, enquiries }) {
     byDate[b.date].push(b);
   });
 
-  // Collect all viewings from bookings and enquiries
+  // Collect all viewings from bookings and enquiries (with source id for click-through)
   const viewingsByDate = {};
   bookings.forEach(b=>{
     (b.viewings||[]).forEach(v=>{
       if(v.date&&v.date.startsWith(year)){
         viewingsByDate[v.date] = viewingsByDate[v.date]||[];
-        viewingsByDate[v.date].push({ label:b.couple||"Booking", source:"booking" });
+        viewingsByDate[v.date].push({ label:b.couple||"Booking", source:"booking", sourceId:b.id });
       }
     });
   });
@@ -1728,7 +1743,7 @@ function CalendarReport({ bookings, enquiries }) {
     (e.viewings||[]).forEach(v=>{
       if(v.date&&v.date.startsWith(year)){
         viewingsByDate[v.date] = viewingsByDate[v.date]||[];
-        viewingsByDate[v.date].push({ label:e.name||"Enquiry", source:"enquiry" });
+        viewingsByDate[v.date].push({ label:e.name||"Enquiry", source:"enquiry", sourceId:e.id });
       }
     });
   });
@@ -1837,12 +1852,13 @@ function CalendarReport({ bookings, enquiries }) {
                     );
                   })}
                 </div>
-                {/* Booking list for this month */}
+                {/* Booking list for this month — click to open the booking */}
                 {Object.entries(byDate).filter(([d])=>d.startsWith(`${year}-${monthNum}`)).sort().map(([d, bks])=>(
                   bks.map(b => {
                     const s = getBookingStyle(b);
                     return (
-                      <div key={b.id} style={{ marginTop:4, padding:"2px 6px", borderRadius:4, background:s.bg, border:`1px solid ${s.border}`, display:"flex", alignItems:"center", gap:4 }}>
+                      <div key={b.id} onClick={()=>openBooking(b.id)} title={`Open ${b.couple}`}
+                        style={{ marginTop:4, padding:"2px 6px", borderRadius:4, background:s.bg, border:`1px solid ${s.border}`, display:"flex", alignItems:"center", gap:4, cursor:"pointer" }}>
                         <span style={{ fontSize:10, fontWeight:700, color:s.text, flexShrink:0 }}>{new Date(d+"T00:00:00").getDate()}</span>
                         <span style={{ fontSize:10, color:s.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.couple}</span>
                       </div>
@@ -1851,7 +1867,8 @@ function CalendarReport({ bookings, enquiries }) {
                 ))}
                 {showViewings && Object.entries(viewingsByDate).filter(([d])=>d.startsWith(`${year}-${monthNum}`)).sort().map(([d, views])=>(
                   views.map((v,vi) => (
-                    <div key={d+vi} style={{ marginTop:3, padding:"2px 6px", borderRadius:4, background:"#f3e8ff", border:"1px solid #c4b5fd", display:"flex", alignItems:"center", gap:4 }}>
+                    <div key={d+vi} onClick={()=>openViewing(v)} title={`Open ${v.label} (${v.source})`}
+                      style={{ marginTop:3, padding:"2px 6px", borderRadius:4, background:"#f3e8ff", border:"1px solid #c4b5fd", display:"flex", alignItems:"center", gap:4, cursor:"pointer" }}>
                       <span style={{ fontSize:9, width:7, height:7, borderRadius:"50%", background:"#7c3aed", flexShrink:0, display:"inline-block" }}/>
                       <span style={{ fontSize:10, fontWeight:700, color:"#6d28d9", flexShrink:0 }}>{new Date(d+"T00:00:00").getDate()}</span>
                       <span style={{ fontSize:10, color:"#6d28d9", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{v.label}</span>
@@ -1862,63 +1879,6 @@ function CalendarReport({ bookings, enquiries }) {
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function RevenueReport({ bookings }) {
-  const [printMode, setPrintMode] = useState(false);
-  const rows=bookings.filter(b=>b.couple&&parseMoney(b.venueFee)>0).sort((a,b)=>a.date>b.date?1:-1);
-  const totalFees=rows.reduce((s,b)=>s+parseMoney(b.venueFee),0);
-  const totalDeposits=rows.reduce((s,b)=>s+parseMoney(b.deposit),0);
-  // Deposit is an advance on venue fee — balance = fee - deposit (remaining to collect)
-  const totalBalance=rows.reduce((s,b)=>s+Math.max(0,parseMoney(b.venueFee)-parseMoney(b.deposit)),0);
-  const printText = [
-    "Revenue Tracker", "",
-    "Date | Couple | Venue Fee | Deposit Paid | Balance",
-    ...rows.map(b=>{ const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),bal=Math.max(0,fee-dep); return b.date+" | "+b.couple+" | £"+fee.toLocaleString()+" | £"+dep.toLocaleString()+" | £"+bal.toLocaleString(); }),
-    "",
-    "Total: £"+totalFees.toLocaleString()+" fees | £"+totalDeposits.toLocaleString()+" deposits | £"+totalBalance.toLocaleString()+" outstanding",
-  ].join("\n");
-  if(printMode) return (
-    <div>
-      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.7, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
-    </div>
-  );
-  return (
-    <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
-      </div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
-        <StatCard label="Total Venue Fees" value={`£${totalFees.toLocaleString()}`} sub="Sum of all venue fees"/>
-        <StatCard label="Deposits Paid" value={`£${totalDeposits.toLocaleString()}`} sub="Advances on venue fees"/>
-        <StatCard label="Balance Outstanding" value={`£${totalBalance.toLocaleString()}`} sub="Remaining after deposits"/>
-      </div>
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Venue Fee","Deposit (advance)","Balance Remaining"].map(h=><th key={h} style={{ padding:"10px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
-          <tbody>
-            {rows.map((b,i)=>{
-              const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep);
-              return <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
-                <td style={{ padding:"10px 14px", fontSize:12, color:T.accent, fontWeight:500 }}>{b.date}</td>
-                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:500 }}>{b.couple}</td>
-                <td style={{ padding:"10px 14px", fontSize:13 }}>£{fee.toLocaleString()}</td>
-                <td style={{ padding:"10px 14px", fontSize:13, color:dep>0?T.green:T.textLight }}>{dep>0?`£${dep.toLocaleString()}`:"—"}</td>
-                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:balance===0?T.green:T.amber }}>{balance===0?"✓ Paid in full":`£${balance.toLocaleString()}`}</td>
-              </tr>;
-            })}
-          </tbody>
-          <tfoot><tr style={{ borderTop:`2px solid ${T.border}`, background:"#eef4fd" }}>
-            <td colSpan={2} style={{ padding:"10px 14px", fontSize:13, color:T.midBlue, fontWeight:700 }}>TOTALS</td>
-            <td style={{ padding:"10px 14px", fontSize:13, color:T.midBlue, fontWeight:700 }}>£{totalFees.toLocaleString()}</td>
-            <td style={{ padding:"10px 14px", fontSize:13, color:T.green, fontWeight:600 }}>£{totalDeposits.toLocaleString()}</td>
-            <td style={{ padding:"10px 14px", fontSize:13, color:T.amber, fontWeight:700 }}>£{totalBalance.toLocaleString()}</td>
-          </tr></tfoot>
-        </table>
       </div>
     </div>
   );
@@ -5164,6 +5124,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   // Decline modal state
   const [declineModal, setDeclineModal]   = useState(null); // { req } or null
   const [declineReason, setDeclineReason] = useState("");
+  // Delete modal state (removes a request without sending any email)
+  const [deleteModal, setDeleteModal]     = useState(null); // { req } or null
 
   const showFlash = (msg, col=T.green) => { setFlash({msg,col}); setTimeout(()=>setFlash(null),3000); };
 
@@ -5191,6 +5153,16 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   const handleDeclineClick = (req) => {
     setDeclineReason("");
     setDeclineModal({ req });
+  };
+
+  const handleDeleteClick = (req) => setDeleteModal({ req });
+
+  // Remove a request entirely — no email is sent (for test/duplicate requests)
+  const handleDeleteRequest = async (req) => {
+    const updated = requests.filter(r => r.id !== req.id);
+    await saveRequests(updated);
+    setDeleteModal(null);
+    showFlash("Request deleted", T.textMid);
   };
 
   const handleAction = async (req, action, mode, existingEnqId, declineMsg) => {
@@ -5315,6 +5287,34 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   return (
     <div>
       {flash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:flash.col, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>{flash.msg}</div>}
+
+      {/* Delete modal — removes the request with no email sent */}
+      {deleteModal && (() => {
+        const req = deleteModal.req;
+        return (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div style={{ background:"#fff", borderRadius:12, padding:28, maxWidth:440, width:"100%", boxShadow:"0 8px 40px rgba(0,0,0,.2)" }}>
+              <h3 style={{ margin:"0 0 6px", fontSize:17, color:T.text }}>Delete Viewing Request</h3>
+              <p style={{ fontSize:13, color:T.textLight, margin:"0 0 18px" }}>
+                {req.name} — {new Date(req.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})} at {req.time}
+              </p>
+              <p style={{ fontSize:13, color:T.textMid, margin:"0 0 20px" }}>
+                This permanently removes the request. <strong>No email is sent</strong> to the requester — use this for test or duplicate requests.
+              </p>
+              <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+                <button onClick={()=>setDeleteModal(null)}
+                  style={{ padding:"9px 20px", border:`1px solid ${T.border}`, borderRadius:6, background:"#fff", color:T.textMid, fontFamily:"inherit", fontSize:13, cursor:"pointer" }}>
+                  Cancel
+                </button>
+                <button onClick={()=>handleDeleteRequest(req)}
+                  style={{ padding:"9px 20px", background:T.red, border:"none", borderRadius:6, color:"#fff", fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                  Delete Request
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Decline modal */}
       {declineModal && (() => {
@@ -5473,8 +5473,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                   </div>
                   {req.notes && <div style={{ marginTop:8, fontSize:12, color:T.textMid, fontStyle:"italic", background:T.bgInput, borderRadius:5, padding:"6px 10px" }}>{req.notes}</div>}
                 </div>
-                {req.status==="pending" && (
-                  <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+                <div style={{ display:"flex", gap:8, flexShrink:0, alignItems:"center" }}>
+                  {req.status==="pending" && (<>
                     <button onClick={()=>handleConfirmClick(req)} disabled={acting===req.id}
                       style={{ background:T.green, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:acting===req.id?0.7:1 }}>
                       {acting===req.id?"…":"✓ Confirm"}
@@ -5483,8 +5483,12 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                       style={{ background:T.redBg, color:T.red, border:`1px solid #fca5a5`, padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
                       ✕ Decline
                     </button>
-                  </div>
-                )}
+                  </>)}
+                  <button onClick={()=>handleDeleteClick(req)} disabled={acting===req.id} title="Delete request (no email sent)"
+                    style={{ background:"none", color:T.textLight, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                    🗑 Delete
+                  </button>
+                </div>
               </div>
             </div>
           );
@@ -5554,13 +5558,21 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   );
 }
 
-function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
+function ViewingsView({ bookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
   const [filter,    setFilter]    = useState("upcoming");
   const [viewTab,   setViewTab]   = useState("requests");
   const [refreshing, setRefreshing] = useState(false);
+  const [editKey, setEditKey]     = useState(null); // `${sourceType}:${sourceId}:${vIndex}` currently being edited
+  const [editV,   setEditV]       = useState(null);
+  const [vFlash,  setVFlash]      = useState(false);
+  const [feedCopied, setFeedCopied] = useState(false);
   const loaded = true;
 
-  // Reload viewing requests fresh from Supabase
+  const flashSaved = () => { setVFlash(true); setTimeout(()=>setVFlash(false), 2000); };
+
+  // Reload viewing requests + enquiries fresh from Supabase.
+  // Enquiries are reloaded because viewings added on an enquiry page are saved
+  // in that view's own state, so this keeps the confirmed list in sync.
   const refreshRequests = async () => {
     setRefreshing(true);
     try {
@@ -5568,6 +5580,8 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
       setViewingRequests(r || []);
       const b = await sbGet(VB_STORAGE);
       setViewingBlocks(b || []);
+      const enq = await sbGet(ENQUIRIES_STORAGE);
+      if (enq && setEnquiries) setEnquiries(enq);
     } catch(e) { console.warn("Refresh failed:", e); }
     finally { setRefreshing(false); }
   };
@@ -5576,18 +5590,50 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
   useEffect(() => { refreshRequests(); }, []);
   const today = new Date().toISOString().slice(0,10);
 
-  // Gather all viewings from both bookings and enquiries
+  // Gather all viewings from both bookings and enquiries.
+  // vIndex is the position within that source's viewings array — used for edit/delete.
   const allViewings = [];
   bookings.forEach(b=>{
-    (b.viewings||[]).forEach(v=>{
-      allViewings.push({ ...v, sourceType:"booking", sourceName:b.couple||"Unnamed Booking", sourceId:b.id, sourcePhone:b.phone||b.email||"" });
+    (b.viewings||[]).forEach((v,vi)=>{
+      allViewings.push({ ...v, vIndex:vi, sourceType:"booking", sourceName:b.couple||"Unnamed Booking", sourceId:b.id, sourcePhone:b.phone||b.email||"" });
     });
   });
   enquiries.forEach(e=>{
-    (e.viewings||[]).forEach(v=>{
-      allViewings.push({ ...v, sourceType:"enquiry", sourceName:e.name||"Unnamed Enquiry", sourceId:e.id, sourcePhone:e.phone||e.email||"" });
+    (e.viewings||[]).forEach((v,vi)=>{
+      allViewings.push({ ...v, vIndex:vi, sourceType:"enquiry", sourceName:e.name||"Unnamed Enquiry", sourceId:e.id, sourcePhone:e.phone||e.email||"" });
     });
   });
+
+  // Update / delete a viewing back onto its source booking or enquiry
+  const saveViewingEdit = async (v) => {
+    if (v.sourceType==="booking") {
+      const updated = bookings.map(b => b.id===v.sourceId
+        ? { ...b, viewings:(b.viewings||[]).map((vv,idx)=> idx===v.vIndex ? { ...vv, date:editV.date, time:editV.time, notes:editV.notes } : vv) }
+        : b);
+      if (saveBookings) await saveBookings(updated);
+    } else {
+      const updated = enquiries.map(e => e.id===v.sourceId
+        ? { ...e, viewings:(e.viewings||[]).map((vv,idx)=> idx===v.vIndex ? { ...vv, date:editV.date, time:editV.time, notes:editV.notes } : vv) }
+        : e);
+      if (saveEnquiries) await saveEnquiries(updated);
+    }
+    setEditKey(null); setEditV(null); flashSaved();
+  };
+
+  const deleteViewing = async (v) => {
+    if (v.sourceType==="booking") {
+      const updated = bookings.map(b => b.id===v.sourceId
+        ? { ...b, viewings:(b.viewings||[]).filter((_,idx)=> idx!==v.vIndex) }
+        : b);
+      if (saveBookings) await saveBookings(updated);
+    } else {
+      const updated = enquiries.map(e => e.id===v.sourceId
+        ? { ...e, viewings:(e.viewings||[]).filter((_,idx)=> idx!==v.vIndex) }
+        : e);
+      if (saveEnquiries) await saveEnquiries(updated);
+    }
+    flashSaved();
+  };
 
   const sorted = [...allViewings].sort((a,b)=>a.date>b.date?1:-1);
   const filtered = sorted.filter(v=>{
@@ -5631,10 +5677,17 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
       )}
 
       {viewTab==="calendar" && (<>
-      <div style={{ display:"flex", gap:6, marginBottom:20 }}>
+      {vFlash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:T.green, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>✓ Saved</div>}
+      <div style={{ display:"flex", gap:6, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
         {[["upcoming","Upcoming"],["all","All"],["past","Past"]].map(([v,l])=>(
           <button key={v} onClick={()=>setFilter(v)} style={{ background:filter===v?"#6d28d9":"#fff", color:filter===v?"#fff":T.textMid, border:`1.5px solid ${filter===v?"#6d28d9":T.border}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:filter===v?700:400 }}>{l}</button>
         ))}
+        {setReportType && (
+          <button onClick={()=>{ setReportType("calendar"); setView("reports"); }}
+            style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+            📅 Open Year Calendar →
+          </button>
+        )}
         <span style={{ fontSize:13, color:T.textLight, marginLeft:"auto", alignSelf:"center" }}>{filtered.length} viewing{filtered.length!==1?"s":""}</span>
       </div>
 
@@ -5643,8 +5696,11 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
       )}
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {filtered.map((v,i)=>(
-          <div key={i} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 18px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", alignItems:"flex-start", gap:16 }}>
+        {filtered.map((v,i)=>{
+          const key = `${v.sourceType}:${v.sourceId}:${v.vIndex}`;
+          const isEditing = editKey===key;
+          return (
+          <div key={key} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 18px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", alignItems:"flex-start", gap:16 }}>
             <div style={{ flexShrink:0, background:"#f3e8ff", border:"1px solid #c4b5fd", borderRadius:8, padding:"10px 14px", textAlign:"center", minWidth:60 }}>
               <div style={{ fontSize:18, fontWeight:700, color:"#6d28d9", lineHeight:1 }}>{v.date ? new Date(v.date+"T00:00:00").getDate() : "—"}</div>
               <div style={{ fontSize:10, color:"#7c3aed", fontWeight:600, marginTop:2 }}>{v.date ? new Date(v.date+"T00:00:00").toLocaleDateString("en-GB",{month:"short"}) : ""}</div>
@@ -5652,31 +5708,70 @@ function ViewingsView({ bookings, setView, onEditBooking, onSelectEnquiry, viewi
             </div>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
-                {v.time && <span style={{ fontSize:13, fontWeight:600, color:T.text }}>🕐 {v.time}</span>}
+                {v.time && !isEditing && <span style={{ fontSize:13, fontWeight:600, color:T.text }}>🕐 {v.time}</span>}
                 <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, background:v.sourceType==="booking"?T.greenBg:"#f3e8ff", color:v.sourceType==="booking"?T.green:"#6d28d9", border:`1px solid ${v.sourceType==="booking"?"#86efac":"#c4b5fd"}`, fontWeight:600 }}>
                   {v.sourceType==="booking" ? "Booking" : "Enquiry"}
                 </span>
                 {v.date < today && <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, background:"#e5e7eb", color:"#6b7280", border:"1px solid #d1d5db", fontWeight:600 }}>Past</span>}
+                {!isEditing && (
+                  <span style={{ marginLeft:"auto", display:"flex", gap:6 }}>
+                    <button onClick={()=>{ setEditKey(key); setEditV({ date:v.date||"", time:v.time||"", notes:v.notes||"" }); }}
+                      style={{ background:"#f3e8ff", border:"none", color:"#6d28d9", cursor:"pointer", fontSize:12, fontWeight:600, padding:"3px 12px", borderRadius:5 }}>Edit</button>
+                    <button onClick={()=>deleteViewing(v)}
+                      style={{ background:T.redBg, border:"none", color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, padding:"3px 10px", borderRadius:5 }}>✕ Delete</button>
+                  </span>
+                )}
               </div>
-              <div
-                onClick={()=>{ if(v.sourceType==="booking"&&onEditBooking){ onEditBooking(v.sourceId); setView("form"); } else if(v.sourceType==="enquiry"&&onSelectEnquiry){ onSelectEnquiry(v.sourceId); setView("enquiries"); } }}
-                style={{ fontWeight:700, color:T.accent, fontSize:15, marginBottom:4, cursor:"pointer", textDecoration:"underline", textDecorationColor:"transparent", transition:"text-decoration-color .15s" }}
-                onMouseEnter={e=>e.currentTarget.style.textDecorationColor=T.accent}
-                onMouseLeave={e=>e.currentTarget.style.textDecorationColor="transparent"}
-              >{v.sourceName}</div>
-              {v.sourcePhone && <div style={{ fontSize:12, color:T.textMid, marginBottom:v.notes?4:0 }}>📞 {v.sourcePhone}</div>}
-              {v.notes && <p style={{ margin:0, fontSize:13, color:T.textMid, lineHeight:1.5 }}>{v.notes}</p>}
+              {isEditing ? (
+                <div style={{ marginTop:6 }}>
+                  <ViewingForm viewing={editV} onChange={setEditV} onSave={()=>saveViewingEdit(v)} onCancel={()=>{ setEditKey(null); setEditV(null); }} saveLabel="Save"/>
+                </div>
+              ) : (<>
+                <div
+                  onClick={()=>{ if(v.sourceType==="booking"&&onEditBooking){ onEditBooking(v.sourceId); setView("form"); } else if(v.sourceType==="enquiry"&&onSelectEnquiry){ onSelectEnquiry(v.sourceId); } }}
+                  style={{ fontWeight:700, color:T.accent, fontSize:15, marginBottom:4, cursor:"pointer", textDecoration:"underline", textDecorationColor:"transparent", transition:"text-decoration-color .15s" }}
+                  onMouseEnter={e=>e.currentTarget.style.textDecorationColor=T.accent}
+                  onMouseLeave={e=>e.currentTarget.style.textDecorationColor="transparent"}
+                >{v.sourceName}</div>
+                {v.sourcePhone && <div style={{ fontSize:12, color:T.textMid, marginBottom:v.notes?4:0 }}>📞 {v.sourcePhone}</div>}
+                {v.notes && <p style={{ margin:0, fontSize:13, color:T.textMid, lineHeight:1.5 }}>{v.notes}</p>}
+              </>)}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </>)}
+
+      {/* Hosted calendar feed — subscribe in Google / Apple / Outlook */}
+      {(() => {
+        const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
+        return (
+          <div style={{ marginTop:32, borderTop:`2px solid ${T.border}`, paddingTop:20 }}>
+            <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Calendar Feed (Subscribe)</div>
+            <p style={{ fontSize:12, color:T.textLight, margin:"0 0 10px", maxWidth:640 }}>
+              A live iCalendar feed of all events and viewings. Add it to Google, Apple or Outlook calendar via "Subscribe from URL" / "Add calendar by URL" — it refreshes automatically.
+            </p>
+            <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+              <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"7px 12px", fontSize:12, color:T.text, wordBreak:"break-all" }}>{feedUrl}</code>
+              <button onClick={()=>{ try{ navigator.clipboard.writeText(feedUrl); setFeedCopied(true); setTimeout(()=>setFeedCopied(false),2000); }catch(e){} }}
+                style={{ background:feedCopied?T.green:T.midBlue, color:"#fff", border:"none", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                {feedCopied ? "✓ Copied" : "Copy URL"}
+              </button>
+              <a href={feedUrl} target="_blank" rel="noreferrer"
+                style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, textDecoration:"none", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                Download .ics
+              </a>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
 
 // ─── EnquiriesView (top-level) ────────────────────────────────────────────────
-function EnquiriesView({ gmailToken, onConvertToBooking }) {
+function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFocus }) {
   const [enquiries, setEnquiries] = useState([]);
   const [loaded, setLoaded]       = useState(false);
   const [selected, setSelected]   = useState(null); // id of open enquiry
@@ -5695,6 +5790,11 @@ function EnquiriesView({ gmailToken, onConvertToBooking }) {
       setLoaded(true);
     })();
   }, []);
+
+  // Deep-link: when arriving with a focus enquiry id (e.g. clicked from Viewings or Year Calendar), open it
+  useEffect(() => {
+    if (focusEnquiryId) { setSelected(focusEnquiryId); setAdding(false); if (clearFocus) clearFocus(); }
+  }, [focusEnquiryId]);
 
   const save = async data => {
     setEnquiries(data);
