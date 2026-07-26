@@ -6,173 +6,117 @@
   <title>Book Your Stay | Hawthbush Farm</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
-  <script src="https://js.stripe.com/v3/"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Jost', sans-serif;
-      background: #f9f6f1;
-      color: #2d2a25;
-      min-height: 100vh;
-    }
-    .header {
-      background: #fff;
-      border-bottom: 1px solid #e8e2d9;
-      padding: 22px 40px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .header h1 {
-      font-family: 'Cormorant Garamond', serif;
-      font-size: 28px;
-      font-weight: 600;
-      color: #2d2a25;
-      letter-spacing: .5px;
-    }
-    .header .sub {
-      font-size: 13px;
-      color: #7a7060;
-      font-weight: 400;
-      margin-top: 2px;
-    }
-    .main { max-width: 960px; margin: 0 auto; padding: 40px 20px 80px; }
-    h2.section-title {
-      font-family: 'Cormorant Garamond', serif;
-      font-size: 32px;
-      font-weight: 600;
-      color: #2d2a25;
-      margin-bottom: 8px;
-    }
-    .section-sub { font-size: 14px; color: #7a7060; margin-bottom: 32px; line-height: 1.5; }
+    body { font-family: 'Jost', sans-serif; background: #f9f6f1; color: #2d2a25; min-height: 100vh; }
+    .header { background: #fff; border-bottom: 1px solid #e8e2d9; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; color: #2d2a25; letter-spacing: .5px; }
+    .header .sub { font-size: 13px; color: #7a7060; font-weight: 400; margin-top: 2px; }
+    .main { max-width: 1000px; margin: 0 auto; padding: 36px 20px 80px; }
+
+    /* Steps */
+    .steps { display: flex; margin-bottom: 32px; border-radius: 10px; overflow: hidden; border: 1px solid #e8e2d9; }
+    .step { flex: 1; padding: 11px 8px; text-align: center; background: #f9f6f1; font-size: 12px; font-weight: 600; color: #9a9080; border-right: 1px solid #e8e2d9; }
+    .step:last-child { border-right: none; }
+    .step.active { background: #2d2a25; color: #fff; }
+    .step.done { background: #edf7ed; color: #3d7a3d; }
 
     /* Property cards */
-    .property-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; margin-bottom: 48px; }
-    .property-card {
-      background: #fff;
-      border: 2px solid #e8e2d9;
-      border-radius: 14px;
-      padding: 22px;
-      cursor: pointer;
-      transition: border-color .15s, box-shadow .15s;
-      position: relative;
-    }
-    .property-card:hover { border-color: #b8a88a; box-shadow: 0 4px 20px rgba(0,0,0,.08); }
-    .property-card.selected { border-color: #b8a88a; box-shadow: 0 0 0 3px #f0e8d830; background: #fdfaf6; }
-    .property-card .badge { position: absolute; top: 14px; right: 14px; font-size: 11px; font-weight: 600; background: #f0e8d8; color: #7a5c30; padding: 3px 10px; border-radius: 20px; }
-    .property-card .prop-name { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; color: #2d2a25; margin-bottom: 4px; }
-    .property-card .prop-sleeps { font-size: 13px; color: #7a7060; margin-bottom: 10px; }
-    .property-card .prop-rate { font-size: 14px; color: #2d2a25; font-weight: 500; }
-    .property-card .prop-rules { font-size: 12px; color: #9a9080; margin-top: 6px; }
+    .prop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-bottom: 24px; }
+    .prop-card { background: #fff; border: 2px solid #e8e2d9; border-radius: 14px; padding: 20px; cursor: pointer; transition: border-color .15s, box-shadow .15s; position: relative; }
+    .prop-card:hover { border-color: #b8a88a; box-shadow: 0 4px 18px rgba(0,0,0,.07); }
+    .prop-card.selected { border-color: var(--col); box-shadow: 0 0 0 3px var(--col-faint); }
+    .prop-card-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+    .prop-dot { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
+    .prop-name { font-family: 'Cormorant Garamond', serif; font-size: 20px; font-weight: 600; flex: 1; }
+    .prop-cb { width: 19px; height: 19px; accent-color: #2d2a25; cursor: pointer; flex-shrink: 0; }
+    .prop-meta { font-size: 12px; color: #7a7060; line-height: 1.55; }
+    .prop-rate { font-size: 13px; color: #2d2a25; font-weight: 500; margin-top: 5px; }
 
-    /* Booking panel */
-    .booking-panel {
-      background: #fff;
-      border: 1px solid #e8e2d9;
-      border-radius: 16px;
-      padding: 32px;
-      margin-bottom: 32px;
-      box-shadow: 0 2px 12px rgba(0,0,0,.04);
-    }
-    .booking-panel h3 {
-      font-family: 'Cormorant Garamond', serif;
-      font-size: 24px;
-      font-weight: 600;
-      margin-bottom: 22px;
-      color: #2d2a25;
-    }
-    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-    .form-row.three { grid-template-columns: 1fr 1fr 1fr; }
-    .form-group { display: flex; flex-direction: column; gap: 6px; }
-    .form-group label { font-size: 12px; font-weight: 600; color: #7a7060; text-transform: uppercase; letter-spacing: .4px; }
-    .form-group input, .form-group select {
-      background: #fafaf8;
-      border: 1.5px solid #e0d9ce;
-      border-radius: 8px;
-      color: #2d2a25;
-      font-family: 'Jost', sans-serif;
-      font-size: 14px;
-      padding: 10px 13px;
-      outline: none;
-      transition: border-color .15s, box-shadow .15s;
-    }
-    .form-group input:focus, .form-group select:focus {
-      border-color: #b8a88a;
-      box-shadow: 0 0 0 3px #f0e8d840;
-    }
-    .form-group input.error { border-color: #e05252; }
+    /* Panel */
+    .panel { background: #fff; border: 1px solid #e8e2d9; border-radius: 14px; padding: 26px 28px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
+    .panel h3 { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; color: #2d2a25; margin-bottom: 18px; }
 
-    /* Quote box */
-    .quote-box {
-      background: #fdfaf6;
-      border: 1.5px solid #d4c8b0;
-      border-radius: 10px;
-      padding: 18px 20px;
-      margin: 16px 0 22px;
-    }
-    .quote-box .quote-line { display: flex; justify-content: space-between; font-size: 14px; color: #2d2a25; padding: 3px 0; }
-    .quote-box .quote-line.discount { color: #5a8a4a; }
-    .quote-box .quote-line.total { font-weight: 700; font-size: 16px; border-top: 1px solid #e0d9ce; margin-top: 8px; padding-top: 10px; }
-    .quote-box .deposit-note { font-size: 12px; color: #7a7060; margin-top: 8px; }
-    .unavail-msg { background: #fff3f3; border: 1.5px solid #f5c6c6; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #b94040; margin: 12px 0; }
-    .warn-msg { background: #fff9ed; border: 1.5px solid #f0d98a; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #7a5c20; margin: 8px 0; }
+    /* Calendar */
+    .cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .cal-title { font-family: 'Cormorant Garamond', serif; font-size: 20px; font-weight: 600; color: #2d2a25; }
+    .cal-btn { width: 34px; height: 34px; border: 1.5px solid #e0d9ce; border-radius: 8px; background: #faf8f5; cursor: pointer; font-size: 18px; color: #7a7060; display: flex; align-items: center; justify-content: center; line-height: 1; }
+    .cal-btn:hover { border-color: #b8a88a; color: #2d2a25; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .cal-dow { text-align: center; font-size: 11px; font-weight: 600; color: #b8a88a; padding-bottom: 6px; }
+    .cal-cell { position: relative; aspect-ratio: 1; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; overflow: hidden; transition: transform .1s; }
+    .cal-cell.pad { background: transparent; }
+    .cal-cell.past { background: #f4f2ef; color: #ccc8c0; cursor: not-allowed; }
+    .cal-cell.avail { background: #c8f0d0; color: #1a6630; cursor: pointer; }
+    .cal-cell.avail:hover { transform: scale(1.1); z-index: 2; }
+    .cal-cell.booked { background: #f5bfbf; color: #8b2020; cursor: not-allowed; }
+    .cal-cell.checkout-free { cursor: pointer; } /* departure day - available for new checkin */
+    .cal-cell.checkout-free:hover { transform: scale(1.1); z-index: 2; }
+    .cal-cell.changeover { cursor: not-allowed; } /* both checkout and checkin already booked */
+    .cal-cell.selected { background: #2d2a25 !important; color: #fff !important; font-weight: 700; z-index: 3; }
+    .cal-cell.selected-end { background: #7a7060 !important; color: #fff !important; z-index: 3; }
+    .cal-cell.in-range { background: #e8f4ec !important; color: #1a6630; }
+    .cal-cell.today-ring { outline: 2px solid #2d2a25; outline-offset: -2px; }
+    /* Triangle overlays */
+    .tri { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    .tri-co { clip-path: polygon(0 0, 0 100%, 100% 100%); }  /* lower-left = departure */
+    .tri-ci { clip-path: polygon(100% 0, 0 0, 100% 100%); } /* upper-right = arrival */
+    .cal-num { position: relative; z-index: 1; font-size: 13px; }
 
-    /* Divider */
-    .divider { border: none; border-top: 1px solid #e8e2d9; margin: 28px 0; }
+    /* Legend */
+    .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: #7a7060; align-items: center; }
+    .leg-item { display: flex; align-items: center; gap: 5px; }
+    .leg-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
 
-    /* Submit button */
-    .btn-primary {
-      background: #2d2a25;
-      color: #fff;
-      border: none;
-      border-radius: 10px;
-      padding: 15px 36px;
-      font-family: 'Jost', sans-serif;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      width: 100%;
-      letter-spacing: .3px;
-      transition: background .15s;
+    /* Nights grid */
+    .nights-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-bottom: 18px; }
+    .night-btn { padding: 10px 12px; border: 2px solid #e8e2d9; border-radius: 9px; cursor: pointer; background: #faf8f5; text-align: center; transition: border-color .15s, background .15s; }
+    .night-btn:hover { border-color: #b8a88a; }
+    .night-btn.sel { border-color: #2d2a25; background: #f0ece4; }
+    .night-btn .nn { font-size: 15px; font-weight: 600; color: #2d2a25; }
+    .night-btn .np { font-size: 12px; color: #7a7060; margin-top: 2px; }
+
+    /* Quote */
+    .quote-box { background: #fdfaf6; border: 1.5px solid #d4c8b0; border-radius: 10px; padding: 16px 18px; margin: 14px 0 18px; }
+    .q-row { display: flex; justify-content: space-between; font-size: 14px; padding: 3px 0; color: #2d2a25; }
+    .q-row.tot { font-weight: 700; font-size: 16px; border-top: 1px solid #e0d9ce; margin-top: 8px; padding-top: 9px; }
+    .q-row.dep { color: #5a7a3a; font-weight: 600; }
+    .q-row.bal { font-size: 12px; color: #9a9080; }
+
+    /* Form */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+    .form-field { display: flex; flex-direction: column; gap: 5px; }
+    .form-field.full { grid-column: 1 / -1; }
+    .form-field label { font-size: 11px; font-weight: 600; color: #7a7060; text-transform: uppercase; letter-spacing: .5px; }
+    .form-field input, .form-field textarea, .form-field select {
+      background: #fafaf8; border: 1.5px solid #e0d9ce; border-radius: 8px; color: #2d2a25;
+      font-family: 'Jost', sans-serif; font-size: 14px; padding: 10px 13px; outline: none; transition: border-color .15s;
     }
+    .form-field input:focus, .form-field textarea:focus { border-color: #b8a88a; box-shadow: 0 0 0 3px #f0e8d840; }
+
+    /* Buttons */
+    .btn-primary { display: block; width: 100%; padding: 14px 24px; background: #2d2a25; color: #fff; border: none; border-radius: 10px; font-family: 'Jost', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; transition: background .15s; letter-spacing: .2px; }
     .btn-primary:hover { background: #4a4540; }
     .btn-primary:disabled { background: #c0bab0; cursor: not-allowed; }
-    .btn-secondary {
-      background: none;
-      color: #7a7060;
-      border: 1.5px solid #e0d9ce;
-      border-radius: 10px;
-      padding: 11px 24px;
-      font-family: 'Jost', sans-serif;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: border-color .15s;
-    }
-    .btn-secondary:hover { border-color: #b8a88a; color: #2d2a25; }
+    .btn-ghost { padding: 10px 20px; background: none; color: #7a7060; border: 1.5px solid #e0d9ce; border-radius: 9px; font-family: 'Jost', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; }
+    .btn-ghost:hover { border-color: #b8a88a; color: #2d2a25; }
 
-    /* Loading / error states */
-    .loading { text-align: center; padding: 60px 20px; font-size: 14px; color: #9a9080; }
-    .error-page { text-align: center; padding: 60px 20px; }
-    .error-page h3 { font-family: 'Cormorant Garamond', serif; font-size: 24px; margin-bottom: 10px; color: #2d2a25; }
-    .error-page p { color: #7a7060; font-size: 14px; }
+    /* Alert */
+    .alert { border-radius: 8px; padding: 11px 15px; font-size: 13px; margin-bottom: 14px; line-height: 1.5; }
+    .alert-info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .alert-warn { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+    .alert-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .alert-ok { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
 
-    .stripe-note { font-size: 12px; color: #9a9080; text-align: center; margin-top: 12px; }
-    .stripe-note svg { vertical-align: middle; margin-right: 4px; }
-
-    .selected-prop-label {
-      font-family: 'Cormorant Garamond', serif;
-      font-size: 20px;
-      font-weight: 600;
-      color: #2d2a25;
-      margin-bottom: 4px;
-    }
+    .divider { border: none; border-top: 1px solid #e8e2d9; margin: 22px 0; }
+    .stripe-note { font-size: 12px; color: #9a9080; text-align: center; margin-top: 10px; }
 
     @media (max-width: 600px) {
-      .header { padding: 16px 20px; }
-      .main { padding: 24px 14px 60px; }
-      .form-row, .form-row.three { grid-template-columns: 1fr; }
-      .property-grid { grid-template-columns: 1fr; }
+      .header { padding: 16px 18px; }
+      .main { padding: 20px 12px 60px; }
+      .form-grid { grid-template-columns: 1fr; }
+      .prop-grid { grid-template-columns: 1fr; }
+      .nights-grid { grid-template-columns: repeat(3, 1fr); }
     }
   </style>
 </head>
@@ -187,324 +131,552 @@
 </div>
 
 <div class="main" id="app">
-  <div class="loading">Loading availability&hellip;</div>
+  <div style="text-align:center; padding:60px; color:#9a9080;">Loading availability&hellip;</div>
 </div>
 
 <script>
-// ── Config ───────────────────────────────────────────────────────────────────
-const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
-const STRIPE_PK    = "pk_live_51Pyd6CBQuJjvSXJobhKedNOwGedgBl6FEfzbA3Y6RQmCnLJ4StE7ULa1cUDbZPPjxAALSaiiSExsuNuqXiNRASNp00MrXav8Fr";
-const CHECKOUT_FN  = "/.netlify/functions/create-accom-checkout";
+// ── Config ────────────────────────────────────────────────────────────────────
+var SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+var SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+var CHECKOUT_FN   = "/.netlify/functions/create-accom-checkout";
+var MONTH_NAMES   = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+var DOW_LABELS    = ["M","T","W","T","F","S","S"];
 
-// ── Supabase helpers ─────────────────────────────────────────────────────────
-async function sbGet(key) {
-  const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
-    headers: { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY }
+// ── State ─────────────────────────────────────────────────────────────────────
+var S = {
+  properties: [],
+  bookings: [],
+  selProps: [],          // selected property IDs
+  calYear: 0, calMonth: 0,
+  checkIn: null,         // ISO date string
+  nights: null,
+  checkOut: null,
+  // availability (built once after load)
+  occupied: {},          // propId -> Set of dateStr  [ci, co) exclusive
+  checkInDates: {},      // propId -> Set of dateStr
+  checkOutDates: {},     // propId -> Set of dateStr
+  // form
+  guestName: "", email: "", phone: "", guestCount: 2, notes: "",
+  submitting: false, error: ""
+};
+
+// ── Supabase ──────────────────────────────────────────────────────────────────
+function sbGet(key) {
+  return fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
+    headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+  }).then(function(r) { return r.json(); }).then(function(rows) {
+    return (rows && rows[0]) ? rows[0].value : null;
   });
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return (rows && rows[0]) ? rows[0].value : null;
 }
 
-// ── Pricing helpers ──────────────────────────────────────────────────────────
-function nightsBetween(ci, co) {
-  if (!ci || !co) return 0;
-  return Math.round((new Date(co + "T00:00:00") - new Date(ci + "T00:00:00")) / 86400000);
+// ── Date helpers ──────────────────────────────────────────────────────────────
+function addDays(iso, n) {
+  var d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
 }
+function fmtDate(iso) {
+  if (!iso) return "";
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+function fmt(n) { return "£" + Number(n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+function isoDate(y, m, d) { return y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0"); }
+function today() { return new Date().toISOString().slice(0, 10); }
+function escHtml(s) { return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
+// ── Pricing ───────────────────────────────────────────────────────────────────
 function getPriceForNight(prop, dateStr) {
   if (!prop) return 0;
   if (prop.seasons && prop.seasons.length) {
     for (var i = 0; i < prop.seasons.length; i++) {
       var s = prop.seasons[i];
-      if (s.startDate && s.endDate && dateStr >= s.startDate && dateStr < s.endDate) {
+      if (s.startDate && s.endDate && dateStr >= s.startDate && dateStr < s.endDate)
         return Number(s.ratePerNight) || 0;
-      }
     }
   }
   return Number(prop.baseRate) || 0;
 }
 
-function quoteStay(prop, checkIn, checkOut) {
-  if (!prop || !checkIn || !checkOut) return null;
-  var nights = nightsBetween(checkIn, checkOut);
+function quoteStay(prop, ci, co) {
+  if (!prop || !ci || !co) return null;
+  var nights = Math.round((new Date(co + "T00:00:00") - new Date(ci + "T00:00:00")) / 86400000);
   if (nights <= 0) return null;
-  var subtotal = 0;
-  var d = new Date(checkIn + "T00:00:00");
+  var sub = 0;
+  var d = new Date(ci + "T00:00:00");
   for (var i = 0; i < nights; i++) {
-    subtotal += getPriceForNight(prop, d.toISOString().slice(0,10));
+    sub += getPriceForNight(prop, d.toISOString().slice(0, 10));
     d.setDate(d.getDate() + 1);
   }
-  var discount = 0;
-  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0) {
-    discount = prop.longStayDiscount * nights;
-  }
-  var total = Math.max(0, subtotal - discount);
-  return { nights: nights, subtotal: subtotal, discount: discount, total: total };
+  var disc = 0;
+  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0)
+    disc = prop.longStayDiscount * nights;
+  return { nights: nights, subtotal: sub, discount: disc, total: Math.max(0, sub - disc) };
 }
 
-function checkAvailability(bookings, propertyId, checkIn, checkOut) {
-  if (!checkIn || !checkOut || !propertyId) return true;
-  var ci = new Date(checkIn + "T00:00:00");
-  var co = new Date(checkOut + "T00:00:00");
-  for (var i = 0; i < bookings.length; i++) {
-    var b = bookings[i];
-    if (b.status === "cancelled") continue;
+// ── Build availability maps ───────────────────────────────────────────────────
+function buildAvailability() {
+  S.occupied = {}; S.checkInDates = {}; S.checkOutDates = {};
+  S.bookings.forEach(function(b) {
+    if (b.status === "cancelled") return;
     var stays = (b.stays && b.stays.length) ? b.stays : [b];
-    for (var j = 0; j < stays.length; j++) {
-      var s = stays[j];
-      if (s.propertyId !== propertyId) continue;
-      if (!s.checkIn || !s.checkOut) continue;
-      var sCI = new Date(s.checkIn + "T00:00:00");
-      var sCO = new Date(s.checkOut + "T00:00:00");
-      if (ci < sCO && co > sCI) return false;
+    stays.forEach(function(st) {
+      if (!st.propertyId || !st.checkIn || !st.checkOut) return;
+      var pid = st.propertyId;
+      if (!S.occupied[pid])      S.occupied[pid]      = new Set();
+      if (!S.checkInDates[pid])  S.checkInDates[pid]  = new Set();
+      if (!S.checkOutDates[pid]) S.checkOutDates[pid] = new Set();
+      S.checkInDates[pid].add(st.checkIn);
+      S.checkOutDates[pid].add(st.checkOut);
+      var d = new Date(st.checkIn + "T00:00:00");
+      var co = new Date(st.checkOut + "T00:00:00");
+      while (d < co) { S.occupied[pid].add(d.toISOString().slice(0, 10)); d.setDate(d.getDate() + 1); }
+    });
+  });
+}
+
+// Status for a date across currently selected properties:
+// "past" | "avail" | "booked" | "checkout-free" | "changeover"
+function dayStatus(ds) {
+  var t = today();
+  if (ds < t) return "past";
+  var pids = S.selProps;
+  if (!pids.length) return "avail";
+  var anyOccupied = false;
+  var anyCheckout = false;
+  var anyCheckin  = false;
+  for (var i = 0; i < pids.length; i++) {
+    var pid = pids[i];
+    if (S.occupied[pid] && S.occupied[pid].has(ds)) anyOccupied = true;
+    if (S.checkOutDates[pid] && S.checkOutDates[pid].has(ds)) anyCheckout = true;
+    if (S.checkInDates[pid]  && S.checkInDates[pid].has(ds))  anyCheckin  = true;
+  }
+  if (anyOccupied) return "booked";
+  // Not occupied by any selected property
+  if (anyCheckout && anyCheckin) return "changeover"; // another booking already starts this day
+  if (anyCheckout) return "checkout-free"; // guests leaving in morning, can check in same day
+  return "avail";
+}
+
+// How many consecutive FREE nights from checkIn across ALL selected properties?
+function maxFreeNights(ci) {
+  var maxN = 28;
+  S.selProps.forEach(function(pid) {
+    var occ = S.occupied[pid] || new Set();
+    for (var i = 1; i <= 28; i++) {
+      var ds = addDays(ci, i);
+      if (occ.has(ds)) { if (i < maxN) maxN = i; break; }
     }
-  }
-  return true;
+  });
+  return maxN;
 }
 
-function fmt(n) { return "£" + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
-function fmtDate(s) { if (!s) return ""; var d = new Date(s + "T00:00:00"); return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); }
-
-// ── State ────────────────────────────────────────────────────────────────────
-var state = {
-  properties: [],
-  bookings: [],
-  selectedPropId: null,
-  checkIn: "",
-  checkOut: "",
-  guestName: "",
-  email: "",
-  phone: "",
-  guestCount: "",
-  loading: true,
-  submitting: false,
-  error: ""
-};
-
-// ── Normalise bookings ───────────────────────────────────────────────────────
-function normalizeAccom(b) {
-  if (b.stays && b.stays.length) return b;
-  var stay = { propertyId: b.propertyId || "", checkIn: b.checkIn || "", checkOut: b.checkOut || "" };
-  return Object.assign({}, b, { stays: [stay] });
+// ── Render infrastructure ─────────────────────────────────────────────────────
+function setStep(n) {
+  for (var i = 1; i <= 4; i++) {
+    var el = document.getElementById("stp-" + i);
+    if (el) el.className = "step" + (i === n ? " active" : i < n ? " done" : "");
+  }
 }
 
-// ── Render ───────────────────────────────────────────────────────────────────
-function getSelectedProp() {
-  if (!state.selectedPropId) return null;
-  for (var i = 0; i < state.properties.length; i++) {
-    if (state.properties[i].id === state.selectedPropId) return state.properties[i];
+function mount(html) { document.getElementById("app").innerHTML = html; }
+
+// ── Step 1: Property selection ────────────────────────────────────────────────
+function renderStep1() {
+  setStep(1);
+  var html = '<div class="steps">';
+  var labels = ["1. Choose property", "2. Pick dates", "3. Your details", "4. Confirm"];
+  for (var i = 0; i < labels.length; i++) {
+    html += '<div class="step' + (i === 0 ? " active" : "") + '" id="stp-' + (i+1) + '">' + labels[i] + '</div>';
   }
-  return null;
-}
+  html += '</div>';
 
-function render() {
-  var app = document.getElementById("app");
-  if (state.loading) { app.innerHTML = '<div class="loading">Loading availability&hellip;</div>'; return; }
-  if (state.loadError) { app.innerHTML = '<div class="error-page"><h3>Something went wrong</h3><p>' + state.loadError + '</p></div>'; return; }
+  html += '<h2 style="font-family:\'Cormorant Garamond\',serif;font-size:30px;font-weight:600;margin-bottom:6px;color:#2d2a25">Book Your Stay</h2>';
+  html += '<p style="font-size:14px;color:#7a7060;margin-bottom:28px">Select one or more properties, then pick your dates. You can book Hamlet and Amly together for large groups.</p>';
 
-  var prop = getSelectedProp();
-  var today = new Date().toISOString().slice(0,10);
-
-  // Validate dates
-  var quote = null, available = true, nightsWarn = "", checkInWarn = "";
-  if (prop && state.checkIn && state.checkOut) {
-    var nights = nightsBetween(state.checkIn, state.checkOut);
-    if (nights <= 0) {
-      checkInWarn = "Check-out must be after check-in.";
-    } else {
-      if (prop.minNights && nights < prop.minNights) {
-        nightsWarn = "Minimum stay is " + prop.minNights + " night" + (prop.minNights > 1 ? "s" : "") + " for this property.";
-      }
-      if (prop.maxNights && nights > prop.maxNights) {
-        nightsWarn = "Maximum stay is " + prop.maxNights + " nights for this property.";
-      }
-      available = checkAvailability(state.bookings, prop.id, state.checkIn, state.checkOut);
-      if (available && !nightsWarn) {
-        quote = quoteStay(prop, state.checkIn, state.checkOut);
-      }
-    }
-  }
-
-  var depositAmt = quote ? Math.round(quote.total * ((prop.depositPct || 30) / 100)) : 0;
-
-  var canSubmit = prop && state.checkIn && state.checkOut && available && !nightsWarn && !checkInWarn
-    && quote && state.guestName.trim() && state.email.trim() && !state.submitting;
-
-  // Build HTML
-  var html = '<h2 class="section-title">Book Your Stay</h2>';
-  html += '<p class="section-sub">Select a property, choose your dates, and pay a ' + (prop ? (prop.depositPct || 30) : 30) + '% deposit to secure your booking. The balance is due ' + (prop ? (prop.balanceWeeks || 6) : 6) + ' weeks before arrival.</p>';
-
-  // Property cards
-  html += '<div class="property-grid">';
-  for (var i = 0; i < state.properties.length; i++) {
-    var p = state.properties[i];
-    var sel = p.id === state.selectedPropId;
-    var rateStr = p.baseRate ? ("From " + fmt(p.baseRate) + "/night") : "Contact for pricing";
-    html += '<div class="property-card' + (sel ? " selected" : "") + '" onclick="selectProp(\'' + p.id + '\')">';
-    if (sel) html += '<div class="badge">Selected</div>';
-    html += '<div class="prop-name">' + p.name + '</div>';
-    html += '<div class="prop-sleeps">Sleeps ' + p.sleeps + '</div>';
+  html += '<div class="prop-grid">';
+  S.properties.forEach(function(p) {
+    var sel = S.selProps.indexOf(p.id) >= 0;
+    var rateStr = p.baseRate > 0 ? "From " + fmt(p.baseRate) + " / night" : "Contact for pricing";
+    var col = p.colour || "#2d2a25";
+    html += '<div class="prop-card' + (sel ? " selected" : "") + '" style="--col:' + col + ';--col-faint:' + col + '22" onclick="toggleProp(\'' + p.id + '\')">';
+    html += '<div class="prop-card-head">';
+    html += '<span class="prop-dot" style="background:' + col + '"></span>';
+    html += '<span class="prop-name">' + escHtml(p.name) + '</span>';
+    html += '<input type="checkbox" class="prop-cb" ' + (sel ? "checked" : "") + ' onclick="event.stopPropagation();toggleProp(\'' + p.id + '\')">';
+    html += '</div>';
+    var meta = [];
+    if (p.sleeps) meta.push("Sleeps " + p.sleeps);
+    if (p.minNights) meta.push(p.minNights + " night min");
+    if (p.checkInFrom) meta.push("Check-in from " + p.checkInFrom);
+    if (meta.length) html += '<div class="prop-meta">' + meta.join(" &middot; ") + '</div>';
     html += '<div class="prop-rate">' + rateStr + '</div>';
-    var rules = [];
-    if (p.minNights) rules.push("Min " + p.minNights + " nights");
-    if (p.checkInFrom) rules.push("Check-in from " + p.checkInFrom);
-    if (p.checkOutBy) rules.push("Check-out by " + p.checkOutBy);
-    if (rules.length) html += '<div class="prop-rules">' + rules.join(" &middot; ") + '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  if (S.selProps.length) {
+    html += '<div style="text-align:right">';
+    html += '<button class="btn-primary" style="max-width:220px" onclick="goStep2()">Choose dates &#8594;</button>';
+    html += '</div>';
+  } else {
+    html += '<p style="text-align:center;color:#b8a88a;font-size:13px">Tick one or more properties above to continue</p>';
+  }
+
+  mount(html);
+}
+
+function toggleProp(pid) {
+  var idx = S.selProps.indexOf(pid);
+  if (idx >= 0) S.selProps.splice(idx, 1);
+  else S.selProps.push(pid);
+  renderStep1();
+}
+
+// ── Step 2: Availability calendar ────────────────────────────────────────────
+function goStep2() {
+  if (!S.selProps.length) return;
+  S.checkIn = null; S.nights = null; S.checkOut = null;
+  var n = new Date();
+  S.calYear = n.getFullYear(); S.calMonth = n.getMonth();
+  renderStep2();
+}
+
+function renderCal() {
+  var year = S.calYear, month = S.calMonth;
+  var t = today();
+  var nDays = daysInMonth(year, month);
+  var firstDow = (new Date(year, month, 1).getDay() + 6) % 7; // 0=Mon
+
+  var html = '<div class="cal-grid">';
+  DOW_LABELS.forEach(function(d) { html += '<div class="cal-dow">' + d + '</div>'; });
+  for (var p = 0; p < firstDow; p++) html += '<div class="cal-cell pad"></div>';
+
+  for (var d = 1; d <= nDays; d++) {
+    var ds = isoDate(year, month, d);
+    var status = dayStatus(ds);
+    var isSel   = ds === S.checkIn;
+    var isEnd   = ds === S.checkOut;
+    var inRange = S.checkIn && S.checkOut && ds > S.checkIn && ds < S.checkOut;
+    var isToday = ds === t;
+
+    var cls = "cal-cell " + status;
+    if (isSel)    cls += " selected";
+    else if (isEnd) cls += " selected-end";
+    else if (inRange) cls += " in-range";
+    if (isToday && !isSel && !isEnd) cls += " today-ring";
+
+    var onclick = "";
+    if (status === "avail" || status === "checkout-free") onclick = ' onclick="selectDate(\'' + ds + '\')"';
+
+    html += '<div class="' + cls + '"' + onclick + '>';
+
+    // Triangles for special statuses
+    if (status === "checkout-free") {
+      // Lower-left = departure (pink), upper-right = available (green)
+      html += '<div class="tri tri-co" style="background:#f5bfbf"></div>';
+      html += '<div class="tri tri-ci" style="background:#c8f0d0"></div>';
+    } else if (status === "changeover") {
+      // Both halves filled: departure in lower-left (darker pink), checkin in upper-right (salmon)
+      html += '<div class="tri tri-co" style="background:#e89090"></div>';
+      html += '<div class="tri tri-ci" style="background:#f5bfbf"></div>';
+    }
+
+    html += '<span class="cal-num">' + d + '</span>';
     html += '</div>';
   }
   html += '</div>';
 
-  if (prop) {
-    html += '<div class="booking-panel">';
-    html += '<div class="selected-prop-label">' + prop.name + '</div>';
-    html += '<p style="font-size:13px;color:#7a7060;margin-bottom:22px;">Sleeps ' + prop.sleeps + ' &middot; Check-in from ' + (prop.checkInFrom || "16:00") + ' &middot; Check-out by ' + (prop.checkOutBy || "10:00") + '</p>';
+  // Legend
+  html += '<div class="legend">';
+  html += '<div class="leg-item"><div class="leg-swatch" style="background:#c8f0d0;border:1px solid #6dcc8a"></div>Available</div>';
+  html += '<div class="leg-item"><div class="leg-swatch" style="background:#f5bfbf;border:1px solid #e07070"></div>Booked</div>';
+  html += '<div class="leg-item"><div class="leg-swatch" style="background:linear-gradient(135deg,#f5bfbf 50%,#c8f0d0 50%);border:1px solid #ddd"></div>Changeover (available for arrival)</div>';
+  html += '<div class="leg-item"><div class="leg-swatch" style="background:#2d2a25"></div>Selected</div>';
+  html += '</div>';
 
-    // Date row
-    html += '<div class="form-row">';
-    html += '<div class="form-group"><label>Check-in date</label><input type="date" id="ci" value="' + state.checkIn + '" min="' + today + '" onchange="updateDates()" class="' + (checkInWarn ? "error" : "") + '"></div>';
-    html += '<div class="form-group"><label>Check-out date</label><input type="date" id="co" value="' + state.checkOut + '" min="' + (state.checkIn || today) + '" onchange="updateDates()"></div>';
+  return html;
+}
+
+function renderStep2() {
+  setStep(2);
+  var propNames = S.selProps.map(function(pid) {
+    var p = S.properties.filter(function(x) { return x.id === pid; })[0];
+    return p ? p.name : pid;
+  });
+
+  var html = stepsHtml(2);
+  html += '<div class="panel">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">';
+  html += '<h3 style="margin:0">' + escHtml(propNames.join(" + ")) + ' &mdash; Availability</h3>';
+  html += '<button class="btn-ghost" onclick="renderStep1()">&#8592; Change property</button>';
+  html += '</div>';
+
+  // Calendar nav
+  html += '<div class="cal-nav">';
+  html += '<button class="cal-btn" onclick="shiftCal(-1)">&#8249;</button>';
+  html += '<span class="cal-title">' + MONTH_NAMES[S.calMonth] + ' ' + S.calYear + '</span>';
+  html += '<button class="cal-btn" onclick="shiftCal(1)">&#8250;</button>';
+  html += '</div>';
+
+  html += renderCal();
+  html += '</div>'; // panel
+
+  // Nights picker (shown once date selected)
+  if (S.checkIn) {
+    html += renderNightsPicker();
+  } else {
+    html += '<div class="alert alert-info">Click an available date above to select your arrival day.</div>';
+  }
+
+  mount(html);
+}
+
+function stepsHtml(active) {
+  var labels = ["1. Property", "2. Dates", "3. Details", "4. Confirm"];
+  var html = '<div class="steps">';
+  for (var i = 0; i < labels.length; i++) {
+    var cls = "step" + (i + 1 === active ? " active" : i + 1 < active ? " done" : "");
+    html += '<div class="' + cls + '" id="stp-' + (i+1) + '">' + labels[i] + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function shiftCal(delta) {
+  S.calMonth += delta;
+  if (S.calMonth < 0)  { S.calMonth = 11; S.calYear--; }
+  if (S.calMonth > 11) { S.calMonth = 0;  S.calYear++; }
+  renderStep2();
+}
+
+function selectDate(ds) {
+  S.checkIn = ds; S.nights = null; S.checkOut = null;
+  renderStep2();
+}
+
+function renderNightsPicker() {
+  var selPropsData = S.selProps.map(function(pid) {
+    return S.properties.filter(function(x) { return x.id === pid; })[0];
+  }).filter(Boolean);
+
+  var minN = selPropsData.reduce(function(acc, p) { return Math.max(acc, p.minNights || 2); }, 1);
+  var maxN = selPropsData.reduce(function(acc, p) { return Math.min(acc, p.maxNights || 28); }, 28);
+  var freeN = maxFreeNights(S.checkIn);
+  maxN = Math.min(maxN, freeN);
+
+  var html = '<div class="panel">';
+  html += '<h3>Arrival: ' + fmtDate(S.checkIn) + ' &mdash; How many nights?</h3>';
+
+  if (maxN < minN) {
+    html += '<div class="alert alert-warn">Not enough consecutive availability from this date. Please choose a different arrival date.</div>';
     html += '</div>';
-
-    if (checkInWarn) html += '<div class="unavail-msg">' + checkInWarn + '</div>';
-    if (nightsWarn)  html += '<div class="warn-msg">' + nightsWarn + '</div>';
-    if (!available && !checkInWarn) html += '<div class="unavail-msg">Sorry, those dates are not available for ' + prop.name + '. Please choose different dates.</div>';
-
-    // Quote
-    if (quote) {
-      html += '<div class="quote-box">';
-      html += '<div class="quote-line"><span>' + quote.nights + ' nights</span><span>' + fmt(quote.subtotal) + '</span></div>';
-      if (quote.discount > 0) {
-        html += '<div class="quote-line discount"><span>Long-stay discount</span><span>-' + fmt(quote.discount) + '</span></div>';
-      }
-      html += '<div class="quote-line total"><span>Total</span><span>' + fmt(quote.total) + '</span></div>';
-      html += '<div class="deposit-note">Deposit due today: ' + fmt(depositAmt) + ' (' + (prop.depositPct || 30) + '%) &mdash; Balance of ' + fmt(quote.total - depositAmt) + ' due ' + (prop.balanceWeeks || 6) + ' weeks before arrival.</div>';
-      html += '</div>';
-    } else if (prop.baseRate && state.checkIn && state.checkOut && available && !nightsWarn && !checkInWarn) {
-      html += '<div class="unavail-msg">Could not calculate a quote. Please check dates.</div>';
-    }
-
-    if (quote && available && !nightsWarn) {
-      html += '<hr class="divider">';
-      html += '<h3>Your details</h3>';
-      html += '<div class="form-row">';
-      html += '<div class="form-group"><label>Full name *</label><input type="text" id="gname" value="' + escHtml(state.guestName) + '" placeholder="Jane Smith" oninput="updateField(\'guestName\',this.value)"></div>';
-      html += '<div class="form-group"><label>Email address *</label><input type="email" id="gemail" value="' + escHtml(state.email) + '" placeholder="jane@example.com" oninput="updateField(\'email\',this.value)"></div>';
-      html += '</div>';
-      html += '<div class="form-row">';
-      html += '<div class="form-group"><label>Phone number</label><input type="tel" id="gphone" value="' + escHtml(state.phone) + '" placeholder="+44 7700 900000" oninput="updateField(\'phone\',this.value)"></div>';
-      html += '<div class="form-group"><label>Number of guests</label><input type="number" id="gcnt" value="' + escHtml(state.guestCount) + '" min="1" max="' + prop.sleeps + '" oninput="updateField(\'guestCount\',this.value)"></div>';
-      html += '</div>';
-      if (state.error) html += '<div class="unavail-msg">' + state.error + '</div>';
-      html += '<button class="btn-primary" onclick="handleSubmit()" ' + (canSubmit ? "" : "disabled") + '>' + (state.submitting ? "Processing&hellip;" : "Pay deposit &mdash; " + fmt(depositAmt)) + '</button>';
-      html += '<p class="stripe-note">Payments are processed securely by Stripe. We never store card details.</p>';
-    }
-
-    html += '</div>'; // booking-panel
+    return html;
   }
 
-  app.innerHTML = html;
-}
-
-function escHtml(s) {
-  return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
-// ── Actions ──────────────────────────────────────────────────────────────────
-function selectProp(id) {
-  state.selectedPropId = id;
-  state.checkIn = "";
-  state.checkOut = "";
-  render();
-  setTimeout(function() {
-    var el = document.getElementById("ci");
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, 100);
-}
-
-function updateDates() {
-  var ci = document.getElementById("ci");
-  var co = document.getElementById("co");
-  state.checkIn  = ci ? ci.value : "";
-  state.checkOut = co ? co.value : "";
-  render();
-}
-
-function updateField(field, val) {
-  state[field] = val;
-  // Don't re-render on every keystroke — just keep state updated
-  // Re-enable/disable submit button
-  var btn = document.querySelector(".btn-primary");
-  if (btn) {
-    var prop = getSelectedProp();
-    var quote = quoteStay(prop, state.checkIn, state.checkOut);
-    var canSubmit = prop && state.checkIn && state.checkOut
-      && checkAvailability(state.bookings, prop.id, state.checkIn, state.checkOut)
-      && quote && state.guestName.trim() && state.email.trim() && !state.submitting;
-    btn.disabled = !canSubmit;
+  html += '<div class="nights-grid">';
+  for (var n = minN; n <= Math.min(maxN, 28); n++) {
+    var co = addDays(S.checkIn, n);
+    var totalPrice = 0; var hasPrice = true;
+    selPropsData.forEach(function(p) {
+      var q = quoteStay(p, S.checkIn, co);
+      if (q && q.total > 0) totalPrice += q.total;
+      else hasPrice = false;
+    });
+    var priceStr = hasPrice && totalPrice > 0 ? fmt(totalPrice) : "—";
+    var isSel = S.nights === n;
+    html += '<div class="night-btn' + (isSel ? " sel" : "") + '" onclick="selectNights(' + n + ')">';
+    html += '<div class="nn">' + n + ' night' + (n === 1 ? "" : "s") + '</div>';
+    html += '<div class="np">' + priceStr + '</div>';
+    html += '</div>';
   }
+  html += '</div>';
+
+  if (S.nights) {
+    html += renderQuote(selPropsData);
+    html += '<button class="btn-primary" onclick="goStep3()">Continue to your details &#8594;</button>';
+  }
+
+  html += '</div>';
+  return html;
 }
 
-function handleSubmit() {
-  var prop = getSelectedProp();
-  var quote = quoteStay(prop, state.checkIn, state.checkOut);
-  if (!prop || !quote) return;
-  if (!state.guestName.trim() || !state.email.trim()) { state.error = "Please fill in your name and email."; render(); return; }
+function selectNights(n) {
+  S.nights = n;
+  S.checkOut = addDays(S.checkIn, n);
+  renderStep2();
+}
 
-  state.submitting = true;
-  state.error = "";
-  render();
+function renderQuote(selPropsData) {
+  var totalAmt = 0;
+  var html = '<div class="quote-box">';
+  html += '<div class="q-row"><span><strong>' + fmtDate(S.checkIn) + '</strong> &rarr; <strong>' + fmtDate(S.checkOut) + '</strong></span><span>' + S.nights + ' nights</span></div>';
+  selPropsData.forEach(function(p) {
+    var q = quoteStay(p, S.checkIn, S.checkOut);
+    var amt = q ? q.total : 0;
+    totalAmt += amt;
+    html += '<div class="q-row"><span>' + escHtml(p.name) + '</span><span>' + fmt(amt) + '</span></div>';
+  });
+  var depPct  = selPropsData.reduce(function(acc, p) { return Math.max(acc, p.depositPct || 50); }, 50);
+  var dep     = Math.round(totalAmt * depPct) / 100;
+  var bal     = totalAmt - dep;
+  var balWks  = selPropsData.reduce(function(acc, p) { return Math.min(acc, p.balanceWeeks || 6); }, 6);
+  var balDue  = addDays(S.checkIn, -balWks * 7);
+  html += '<div class="q-row tot"><span>Total</span><span>' + fmt(totalAmt) + '</span></div>';
+  html += '<div class="q-row dep"><span>Deposit due now (' + depPct + '%)</span><span>' + fmt(dep) + '</span></div>';
+  html += '<div class="q-row bal"><span>Balance due ' + fmtDate(balDue) + '</span><span>' + fmt(bal) + '</span></div>';
+  html += '</div>';
+  return html;
+}
 
-  var depositAmt = Math.round(quote.total * ((prop.depositPct || 30) / 100));
+// ── Step 3: Guest details ─────────────────────────────────────────────────────
+function goStep3() {
+  if (!S.checkIn || !S.nights) return;
+  renderStep3();
+}
+
+function renderStep3() {
+  var selPropsData = S.selProps.map(function(pid) {
+    return S.properties.filter(function(x) { return x.id === pid; })[0];
+  }).filter(Boolean);
+
+  var html = stepsHtml(3);
+  html += '<div class="panel">';
+  html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:16px;flex-wrap:wrap">';
+  html += '<h3 style="margin:0">Your booking details</h3>';
+  html += '<button class="btn-ghost" onclick="goStep2()">&#8592; Change dates</button>';
+  html += '</div>';
+
+  // Recap
+  html += renderQuote(selPropsData);
+
+  html += '<div class="divider"></div>';
+  html += '<h3>About you</h3>';
+  html += '<div class="form-grid" style="margin-bottom:16px">';
+  html += '<div class="form-field"><label>Full name *</label><input id="f-name" value="' + escHtml(S.guestName) + '" oninput="S.guestName=this.value" placeholder="Jane Smith"></div>';
+  html += '<div class="form-field"><label>Email address *</label><input type="email" id="f-email" value="' + escHtml(S.email) + '" oninput="S.email=this.value" placeholder="jane@example.com"></div>';
+  html += '<div class="form-field"><label>Phone number</label><input id="f-phone" value="' + escHtml(S.phone) + '" oninput="S.phone=this.value" placeholder="+44 7700 900000"></div>';
+  html += '<div class="form-field"><label>Number of guests *</label><input type="number" min="1" max="40" id="f-guests" value="' + (S.guestCount || 2) + '" oninput="S.guestCount=parseInt(this.value)||1"></div>';
+  html += '<div class="form-field full"><label>Notes / special requirements</label><textarea id="f-notes" rows="3" oninput="S.notes=this.value" placeholder="Any special requirements or questions...">' + escHtml(S.notes) + '</textarea></div>';
+  html += '</div>';
+
+  if (S.error) html += '<div class="alert alert-error">' + escHtml(S.error) + '</div>';
+
+  var depPct  = selPropsData.reduce(function(acc, p) { return Math.max(acc, p.depositPct || 50); }, 50);
+  var totalAmt = selPropsData.reduce(function(acc, p) {
+    var q = quoteStay(p, S.checkIn, S.checkOut);
+    return acc + (q ? q.total : 0);
+  }, 0);
+  var dep = Math.round(totalAmt * depPct) / 100;
+
+  html += '<button class="btn-primary" ' + (S.submitting ? "disabled" : "") + ' onclick="submitBooking()">';
+  html += S.submitting ? "Processing&hellip;" : ("Pay deposit " + fmt(dep) + " &rarr;");
+  html += '</button>';
+  html += '<p class="stripe-note">Secure payment via Stripe &mdash; we never store card details.</p>';
+  html += '</div>';
+
+  mount(html);
+}
+
+// ── Submit ────────────────────────────────────────────────────────────────────
+function submitBooking() {
+  if (!S.guestName.trim()) { S.error = "Please enter your name."; renderStep3(); return; }
+  if (!S.email.trim() || S.email.indexOf("@") < 0) { S.error = "Please enter a valid email address."; renderStep3(); return; }
+
+  var selPropsData = S.selProps.map(function(pid) {
+    return S.properties.filter(function(x) { return x.id === pid; })[0];
+  }).filter(Boolean);
+
+  var stays = selPropsData.map(function(p) {
+    var q = quoteStay(p, S.checkIn, S.checkOut);
+    return { propertyId: p.id, propertyName: p.name, checkIn: S.checkIn, checkOut: S.checkOut, nights: S.nights, value: q ? q.total : 0 };
+  });
+
+  var totalAmount = stays.reduce(function(acc, st) { return acc + st.value; }, 0);
+  var depPct      = selPropsData.reduce(function(acc, p) { return Math.max(acc, p.depositPct || 50); }, 50);
+  var depositAmount = Math.round(totalAmount * depPct) / 100;
+
+  S.submitting = true; S.error = "";
+  renderStep3();
 
   fetch(CHECKOUT_FN, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      propertyId:   prop.id,
-      propertyName: prop.name,
-      checkIn:      state.checkIn,
-      checkOut:     state.checkOut,
-      nights:       quote.nights,
-      totalAmount:  quote.total,
-      depositAmount: depositAmt,
-      guestName:    state.guestName.trim(),
-      email:        state.email.trim(),
-      phone:        state.phone.trim(),
-      guestCount:   Number(state.guestCount) || 1
+      stays: stays,
+      totalAmount: totalAmount,
+      depositAmount: depositAmount,
+      guestName: S.guestName.trim(),
+      email: S.email.trim(),
+      phone: S.phone.trim(),
+      guestCount: S.guestCount,
+      notes: S.notes.trim()
     })
-  })
-  .then(function(res) { return res.json(); })
-  .then(function(data) {
-    if (data.url) {
-      window.location.href = data.url;
-    } else {
-      state.submitting = false;
-      state.error = data.error || "Something went wrong. Please try again.";
-      render();
-    }
-  })
-  .catch(function(err) {
-    state.submitting = false;
-    state.error = "Connection error. Please try again.";
-    render();
-  });
+  }).then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.url) { window.location.href = data.url; return; }
+      S.submitting = false; S.error = data.error || "Something went wrong. Please try again.";
+      renderStep3();
+    })
+    .catch(function() {
+      S.submitting = false; S.error = "Connection error. Please check your internet and try again.";
+      renderStep3();
+    });
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────
-(async function init() {
-  try {
-    var propsData = await sbGet("hbf_properties_v1");
-    var accomData = await sbGet("hbf_accom_v1");
-    state.properties = (propsData && propsData.length) ? propsData : [];
-    state.bookings = (accomData || []).map(normalizeAccom);
-    state.loading = false;
-  } catch(e) {
-    state.loading = false;
-    state.loadError = "Could not load property data. Please refresh the page.";
+// ── Success / cancel pages ────────────────────────────────────────────────────
+function showSuccess(prop, ci, co) {
+  setStep(4);
+  var html = stepsHtml(4);
+  html += '<div class="panel" style="text-align:center;padding:50px 28px">';
+  html += '<div style="font-size:52px;margin-bottom:18px">&#10003;</div>';
+  html += '<h2 style="font-family:\'Cormorant Garamond\',serif;font-size:26px;font-weight:600;margin-bottom:10px">Booking confirmed!</h2>';
+  html += '<p style="color:#7a7060;margin-bottom:22px">Thank you for booking with Hawthbush Farm. A confirmation email is on its way.</p>';
+  if (ci) {
+    html += '<div class="quote-box" style="max-width:340px;margin:0 auto;text-align:left">';
+    if (prop) html += '<div class="q-row"><span>Property</span><span>' + escHtml(decodeURIComponent(prop)) + '</span></div>';
+    html += '<div class="q-row"><span>Check-in</span><span>' + fmtDate(ci) + '</span></div>';
+    if (co) html += '<div class="q-row"><span>Check-out</span><span>' + fmtDate(co) + '</span></div>';
+    html += '</div>';
   }
-  render();
+  html += '</div>';
+  mount(html);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(function init() {
+  var params = new URLSearchParams(window.location.search);
+  if (params.get("booked") === "1") {
+    Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function() {
+      showSuccess(params.get("prop"), params.get("ci"), params.get("co"));
+    });
+    return;
+  }
+  Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function(results) {
+    var propsData  = results[0];
+    var accomData  = results[1];
+    S.properties = (propsData && propsData.length) ? propsData : [
+      { id:"hamlet",   name:"The Hamlet",  sleeps:14, colour:"#2563eb", depositPct:50, balanceWeeks:4, minNights:2, maxNights:28, baseRate:0, seasons:[] },
+      { id:"amly",     name:"Amly Barn",   sleeps:6,  colour:"#16a34a", depositPct:50, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] },
+      { id:"glamping", name:"Glamping",    sleeps:20, colour:"#9333ea", depositPct:20, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] }
+    ];
+    // normalise stays
+    S.bookings = (accomData || []).map(function(b) {
+      if (b.stays && b.stays.length) return b;
+      return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
+    });
+    buildAvailability();
+    if (params.get("cancelled") === "1") {
+      renderStep1();
+      document.getElementById("app").insertAdjacentHTML("afterbegin",
+        '<div class="alert alert-warn" style="margin-bottom:16px">Your booking was not completed &mdash; you have not been charged.</div>');
+    } else {
+      renderStep1();
+    }
+  }).catch(function(e) {
+    console.error(e);
+    mount('<div class="alert alert-error">Could not load availability. Please refresh the page.</div>');
+  });
 })();
 </script>
 </body>
