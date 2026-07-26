@@ -700,7 +700,6 @@ export default function App() {
           saveBookings={saveBookings}
           onSelectEnquiry={goToEnquiry}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry}/>}
-        {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}/>}
       </div>
     </div>
   );
@@ -708,7 +707,7 @@ export default function App() {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
-  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"},{id:"settings",label:"Settings"}];
+  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
   const isXeroConnected  = !!xeroToken;
   const isGmailConnected = !!gmailToken;
   return (
@@ -5125,7 +5124,8 @@ function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
 // ─── VIEWING REQUESTS INBOX ───────────────────────────────────────────────────
 const VIEWING_SLOTS = ["10:00","12:00","14:00","16:00","18:00"];
 
-function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, saveBookings, mode="requests", confirmedSlot=null }) {
+function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, saveBookings }) {
+  const [tab, setTab]               = useState("pending");
   const [acting, setActing]         = useState(null);
   const [blockDate,   setBlockDate]   = useState("");
   const [blockDateTo, setBlockDateTo] = useState("");
@@ -5298,63 +5298,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   };
 
   const tabData = { pending, confirmed, declined };
-  const pendingRows  = [...pending].sort((a,b)=>a.date>b.date?1:-1);
-  const declinedRows = [...declined].sort((a,b)=>a.date>b.date?1:-1);
-
-  // A single request card (used in the Pending and Declined sections)
-  const renderReqCard = (req) => {
-    const niceDate = fmtDate(req.date);
-    return (
-      <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 6px rgba(37,99,235,.06)" }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
-              <span style={{ fontWeight:700, fontSize:15, color:T.text }}>{req.name}</span>
-              {statusBadge(req.status)}
-              <span style={{ fontSize:12, color:T.textLight }}>{req.submittedAt ? new Date(req.submittedAt).toLocaleDateString("en-GB") : ""}</span>
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:"4px 16px", fontSize:13, color:T.textMid }}>
-              <span>Date: {niceDate} at {req.time}</span>
-              {req.eventType && <span>Event type: {req.eventType}</span>}
-              <span>Email: {req.email}</span>
-              {req.phone && <span>Phone: {req.phone}</span>}
-              {req.dayGuests && <span>Day guests: {req.dayGuests}</span>}
-              {req.eveGuests && <span>Eve guests: {req.eveGuests}</span>}
-              {req.preferredDate && <span>Year: {req.preferredDate}</span>}
-              {req.source && <span>Source: {req.source}</span>}
-              {req.midweek && <span style={{ color:T.green, fontWeight:600 }}>Midweek interest</span>}
-              {req.ceremony && <span style={{ color:T.green, fontWeight:600 }}>Ceremony onsite</span>}
-            </div>
-            {req.notes && <div style={{ marginTop:8, fontSize:12, color:T.textMid, fontStyle:"italic", background:T.bgInput, borderRadius:5, padding:"6px 10px" }}>{req.notes}</div>}
-          </div>
-          <div style={{ display:"flex", gap:8, flexShrink:0, alignItems:"center" }}>
-            {req.status==="pending" && (<>
-              <button onClick={()=>handleConfirmClick(req)} disabled={acting===req.id}
-                style={{ background:T.green, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:acting===req.id?0.7:1 }}>
-                {acting===req.id?"…":"✓ Confirm"}
-              </button>
-              <button onClick={()=>handleDeclineClick(req)} disabled={acting===req.id}
-                style={{ background:T.redBg, color:T.red, border:`1px solid #fca5a5`, padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-                ✕ Decline
-              </button>
-            </>)}
-            <button onClick={()=>handleDeleteClick(req)} disabled={acting===req.id} title="Delete request (no email sent)"
-              style={{ background:"none", color:T.textLight, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-              🗑 Delete
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const sectionHeading = (label, count, color) => (
-    <div style={{ display:"flex", alignItems:"center", gap:10, margin:"0 0 14px" }}>
-      <span style={{ fontSize:12, letterSpacing:1.2, textTransform:"uppercase", color:color, fontWeight:700 }}>{label}</span>
-      {count!=null && <span style={{ background:T.bgInput, color:T.textMid, borderRadius:10, padding:"1px 9px", fontSize:11, fontWeight:700 }}>{count}</span>}
-      <div style={{ flex:1, height:1, background:T.border }}/>
-    </div>
-  );
+  const tabRows = tabData[tab] || [];
+  const tabCounts = { pending:pending.length, confirmed:confirmed.length, declined:declined.length };
 
   return (
     <div>
@@ -5507,27 +5452,69 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
         );
       })()}
 
-      {/* ── Requests mode: Pending → Confirmed → Declined, all on one page ── */}
-      {mode==="requests" && (<>
-        {sectionHeading("Pending", pendingRows.length, "#92400e")}
-        {pendingRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"6px 0 20px" }}>No pending requests.</div>}
-        <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:32 }}>
-          {pendingRows.map(renderReqCard)}
-        </div>
+      {/* Tab bar */}
+      <div style={{ display:"flex", gap:8, marginBottom:20 }}>
+        {["pending","confirmed","declined"].map(t=>(
+          <button key={t} onClick={()=>setTab(t)}
+            style={{ background:tab===t?T.midBlue:"#fff", color:tab===t?"#fff":T.textMid, border:`1.5px solid ${tab===t?T.midBlue:T.border}`, padding:"7px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:tab===t?700:400, textTransform:"capitalize", display:"flex", alignItems:"center", gap:7 }}>
+            {t}
+            {tabCounts[t]>0 && <span style={{ background:tab===t?"rgba(255,255,255,.3)":T.midBlueBg, color:tab===t?"#fff":T.midBlue, borderRadius:10, padding:"1px 7px", fontSize:11, fontWeight:700 }}>{tabCounts[t]}</span>}
+          </button>
+        ))}
+      </div>
 
-        {sectionHeading("Confirmed", null, T.green)}
-        <div style={{ marginBottom:32 }}>{confirmedSlot}</div>
+      {/* Request cards */}
+      {tabRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"20px 0" }}>No {tab} requests.</div>}
+      <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:32 }}>
+        {tabRows.sort((a,b)=>a.date>b.date?1:-1).map(req=>{
+          const niceDate = fmtDate(req.date);
+          return (
+            <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 6px rgba(37,99,235,.06)" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
+                    <span style={{ fontWeight:700, fontSize:15, color:T.text }}>{req.name}</span>
+                    {statusBadge(req.status)}
+                    <span style={{ fontSize:12, color:T.textLight }}>{req.submittedAt ? new Date(req.submittedAt).toLocaleDateString("en-GB") : ""}</span>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:"4px 16px", fontSize:13, color:T.textMid }}>
+                    <span>Date: {niceDate} at {req.time}</span>
+                    {req.eventType && <span>Event type: {req.eventType}</span>}
+                    <span>Email: {req.email}</span>
+                    {req.phone && <span>Phone: {req.phone}</span>}
+                    {req.dayGuests && <span>Day guests: {req.dayGuests}</span>}
+                    {req.eveGuests && <span>Eve guests: {req.eveGuests}</span>}
+                    {req.preferredDate && <span>Year: {req.preferredDate}</span>}
+                    {req.source && <span>Source: {req.source}</span>}
+                    {req.midweek && <span style={{ color:T.green, fontWeight:600 }}>Midweek interest</span>}
+                    {req.ceremony && <span style={{ color:T.green, fontWeight:600 }}>Ceremony onsite</span>}
+                  </div>
+                  {req.notes && <div style={{ marginTop:8, fontSize:12, color:T.textMid, fontStyle:"italic", background:T.bgInput, borderRadius:5, padding:"6px 10px" }}>{req.notes}</div>}
+                </div>
+                <div style={{ display:"flex", gap:8, flexShrink:0, alignItems:"center" }}>
+                  {req.status==="pending" && (<>
+                    <button onClick={()=>handleConfirmClick(req)} disabled={acting===req.id}
+                      style={{ background:T.green, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:acting===req.id?0.7:1 }}>
+                      {acting===req.id?"…":"✓ Confirm"}
+                    </button>
+                    <button onClick={()=>handleDeclineClick(req)} disabled={acting===req.id}
+                      style={{ background:T.redBg, color:T.red, border:`1px solid #fca5a5`, padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                      ✕ Decline
+                    </button>
+                  </>)}
+                  <button onClick={()=>handleDeleteClick(req)} disabled={acting===req.id} title="Delete request (no email sent)"
+                    style={{ background:"none", color:T.textLight, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                    🗑 Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
-        {sectionHeading("Declined", declinedRows.length, T.red)}
-        {declinedRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"6px 0 20px" }}>No declined requests.</div>}
-        <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:12 }}>
-          {declinedRows.map(renderReqCard)}
-        </div>
-      </>)}
-
-      {/* ── Blocks mode: block management only ── */}
-      {mode==="blocks" && (
-      <div style={{ paddingTop:4 }}>
+      {/* Block management */}
+      <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:24 }}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Manage Blocked Dates / Slots</div>
         <p style={{ fontSize:12, color:T.textLight, marginBottom:14 }}>Block a whole day (leave slot empty) or a specific time slot. Events/weddings are automatically blocked.</p>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10, alignItems:"center" }}>
@@ -5572,7 +5559,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
               return groups.map((g,i) => (
                 <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:7, fontSize:13 }}>
                   <span style={{ fontWeight:600, color:T.text }}>
-                    {g.dateFrom === g.dateTo ? fmtDate(g.dateFrom) : `${fmtDate(g.dateFrom)} → ${fmtDate(g.dateTo)}`}
+                    {g.dateFrom === g.dateTo ? g.dateFrom : `${g.dateFrom} → ${g.dateTo}`}
                   </span>
                   <span style={{ color:T.textMid }}>{g.slot || "All day"}</span>
                   {g.note && <span style={{ color:T.textLight, fontStyle:"italic", flex:1 }}>{g.note}</span>}
@@ -5585,46 +5572,43 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
           </div>
         )}
       </div>
-      )}
     </div>
   );
 }
 
 function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
   const [filter,    setFilter]    = useState("upcoming");
-  const [viewTab,   setViewTab]   = useState("viewings");
+  const [viewTab,   setViewTab]   = useState("requests");
   const [refreshing, setRefreshing] = useState(false);
   const [editKey, setEditKey]     = useState(null); // `${sourceType}:${sourceId}:${vIndex}` currently being edited
   const [editV,   setEditV]       = useState(null);
   const [vFlash,  setVFlash]      = useState(false);
+  const [feedCopied, setFeedCopied] = useState(false);
   const loaded = true;
 
   const flashSaved = () => { setVFlash(true); setTimeout(()=>setVFlash(false), 2000); };
 
-  // Reload requests + enquiries (and, on a manual refresh, bookings) from Supabase.
-  // Enquiries are reloaded because the Enquiries page keeps its own copy, so the
-  // confirmed list can otherwise miss enquiry viewings. Bookings are NOT reloaded on
-  // auto-open because App state already holds the freshest bookings (same source the
-  // Year Calendar uses) — reloading there risks overwriting an in-session edit.
-  const refreshRequests = async (full=false) => {
+  // Reload viewing requests + bookings + enquiries fresh from Supabase.
+  // Bookings and enquiries are reloaded because viewings added on a booking or
+  // enquiry page are the same database — this keeps the confirmed list in sync,
+  // including viewings added on another device/session.
+  const refreshRequests = async () => {
     setRefreshing(true);
     try {
       const r = await sbGet(VR_STORAGE);
       setViewingRequests(r || []);
       const b = await sbGet(VB_STORAGE);
       setViewingBlocks(b || []);
+      const bk = await sbGet(BOOKING_STORAGE);
+      if (bk && setBookings) setBookings(bk);
       const enq = await sbGet(ENQUIRIES_STORAGE);
       if (enq && setEnquiries) setEnquiries(enq);
-      if (full) {
-        const bk = await sbGet(BOOKING_STORAGE);
-        if (bk && setBookings) setBookings(bk);
-      }
     } catch(e) { console.warn("Refresh failed:", e); }
     finally { setRefreshing(false); }
   };
 
-  // Auto-refresh when Viewings tab is opened (requests + enquiries only)
-  useEffect(() => { refreshRequests(false); }, []);
+  // Auto-refresh when Viewings tab is opened
+  useEffect(() => { refreshRequests(); }, []);
   const today = new Date().toISOString().slice(0,10);
 
   // Gather all viewings from both bookings and enquiries.
@@ -5683,44 +5667,44 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
 
   return (
     <div style={{ paddingTop:28 }}>
-      {vFlash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:T.green, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>✓ Saved</div>}
-      {/* Tabs: Viewings | Blocks | Year Calendar */}
+      {/* Top-level tab: Requests | Viewings | Blocks */}
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24, flexWrap:"wrap" }}>
         <h2 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:22, marginRight:8 }}>Viewings</h2>
-        {[["viewings","Viewings"],["blocks","Blocks"]].map(([v,l])=>{
-          const pendCount = (viewingRequests||[]).filter(r=>r.status==="pending").length;
-          return (
+        {[["requests","Requests"],["confirmed","Confirmed"],["blocks","Blocks"]].map(([v,l])=>(
           <button key={v} onClick={()=>setViewTab(v)} style={{ background:viewTab===v?T.midBlue:"#fff", color:viewTab===v?"#fff":T.textMid, border:`1.5px solid ${viewTab===v?T.midBlue:T.border}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:viewTab===v?700:400 }}>
-            {v==="viewings" && pendCount>0 ? "Viewings ("+pendCount+")" : l}
+            {v==="requests" && (viewingRequests||[]).filter(r=>r.status==="pending").length>0 ? "Requests ("+( viewingRequests||[]).filter(r=>r.status==="pending").length+")" : l}
           </button>
-          );
-        })}
+        ))}
         {setReportType && (
           <button onClick={()=>{ setReportType("calendar"); setView("reports"); }}
             style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
             📅 Year Calendar →
           </button>
         )}
-        <button onClick={()=>refreshRequests(true)} disabled={refreshing}
+        <button onClick={refreshRequests} disabled={refreshing}
           style={{ marginLeft:"auto", background:"none", border:`1px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, opacity:refreshing?0.5:1 }}>
           {refreshing ? "…" : "↻ Refresh"}
         </button>
       </div>
 
+      {viewTab==="requests" && (
+        <ViewingRequestsInbox
+          requests={viewingRequests||[]} setRequests={setViewingRequests}
+          blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
+        />
+      )}
+
       {viewTab==="blocks" && (
-        <ViewingRequestsInbox mode="blocks"
+        <ViewingRequestsInbox
           requests={[]} setRequests={()=>{}}
           blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
           bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
         />
       )}
 
-      {viewTab==="viewings" && (
-        <ViewingRequestsInbox mode="requests"
-          requests={viewingRequests||[]} setRequests={setViewingRequests}
-          blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
-          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
-          confirmedSlot={(<>
+      {viewTab==="confirmed" && (<>
+      {vFlash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:T.green, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>✓ Saved</div>}
       <div style={{ display:"flex", gap:6, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
         {[["upcoming","Upcoming"],["all","All"],["past","Past"]].map(([v,l])=>(
           <button key={v} onClick={()=>setFilter(v)} style={{ background:filter===v?"#6d28d9":"#fff", color:filter===v?"#fff":T.textMid, border:`1.5px solid ${filter===v?"#6d28d9":T.border}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:filter===v?700:400 }}>{l}</button>
@@ -5729,7 +5713,7 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
       </div>
 
       {filtered.length === 0 && (
-        <div style={{ textAlign:"center", padding:40, color:T.textLight, fontSize:14 }}>No {filter==="all"?"":""+filter+" "}viewings found.</div>
+        <div style={{ textAlign:"center", padding:60, color:T.textLight, fontSize:15 }}>No {filter==="all"?"":""+filter+" "}viewings found.</div>
       )}
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
@@ -5780,66 +5764,31 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
           );
         })}
       </div>
-      </>)}
-        />
-      )}
-    </div>
-  );
-}
+    </>)}
 
-// ─── SETTINGS ─────────────────────────────────────────────────────────────────
-function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
-  const [feedCopied, setFeedCopied] = useState(false);
-  const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
-  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
-  return (
-    <div style={{ paddingTop:28, maxWidth:820 }}>
-      <h2 style={{ margin:"0 0 20px", color:T.midBlue, fontWeight:700, fontSize:22 }}>Settings</h2>
-
-      {/* Calendar feed */}
-      <div style={card}>
-        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Calendar Feed (Subscribe)</div>
-        <p style={{ fontSize:13, color:T.textMid, margin:"0 0 14px", lineHeight:1.5 }}>
-          A live iCalendar feed of all events and viewings. Add it to Google, Apple or Outlook calendar via "Subscribe from URL" / "Add calendar by URL" — it refreshes automatically. New URL subscriptions in Google Calendar can take several hours to first appear.
-        </p>
-        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-          <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"8px 12px", fontSize:12, color:T.text, wordBreak:"break-all" }}>{feedUrl}</code>
-          <button onClick={()=>{ try{ navigator.clipboard.writeText(feedUrl); setFeedCopied(true); setTimeout(()=>setFeedCopied(false),2000); }catch(e){} }}
-            style={{ background:feedCopied?T.green:T.midBlue, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-            {feedCopied ? "✓ Copied" : "Copy URL"}
-          </button>
-          <a href={feedUrl} target="_blank" rel="noreferrer"
-            style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"8px 16px", borderRadius:6, textDecoration:"none", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-            Download .ics
-          </a>
-        </div>
-      </div>
-
-      {/* Integrations */}
-      <div style={card}>
-        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Integrations</div>
-        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
-            <div>
-              <div style={{ fontSize:14, fontWeight:600, color:T.text }}>Xero</div>
-              <div style={{ fontSize:12, color:T.textLight }}>{xeroToken ? "Connected" : "Not connected"}</div>
+      {/* Hosted calendar feed — subscribe in Google / Apple / Outlook */}
+      {(() => {
+        const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
+        return (
+          <div style={{ marginTop:32, borderTop:`2px solid ${T.border}`, paddingTop:20 }}>
+            <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Calendar Feed (Subscribe)</div>
+            <p style={{ fontSize:12, color:T.textLight, margin:"0 0 10px", maxWidth:640 }}>
+              A live iCalendar feed of all events and viewings. Add it to Google, Apple or Outlook calendar via "Subscribe from URL" / "Add calendar by URL" — it refreshes automatically.
+            </p>
+            <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+              <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"7px 12px", fontSize:12, color:T.text, wordBreak:"break-all" }}>{feedUrl}</code>
+              <button onClick={()=>{ try{ navigator.clipboard.writeText(feedUrl); setFeedCopied(true); setTimeout(()=>setFeedCopied(false),2000); }catch(e){} }}
+                style={{ background:feedCopied?T.green:T.midBlue, color:"#fff", border:"none", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                {feedCopied ? "✓ Copied" : "Copy URL"}
+              </button>
+              <a href={feedUrl} target="_blank" rel="noreferrer"
+                style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, textDecoration:"none", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                Download .ics
+              </a>
             </div>
-            {xeroToken
-              ? <button onClick={onXeroDisconnect} style={{ background:"#e6f7fd", border:"1px solid #13B5EA", color:"#0e8ab0", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Disconnect</button>
-              : <button onClick={onXeroConnect} style={{ background:"#13B5EA", border:"none", color:"#fff", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Connect Xero</button>}
           </div>
-          <div style={{ height:1, background:T.border }}/>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
-            <div>
-              <div style={{ fontSize:14, fontWeight:600, color:T.text }}>Gmail</div>
-              <div style={{ fontSize:12, color:T.textLight }}>{gmailToken ? "Connected" : "Not connected"}</div>
-            </div>
-            {gmailToken
-              ? <button onClick={onGmailDisconnect} style={{ background:"#fef2f2", border:"1px solid #fca5a5", color:"#dc2626", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Disconnect</button>
-              : <button onClick={onGmailConnect} style={{ background:"#ea4335", border:"none", color:"#fff", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Connect Gmail</button>}
-          </div>
-        </div>
-      </div>
+        );
+      })()}
     </div>
   );
 }
