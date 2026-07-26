@@ -471,7 +471,7 @@ const DISCOUNT_CODES_STORAGE  = "hbf_discount_codes_v1";
 const EMAIL_TEMPLATES_STORAGE = "hbf_email_templates_v1";
 const SITE_URL = "https://cool-sorbet-b1d599.netlify.app";
 
-const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
+const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
 
 const ACCOM_STATUS_META = {
   confirmed: { label:"Confirmed", bg:T.greenBg,  text:T.green },
@@ -688,7 +688,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerLabel: "Days before check-in (general bookings)",
     triggerDays: 5,
     subject: "Your Arrival at Hawthbush Farm – {{checkIn}}",
-    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}} in just a few days!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from 4:00pm\nCheck-out: {{checkOut}} by 10:00am\nGuests: {{nights}} nights\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}} in just a few days!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\nDuration: {{nights}} nights\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -697,7 +697,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerLabel: "Days before check-in (event/wedding bookings)",
     triggerDays: 7,
     subject: "Your Wedding Weekend at Hawthbush Farm – {{checkIn}}",
-    body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from 4:00pm\nCheck-out: {{checkOut}} by 10:00am\n\nYour event information pack and site map are attached. Please do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\n\nYour event information pack and site map are attached. Please do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm",
     attachments: []
   }
 ];
@@ -706,6 +706,7 @@ const EMAIL_TOKENS = [
   "{{guestName}}", "{{guestEmail}}", "{{guestPhone}}",
   "{{bookingRef}}", "{{propertyName}}",
   "{{checkIn}}", "{{checkOut}}", "{{nights}}",
+  "{{checkInTime}}", "{{checkOutTime}}",
   "{{totalAmount}}", "{{depositAmount}}", "{{balanceAmount}}",
   "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}"
 ];
@@ -779,7 +780,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           <button onClick={()=>{ setCursor(new Date()); setMode("month"); }} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600 }}>This month</button>
         </div>
 
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:16 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:16 }}>
           {MONTHS.map((mName, mIdx) => {
             const nD = daysInMonth(year, mIdx);
             const firstDow = (new Date(year, mIdx, 1).getDay()+6)%7;
@@ -1698,7 +1699,7 @@ function PropertyEditor({ properties, setProperties, onSave }) {
 
                 {/* ── Booking rules ── */}
                 <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:10 }}>Booking rules</div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:12, marginBottom:18 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
                   <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
                     <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Min nights</span>
                     <input type="number" value={p.minNights || ""} onChange={e => updProp(p.id, "minNights", Number(e.target.value))} style={inpStyle} min="1" />
@@ -1707,15 +1708,36 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                     <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Max nights</span>
                     <input type="number" value={p.maxNights || ""} onChange={e => updProp(p.id, "maxNights", Number(e.target.value))} style={inpStyle} min="1" />
                   </label>
-                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-in from</span>
-                    <input value={p.checkInFrom || ""} onChange={e => updProp(p.id, "checkInFrom", e.target.value)} style={inpStyle} placeholder="16:00" />
-                  </label>
-                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-out by</span>
-                    <input value={p.checkOutBy || ""} onChange={e => updProp(p.id, "checkOutBy", e.target.value)} style={inpStyle} placeholder="10:00" />
-                  </label>
                 </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:6 }}>
+                  <div style={{ background:T.accentLight, borderRadius:8, padding:"10px 14px" }}>
+                    <div style={{ fontSize:10, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:8 }}>General bookings</div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-in from</span>
+                        <input value={p.checkInFrom || ""} onChange={e => updProp(p.id, "checkInFrom", e.target.value)} style={inpStyle} placeholder="16:00" />
+                      </label>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-out by</span>
+                        <input value={p.checkOutBy || ""} onChange={e => updProp(p.id, "checkOutBy", e.target.value)} style={inpStyle} placeholder="10:00" />
+                      </label>
+                    </div>
+                  </div>
+                  <div style={{ background:"#fef3c7", borderRadius:8, padding:"10px 14px" }}>
+                    <div style={{ fontSize:10, fontWeight:700, color:"#92400e", textTransform:"uppercase", letterSpacing:.4, marginBottom:8 }}>Weekend weddings</div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-in from</span>
+                        <input value={p.checkInFromWedding || ""} onChange={e => updProp(p.id, "checkInFromWedding", e.target.value)} style={inpStyle} placeholder="14:00" />
+                      </label>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-out by</span>
+                        <input value={p.checkOutByWedding || ""} onChange={e => updProp(p.id, "checkOutByWedding", e.target.value)} style={inpStyle} placeholder="11:00" />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ fontSize:11, color:T.textLight, marginBottom:18 }}>{"Email tokens {{checkInTime}} and {{checkOutTime}} resolve to these times based on booking type."}</div>
 
                 {/* ── Payment ── */}
                 <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:10 }}>Payment</div>
@@ -3578,12 +3600,22 @@ function SummaryReport({ bookings }) {
   );
 }
 
+// Returns which farm properties are booked on a wedding booking
+function getBookedProps(b) {
+  var ps = [];
+  if (b.amlyBooked === "yes") ps.push("Amly Barn");
+  if (b.hamletBooked === "yes") ps.push("The Hamlet");
+  if (b.campingBooked === "yes") ps.push("Glamping");
+  return ps;
+}
+
 // ─── YEAR CALENDAR REPORT ─────────────────────────────────────────────────────
 function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectEnquiry }) {
   const allYears = [...new Set(bookings.filter(b=>b.date).map(b=>b.date.slice(0,4)))].sort();
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
   const [showViewings, setShowViewings] = useState(true);
+  const [tooltip, setTooltip] = useState(null);
   const today = new Date().toISOString().slice(0,10);
 
   // Click handlers → jump to the booking form or the enquiry page
@@ -3672,7 +3704,7 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
       </div>
 
       {/* 12-month grid */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:20 }}>
         {MONTHS.map((monthName, mIdx) => {
           const monthNum = String(mIdx+1).padStart(2,"0");
           const firstDay = new Date(`${year}-${monthNum}-01T00:00:00`);
@@ -3710,18 +3742,25 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
                     const isSun = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 6;
                     const isSat = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 5;
 
+                    const hasViewing = showViewings && (viewingsByDate[dateStr]||[]).length > 0;
                     return (
-                      <div key={day} title={dayBookings.map(b=>b.couple).join(", ")}
-                        style={{ position:"relative", textAlign:"center", padding:"3px 1px 9px", borderRadius:4, background:cellBg, border:`1px solid ${cellBorder}`, cursor:dayBookings.length?"pointer":"default", outline:isToday?`2px solid ${T.accent}`:"none" }}>
-                        <span style={{ fontSize:10, fontWeight:isToday||hasAny?700:400, color:isSat||isSun?T.textLight:cellText }}>
+                      <div key={day}
+                        onMouseEnter={function(e) {
+                          if (!hasAny && !hasViewing) return;
+                          var rect = e.currentTarget.getBoundingClientRect();
+                          setTooltip({ x: rect.left + rect.width/2, y: rect.bottom + 6, dateStr: dateStr, dayBookings: dayBookings, views: showViewings ? (viewingsByDate[dateStr]||[]) : [] });
+                        }}
+                        onMouseLeave={function() { setTooltip(null); }}
+                        style={{ position:"relative", textAlign:"center", padding:"4px 1px 10px", borderRadius:4, background:cellBg, border:`1px solid ${cellBorder}`, cursor:hasAny||hasViewing?"pointer":"default", outline:isToday?`2px solid ${T.accent}`:"none" }}>
+                        <span style={{ fontSize:11, fontWeight:isToday||hasAny?700:400, color:isSat||isSun?T.textLight:cellText }}>
                           {day}
                         </span>
-                        {showViewings && (viewingsByDate[dateStr]||[]).length>0 && (
-                          <div style={{ position:"absolute", top:1, left:2, width:5, height:5, borderRadius:"50%", background:"#7c3aed" }} title={(viewingsByDate[dateStr]||[]).map(v=>v.label).join(", ")}/>
+                        {hasViewing && (
+                          <div style={{ position:"absolute", top:1, left:2, width:5, height:5, borderRadius:"50%", background:"#7c3aed" }}/>
                         )}
                         {hasAny && (
-                          <div style={{ position:"absolute", bottom:2, left:"50%", transform:"translateX(-50%)", width:dayBookings.length>1?18:12, height:5, borderRadius:3, background:lozengeBg, display:"flex", alignItems:"center", justifyContent:"center" }}>
-                            {dayBookings.length>1 && <span style={{ fontSize:6, fontWeight:700, color:"#fff", lineHeight:1 }}>{dayBookings.length}</span>}
+                          <div style={{ position:"absolute", bottom:2, left:"50%", transform:"translateX(-50%)", width:dayBookings.length>1?20:14, height:6, borderRadius:3, background:lozengeBg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                            {dayBookings.length>1 && <span style={{ fontSize:7, fontWeight:700, color:"#fff", lineHeight:1 }}>{dayBookings.length}</span>}
                           </div>
                         )}
                       </div>
@@ -3756,6 +3795,36 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
           );
         })}
       </div>
+
+      {/* Hover tooltip */}
+      {tooltip && (
+        <div style={{ position:"fixed", left: Math.max(8, Math.min(tooltip.x - 130, (typeof window!=="undefined"?window.innerWidth:800) - 270)), top: tooltip.y, zIndex:9999, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 14px", boxShadow:"0 8px 28px rgba(37,99,235,.18)", minWidth:220, maxWidth:280, pointerEvents:"none" }}>
+          <div style={{ fontSize:10, fontWeight:700, color:T.textMid, marginBottom:7, paddingBottom:6, borderBottom:`1px solid #eef3fa`, textTransform:"uppercase", letterSpacing:.4 }}>
+            {new Date(tooltip.dateStr+"T00:00:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long", year:"numeric" })}
+          </div>
+          {tooltip.dayBookings.map(function(b) {
+            var props = getBookedProps(b);
+            return (
+              <div key={b.id} style={{ marginBottom:8, paddingBottom:8, borderBottom:`1px solid #f0f4fb` }}>
+                <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{b.couple}</div>
+                <div style={{ fontSize:11, color:T.textMid, marginTop:2 }}>{b.eventType || "Event"}</div>
+                {props.length > 0 && (
+                  <div style={{ fontSize:11, color:T.accent, marginTop:3 }}>{props.join(" + ")}</div>
+                )}
+                <div style={{ fontSize:11, color: b.status==="Holding" ? "#d97706" : b.date < tooltip.dateStr.slice(0,10) ? T.textLight : T.green, marginTop:2, fontWeight:600 }}>{b.status}</div>
+              </div>
+            );
+          })}
+          {tooltip.views.map(function(v, i) {
+            return (
+              <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                <span style={{ width:7, height:7, borderRadius:"50%", background:"#7c3aed", flexShrink:0, display:"inline-block" }}/>
+                <span style={{ fontSize:11, color:"#6d28d9" }}>{v.label} <span style={{ opacity:.65 }}>(viewing)</span></span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
