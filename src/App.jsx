@@ -398,6 +398,8 @@ function StaffPicker({ label, value=[], onChange, staff }) {
 
 // ─── INPUT HELPERS ────────────────────────────────────────────────────────────
 const IS = (f) => ({ width:"100%", background:T.bgInput, border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box", boxShadow:f?"0 0 0 3px #dbeafe":"none", transition:"all .15s" });
+// Static input style used in settings/editor components (no focus state needed)
+const inpStyle = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none", boxSizing:"border-box" };
 function FLabel({ children, required }) {
   return <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>{children}{required&&<span style={{ color:T.red, marginLeft:4 }}>*</span>}</label>;
 }
@@ -3646,12 +3648,18 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
 
       {/* Legend + toggle */}
       <div style={{ display:"flex", gap:16, marginBottom:20, flexWrap:"wrap", alignItems:"center" }}>
-        {[{label:"Confirmed",bg:"#dcfce7",text:"#166534",border:"#86efac"},{label:"Holding",bg:"#fef9c3",text:"#854d0e",border:"#fcd34d"},{label:"Past",bg:"#e5e7eb",text:"#6b7280",border:"#d1d5db"}].map(l=>(
-          <div key={l.label} style={{ display:"flex", alignItems:"center", gap:6 }}>
-            <div style={{ width:14, height:14, borderRadius:3, background:l.bg, border:`1px solid ${l.border}` }}/>
-            <span style={{ fontSize:12, color:T.textMid }}>{l.label}</span>
-          </div>
-        ))}
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <div style={{ width:12, height:5, borderRadius:3, background:"#3b82f6" }}/>
+          <span style={{ fontSize:12, color:T.textMid }}>Wedding booked</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <div style={{ width:12, height:5, borderRadius:3, background:"#ec4899" }}/>
+          <span style={{ fontSize:12, color:T.textMid }}>Payment overdue</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <div style={{ width:8, height:8, borderRadius:"50%", background:"#7c3aed" }}/>
+          <span style={{ fontSize:12, color:T.textMid }}>Viewing</span>
+        </div>
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
           <label style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:13, color:T.textMid, userSelect:"none" }}>
             <input type="checkbox" checked={showViewings} onChange={e=>setShowViewings(e.target.checked)} style={{ accentColor:"#7c3aed", width:15, height:15, cursor:"pointer" }}/>
@@ -3667,7 +3675,7 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
         {MONTHS.map((monthName, mIdx) => {
           const monthNum = String(mIdx+1).padStart(2,"0");
-          const firstDay = new Date(`${year}-${monthNum}-01`);
+          const firstDay = new Date(`${year}-${monthNum}-01T00:00:00`);
           const daysInMonth = new Date(yearInt, mIdx+1, 0).getDate();
           // Monday=0 offset
           let startDow = (firstDay.getDay()+6)%7;
@@ -3693,27 +3701,28 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
                     const dateStr = `${year}-${monthNum}-${String(day).padStart(2,"0")}`;
                     const dayBookings = byDate[dateStr] || [];
                     const isToday = dateStr === today;
-                    const hasPast = dayBookings.some(b=>b.date<today);
-                    const hasConfirmed = dayBookings.some(b=>b.date>=today&&b.status==="Confirmed");
-                    const hasHolding = dayBookings.some(b=>b.date>=today&&b.status==="Holding");
-                    const cellBg = hasPast ? "#e5e7eb" : hasConfirmed ? "#dcfce7" : hasHolding ? "#fef9c3" : "transparent";
-                    const cellBorder = hasPast ? "#d1d5db" : hasConfirmed ? "#86efac" : hasHolding ? "#fcd34d" : "transparent";
-                    const cellText = hasPast ? "#6b7280" : (hasConfirmed||hasHolding) ? (hasConfirmed?"#166534":"#854d0e") : T.text;
+                    const hasOverdue = dayBookings.some(b=>(b.schedule||[]).some(s=>!s.paid&&s.dueDate&&s.dueDate<today));
+                    const hasAny = dayBookings.length > 0;
+                    const cellBg = hasAny ? (hasOverdue ? "#fce7f3" : "#dbeafe") : "transparent";
+                    const cellBorder = hasAny ? (hasOverdue ? "#f9a8d4" : "#93c5fd") : "transparent";
+                    const cellText = hasAny ? (hasOverdue ? "#be185d" : "#1d4ed8") : T.text;
+                    const lozengeBg = hasOverdue ? "#ec4899" : "#3b82f6";
                     const isSun = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 6;
                     const isSat = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 5;
 
                     return (
                       <div key={day} title={dayBookings.map(b=>b.couple).join(", ")}
-                        style={{ position:"relative", textAlign:"center", padding:"3px 1px", borderRadius:4, background:cellBg, border:`1px solid ${cellBorder}`, cursor:dayBookings.length?"pointer":"default" }}>
-                        <span style={{ fontSize:10, fontWeight:dayBookings.length?700:400, color:isToday?T.accent:isSat||isSun?T.textLight:cellText }}>
+                        style={{ position:"relative", textAlign:"center", padding:"3px 1px 9px", borderRadius:4, background:cellBg, border:`1px solid ${cellBorder}`, cursor:dayBookings.length?"pointer":"default", outline:isToday?`2px solid ${T.accent}`:"none" }}>
+                        <span style={{ fontSize:10, fontWeight:isToday||hasAny?700:400, color:isSat||isSun?T.textLight:cellText }}>
                           {day}
                         </span>
-                        {isToday && <div style={{ position:"absolute", bottom:1, left:"50%", transform:"translateX(-50%)", width:4, height:4, borderRadius:"50%", background:T.accent }}/>}
                         {showViewings && (viewingsByDate[dateStr]||[]).length>0 && (
                           <div style={{ position:"absolute", top:1, left:2, width:5, height:5, borderRadius:"50%", background:"#7c3aed" }} title={(viewingsByDate[dateStr]||[]).map(v=>v.label).join(", ")}/>
                         )}
-                        {dayBookings.length>0 && (
-                          <div style={{ position:"absolute", top:1, right:2, fontSize:8, fontWeight:700, color:cellText }}>{dayBookings.length>1?dayBookings.length:""}</div>
+                        {hasAny && (
+                          <div style={{ position:"absolute", bottom:2, left:"50%", transform:"translateX(-50%)", width:dayBookings.length>1?18:12, height:5, borderRadius:3, background:lozengeBg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                            {dayBookings.length>1 && <span style={{ fontSize:6, fontWeight:700, color:"#fff", lineHeight:1 }}>{dayBookings.length}</span>}
+                          </div>
                         )}
                       </div>
                     );
