@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Book Your Stay | Hawthbush Farm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <script src="https://js.stripe.com/v3/"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Jost', sans-serif;
+      background: #f9f6f1;
+      color: #2d2a25;
+      min-height: 100vh;
+    }
+    .header {
+      background: #fff;
+      border-bottom: 1px solid #e8e2d9;
+      padding: 22px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 28px;
+      font-weight: 600;
+      color: #2d2a25;
+      letter-spacing: .5px;
+    }
+    .header .sub {
+      font-size: 13px;
+      color: #7a7060;
+      font-weight: 400;
+      margin-top: 2px;
+    }
+    .main { max-width: 960px; margin: 0 auto; padding: 40px 20px 80px; }
+    h2.section-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 32px;
+      font-weight: 600;
+      color: #2d2a25;
+      margin-bottom: 8px;
+    }
+    .section-sub { font-size: 14px; color: #7a7060; margin-bottom: 32px; line-height: 1.5; }
+
+    /* Property cards */
+    .property-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; margin-bottom: 48px; }
+    .property-card {
+      background: #fff;
+      border: 2px solid #e8e2d9;
+      border-radius: 14px;
+      padding: 22px;
+      cursor: pointer;
+      transition: border-color .15s, box-shadow .15s;
+      position: relative;
+    }
+    .property-card:hover { border-color: #b8a88a; box-shadow: 0 4px 20px rgba(0,0,0,.08); }
+    .property-card.selected { border-color: #b8a88a; box-shadow: 0 0 0 3px #f0e8d830; background: #fdfaf6; }
+    .property-card .badge { position: absolute; top: 14px; right: 14px; font-size: 11px; font-weight: 600; background: #f0e8d8; color: #7a5c30; padding: 3px 10px; border-radius: 20px; }
+    .property-card .prop-name { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; color: #2d2a25; margin-bottom: 4px; }
+    .property-card .prop-sleeps { font-size: 13px; color: #7a7060; margin-bottom: 10px; }
+    .property-card .prop-rate { font-size: 14px; color: #2d2a25; font-weight: 500; }
+    .property-card .prop-rules { font-size: 12px; color: #9a9080; margin-top: 6px; }
+
+    /* Booking panel */
+    .booking-panel {
+      background: #fff;
+      border: 1px solid #e8e2d9;
+      border-radius: 16px;
+      padding: 32px;
+      margin-bottom: 32px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.04);
+    }
+    .booking-panel h3 {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 22px;
+      color: #2d2a25;
+    }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .form-row.three { grid-template-columns: 1fr 1fr 1fr; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label { font-size: 12px; font-weight: 600; color: #7a7060; text-transform: uppercase; letter-spacing: .4px; }
+    .form-group input, .form-group select {
+      background: #fafaf8;
+      border: 1.5px solid #e0d9ce;
+      border-radius: 8px;
+      color: #2d2a25;
+      font-family: 'Jost', sans-serif;
+      font-size: 14px;
+      padding: 10px 13px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      border-color: #b8a88a;
+      box-shadow: 0 0 0 3px #f0e8d840;
+    }
+    .form-group input.error { border-color: #e05252; }
+
+    /* Quote box */
+    .quote-box {
+      background: #fdfaf6;
+      border: 1.5px solid #d4c8b0;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin: 16px 0 22px;
+    }
+    .quote-box .quote-line { display: flex; justify-content: space-between; font-size: 14px; color: #2d2a25; padding: 3px 0; }
+    .quote-box .quote-line.discount { color: #5a8a4a; }
+    .quote-box .quote-line.total { font-weight: 700; font-size: 16px; border-top: 1px solid #e0d9ce; margin-top: 8px; padding-top: 10px; }
+    .quote-box .deposit-note { font-size: 12px; color: #7a7060; margin-top: 8px; }
+    .unavail-msg { background: #fff3f3; border: 1.5px solid #f5c6c6; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #b94040; margin: 12px 0; }
+    .warn-msg { background: #fff9ed; border: 1.5px solid #f0d98a; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #7a5c20; margin: 8px 0; }
+
+    /* Divider */
+    .divider { border: none; border-top: 1px solid #e8e2d9; margin: 28px 0; }
+
+    /* Submit button */
+    .btn-primary {
+      background: #2d2a25;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 15px 36px;
+      font-family: 'Jost', sans-serif;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      letter-spacing: .3px;
+      transition: background .15s;
+    }
+    .btn-primary:hover { background: #4a4540; }
+    .btn-primary:disabled { background: #c0bab0; cursor: not-allowed; }
+    .btn-secondary {
+      background: none;
+      color: #7a7060;
+      border: 1.5px solid #e0d9ce;
+      border-radius: 10px;
+      padding: 11px 24px;
+      font-family: 'Jost', sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: border-color .15s;
+    }
+    .btn-secondary:hover { border-color: #b8a88a; color: #2d2a25; }
+
+    /* Loading / error states */
+    .loading { text-align: center; padding: 60px 20px; font-size: 14px; color: #9a9080; }
+    .error-page { text-align: center; padding: 60px 20px; }
+    .error-page h3 { font-family: 'Cormorant Garamond', serif; font-size: 24px; margin-bottom: 10px; color: #2d2a25; }
+    .error-page p { color: #7a7060; font-size: 14px; }
+
+    .stripe-note { font-size: 12px; color: #9a9080; text-align: center; margin-top: 12px; }
+    .stripe-note svg { vertical-align: middle; margin-right: 4px; }
+
+    .selected-prop-label {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 20px;
+      font-weight: 600;
+      color: #2d2a25;
+      margin-bottom: 4px;
+    }
+
+    @media (max-width: 600px) {
+      .header { padding: 16px 20px; }
+      .main { padding: 24px 14px 60px; }
+      .form-row, .form-row.three { grid-template-columns: 1fr; }
+      .property-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Hawthbush Farm</h1>
+    <div class="sub">East Sussex &mdash; Holiday cottages &amp; glamping</div>
+  </div>
+  <a href="/" style="font-size:13px; color:#7a7060; text-decoration:none;">&#8592; Back to website</a>
+</div>
+
+<div class="main" id="app">
+  <div class="loading">Loading availability&hellip;</div>
+</div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+const STRIPE_PK    = "pk_live_51Pyd6CBQuJjvSXJobhKedNOwGedgBl6FEfzbA3Y6RQmCnLJ4StE7ULa1cUDbZPPjxAALSaiiSExsuNuqXiNRASNp00MrXav8Fr";
+const CHECKOUT_FN  = "/.netlify/functions/create-accom-checkout";
+
+// ── Supabase helpers ─────────────────────────────────────────────────────────
+async function sbGet(key) {
+  const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
+    headers: { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY }
+  });
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return (rows && rows[0]) ? rows[0].value : null;
+}
+
+// ── Pricing helpers ──────────────────────────────────────────────────────────
+function nightsBetween(ci, co) {
+  if (!ci || !co) return 0;
+  return Math.round((new Date(co + "T00:00:00") - new Date(ci + "T00:00:00")) / 86400000);
+}
+
+function getPriceForNight(prop, dateStr) {
+  if (!prop) return 0;
+  if (prop.seasons && prop.seasons.length) {
+    for (var i = 0; i < prop.seasons.length; i++) {
+      var s = prop.seasons[i];
+      if (s.startDate && s.endDate && dateStr >= s.startDate && dateStr < s.endDate) {
+        return Number(s.ratePerNight) || 0;
+      }
+    }
+  }
+  return Number(prop.baseRate) || 0;
+}
+
+function quoteStay(prop, checkIn, checkOut) {
+  if (!prop || !checkIn || !checkOut) return null;
+  var nights = nightsBetween(checkIn, checkOut);
+  if (nights <= 0) return null;
+  var subtotal = 0;
+  var d = new Date(checkIn + "T00:00:00");
+  for (var i = 0; i < nights; i++) {
+    subtotal += getPriceForNight(prop, d.toISOString().slice(0,10));
+    d.setDate(d.getDate() + 1);
+  }
+  var discount = 0;
+  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0) {
+    discount = prop.longStayDiscount * nights;
+  }
+  var total = Math.max(0, subtotal - discount);
+  return { nights: nights, subtotal: subtotal, discount: discount, total: total };
+}
+
+function checkAvailability(bookings, propertyId, checkIn, checkOut) {
+  if (!checkIn || !checkOut || !propertyId) return true;
+  var ci = new Date(checkIn + "T00:00:00");
+  var co = new Date(checkOut + "T00:00:00");
+  for (var i = 0; i < bookings.length; i++) {
+    var b = bookings[i];
+    if (b.status === "cancelled") continue;
+    var stays = (b.stays && b.stays.length) ? b.stays : [b];
+    for (var j = 0; j < stays.length; j++) {
+      var s = stays[j];
+      if (s.propertyId !== propertyId) continue;
+      if (!s.checkIn || !s.checkOut) continue;
+      var sCI = new Date(s.checkIn + "T00:00:00");
+      var sCO = new Date(s.checkOut + "T00:00:00");
+      if (ci < sCO && co > sCI) return false;
+    }
+  }
+  return true;
+}
+
+function fmt(n) { return "£" + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+function fmtDate(s) { if (!s) return ""; var d = new Date(s + "T00:00:00"); return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); }
+
+// ── State ────────────────────────────────────────────────────────────────────
+var state = {
+  properties: [],
+  bookings: [],
+  selectedPropId: null,
+  checkIn: "",
+  checkOut: "",
+  guestName: "",
+  email: "",
+  phone: "",
+  guestCount: "",
+  loading: true,
+  submitting: false,
+  error: ""
+};
+
+// ── Normalise bookings ───────────────────────────────────────────────────────
+function normalizeAccom(b) {
+  if (b.stays && b.stays.length) return b;
+  var stay = { propertyId: b.propertyId || "", checkIn: b.checkIn || "", checkOut: b.checkOut || "" };
+  return Object.assign({}, b, { stays: [stay] });
+}
+
+// ── Render ───────────────────────────────────────────────────────────────────
+function getSelectedProp() {
+  if (!state.selectedPropId) return null;
+  for (var i = 0; i < state.properties.length; i++) {
+    if (state.properties[i].id === state.selectedPropId) return state.properties[i];
+  }
+  return null;
+}
+
+function render() {
+  var app = document.getElementById("app");
+  if (state.loading) { app.innerHTML = '<div class="loading">Loading availability&hellip;</div>'; return; }
+  if (state.loadError) { app.innerHTML = '<div class="error-page"><h3>Something went wrong</h3><p>' + state.loadError + '</p></div>'; return; }
+
+  var prop = getSelectedProp();
+  var today = new Date().toISOString().slice(0,10);
+
+  // Validate dates
+  var quote = null, available = true, nightsWarn = "", checkInWarn = "";
+  if (prop && state.checkIn && state.checkOut) {
+    var nights = nightsBetween(state.checkIn, state.checkOut);
+    if (nights <= 0) {
+      checkInWarn = "Check-out must be after check-in.";
+    } else {
+      if (prop.minNights && nights < prop.minNights) {
+        nightsWarn = "Minimum stay is " + prop.minNights + " night" + (prop.minNights > 1 ? "s" : "") + " for this property.";
+      }
+      if (prop.maxNights && nights > prop.maxNights) {
+        nightsWarn = "Maximum stay is " + prop.maxNights + " nights for this property.";
+      }
+      available = checkAvailability(state.bookings, prop.id, state.checkIn, state.checkOut);
+      if (available && !nightsWarn) {
+        quote = quoteStay(prop, state.checkIn, state.checkOut);
+      }
+    }
+  }
+
+  var depositAmt = quote ? Math.round(quote.total * ((prop.depositPct || 30) / 100)) : 0;
+
+  var canSubmit = prop && state.checkIn && state.checkOut && available && !nightsWarn && !checkInWarn
+    && quote && state.guestName.trim() && state.email.trim() && !state.submitting;
+
+  // Build HTML
+  var html = '<h2 class="section-title">Book Your Stay</h2>';
+  html += '<p class="section-sub">Select a property, choose your dates, and pay a ' + (prop ? (prop.depositPct || 30) : 30) + '% deposit to secure your booking. The balance is due ' + (prop ? (prop.balanceWeeks || 6) : 6) + ' weeks before arrival.</p>';
+
+  // Property cards
+  html += '<div class="property-grid">';
+  for (var i = 0; i < state.properties.length; i++) {
+    var p = state.properties[i];
+    var sel = p.id === state.selectedPropId;
+    var rateStr = p.baseRate ? ("From " + fmt(p.baseRate) + "/night") : "Contact for pricing";
+    html += '<div class="property-card' + (sel ? " selected" : "") + '" onclick="selectProp(\'' + p.id + '\')">';
+    if (sel) html += '<div class="badge">Selected</div>';
+    html += '<div class="prop-name">' + p.name + '</div>';
+    html += '<div class="prop-sleeps">Sleeps ' + p.sleeps + '</div>';
+    html += '<div class="prop-rate">' + rateStr + '</div>';
+    var rules = [];
+    if (p.minNights) rules.push("Min " + p.minNights + " nights");
+    if (p.checkInFrom) rules.push("Check-in from " + p.checkInFrom);
+    if (p.checkOutBy) rules.push("Check-out by " + p.checkOutBy);
+    if (rules.length) html += '<div class="prop-rules">' + rules.join(" &middot; ") + '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  if (prop) {
+    html += '<div class="booking-panel">';
+    html += '<div class="selected-prop-label">' + prop.name + '</div>';
+    html += '<p style="font-size:13px;color:#7a7060;margin-bottom:22px;">Sleeps ' + prop.sleeps + ' &middot; Check-in from ' + (prop.checkInFrom || "16:00") + ' &middot; Check-out by ' + (prop.checkOutBy || "10:00") + '</p>';
+
+    // Date row
+    html += '<div class="form-row">';
+    html += '<div class="form-group"><label>Check-in date</label><input type="date" id="ci" value="' + state.checkIn + '" min="' + today + '" onchange="updateDates()" class="' + (checkInWarn ? "error" : "") + '"></div>';
+    html += '<div class="form-group"><label>Check-out date</label><input type="date" id="co" value="' + state.checkOut + '" min="' + (state.checkIn || today) + '" onchange="updateDates()"></div>';
+    html += '</div>';
+
+    if (checkInWarn) html += '<div class="unavail-msg">' + checkInWarn + '</div>';
+    if (nightsWarn)  html += '<div class="warn-msg">' + nightsWarn + '</div>';
+    if (!available && !checkInWarn) html += '<div class="unavail-msg">Sorry, those dates are not available for ' + prop.name + '. Please choose different dates.</div>';
+
+    // Quote
+    if (quote) {
+      html += '<div class="quote-box">';
+      html += '<div class="quote-line"><span>' + quote.nights + ' nights</span><span>' + fmt(quote.subtotal) + '</span></div>';
+      if (quote.discount > 0) {
+        html += '<div class="quote-line discount"><span>Long-stay discount</span><span>-' + fmt(quote.discount) + '</span></div>';
+      }
+      html += '<div class="quote-line total"><span>Total</span><span>' + fmt(quote.total) + '</span></div>';
+      html += '<div class="deposit-note">Deposit due today: ' + fmt(depositAmt) + ' (' + (prop.depositPct || 30) + '%) &mdash; Balance of ' + fmt(quote.total - depositAmt) + ' due ' + (prop.balanceWeeks || 6) + ' weeks before arrival.</div>';
+      html += '</div>';
+    } else if (prop.baseRate && state.checkIn && state.checkOut && available && !nightsWarn && !checkInWarn) {
+      html += '<div class="unavail-msg">Could not calculate a quote. Please check dates.</div>';
+    }
+
+    if (quote && available && !nightsWarn) {
+      html += '<hr class="divider">';
+      html += '<h3>Your details</h3>';
+      html += '<div class="form-row">';
+      html += '<div class="form-group"><label>Full name *</label><input type="text" id="gname" value="' + escHtml(state.guestName) + '" placeholder="Jane Smith" oninput="updateField(\'guestName\',this.value)"></div>';
+      html += '<div class="form-group"><label>Email address *</label><input type="email" id="gemail" value="' + escHtml(state.email) + '" placeholder="jane@example.com" oninput="updateField(\'email\',this.value)"></div>';
+      html += '</div>';
+      html += '<div class="form-row">';
+      html += '<div class="form-group"><label>Phone number</label><input type="tel" id="gphone" value="' + escHtml(state.phone) + '" placeholder="+44 7700 900000" oninput="updateField(\'phone\',this.value)"></div>';
+      html += '<div class="form-group"><label>Number of guests</label><input type="number" id="gcnt" value="' + escHtml(state.guestCount) + '" min="1" max="' + prop.sleeps + '" oninput="updateField(\'guestCount\',this.value)"></div>';
+      html += '</div>';
+      if (state.error) html += '<div class="unavail-msg">' + state.error + '</div>';
+      html += '<button class="btn-primary" onclick="handleSubmit()" ' + (canSubmit ? "" : "disabled") + '>' + (state.submitting ? "Processing&hellip;" : "Pay deposit &mdash; " + fmt(depositAmt)) + '</button>';
+      html += '<p class="stripe-note">Payments are processed securely by Stripe. We never store card details.</p>';
+    }
+
+    html += '</div>'; // booking-panel
+  }
+
+  app.innerHTML = html;
+}
+
+function escHtml(s) {
+  return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────────
+function selectProp(id) {
+  state.selectedPropId = id;
+  state.checkIn = "";
+  state.checkOut = "";
+  render();
+  setTimeout(function() {
+    var el = document.getElementById("ci");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 100);
+}
+
+function updateDates() {
+  var ci = document.getElementById("ci");
+  var co = document.getElementById("co");
+  state.checkIn  = ci ? ci.value : "";
+  state.checkOut = co ? co.value : "";
+  render();
+}
+
+function updateField(field, val) {
+  state[field] = val;
+  // Don't re-render on every keystroke — just keep state updated
+  // Re-enable/disable submit button
+  var btn = document.querySelector(".btn-primary");
+  if (btn) {
+    var prop = getSelectedProp();
+    var quote = quoteStay(prop, state.checkIn, state.checkOut);
+    var canSubmit = prop && state.checkIn && state.checkOut
+      && checkAvailability(state.bookings, prop.id, state.checkIn, state.checkOut)
+      && quote && state.guestName.trim() && state.email.trim() && !state.submitting;
+    btn.disabled = !canSubmit;
+  }
+}
+
+function handleSubmit() {
+  var prop = getSelectedProp();
+  var quote = quoteStay(prop, state.checkIn, state.checkOut);
+  if (!prop || !quote) return;
+  if (!state.guestName.trim() || !state.email.trim()) { state.error = "Please fill in your name and email."; render(); return; }
+
+  state.submitting = true;
+  state.error = "";
+  render();
+
+  var depositAmt = Math.round(quote.total * ((prop.depositPct || 30) / 100));
+
+  fetch(CHECKOUT_FN, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      propertyId:   prop.id,
+      propertyName: prop.name,
+      checkIn:      state.checkIn,
+      checkOut:     state.checkOut,
+      nights:       quote.nights,
+      totalAmount:  quote.total,
+      depositAmount: depositAmt,
+      guestName:    state.guestName.trim(),
+      email:        state.email.trim(),
+      phone:        state.phone.trim(),
+      guestCount:   Number(state.guestCount) || 1
+    })
+  })
+  .then(function(res) { return res.json(); })
+  .then(function(data) {
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      state.submitting = false;
+      state.error = data.error || "Something went wrong. Please try again.";
+      render();
+    }
+  })
+  .catch(function(err) {
+    state.submitting = false;
+    state.error = "Connection error. Please try again.";
+    render();
+  });
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+(async function init() {
+  try {
+    var propsData = await sbGet("hbf_properties_v1");
+    var accomData = await sbGet("hbf_accom_v1");
+    state.properties = (propsData && propsData.length) ? propsData : [];
+    state.bookings = (accomData || []).map(normalizeAccom);
+    state.loading = false;
+  } catch(e) {
+    state.loading = false;
+    state.loadError = "Could not load property data. Please refresh the page.";
+  }
+  render();
+})();
+</script>
+</body>
+</html>
