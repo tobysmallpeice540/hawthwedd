@@ -462,6 +462,86 @@ function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData,
   );
 }
 
+// Find lettings bookings whose check-in falls within windowDays of an event date
+function findLinkedAccom(eventDate, accomBookings, windowDays) {
+  if (!eventDate || !accomBookings) return [];
+  var eDate = new Date(eventDate+"T00:00:00");
+  var win = windowDays || 7;
+  return accomBookings.filter(function(b) {
+    if (b.status === "cancelled") return false;
+    var stays = (b.stays&&b.stays.length) ? b.stays : [b];
+    return stays.some(function(s) {
+      if (!s.checkIn) return false;
+      var ci = new Date(s.checkIn+"T00:00:00");
+      return Math.abs((ci-eDate)/86400000) <= win;
+    });
+  });
+}
+
+// Read-only panel: shows lettings bookings linked to a wedding event by date proximity
+function LinkedAccomPanel({ eventDate, accomBookings, accomProperties }) {
+  var linked = findLinkedAccom(eventDate, accomBookings, 7);
+  if (!linked.length) return (
+    <div style={{ fontSize:12, color:T.textLight, background:T.bgInput, borderRadius:8, padding:"12px 14px", lineHeight:1.6 }}>
+      No lettings bookings found within 7 days of this event.
+      To link one, go to Lettings, add or edit a booking, and set its check-in near this event date.
+    </div>
+  );
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+      {linked.map(function(b) {
+        var stays = (b.stays&&b.stays.length) ? b.stays : [b];
+        var paidAmt = (b.schedule||[]).filter(function(s){ return s.paid; }).reduce(function(sum,s){ return sum+(Number(s.amount)||0); }, 0);
+        var outstanding = (Number(b.value)||0) - paidAmt;
+        return (
+          <div key={b.id} style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"12px 14px", background:"#fff" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+              <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>
+                {b.guestName || "(no name)"}
+                {b.bookingType && <span style={{ marginLeft:8, fontSize:11, fontWeight:600, color:T.accent, background:T.accentLight, padding:"1px 6px", borderRadius:6 }}>{b.bookingType}</span>}
+              </span>
+              <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>{fmtMoney(Number(b.value)||0)}</span>
+            </div>
+            {stays.map(function(s, i) {
+              var prop = (accomProperties||[]).find(function(p){ return p.id===s.propertyId; });
+              return (
+                <div key={i} style={{ fontSize:12, color:T.textMid, display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+                  {prop && <span style={{ width:8, height:8, borderRadius:"50%", background:prop.colour, display:"inline-block", flexShrink:0 }}/>}
+                  <span style={{ fontWeight:600 }}>{s.propertyName || s.propertyId}</span>
+                  <span>{fmtDate(s.checkIn)} – {fmtDate(s.checkOut)}</span>
+                  {s.nights ? <span style={{ color:T.textLight }}>({s.nights} nights)</span> : null}
+                </div>
+              );
+            })}
+            {(b.schedule||[]).length > 0 && (
+              <div style={{ marginTop:8, display:"flex", gap:6, flexWrap:"wrap" }}>
+                {(b.schedule||[]).map(function(s, si) {
+                  return (
+                    <span key={si} style={{ fontSize:11, padding:"2px 8px", borderRadius:6, fontWeight:600,
+                      background: s.paid ? T.greenBg : T.amberBg,
+                      color:      s.paid ? T.green   : T.amber }}>
+                      {s.label}: {fmtMoney(Number(s.amount)||0)} {s.paid ? "paid" : (s.dueDate ? "due "+fmtDate(s.dueDate) : "pending")}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            {(Number(b.value)||0) > 0 && (
+              <div style={{ marginTop:6, fontSize:12 }}>
+                {outstanding <= 0
+                  ? <span style={{ color:T.green, fontWeight:600 }}>Fully paid</span>
+                  : paidAmt > 0
+                    ? <span style={{ color:T.amber, fontWeight:600 }}>Outstanding: {fmtMoney(outstanding)}</span>
+                    : <span style={{ color:T.red, fontWeight:600 }}>Not yet paid</span>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── LETTINGS (HOLIDAY LETS / ACCOMMODATION) ─────────────────────────────────
 const PROPERTIES_STORAGE     = "hbf_properties_v1";
 const ACCOM_STORAGE          = "hbf_accom_v1";
@@ -607,10 +687,11 @@ function buildAccomSchedule(value, prop, checkIn) {
 }
 
 function blankAccom(propId) {
+  var pid = propId || "hamlet";
   return {
     id: "a" + Date.now(),
-    propertyId: propId || "hamlet", propertyName: "",
-    propertyIds: [propId || "hamlet"],
+    propertyId: pid, propertyName: "",
+    propertyIds: [pid],
     guestName:"", email:"", phone:"",
     checkIn:"", checkOut:"", nights:null, guestCount:"",
     source:"manual", status:"confirmed", bookingType:"", linkedEventId:null,
@@ -618,6 +699,7 @@ function blankAccom(propId) {
     extras:[], breakage:0, breakageStripeId:"",
     discountCode:"", discountAmount:0,
     schedule:[], notes:"", createdAt: new Date().toISOString().slice(0,10),
+    stays:[{ propertyId:pid, propertyName:"", checkIn:"", checkOut:"", nights:null, guestCount:"", value:0 }],
   };
 }
 
@@ -756,9 +838,16 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
     });
   });
 
-  // Event dates set: any wedding/event that falls in the year
+  // Event dates set + map: any wedding/event that falls in the year
   const eventDates = new Set();
-  (events || []).forEach(e => { if (e.date && e.date.startsWith(String(year))) eventDates.add(e.date); });
+  const eventByDate = {};
+  (events || []).forEach(function(e) {
+    if (e.date && e.date.startsWith(String(year))) {
+      eventDates.add(e.date);
+      if (!eventByDate[e.date]) eventByDate[e.date] = [];
+      eventByDate[e.date].push(e);
+    }
+  });
 
   // Changeover set: "dateStr:propId" for days where same property has both a checkOut AND checkIn
   const coByProp = {}, ciByProp = {};
@@ -831,15 +920,16 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                         : propsOn.length > 1   ? propsOn[0].colour+"1e"
                         : "transparent";
                       const dayEntries = bookingMap[ds] || [];
+                      const dateEvts = eventByDate[ds] || [];
                       return (
                         <div key={day}
                           style={{ textAlign:"center", padding:"3px 0 5px", borderRadius:3, background:bg,
                             outline: isToday ? `1.5px solid ${T.accent}` : "none",
-                            cursor: dayEntries.length ? "pointer" : "default", position:"relative" }}
+                            cursor: (dayEntries.length||dateEvts.length) ? "pointer" : "default", position:"relative" }}
                           onMouseEnter={function(e) {
-                            if (!dayEntries.length && !hasEvent) return;
+                            if (!dayEntries.length && !dateEvts.length) return;
                             var rect = e.currentTarget.getBoundingClientRect();
-                            setTooltip({ ds:ds, dayEntries:dayEntries, hasEvent:hasEvent, x:rect.left, y:rect.bottom+4 });
+                            setTooltip({ ds:ds, dayEntries:dayEntries, dateEvts:dateEvts, x:rect.left, y:rect.bottom+4 });
                           }}
                           onMouseLeave={function() { setTooltip(null); }}>
                           <div style={{ fontSize:12, fontWeight:propsOn.length||hasEvent?700:400,
@@ -891,12 +981,16 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                   </div>
                 );
               })}
-              {tooltip.hasEvent && (
-                <div style={{ marginTop: tooltip.dayEntries.length ? 6 : 0, display:"flex", alignItems:"center", gap:6 }}>
-                  <span style={{ width:8, height:8, borderRadius:"50%", background:"#ef4444", display:"inline-block", flexShrink:0 }}/>
-                  <span style={{ color:"#fca5a5" }}>Farm event</span>
-                </div>
-              )}
+              {(tooltip.dateEvts||[]).map(function(ev, i) {
+                return (
+                  <div key={i} style={{ marginTop: (i===0&&tooltip.dayEntries.length) ? 6 : i===0 ? 0 : 4, display:"flex", alignItems:"center", gap:6 }}>
+                    <span style={{ width:8, height:8, borderRadius:"50%", background:"#ef4444", display:"inline-block", flexShrink:0 }}/>
+                    <span style={{ color:"#fca5a5", fontWeight:600 }}>
+                      {ev.eventType || "Wedding"}{ev.couple ? " — " + ev.couple : ""}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           );
         })()}
@@ -1220,21 +1314,39 @@ const selStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRa
 
 // ── Add / edit form ──────────────────────────────────────────────────────────
 function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel, onDelete }) {
-  const selPropIds = form.propertyIds && form.propertyIds.length ? form.propertyIds : [form.propertyId || "hamlet"];
-  const prop = properties.find(p=>p.id===selPropIds[0]);
+  var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
+  var selPropIds = formStays.map(function(s){ return s.propertyId; });
+  var totalValue = formStays.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
+  var primaryProp = properties.find(function(p){ return p.id===selPropIds[0]; });
   const upd = (k,v)=> setForm(f=>({ ...f, [k]:v }));
-  const zeroValue = (Number(form.value)||0) <= 0;
+  const zeroValue = totalValue <= 0;
 
   const toggleProp = (pid, checked) => setForm(function(f) {
-    var cur = f.propertyIds && f.propertyIds.length ? f.propertyIds : [f.propertyId || "hamlet"];
-    var next = checked ? cur.concat([pid]) : cur.filter(function(id){ return id!==pid; });
-    if (!next.length) next = cur; // prevent empty selection
-    return Object.assign({}, f, { propertyIds: next, propertyId: next[0] });
+    var cur = (f.stays&&f.stays.length) ? f.stays : [{ propertyId:f.propertyId||"hamlet", propertyName:"", checkIn:"", checkOut:"", nights:null, guestCount:"", value:0 }];
+    var next;
+    if (checked) {
+      var ref = cur[0] || {};
+      next = cur.concat([{ propertyId:pid, propertyName:"", checkIn:ref.checkIn||"", checkOut:ref.checkOut||"", nights:ref.nights||null, guestCount:"", value:0 }]);
+    } else {
+      next = cur.filter(function(s){ return s.propertyId !== pid; });
+      if (!next.length) next = cur;
+    }
+    var pIds = next.map(function(s){ return s.propertyId; });
+    var tot = next.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
+    return Object.assign({}, f, { stays:next, propertyIds:pIds, propertyId:pIds[0], value:tot });
+  });
+
+  const updStay = (idx, key, val) => setForm(function(f) {
+    var cur = (f.stays&&f.stays.length) ? f.stays : [];
+    var next = cur.map(function(s,i){ return i===idx ? Object.assign({}, s, { [key]:val }) : s; });
+    var tot = next.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
+    return Object.assign({}, f, { stays:next, value:tot });
   });
 
   const regenSchedule = () => {
-    const sched = buildAccomSchedule(form.value, prop, form.checkIn);
-    setForm(f=>({ ...f, schedule: sched }));
+    var firstStay = formStays[0] || {};
+    const sched = buildAccomSchedule(totalValue, primaryProp, firstStay.checkIn);
+    setForm(f=>({ ...f, schedule: sched, value: totalValue }));
   };
   const updSched = (i, k, v) => setForm(f=>{
     const s = f.schedule.map((row,idx)=> idx===i ? { ...row, [k]:v } : row);
@@ -1245,7 +1357,7 @@ function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel,
   const rmExtra = (i)=> setForm(f=>({ ...f, extras: f.extras.filter((_,idx)=> idx!==i) }));
 
   return (
-    <div style={{ maxWidth:760 }}>
+    <div style={{ maxWidth:860 }}>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
         <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Properties</span>
@@ -1274,16 +1386,10 @@ function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel,
         </label>
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:16 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
         <LInput label="Guest name" value={form.guestName} onChange={v=>upd("guestName",v)} />
         <LInput label="Email" value={form.email} onChange={v=>upd("email",v)} />
         <LInput label="Phone" value={form.phone} onChange={v=>upd("phone",v)} />
-      </div>
-
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
-        <LInput label="Check-in" type="date" value={form.checkIn} onChange={v=>upd("checkIn",v)} />
-        <LInput label="Check-out" type="date" value={form.checkOut} onChange={v=>upd("checkOut",v)} />
-        <LInput label="Guests" value={form.guestCount} onChange={v=>upd("guestCount",v)} />
         <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Status</span>
           <select value={form.status} onChange={e=>upd("status", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
@@ -1295,43 +1401,53 @@ function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel,
         </label>
       </div>
 
-      {/* Pricing engine quote — shown per selected property */}
-      {form.checkIn && form.checkOut && (function() {
-        var quotes = selPropIds.map(function(pid) {
-          var p = properties.find(function(pp){ return pp.id===pid; });
-          if (!p || !p.baseRate) return null;
-          var q = quoteStay(p, form.checkIn, form.checkOut);
-          if (!q) return null;
-          return { prop:p, q:q };
-        }).filter(Boolean);
-        if (!quotes.length) return null;
-        var total = quotes.reduce(function(s,x){ return s+x.q.total; }, 0);
-        return (
-          <div style={{ background:T.accentLight, border:`1.5px solid ${T.accent}30`, borderRadius:9, padding:"11px 16px", marginBottom:12 }}>
-            <div style={{ fontSize:12, fontWeight:700, color:T.midBlue, marginBottom:6 }}>Pricing engine estimate</div>
-            {quotes.map(function(x) {
-              return (
-                <div key={x.prop.id} style={{ fontSize:13, color:T.midBlue, marginBottom:3 }}>
-                  <span style={{ fontWeight:600 }}>{x.prop.name}:</span>
-                  {" "}{x.q.nights} nights = {fmtMoney(x.q.subtotal)}
-                  {x.q.discount>0 ? " − "+fmtMoney(x.q.discount)+" discount = "+fmtMoney(x.q.total) : ""}
-                </div>
-              );
-            })}
-            {quotes.length>1 && (
-              <div style={{ fontSize:13, fontWeight:700, color:T.text, marginTop:4, borderTop:`1px solid ${T.accent}30`, paddingTop:4 }}>
-                Total estimate: {fmtMoney(total)}
+      {/* Per-property stays grid */}
+      <div style={{ border:`1px solid ${T.border}`, borderRadius:9, overflow:"hidden", marginBottom:16 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 50px 60px 1fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5 }}>
+          {["Property","Check-in","Check-out","Nights","Guests","Price (£)"].map(function(h){ return <div key={h} style={{ padding:"9px 12px" }}>{h}</div>; })}
+        </div>
+        {formStays.map(function(s, idx) {
+          var p = properties.find(function(pp){ return pp.id===s.propertyId; });
+          var nights = nightsBetween(s.checkIn, s.checkOut);
+          var q = (p && p.baseRate && s.checkIn && s.checkOut) ? quoteStay(p, s.checkIn, s.checkOut) : null;
+          return (
+            <div key={s.propertyId} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 50px 60px 1fr", borderBottom: idx < formStays.length-1 ? `1px solid ${T.border}` : "none", background:"#fff", alignItems:"center" }}>
+              <div style={{ padding:"10px 12px", display:"flex", alignItems:"center", gap:7, fontSize:13, fontWeight:600 }}>
+                {p && <span style={{ width:10, height:10, borderRadius:"50%", background:p.colour, display:"inline-block", flexShrink:0 }}/>}
+                {p ? p.name : s.propertyId}
               </div>
-            )}
-            <button type="button" onClick={function(){ upd("value", total); }}
-              style={{ marginTop:8, background:T.accent, color:"#fff", border:"none", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
-              Apply {fmtMoney(total)}
-            </button>
+              <div style={{ padding:"6px 8px" }}>
+                <input type="date" value={s.checkIn||""} onChange={function(e){ updStay(idx,"checkIn",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+              </div>
+              <div style={{ padding:"6px 8px" }}>
+                <input type="date" value={s.checkOut||""} onChange={function(e){ updStay(idx,"checkOut",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+              </div>
+              <div style={{ padding:"10px 8px", fontSize:13, color:T.textMid, textAlign:"center" }}>{nights||"—"}</div>
+              <div style={{ padding:"6px 8px" }}>
+                <input type="number" value={s.guestCount||""} placeholder="—" onChange={function(e){ updStay(idx,"guestCount",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+              </div>
+              <div style={{ padding:"6px 8px", display:"flex", gap:6, alignItems:"center" }}>
+                <input type="number" value={s.value||""} placeholder="0" onChange={function(e){ updStay(idx,"value",e.target.value); }} style={{ ...inlineInput, flex:1, minWidth:0 }}/>
+                {q && (
+                  <button type="button" onClick={function(){ updStay(idx,"value",q.total); }}
+                    title={"Pricing estimate: "+fmtMoney(q.total)}
+                    style={{ ...smallBtn, padding:"5px 9px", fontSize:11, whiteSpace:"nowrap", flexShrink:0 }}>
+                    {fmtMoney(q.total)}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {formStays.length > 1 && (
+          <div style={{ display:"flex", justifyContent:"flex-end", alignItems:"center", padding:"10px 16px", background:T.accentLight, borderTop:`1px solid ${T.accent}30`, gap:16 }}>
+            <span style={{ fontSize:12, color:T.midBlue }}>Total billed to guest</span>
+            <span style={{ fontSize:16, fontWeight:800, color:T.text }}>{fmtMoney(totalValue)}</span>
           </div>
-        );
-      })()}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:8 }}>
-        <LInput label="Accommodation price (£)" type="number" value={form.value} onChange={v=>upd("value",v)} />
+        )}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:8 }}>
         <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Discount code</span>
           <input value={form.discountCode || ""} onChange={e => {
@@ -1458,75 +1574,69 @@ function AccomImport({ onImported, saveBookings, bookings }) {
     reader.readAsText(file);
   };
 
-  // Find wedding pairs: Wedding-typed bookings where one is hamlet and one is amly,
-  // check-in dates within 3 days of each other.
-  const findWeddingPairs = () => {
-    const weddings = (bookings||[]).filter(b => b.bookingType==="Wedding" && b.status!=="cancelled");
-    const hamlets = weddings.filter(b => {
-      const stays = (b.stays&&b.stays.length) ? b.stays : [b];
-      return stays.some(s=>s.propertyId==="hamlet");
+  // Find pairs: any two single-property bookings with the same guest name (case-insensitive)
+  // that have different properties and check-in dates within 7 days of each other.
+  const findMergePairs = () => {
+    var singles = (bookings||[]).filter(function(b) {
+      if (b.status === "cancelled") return false;
+      var stays = (b.stays&&b.stays.length) ? b.stays : [b];
+      return stays.length === 1;
     });
-    const amlys = weddings.filter(b => {
-      const stays = (b.stays&&b.stays.length) ? b.stays : [b];
-      return stays.some(s=>s.propertyId==="amly");
-    });
-    const pairs = [];
-    const usedAmly = new Set();
-    hamlets.forEach(h => {
-      const hStay = ((h.stays&&h.stays.length)?h.stays:[h]).find(s=>s.propertyId==="hamlet");
-      if (!hStay) return;
-      // Already multi-stay? Skip
-      if (h.stays && h.stays.length>1) return;
-      const hDate = new Date((hStay.checkIn||"")+"T00:00:00");
-      const match = amlys.find(a => {
-        if (usedAmly.has(a.id)) return false;
-        if (a.stays && a.stays.length>1) return false;
-        const aStay = ((a.stays&&a.stays.length)?a.stays:[a]).find(s=>s.propertyId==="amly");
-        if (!aStay) return false;
-        const aDate = new Date((aStay.checkIn||"")+"T00:00:00");
-        const diffDays = Math.abs((hDate-aDate)/86400000);
-        return diffDays <= 3;
+    var pairs = [];
+    var used = new Set();
+    singles.forEach(function(b1, i) {
+      if (used.has(b1.id)) return;
+      var s1 = ((b1.stays&&b1.stays.length)?b1.stays:[b1])[0];
+      if (!s1||!s1.propertyId||!s1.checkIn) return;
+      var name1 = (b1.guestName||"").toLowerCase().trim();
+      if (!name1) return;
+      var ci1 = new Date(s1.checkIn+"T00:00:00");
+      singles.forEach(function(b2, j) {
+        if (j <= i) return;
+        if (used.has(b1.id)||used.has(b2.id)) return;
+        var s2 = ((b2.stays&&b2.stays.length)?b2.stays:[b2])[0];
+        if (!s2||!s2.propertyId||!s2.checkIn) return;
+        if (s2.propertyId === s1.propertyId) return;
+        var name2 = (b2.guestName||"").toLowerCase().trim();
+        if (!name2 || name2 !== name1) return;
+        var ci2 = new Date(s2.checkIn+"T00:00:00");
+        if (Math.abs((ci1-ci2)/86400000) > 7) return;
+        pairs.push({ b1:b1, b2:b2, s1:s1, s2:s2 });
+        used.add(b1.id); used.add(b2.id);
       });
-      if (match) { pairs.push({ hamlet:h, amly:match }); usedAmly.add(match.id); }
     });
     return pairs;
   };
 
   const previewMerge = () => {
-    const pairs = findWeddingPairs();
+    var pairs = findMergePairs();
     setMergePreview(pairs);
   };
 
   const runMerge = async () => {
     if (!mergePreview || !mergePreview.length) return;
     setMergeStatus("Merging…");
-    const removeIds = new Set();
-    const newBookings = [];
-    mergePreview.forEach(({ hamlet, amly }) => {
-      const hStay = ((hamlet.stays&&hamlet.stays.length)?hamlet.stays:[hamlet]).find(s=>s.propertyId==="hamlet");
-      const aStay = ((amly.stays&&amly.stays.length)?amly.stays:[amly]).find(s=>s.propertyId==="amly");
-      if (!hStay || !aStay) return;
-      // Merge: keep hamlet as the primary booking, add amly as a second stay
-      const merged = Object.assign({}, hamlet, {
-        guestName: hamlet.guestName || amly.guestName,
-        value: (Number(hamlet.value)||0) + (Number(amly.value)||0),
+    var removeIds = new Set();
+    var newBookings = [];
+    mergePreview.forEach(function(pair) {
+      var b1 = pair.b1, b2 = pair.b2, s1 = pair.s1, s2 = pair.s2;
+      var merged = Object.assign({}, b1, {
+        guestName: b1.guestName || b2.guestName,
+        value: (Number(b1.value)||0) + (Number(b2.value)||0),
+        propertyIds: [s1.propertyId, s2.propertyId],
         stays: [
-          Object.assign({}, hStay, { propertyName: hStay.propertyName||"The Hamlet" }),
-          Object.assign({}, aStay, { propertyName: aStay.propertyName||"Amly Barn" }),
+          Object.assign({}, s1, { value:0 }),
+          Object.assign({}, s2, { value:0 }),
         ],
       });
-      // Merge payment schedules
-      const combinedSched = (hamlet.schedule||[]).concat(amly.schedule||[]);
+      var combinedSched = (b1.schedule||[]).concat(b2.schedule||[]);
       if (combinedSched.length) merged.schedule = combinedSched;
       newBookings.push(merged);
-      removeIds.add(hamlet.id);
-      removeIds.add(amly.id);
+      removeIds.add(b1.id); removeIds.add(b2.id);
     });
-    const updated = (bookings||[])
-      .filter(b => !removeIds.has(b.id))
-      .concat(newBookings);
+    var updated = (bookings||[]).filter(function(b){ return !removeIds.has(b.id); }).concat(newBookings);
     await saveBookings(updated);
-    setMergeStatus("Merged " + mergePreview.length + " pairs into " + newBookings.length + " two-stay bookings.");
+    setMergeStatus("Merged " + mergePreview.length + " pair" + (mergePreview.length===1?"":"s") + " — " + newBookings.length + " multi-property booking" + (newBookings.length===1?"":"s") + " created.");
     setMergePreview(null);
   };
 
@@ -1542,30 +1652,36 @@ function AccomImport({ onImported, saveBookings, bookings }) {
         {status && <div style={{ marginTop:14, fontSize:13, fontWeight:600, color: status.startsWith("Import failed") ? T.red : T.green }}>{status}</div>}
       </div>
 
-      {/* Wedding pair merge migration */}
+      {/* Multi-property merge tool */}
       <div style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", background:"#fff" }}>
-        <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:4 }}>Merge Wedding Pairs</div>
+        <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:4 }}>Merge Split Bookings</div>
         <div style={{ fontSize:13, color:T.textMid, lineHeight:1.55, marginBottom:14 }}>
-          Finds Wedding-typed bookings where the same event has separate Hamlet and Amly single-stay entries and merges them into one two-stay booking. Preview first — the merge is irreversible without re-importing the seed.
+          Finds pairs of single-property bookings with the same guest name and close dates — these should be one multi-property booking. Preview first before committing.
         </div>
         {!mergePreview && (
           <button onClick={previewMerge} style={{ background:"#fff", border:`1.5px solid ${T.border}`, color:T.text, fontFamily:"inherit", fontSize:13, fontWeight:600, padding:"9px 18px", borderRadius:8, cursor:"pointer" }}>Preview pairs</button>
         )}
         {mergePreview && mergePreview.length===0 && (
-          <div style={{ fontSize:13, color:T.green, fontWeight:600 }}>No mergeable pairs found — either already merged or none matched.</div>
+          <div style={{ fontSize:13, color:T.green, fontWeight:600 }}>No mergeable pairs found — all bookings look correct.</div>
         )}
         {mergePreview && mergePreview.length>0 && (
           <div>
-            <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:10 }}>Found {mergePreview.length} pair{mergePreview.length===1?"":"s"}:</div>
-            {mergePreview.map(({ hamlet, amly }, i) => {
-              const hStay = ((hamlet.stays&&hamlet.stays.length)?hamlet.stays:[hamlet]).find(s=>s.propertyId==="hamlet")||{};
-              const aStay = ((amly.stays&&amly.stays.length)?amly.stays:[amly]).find(s=>s.propertyId==="amly")||{};
+            <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:10 }}>Found {mergePreview.length} pair{mergePreview.length===1?"":"s"} to merge:</div>
+            {mergePreview.map(function(pair, i) {
+              var b1=pair.b1, b2=pair.b2, s1=pair.s1, s2=pair.s2;
               return (
                 <div key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7, padding:"10px 14px", marginBottom:8, fontSize:12, color:T.textMid }}>
-                  <span style={{ fontWeight:700, color:T.text }}>{hamlet.guestName||amly.guestName||"(no name)"}</span>
-                  <span style={{ marginLeft:10 }}>Hamlet {fmtDate(hStay.checkIn)}–{fmtDate(hStay.checkOut)}</span>
-                  <span style={{ marginLeft:6 }}>+ Amly {fmtDate(aStay.checkIn)}–{fmtDate(aStay.checkOut)}</span>
-                  <span style={{ marginLeft:10, color:T.green, fontWeight:600 }}>Total: {fmtMoney((Number(hamlet.value)||0)+(Number(amly.value)||0))}</span>
+                  <div style={{ fontWeight:700, color:T.text, marginBottom:4 }}>{b1.guestName || "(no name)"}</div>
+                  <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
+                    <span style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:5, padding:"3px 8px" }}>
+                      {s1.propertyId} · {fmtDate(s1.checkIn)}–{fmtDate(s1.checkOut)} · {fmtMoney(Number(b1.value)||0)}
+                    </span>
+                    <span style={{ color:T.textLight, alignSelf:"center" }}>+</span>
+                    <span style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:5, padding:"3px 8px" }}>
+                      {s2.propertyId} · {fmtDate(s2.checkIn)}–{fmtDate(s2.checkOut)} · {fmtMoney(Number(b2.value)||0)}
+                    </span>
+                    <span style={{ color:T.green, fontWeight:700, alignSelf:"center" }}>= {fmtMoney((Number(b1.value)||0)+(Number(b2.value)||0))}</span>
+                  </div>
                 </div>
               );
             })}
@@ -2372,25 +2488,39 @@ function LettingsView({ events }) {
 
   const openNew  = () => { setForm(blankAccom()); setEditId(null); setTab("form"); };
   const openEdit = (b) => {
-    // Derive propertyIds from stays[] for multi-property bookings
-    var pIds = (b.stays && b.stays.length) ? b.stays.map(function(s){ return s.propertyId; }).filter(Boolean) : [b.propertyId];
-    if (!pIds.length) pIds = [b.propertyId || "hamlet"];
-    setForm(Object.assign({}, blankAccom(pIds[0]), b, { propertyIds: pIds, extras: (b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }));
+    var editStays;
+    if (b.stays && b.stays.length) {
+      // Ensure each stay has guestCount and value fields
+      editStays = b.stays.map(function(s) {
+        return Object.assign({ guestCount:"", value:0 }, s);
+      });
+    } else {
+      // Old flat booking — wrap into a single stay
+      editStays = [{ propertyId:b.propertyId||"hamlet", propertyName:b.propertyName||"", checkIn:b.checkIn||"", checkOut:b.checkOut||"", nights:b.nights||null, guestCount:b.guestCount||"", value:Number(b.value)||0 }];
+    }
+    var pIds = editStays.map(function(s){ return s.propertyId; }).filter(Boolean);
+    if (!pIds.length) pIds = [b.propertyId||"hamlet"];
+    setForm(Object.assign({}, blankAccom(pIds[0]), b, { propertyIds:pIds, propertyId:pIds[0], stays:editStays, extras:(b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }));
     setEditId(b.id); setTab("form");
   };
 
   const handleSave = async () => {
-    var pIds = (form.propertyIds && form.propertyIds.length) ? form.propertyIds : [form.propertyId || "hamlet"];
-    var nights = nightsBetween(form.checkIn, form.checkOut);
-    var stays = pIds.map(function(pid) {
-      var p = properties.find(function(pp){ return pp.id===pid; });
-      return { propertyId:pid, propertyName: p ? p.name : pid, checkIn:form.checkIn, checkOut:form.checkOut, nights:nights, value:0 };
+    var rawStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
+    var stays = rawStays.map(function(s) {
+      var p = properties.find(function(pp){ return pp.id===s.propertyId; });
+      return Object.assign({}, s, { propertyName: p?p.name:s.propertyId, nights: nightsBetween(s.checkIn, s.checkOut) });
     });
-    var primaryProp = properties.find(function(p){ return p.id===pIds[0]; });
+    var totalValue = stays.reduce(function(sum,s){ return sum+(Number(s.value)||0); }, 0);
+    var primary = stays[0] || {};
+    var pIds = stays.map(function(s){ return s.propertyId; });
     var rec = Object.assign({}, form, {
-      propertyId: pIds[0],
-      propertyName: primaryProp ? primaryProp.name : pIds[0],
-      nights: nights,
+      propertyId: primary.propertyId || form.propertyId,
+      propertyName: primary.propertyName || "",
+      propertyIds: pIds,
+      checkIn: primary.checkIn || "",
+      checkOut: primary.checkOut || "",
+      nights: primary.nights || null,
+      value: totalValue,
       stays: stays
     });
     var next = editId ? bookings.map(function(b){ return b.id===editId ? rec : b; }) : bookings.concat([rec]);
@@ -2559,6 +2689,8 @@ export default function App() {
   const [editStaffId, setEditStaffId] = useState(null);
   const [staffForm, setStaffForm]     = useState(null);
   const [focusEnquiryId, setFocusEnquiryId] = useState(null);
+  const [accomBookings, setAccomBookings]     = useState([]);
+  const [accomProperties, setAccomProperties] = useState([]);
 
   // Navigate straight to a specific enquiry's detail page (used from Viewings + Year Calendar)
   const goToEnquiry = (id) => { setFocusEnquiryId(id); setView("enquiries"); };
@@ -2583,6 +2715,8 @@ export default function App() {
       try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r || []); } catch { setEnquiries([]); }
         try { const r = await sbGet(VR_STORAGE); setViewingRequests(r || []); } catch { setViewingRequests([]); }
         try { const r = await sbGet(VB_STORAGE); setViewingBlocks(r || []); } catch { setViewingBlocks([]); }
+      try { const r = await sbGet(ACCOM_STORAGE); setAccomBookings((r||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
+      try { const r = await sbGet(PROPERTIES_STORAGE); setAccomProperties(r||INITIAL_PROPERTIES); } catch { setAccomProperties(INITIAL_PROPERTIES); }
       setLoaded(true);
     })();
   },[]);
@@ -2678,7 +2812,7 @@ export default function App() {
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties}
           onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
@@ -2692,7 +2826,7 @@ export default function App() {
           saveEnquiries={async(e)=>{ setEnquiries(e); await sbSet(ENQUIRIES_STORAGE,e); }}
           saveBookings={saveBookings}
           onSelectEnquiry={goToEnquiry}/>}
-        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry}/>}
+        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties}/>}
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}/>}
       </div>
     </div>
@@ -3216,7 +3350,7 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -3434,14 +3568,13 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 )}
               </div>
 
-              {/* Accommodation */}
+              {/* Accommodation — live from Lettings */}
               <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
-                <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12 }}>Accommodation</div>
-                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <AccomField bookedKey="amlyBooked"    feeKey="amlyFee"    paid50Key="amly50Paid"    paid100Key="amly100Paid"    label="Amly"    formData={formData} update={update}/>
-                  <AccomField bookedKey="hamletBooked"  feeKey="hamletFee"  paid50Key="hamlet50Paid"  paid100Key="hamlet100Paid"  label="Hamlet"  formData={formData} update={update}/>
-                  <AccomField bookedKey="campingBooked" feeKey="campingFee" paid50Key="camping50Paid" paid100Key="camping100Paid" label="Camping" formData={formData} update={update}/>
+                <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:4 }}>Accommodation</div>
+                <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>
+                  Lettings bookings with check-in within 7 days of this event date
                 </div>
+                <LinkedAccomPanel eventDate={formData.date} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]}/>
               </div>
 
               {/* Payment notes */}
@@ -3596,7 +3729,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
-function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry }) {
+function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry, accomBookings, accomProperties }) {
   const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Rota Overview"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Event Rota"}];
   // If an old/removed report type is still selected, fall back to summary
   const activeType = types.some(t=>t.id===reportType) ? reportType : "summary";
@@ -3609,7 +3742,7 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
       </div>
       {activeType==="summary"       && <SummaryReport bookings={bookings}/>}
       {activeType==="calendar"       && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
-      {activeType==="accommodation" && <AccommodationReport bookings={bookings}/>}
+      {activeType==="accommodation" && <AccommodationReport bookings={bookings} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]}/>}
       {activeType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
       {activeType==="hours"          && <HoursReport bookings={bookings} staff={staff}/>}
       {activeType==="timeline"        && <StaffTimelineReport bookings={bookings} staff={staff}/>}
@@ -3974,59 +4107,100 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
   );
 }
 
-function AccommodationReport({ bookings }) {
-  const [printMode, setPrintMode] = useState(false);
-  const rows=bookings.filter(b=>b.couple&&b.date);
-  const amlyRows=rows.filter(b=>b.amlyBooked==="yes");
-  const hamletRows=rows.filter(b=>b.hamletBooked==="yes");
-  const campingRows=rows.filter(b=>b.campingBooked==="yes");
-  const printText = [
-    "Accommodation Report",
-    `Amly: ${amlyRows.length} bookings — £${amlyRows.reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()}`,
-    `Hamlet: ${hamletRows.length} bookings — £${hamletRows.reduce((s,b)=>s+parseMoney(b.hamletFee),0).toLocaleString()}`,
-    `Camping: ${campingRows.length} bookings — £${campingRows.reduce((s,b)=>s+parseMoney(b.campingFee),0).toLocaleString()}`,
-    "",
-    "Date | Couple | Amly | Amly Fee | Hamlet | Hamlet Fee | Camping | Camping Fee",
-    ...rows.map(b=>`${b.date} | ${b.couple} | ${b.amlyBooked==="yes"?"Yes":b.amlyBooked==="no"?"No":"TBC"} | ${parseMoney(b.amlyFee)>0?"£"+parseMoney(b.amlyFee).toLocaleString():"—"} | ${b.hamletBooked==="yes"?"Yes":b.hamletBooked==="no"?"No":"TBC"} | ${parseMoney(b.hamletFee)>0?"£"+parseMoney(b.hamletFee).toLocaleString():"—"} | ${b.campingBooked==="yes"?"Yes":b.campingBooked==="no"?"No":"TBC"} | ${parseMoney(b.campingFee)>0?"£"+parseMoney(b.campingFee).toLocaleString():"—"}`)
-  ].join("\n");
-  if(printMode) return (
-    <div>
-      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
-    </div>
-  );
+function AccommodationReport({ bookings, accomBookings, accomProperties }) {
+  // Wedding events sorted by date
+  var rows = bookings.filter(function(b){ return b.couple && b.date; })
+    .sort(function(a,z){ return a.date > z.date ? 1 : -1; });
+
+  // For each event, find linked lettings bookings (check-in within 7 days)
+  var rowsWithAccom = rows.map(function(b) {
+    return { event:b, linked: findLinkedAccom(b.date, accomBookings, 7) };
+  });
+
+  // Stats: count events that have at least one linked accom booking + total revenue
+  var linkedEvents = rowsWithAccom.filter(function(r){ return r.linked.length > 0; });
+  var totalAccomRevenue = accomBookings.filter(function(b){ return b.status!=="cancelled"; })
+    .reduce(function(s,b){ return s + (Number(b.value)||0); }, 0);
+
+  // Per-property stats
+  var propStats = {};
+  (accomProperties||[]).forEach(function(p) { propStats[p.id] = { count:0, revenue:0 }; });
+  accomBookings.filter(function(b){ return b.status!=="cancelled"; }).forEach(function(b) {
+    var stays = (b.stays&&b.stays.length) ? b.stays : [b];
+    var perStay = (Number(b.value)||0) / (stays.length||1);
+    stays.forEach(function(s) {
+      if (!propStats[s.propertyId]) propStats[s.propertyId] = { count:0, revenue:0 };
+      propStats[s.propertyId].count++;
+      propStats[s.propertyId].revenue += perStay;
+    });
+  });
+
   return (
     <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
+      {/* Summary cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr " + (accomProperties||[]).map(function(){ return "1fr"; }).join(" "), gap:16, marginBottom:22, flexWrap:"wrap" }}>
+        <StatCard label="Events with Accom" value={linkedEvents.length} sub={rows.length + " events total"}/>
+        <StatCard label="Total Accom Revenue" value={fmtMoney(totalAccomRevenue)} sub="all non-cancelled bookings"/>
+        {(accomProperties||[]).map(function(p) {
+          var st = propStats[p.id] || { count:0, revenue:0 };
+          return (
+            <StatCard key={p.id} label={p.name} value={st.count + " stays"} sub={fmtMoney(st.revenue)}/>
+          );
+        })}
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:22 }}>
-        <StatCard label="Amly Booked"    value={amlyRows.length}    sub={`£${amlyRows.reduce((s,b)=>s+parseMoney(b.amlyFee),0).toLocaleString()} confirmed`}/>
-        <StatCard label="Hamlet Booked"  value={hamletRows.length}  sub={`£${hamletRows.reduce((s,b)=>s+parseMoney(b.hamletFee),0).toLocaleString()} confirmed`}/>
-        <StatCard label="Camping Booked" value={campingRows.length} sub={`£${campingRows.reduce((s,b)=>s+parseMoney(b.campingFee),0).toLocaleString()} confirmed`}/>
-      </div>
+
+      {/* Per-event table */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Amly","Amly Fee","Hamlet","Hamlet Fee","Camping","Camping Fee"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
-          <tbody>
-            {rows.map((b,i)=>(
-              <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
-                <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, fontWeight:500 }}>{fmtDate(b.date)}</td>
-                <td style={{ padding:"10px 12px", fontSize:13, fontWeight:500 }}>{b.couple}</td>
-                {[["amlyBooked","amlyFee"],["hamletBooked","hamletFee"],["campingBooked","campingFee"]].map(([bk,fk])=>[
-                  <td key={bk} style={{ padding:"10px 12px" }}>
-                    {b[bk]==="yes"
-                      ? <span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:T.greenBg, color:T.green, fontWeight:700 }}>Yes</span>
-                      : b[bk]==="no"
-                        ? <span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:T.redBg, color:T.red, fontWeight:700 }}>No</span>
-                        : <span style={{ fontSize:11, padding:"2px 9px", borderRadius:10, background:T.amberBg, color:T.amber, fontWeight:700 }}>TBC</span>}
-                  </td>,
-                  <td key={fk} style={{ padding:"10px 12px", fontSize:13, color:parseMoney(b[fk])>0?T.text:T.textLight }}>{parseMoney(b[fk])>0?`£${parseMoney(b[fk]).toLocaleString()}`:"—"}</td>
-                ])}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={{ padding:"10px 14px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:1 }}>
+          Events and linked lettings bookings
+        </div>
+        {rowsWithAccom.map(function(row, i) {
+          var ev = row.event;
+          var linked = row.linked;
+          return (
+            <div key={ev.id} style={{ borderTop: i>0 ? `1px solid ${T.border}` : "none", padding:"12px 14px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom: linked.length ? 8 : 0 }}>
+                <span style={{ fontSize:12, color:T.accent, fontWeight:600, minWidth:90 }}>{fmtDate(ev.date)}</span>
+                <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{ev.couple}</span>
+                {ev.eventType && <span style={{ fontSize:11, color:T.midBlue, background:T.midBlueBg, padding:"1px 7px", borderRadius:5, fontWeight:600 }}>{ev.eventType}</span>}
+                {!linked.length && <span style={{ fontSize:11, color:T.textLight, fontStyle:"italic" }}>No lettings bookings linked</span>}
+              </div>
+              {linked.length > 0 && (
+                <div style={{ paddingLeft:102, display:"flex", flexDirection:"column", gap:6 }}>
+                  {linked.map(function(ab) {
+                    var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
+                    var paidAmt = (ab.schedule||[]).filter(function(s){ return s.paid; }).reduce(function(sum,s){ return sum+(Number(s.amount)||0); }, 0);
+                    var outstanding = (Number(ab.value)||0) - paidAmt;
+                    return (
+                      <div key={ab.id} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7, padding:"8px 12px", fontSize:12 }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                          <span style={{ fontWeight:600, color:T.text }}>{ab.guestName||"(no name)"}</span>
+                          {stays.map(function(s, si) {
+                            var prop = (accomProperties||[]).find(function(p){ return p.id===s.propertyId; });
+                            return (
+                              <span key={si} style={{ display:"inline-flex", alignItems:"center", gap:4, color:T.textMid }}>
+                                {prop && <span style={{ width:7, height:7, borderRadius:"50%", background:prop.colour, display:"inline-block" }}/>}
+                                {s.propertyName||s.propertyId}
+                                {" "}{fmtDate(s.checkIn)}–{fmtDate(s.checkOut)}
+                              </span>
+                            );
+                          })}
+                          <span style={{ marginLeft:"auto", fontWeight:700, color:T.text }}>{fmtMoney(Number(ab.value)||0)}</span>
+                          {outstanding <= 0 && (Number(ab.value)||0) > 0
+                            ? <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"1px 7px", borderRadius:5 }}>Paid</span>
+                            : outstanding > 0
+                              ? <span style={{ fontSize:11, fontWeight:700, color:T.amber, background:T.amberBg, padding:"1px 7px", borderRadius:5 }}>{fmtMoney(outstanding)} outstanding</span>
+                              : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {!rows.length && <div style={{ padding:24, textAlign:"center", color:T.textLight, fontSize:13 }}>No bookings yet.</div>}
       </div>
     </div>
   );
