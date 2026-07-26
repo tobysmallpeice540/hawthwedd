@@ -465,7 +465,8 @@ const PROPERTIES_STORAGE     = "hbf_properties_v1";
 const ACCOM_STORAGE          = "hbf_accom_v1";
 const ACCOM_GUESTS_STORAGE   = "hbf_accom_guests_v1";
 const EMAIL_LOG_STORAGE      = "hbf_email_log_v1";
-const DISCOUNT_CODES_STORAGE = "hbf_discount_codes_v1";
+const DISCOUNT_CODES_STORAGE  = "hbf_discount_codes_v1";
+const EMAIL_TEMPLATES_STORAGE = "hbf_email_templates_v1";
 const SITE_URL = "https://cool-sorbet-b1d599.netlify.app";
 
 const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
@@ -632,6 +633,81 @@ function LInput({ label, value, onChange, type="text", placeholder="", width, mo
   );
 }
 
+// Darken a hex colour by subtracting `amount` from each RGB channel (0-255 clamp)
+function darkenHex(hex, amount) {
+  var h = (hex || "#000000").replace("#", "");
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  var r = Math.max(0, parseInt(h.slice(0,2), 16) - amount);
+  var g = Math.max(0, parseInt(h.slice(2,4), 16) - amount);
+  var b = Math.max(0, parseInt(h.slice(4,6), 16) - amount);
+  return "#" + [r,g,b].map(function(x){ return x.toString(16).padStart(2,"0"); }).join("");
+}
+
+const DEFAULT_EMAIL_TEMPLATES = [
+  {
+    id: "booking_confirmed",
+    name: "Booking Confirmed",
+    triggerLabel: "Send on booking creation",
+    triggerDays: null,
+    subject: "Booking Confirmed – {{propertyName}} – Ref {{bookingRef}}",
+    body: "Dear {{guestName}},\n\nThank you for booking with Hawthbush Farm! Your reservation is confirmed.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDuration: {{nights}} nights\nTotal: £{{totalAmount}}\n\nA deposit of £{{depositAmount}} is due by {{depositDueDate}}.\n\nIf you have any questions, please don't hesitate to get in touch.\n\nWarm regards,\nHawthbush Farm",
+    attachments: []
+  },
+  {
+    id: "deposit_request",
+    name: "Deposit Request",
+    triggerLabel: "Days before deposit due date",
+    triggerDays: 7,
+    subject: "Deposit Due – {{propertyName}} – Ref {{bookingRef}}",
+    body: "Dear {{guestName}},\n\nThis is a reminder that your deposit is due for your upcoming stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDeposit due: £{{depositAmount}}\nDue date: {{depositDueDate}}\n\nPlease make payment at your earliest convenience.\n\nWarm regards,\nHawthbush Farm",
+    attachments: []
+  },
+  {
+    id: "balance_request",
+    name: "Balance Request",
+    triggerLabel: "Days before balance due date",
+    triggerDays: 14,
+    subject: "Balance Due – {{propertyName}} – Ref {{bookingRef}}",
+    body: "Dear {{guestName}},\n\nYour balance is now due ahead of your stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nBalance due: £{{balanceAmount}}\nDue date: {{balanceDueDate}}\n\nWe look forward to welcoming you!\n\nWarm regards,\nHawthbush Farm",
+    attachments: []
+  },
+  {
+    id: "payment_confirmation",
+    name: "Payment Confirmation",
+    triggerLabel: "Send on payment receipt",
+    triggerDays: null,
+    subject: "Payment Received – {{propertyName}} – Ref {{bookingRef}}",
+    body: "Dear {{guestName}},\n\nThank you – we have received your payment of £{{amountPaid}} for your booking at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nAmount received: £{{amountPaid}}\n\nWarm regards,\nHawthbush Farm",
+    attachments: []
+  },
+  {
+    id: "arrival_general",
+    name: "Arrival Info (General)",
+    triggerLabel: "Days before check-in (general bookings)",
+    triggerDays: 5,
+    subject: "Your Arrival at Hawthbush Farm – {{checkIn}}",
+    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}} in just a few days!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from 4:00pm\nCheck-out: {{checkOut}} by 10:00am\nGuests: {{nights}} nights\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
+    attachments: []
+  },
+  {
+    id: "arrival_event",
+    name: "Arrival Info (Wedding/Event)",
+    triggerLabel: "Days before check-in (event/wedding bookings)",
+    triggerDays: 7,
+    subject: "Your Wedding Weekend at Hawthbush Farm – {{checkIn}}",
+    body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from 4:00pm\nCheck-out: {{checkOut}} by 10:00am\n\nYour event information pack and site map are attached. Please do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm",
+    attachments: []
+  }
+];
+
+const EMAIL_TOKENS = [
+  "{{guestName}}", "{{guestEmail}}", "{{guestPhone}}",
+  "{{bookingRef}}", "{{propertyName}}",
+  "{{checkIn}}", "{{checkOut}}", "{{nights}}",
+  "{{totalAmount}}", "{{depositAmount}}", "{{balanceAmount}}",
+  "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}"
+];
+
 // ── Month timeline: one lane per property ────────────────────────────────────
 function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen }) {
   const [mode, setMode] = useState("year");
@@ -669,6 +745,26 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
   // Event dates set: any wedding/event that falls in the year
   const eventDates = new Set();
   (events || []).forEach(e => { if (e.date && e.date.startsWith(String(year))) eventDates.add(e.date); });
+
+  // Changeover set: "dateStr:propId" for days where same property has both a checkOut AND checkIn
+  const coByProp = {}, ciByProp = {};
+  bookings.forEach(function(b) {
+    if (b.status === "cancelled") return;
+    var bstays = (b.stays && b.stays.length) ? b.stays : [b];
+    bstays.forEach(function(s) {
+      if (!s.checkIn || !s.checkOut || !s.propertyId) return;
+      if (!coByProp[s.propertyId]) coByProp[s.propertyId] = new Set();
+      if (!ciByProp[s.propertyId]) ciByProp[s.propertyId] = new Set();
+      coByProp[s.propertyId].add(s.checkOut);
+      ciByProp[s.propertyId].add(s.checkIn);
+    });
+  });
+  const changeoverSet = new Set();
+  properties.forEach(function(p) {
+    var coSet = coByProp[p.id] || new Set();
+    var ciSet = ciByProp[p.id] || new Set();
+    coSet.forEach(function(d) { if (ciSet.has(d)) changeoverSet.add(d + ":" + p.id); });
+  });
 
   // ── YEAR VIEW ──────────────────────────────────────────────────────────────
   if (mode === "year") {
@@ -712,9 +808,14 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       const isToday  = ds === today;
                       const colInRow = (ci - 7) % 7; // offset by 7 header cells
                       const isSat = colInRow === 5, isSun = colInRow === 6;
-                      const bg = propsOn.length === 1 ? propsOn[0].colour+"2a"
-                               : propsOn.length > 1   ? propsOn[0].colour+"1e"
-                               : "transparent";
+                      const chgProps = propsOn.filter(p => changeoverSet.has(ds + ":" + p.id));
+                      const isChgover = chgProps.length > 0;
+                      const cp0 = isChgover ? chgProps[0] : null;
+                      const bg = isChgover && cp0
+                        ? "linear-gradient(135deg, " + darkenHex(cp0.colour, 60) + " 50%, " + cp0.colour + "44 50%)"
+                        : propsOn.length === 1 ? propsOn[0].colour+"2a"
+                        : propsOn.length > 1   ? propsOn[0].colour+"1e"
+                        : "transparent";
                       return (
                         <div key={day} style={{ textAlign:"center", padding:"1px 0", borderRadius:2, background:bg,
                           outline: isToday ? `1.5px solid ${T.accent}` : "none" }}>
@@ -755,6 +856,10 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{ width:10, height:10, borderRadius:2, outline:`1.5px solid ${T.accent}`, display:"inline-block" }}/>
             Today
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ width:10, height:10, borderRadius:2, background:"linear-gradient(135deg, #1040a0 50%, #3b82f633 50%)", display:"inline-block" }}/>
+            Changeover day
           </span>
         </div>
       </div>
@@ -841,13 +946,18 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                     const dayNum = i+1;
                     const isCI = checkInDays.has(dayNum);
                     const isCO = checkOutDays.has(dayNum);
+                    const isChgDay = isCI && isCO;
                     return (
                       <div key={i} style={{ position:"absolute", left:i*dayW, top:0, width:dayW, height:"100%",
                         background: wknd ? "#f6faff" : "transparent", borderRight:`1px solid #eef3fa`, overflow:"hidden" }}>
                         {isCO && <div style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
-                          background:p.colour, opacity:0.28, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>}
+                          background: isChgDay ? darkenHex(p.colour, 55) : p.colour,
+                          opacity: isChgDay ? 0.75 : 0.28,
+                          clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>}
                         {isCI && <div style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
-                          background:p.colour, opacity:0.28, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>}
+                          background: p.colour,
+                          opacity: isChgDay ? 0.35 : 0.28,
+                          clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>}
                       </div>
                     );
                   })}
@@ -882,6 +992,16 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
           <span style={{ display:"inline-block", width:14, height:14, background:"#2563eb", opacity:.3, clipPath:"polygon(100% 0, 0 0, 100% 100%)", verticalAlign:"middle" }}/>
           <span>Checkin day</span>
+        </span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+          <span style={{ display:"inline-flex", width:14, height:14, verticalAlign:"middle", overflow:"hidden" }}>
+            <span style={{ display:"inline-block", width:"100%", height:"100%", background:"#1040a0", opacity:.8, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>
+          </span>
+          <span>+</span>
+          <span style={{ display:"inline-flex", width:14, height:14, verticalAlign:"middle", overflow:"hidden" }}>
+            <span style={{ display:"inline-block", width:"100%", height:"100%", background:"#2563eb", opacity:.35, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
+          </span>
+          <span>Changeover day</span>
         </span>
         <span style={{ opacity:.7 }}>Faded = pending</span>
       </div>
@@ -1853,36 +1973,206 @@ function ICalSettings({ properties, setProperties, onSave }) {
   );
 }
 
+// ── Email Templates Editor ────────────────────────────────────────────────────
+function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
+  const [sel, setSel] = useState(0);
+  const [flash, setFlash] = useState("");
+  const [copying, setCopying] = useState(null);
+  const fileRef = useRef(null);
+
+  const upd = function(key, val) {
+    setTemplates(function(ts) {
+      return ts.map(function(t, i) { return i === sel ? Object.assign({}, t, { [key]: val }) : t; });
+    });
+  };
+
+  const handleSave = async function() {
+    await onSave();
+    setFlash("Saved");
+    setTimeout(function() { setFlash(""); }, 2000);
+  };
+
+  const handleFile = function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert("File is over 2 MB — please compress it before attaching.");
+      e.target.value = "";
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+      var att = { name: file.name, size: file.size, type: file.type, dataUrl: ev.target.result };
+      var curr = templates[sel];
+      upd("attachments", (curr.attachments || []).concat([att]));
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const removeAtt = function(idx) {
+    upd("attachments", (templates[sel].attachments || []).filter(function(_, i) { return i !== idx; }));
+  };
+
+  const copyToken = function(token, idx) {
+    if (navigator.clipboard) navigator.clipboard.writeText(token);
+    setCopying(idx);
+    setTimeout(function() { setCopying(null); }, 1200);
+  };
+
+  var tmpl = templates[sel] || {};
+  var TEMPLATE_NAMES = templates.map(function(t) { return t.name; });
+
+  const taStyle = {
+    width:"100%", boxSizing:"border-box", fontFamily:"monospace", fontSize:13, lineHeight:1.65,
+    border:`1.5px solid ${T.border}`, borderRadius:8, padding:"12px 14px", resize:"vertical",
+    color:T.text, background:"#fafbff", minHeight:260, outline:"none"
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:T.text }}>Email templates</div>
+          <div style={{ fontSize:12, color:T.textMid, marginTop:3 }}>Edit subject and body for each email type. Use tokens (click to copy) where guest/booking details should appear.</div>
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center", flexShrink:0, marginLeft:16 }}>
+          {flash && <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>{flash}</span>}
+          <button onClick={handleSave} style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Save templates</button>
+        </div>
+      </div>
+
+      <div style={{ display:"flex", gap:14 }}>
+        {/* Left: template list */}
+        <div style={{ width:190, flexShrink:0 }}>
+          {TEMPLATE_NAMES.map(function(name, i) {
+            return (
+              <button key={i} onClick={function() { setSel(i); }}
+                style={{ display:"block", width:"100%", textAlign:"left", background: sel===i ? T.accentLight : "transparent",
+                  border: `1.5px solid ${sel===i ? T.accent : T.border}`, borderRadius:8, padding:"9px 12px", marginBottom:6,
+                  cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight: sel===i ? 700 : 500,
+                  color: sel===i ? T.accent : T.text }}>
+                {name}
+                {templates[i].triggerDays !== null && (
+                  <div style={{ fontSize:10, color:T.textLight, marginTop:2, fontWeight:400 }}>{templates[i].triggerLabel}</div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Right: editor */}
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px" }}>
+            {/* Trigger days row (for timed templates) */}
+            {tmpl.triggerDays !== null && (
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16, padding:"10px 14px", background:T.accentLight, borderRadius:8, border:`1px solid ${T.accent}30` }}>
+                <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{tmpl.triggerLabel}:</span>
+                <input type="number" min="0" max="365" value={tmpl.triggerDays || 0}
+                  onChange={function(e) { upd("triggerDays", parseInt(e.target.value) || 0); }}
+                  style={{ width:60, border:`1.5px solid ${T.border}`, borderRadius:6, padding:"5px 8px", fontFamily:"inherit", fontSize:13, textAlign:"center" }} />
+                <span style={{ fontSize:12, color:T.textLight }}>days before (set to 0 to disable)</span>
+              </div>
+            )}
+
+            {/* Subject */}
+            <div style={{ marginBottom:14 }}>
+              <label style={{ display:"block", fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:5 }}>Subject</label>
+              <input value={tmpl.subject || ""} onChange={function(e) { upd("subject", e.target.value); }}
+                style={{ ...inpStyle, width:"100%", boxSizing:"border-box", fontSize:13 }} />
+            </div>
+
+            {/* Body */}
+            <div style={{ marginBottom:16 }}>
+              <label style={{ display:"block", fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:5 }}>Body</label>
+              <textarea value={tmpl.body || ""} onChange={function(e) { upd("body", e.target.value); }} style={taStyle} />
+            </div>
+
+            {/* Tokens reference */}
+            <div style={{ marginBottom:18 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:7 }}>Available tokens — click to copy</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                {EMAIL_TOKENS.map(function(token, i) {
+                  return (
+                    <button key={token} onClick={function() { copyToken(token, i); }}
+                      style={{ background: copying===i ? T.green : T.bgInput, color: copying===i ? "#fff" : T.textMid,
+                        border:`1px solid ${T.border}`, borderRadius:5, padding:"3px 8px", cursor:"pointer",
+                        fontFamily:"monospace", fontSize:11, transition:"background .15s" }}>
+                      {copying===i ? "Copied!" : token}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Attachments */}
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:7 }}>Attachments (max 2 MB each)</div>
+              {(tmpl.attachments || []).length === 0 && (
+                <div style={{ fontSize:12, color:T.textLight, marginBottom:8 }}>No files attached to this template.</div>
+              )}
+              {(tmpl.attachments || []).map(function(att, i) {
+                return (
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 10px", background:T.bgInput, borderRadius:7, marginBottom:5, border:`1px solid ${T.border}` }}>
+                    <span style={{ fontSize:12, color:T.text, flex:1, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{att.name}</span>
+                    <span style={{ fontSize:11, color:T.textLight, flexShrink:0 }}>{Math.round(att.size/1024)} KB</span>
+                    <button onClick={function() { removeAtt(i); }}
+                      style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, padding:"0 4px" }}>
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
+              <input ref={fileRef} type="file" onChange={handleFile} style={{ display:"none" }} />
+              <button onClick={function() { if (fileRef.current) fileRef.current.click(); }}
+                style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:7, padding:"8px 16px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, color:T.text, marginTop:4 }}>
+                + Attach file
+              </button>
+              <div style={{ fontSize:11, color:T.textLight, marginTop:5 }}>
+                Files are stored with the template. For large files (brochures, maps) consider linking to a URL in the body instead.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Setup wrapper (sub-tabs: Pricing | Discount Codes | Airbnb Sync) ──────────
-function LettingsSetup({ properties, setProperties, onSaveProperties, discountCodes, setDiscountCodes, onSaveDiscountCodes }) {
+function LettingsSetup({ properties, setProperties, onSaveProperties, discountCodes, setDiscountCodes, onSaveDiscountCodes, emailTemplates, setEmailTemplates, onSaveEmailTemplates }) {
   const [setupTab, setSetupTab] = useState("pricing");
-  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"]];
+  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"]];
   return (
     <div>
       <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}` }}>
-        {tabs.map(([id, label]) => (
-          <button key={id} onClick={() => setSetupTab(id)}
-            style={{ background:"none", border:"none", borderBottom: setupTab===id ? `3px solid ${T.midBlue}` : "3px solid transparent",
-              color: setupTab===id ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13, fontWeight: setupTab===id ? 700 : 500,
-              padding:"6px 16px 10px", cursor:"pointer" }}>
-            {label}
-          </button>
-        ))}
+        {tabs.map(function([id, label]) {
+          return (
+            <button key={id} onClick={function() { setSetupTab(id); }}
+              style={{ background:"none", border:"none", borderBottom: setupTab===id ? `3px solid ${T.midBlue}` : "3px solid transparent",
+                color: setupTab===id ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13, fontWeight: setupTab===id ? 700 : 500,
+                padding:"6px 16px 10px", cursor:"pointer" }}>
+              {label}
+            </button>
+          );
+        })}
       </div>
       {setupTab === "pricing" && <PropertyEditor properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
       {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
+      {setupTab === "emails"  && <EmailTemplatesEditor templates={emailTemplates} setTemplates={setEmailTemplates} onSave={onSaveEmailTemplates}/>}
     </div>
   );
 }
 
 // ── Main Lettings view ───────────────────────────────────────────────────────
 function LettingsView({ events }) {
-  const [properties, setProperties]       = useState(INITIAL_PROPERTIES);
-  const [bookings, setBookings]           = useState([]);
-  const [guests, setGuests]               = useState([]);
-  const [discountCodes, setDiscountCodes] = useState([]);
-  const [loaded, setLoaded]               = useState(false);
+  const [properties, setProperties]         = useState(INITIAL_PROPERTIES);
+  const [bookings, setBookings]             = useState([]);
+  const [guests, setGuests]                 = useState([]);
+  const [discountCodes, setDiscountCodes]   = useState([]);
+  const [emailTemplates, setEmailTemplates] = useState(DEFAULT_EMAIL_TEMPLATES);
+  const [loaded, setLoaded]                 = useState(false);
   const [tab, setTab]               = useState("calendar");
   const [cursor, setCursor]         = useState(()=> new Date());
   const [form, setForm]             = useState(null);
@@ -1897,6 +2187,7 @@ function LettingsView({ events }) {
       try { const b = await sbGet(ACCOM_STORAGE);      setBookings((b || []).map(normalizeAccom)); } catch { setBookings([]); }
       try { const g = await sbGet(ACCOM_GUESTS_STORAGE); setGuests(g || []); } catch { setGuests([]); }
       try { const dc = await sbGet(DISCOUNT_CODES_STORAGE); setDiscountCodes(dc || []); } catch { setDiscountCodes([]); }
+      try { const et = await sbGet(EMAIL_TEMPLATES_STORAGE); if (et && et.length) setEmailTemplates(et); } catch {}
       setLoaded(true);
     })();
   }, []);
@@ -1914,6 +2205,11 @@ function LettingsView({ events }) {
 
   const saveDiscountCodes = async () => {
     try { await sbSet(DISCOUNT_CODES_STORAGE, discountCodes); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
+    catch (e) { console.error(e); setFlash("Save failed"); }
+  };
+
+  const saveEmailTemplates = async () => {
+    try { await sbSet(EMAIL_TEMPLATES_STORAGE, emailTemplates); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
     catch (e) { console.error(e); setFlash("Save failed"); }
   };
 
@@ -1972,6 +2268,7 @@ function LettingsView({ events }) {
         <LettingsSetup
           properties={properties} setProperties={setProperties} onSaveProperties={saveProperties}
           discountCodes={discountCodes} setDiscountCodes={setDiscountCodes} onSaveDiscountCodes={saveDiscountCodes}
+          emailTemplates={emailTemplates} setEmailTemplates={setEmailTemplates} onSaveEmailTemplates={saveEmailTemplates}
         />
       )}
       {tab==="form" && form && (
