@@ -2286,7 +2286,7 @@ function LettingsView({ events }) {
 export default function App() {
   const [bookings, setBookings] = useState([]);
   const [staff, setStaff]       = useState([]);
-  const [view, setView]         = useState("list");
+  const [view, setView]         = useState("home");
   const [xeroToken, setXeroToken]   = useState(() => xeroGetToken());
   const [gmailToken, setGmailToken] = useState(() => gmailGetToken());
 
