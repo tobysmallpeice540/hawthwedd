@@ -12,8 +12,8 @@
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
-const SUPABASE_URL = process.env.SUPABASE_URL || "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
+const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const ACCOM_KEY    = "hbf_accom_v1";
 
 // ── Supabase helpers (no header spread) ──────────────────────────────────────
