@@ -464,8 +464,9 @@ function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData,
 const PROPERTIES_STORAGE   = "hbf_properties_v1";
 const ACCOM_STORAGE        = "hbf_accom_v1";
 const ACCOM_GUESTS_STORAGE = "hbf_accom_guests_v1";
+const EMAIL_LOG_STORAGE    = "hbf_email_log_v1";
 
-const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
+const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
 
 const ACCOM_STATUS_META = {
   confirmed: { label:"Confirmed", bg:T.greenBg,  text:T.green },
@@ -492,6 +493,44 @@ function nightsBetween(ci, co) {
   if (!ci || !co) return null;
   const a = new Date(ci + "T00:00:00"), b = new Date(co + "T00:00:00");
   return Math.round((b - a) / 86400000);
+}
+
+// Wrap a legacy flat accom booking into the multi-stay model. No-op if stays[] already present.
+function normalizeAccom(b) {
+  if (b.stays && b.stays.length) return b;
+  const stay = {
+    propertyId:   b.propertyId   || "",
+    propertyName: b.propertyName || "",
+    checkIn:      b.checkIn      || "",
+    checkOut:     b.checkOut     || "",
+    nights:       b.nights       || null,
+    value:        Number(b.value) || 0,
+  };
+  return Object.assign({}, b, { stays: [stay] });
+}
+
+// Compute Airbnb estimated value using the property's long-stay rules (×0.9 for Airbnb cut).
+// Returns null when baseRate not yet configured.
+function calcAirbnbEstimate(b, prop) {
+  if (!prop || !prop.baseRate || prop.baseRate <= 0) return null;
+  const ci = (b.stays && b.stays[0] && b.stays[0].checkIn) || b.checkIn;
+  const co = (b.stays && b.stays[0] && b.stays[0].checkOut) || b.checkOut;
+  const nights = nightsBetween(ci, co);
+  if (!nights || nights <= 0) return null;
+  let rate = prop.baseRate;
+  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0) {
+    rate = Math.max(0, rate - prop.longStayDiscount);
+  }
+  return Math.round(rate * nights * 0.9 * 100) / 100;
+}
+
+// Log an automated email to Supabase. Called from send handlers (phase 2).
+async function logEmail(entry) {
+  try {
+    const existing = await sbGet(EMAIL_LOG_STORAGE) || [];
+    const rec = Object.assign({ id:"el"+Date.now(), sentAt:new Date().toISOString() }, entry);
+    await sbSet(EMAIL_LOG_STORAGE, existing.concat([rec]).slice(-500));
+  } catch(e) { console.error("Email log:", e); }
 }
 
 // Auto-build a deposit + balance schedule for a manual booking. Zero value -> no schedule.
@@ -543,18 +582,30 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
   const nDays = daysInMonth(year, month);
   const dayW = 34;
   const monthStart = new Date(year, month, 1);
+  const monthEnd   = new Date(year, month+1, 1);
   const monthLabel = cursor.toLocaleDateString("en-GB", { month:"long", year:"numeric" });
 
-  const laneFor = (pid) => bookings.filter(b =>
-    b.propertyId === pid && b.status !== "cancelled" && b.checkIn && b.checkOut &&
-    new Date(b.checkOut+"T00:00:00") > monthStart &&
-    new Date(b.checkIn+"T00:00:00") < new Date(year, month+1, 1)
-  );
+  // Build lane entries for a property: expand stays[] so each stay segment gets its own bar entry
+  const laneFor = (pid) => {
+    const entries = [];
+    bookings.forEach(b => {
+      if (b.status === "cancelled") return;
+      const stays = (b.stays && b.stays.length) ? b.stays : [b];
+      stays.forEach(s => {
+        if (s.propertyId !== pid) return;
+        if (!s.checkIn || !s.checkOut) return;
+        if (new Date(s.checkOut+"T00:00:00") <= monthStart) return;
+        if (new Date(s.checkIn+"T00:00:00") >= monthEnd) return;
+        entries.push({ booking:b, checkIn:s.checkIn, checkOut:s.checkOut });
+      });
+    });
+    return entries;
+  };
 
-  const barGeom = (b) => {
-    const ci = new Date(b.checkIn+"T00:00:00"), co = new Date(b.checkOut+"T00:00:00");
+  const barGeom = (checkIn, checkOut) => {
+    const ci = new Date(checkIn+"T00:00:00"), co = new Date(checkOut+"T00:00:00");
     const startDay = ci < monthStart ? 0 : (ci.getDate() - 1);
-    const endDay   = co > new Date(year, month+1, 1) ? nDays : (co.getDate() - 1);
+    const endDay   = co > monthEnd   ? nDays : (co.getDate() - 1);
     const span = Math.max(1, endDay - startDay);
     return { left: startDay * dayW, width: span * dayW - 3 };
   };
@@ -562,9 +613,9 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
   return (
     <div>
       <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:14 }}>
-        <button onClick={()=>setCursor(new Date(year, month-1, 1))} style={navBtn}>‹</button>
+        <button onClick={()=>setCursor(new Date(year, month-1, 1))} style={navBtn}>&#8249;</button>
         <div style={{ fontSize:17, fontWeight:700, color:T.text, minWidth:180, textAlign:"center" }}>{monthLabel}</div>
-        <button onClick={()=>setCursor(new Date(year, month+1, 1))} style={navBtn}>›</button>
+        <button onClick={()=>setCursor(new Date(year, month+1, 1))} style={navBtn}>&#8250;</button>
         <button onClick={()=>setCursor(new Date())} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600 }}>Today</button>
       </div>
 
@@ -588,6 +639,21 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
           {/* Property lanes */}
           {properties.map(p => {
             const lane = laneFor(p.id);
+
+            // Days in this month that have a check-in or check-out for this property
+            const checkInDays = new Set(
+              lane.filter(e => {
+                const ci = new Date(e.checkIn+"T00:00:00");
+                return ci.getFullYear()===year && ci.getMonth()===month;
+              }).map(e => new Date(e.checkIn+"T00:00:00").getDate())
+            );
+            const checkOutDays = new Set(
+              lane.filter(e => {
+                const co = new Date(e.checkOut+"T00:00:00");
+                return co.getFullYear()===year && co.getMonth()===month;
+              }).map(e => new Date(e.checkOut+"T00:00:00").getDate())
+            );
+
             return (
               <div key={p.id} style={{ display:"flex", borderBottom:`1px solid ${T.border}` }}>
                 <div style={{ width:130, flexShrink:0, padding:"12px 10px", fontSize:13, fontWeight:700, color:T.text,
@@ -595,17 +661,34 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
                   <span style={{ width:11, height:11, borderRadius:3, background:p.colour, flexShrink:0 }}/>{p.name}
                 </div>
                 <div style={{ position:"relative", height:44, flex:1 }}>
+                  {/* Background stripes with check-in / check-out diagonal slice markers */}
                   {Array.from({length:nDays}, (_,i)=>{
-                    const d = new Date(year, month, i+1); const wknd = d.getDay()===0||d.getDay()===6;
-                    return <div key={i} style={{ position:"absolute", left:i*dayW, top:0, width:dayW, height:"100%",
-                      background: wknd ? "#f6faff" : "transparent", borderRight:`1px solid #eef3fa` }}/>;
+                    const d = new Date(year, month, i+1);
+                    const wknd = d.getDay()===0||d.getDay()===6;
+                    const dayNum = i+1;
+                    const isCI = checkInDays.has(dayNum);
+                    const isCO = checkOutDays.has(dayNum);
+                    return (
+                      <div key={i} style={{ position:"absolute", left:i*dayW, top:0, width:dayW, height:"100%",
+                        background: wknd ? "#f6faff" : "transparent", borderRight:`1px solid #eef3fa`, overflow:"hidden" }}>
+                        {/* Checkout: lower-left triangle — guest is leaving this morning */}
+                        {isCO && <div style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
+                          background:p.colour, opacity:0.28, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>}
+                        {/* Checkin: upper-right triangle — guest is arriving this afternoon */}
+                        {isCI && <div style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
+                          background:p.colour, opacity:0.28, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>}
+                      </div>
+                    );
                   })}
-                  {lane.map(b => {
-                    const g = barGeom(b);
+                  {/* Booking bars */}
+                  {lane.map((e,i) => {
+                    const g = barGeom(e.checkIn, e.checkOut);
+                    const b = e.booking;
                     const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
                     const airbnb = b.source==="airbnb";
                     return (
-                      <div key={b.id} onClick={()=>onOpen(b)} title={`${b.guestName||"(no name)"} · ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}`}
+                      <div key={b.id+"-"+i} onClick={()=>onOpen(b)}
+                        title={`${b.guestName||"(no name)"} - ${fmtDate(e.checkIn)} to ${fmtDate(e.checkOut)}`}
                         style={{ position:"absolute", left:g.left+2, top:8, width:g.width, height:28, borderRadius:6,
                           background: airbnb ? "#fff" : p.colourBg, border:`1.5px ${airbnb?"dashed":"solid"} ${p.colour}`,
                           color:p.colour, fontSize:11, fontWeight:600, padding:"0 6px", display:"flex", alignItems:"center",
@@ -620,9 +703,17 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
           })}
         </div>
       </div>
-      <div style={{ display:"flex", gap:16, marginTop:10, fontSize:12, color:T.textMid, flexWrap:"wrap" }}>
-        <span><span style={{ display:"inline-block", width:20, height:10, background:T.accentLight, border:`1.5px solid ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Direct / manual booking</span>
-        <span><span style={{ display:"inline-block", width:20, height:10, background:"#fff", border:`1.5px dashed ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Airbnb (blocked dates)</span>
+      <div style={{ display:"flex", gap:16, marginTop:10, fontSize:12, color:T.textMid, flexWrap:"wrap", alignItems:"center" }}>
+        <span><span style={{ display:"inline-block", width:20, height:10, background:T.accentLight, border:`1.5px solid ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Direct / manual</span>
+        <span><span style={{ display:"inline-block", width:20, height:10, background:"#fff", border:`1.5px dashed ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Airbnb block</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+          <span style={{ display:"inline-block", width:14, height:14, background:"#2563eb", opacity:.3, clipPath:"polygon(0 0, 0% 100%, 100% 100%)", verticalAlign:"middle" }}/>
+          <span>Checkout day</span>
+        </span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+          <span style={{ display:"inline-block", width:14, height:14, background:"#2563eb", opacity:.3, clipPath:"polygon(100% 0, 0 0, 100% 100%)", verticalAlign:"middle" }}/>
+          <span>Checkin day</span>
+        </span>
         <span style={{ opacity:.7 }}>Faded = pending</span>
       </div>
     </div>
@@ -634,15 +725,29 @@ const navBtn = { width:36, height:36, borderRadius:8, border:`1.5px solid ${T.bo
 // ── Booking list ─────────────────────────────────────────────────────────────
 function AccomList({ properties, bookings, filterProp, setFilterProp, filterStatus, setFilterStatus, onOpen }) {
   const propName = (id) => (properties.find(p=>p.id===id)||{}).name || id;
-  const rows = bookings
-    .filter(b => filterProp==="all" || b.propertyId===filterProp)
-    .filter(b => filterStatus==="all" || b.status===filterStatus)
-    .sort((a,b)=> (a.checkIn||"").localeCompare(b.checkIn||""));
+
+  // For filtering + sorting, derive primary stay info
+  const withPrimary = bookings.map(b => {
+    const primary = (b.stays && b.stays[0]) || b;
+    return { b, primary };
+  });
+
+  const rows = withPrimary
+    .filter(({ b, primary }) => filterProp==="all" || (b.stays||[]).some(s=>s.propertyId===filterProp) || b.propertyId===filterProp)
+    .filter(({ b }) => filterStatus==="all" || b.status===filterStatus)
+    .sort((a,z)=> (a.primary.checkIn||"").localeCompare(z.primary.checkIn||""));
+
   const paidState = (b) => {
     if (!b.schedule || !b.schedule.length) return b.value>0 ? "—" : "n/a";
     const paid = b.schedule.filter(s=>s.paid).length;
     return paid===b.schedule.length ? "Paid" : `${paid}/${b.schedule.length}`;
   };
+
+  const staysLabel = (b) => {
+    if (!b.stays || b.stays.length<=1) return propName(b.propertyId || (b.stays&&b.stays[0]&&b.stays[0].propertyId));
+    return b.stays.map(s=>propName(s.propertyId)).join(" + ");
+  };
+
   return (
     <div>
       <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap" }}>
@@ -663,17 +768,17 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
         <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", gap:0, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
           {["Guest","Property","Dates","Status","Value","Paid"].map(h=><div key={h} style={{ padding:"10px 12px" }}>{h}</div>)}
         </div>
-        {rows.map(b=>{
+        {rows.map(({ b, primary })=>{
           const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
           return (
             <div key={b.id} onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
               <div style={{ padding:"11px 12px", fontWeight:600 }}>
                 {b.guestName || (b.source==="airbnb" ? "Airbnb block" : "(no name)")}
                 {b.bookingType && <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:T.accent, background:T.accentLight, padding:"1px 6px", borderRadius:8 }}>{b.bookingType}</span>}
-                {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.textLight }}>est.</span>}
+                {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}> est.</span>}
               </div>
-              <div style={{ padding:"11px 12px" }}>{propName(b.propertyId)}</div>
-              <div style={{ padding:"11px 12px" }}>{fmtDate(b.checkIn)} – {fmtDate(b.checkOut)}</div>
+              <div style={{ padding:"11px 12px", fontSize:12 }}>{staysLabel(b)}</div>
+              <div style={{ padding:"11px 12px" }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
               <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
               <div style={{ padding:"11px 12px" }}>{b.value>0 ? fmtMoney(b.value) : "—"}</div>
               <div style={{ padding:"11px 12px" }}>{paidState(b)}</div>
@@ -823,8 +928,11 @@ const smallBtn = { background:"#fff", border:`1.5px solid ${T.border}`, borderRa
 const inlineInput = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 10px", outline:"none" };
 
 // ── One-off Bookalet importer (file upload) ──────────────────────────────────
-function AccomImport({ onImported }) {
+function AccomImport({ onImported, saveBookings, bookings }) {
   const [status, setStatus] = useState("");
+  const [mergeStatus, setMergeStatus] = useState("");
+  const [mergePreview, setMergePreview] = useState(null);
+
   const handleFile = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -834,28 +942,274 @@ function AccomImport({ onImported }) {
         const data = JSON.parse(reader.result);
         const props = Array.isArray(data.properties) && data.properties.length ? data.properties : INITIAL_PROPERTIES;
         const guests = Array.isArray(data.guests) ? data.guests : [];
-        const bookings = Array.isArray(data.bookings) ? data.bookings : [];
-        setStatus("Saving " + bookings.length + " bookings and " + guests.length + " guests…");
+        const imported = Array.isArray(data.bookings) ? data.bookings : [];
+        setStatus("Saving " + imported.length + " bookings and " + guests.length + " guests…");
         await sbSet(PROPERTIES_STORAGE, props);
         await sbSet(ACCOM_GUESTS_STORAGE, guests);
-        await sbSet(ACCOM_STORAGE, bookings);
-        setStatus("Imported " + bookings.length + " bookings and " + guests.length + " guests.");
-        onImported(props, guests, bookings);
+        await sbSet(ACCOM_STORAGE, imported);
+        setStatus("Imported " + imported.length + " bookings and " + guests.length + " guests.");
+        onImported(props, guests, imported);
       } catch (err) {
         setStatus("Import failed: " + err.message);
       }
     };
     reader.readAsText(file);
   };
+
+  // Find wedding pairs: Wedding-typed bookings where one is hamlet and one is amly,
+  // check-in dates within 3 days of each other.
+  const findWeddingPairs = () => {
+    const weddings = (bookings||[]).filter(b => b.bookingType==="Wedding" && b.status!=="cancelled");
+    const hamlets = weddings.filter(b => {
+      const stays = (b.stays&&b.stays.length) ? b.stays : [b];
+      return stays.some(s=>s.propertyId==="hamlet");
+    });
+    const amlys = weddings.filter(b => {
+      const stays = (b.stays&&b.stays.length) ? b.stays : [b];
+      return stays.some(s=>s.propertyId==="amly");
+    });
+    const pairs = [];
+    const usedAmly = new Set();
+    hamlets.forEach(h => {
+      const hStay = ((h.stays&&h.stays.length)?h.stays:[h]).find(s=>s.propertyId==="hamlet");
+      if (!hStay) return;
+      // Already multi-stay? Skip
+      if (h.stays && h.stays.length>1) return;
+      const hDate = new Date((hStay.checkIn||"")+"T00:00:00");
+      const match = amlys.find(a => {
+        if (usedAmly.has(a.id)) return false;
+        if (a.stays && a.stays.length>1) return false;
+        const aStay = ((a.stays&&a.stays.length)?a.stays:[a]).find(s=>s.propertyId==="amly");
+        if (!aStay) return false;
+        const aDate = new Date((aStay.checkIn||"")+"T00:00:00");
+        const diffDays = Math.abs((hDate-aDate)/86400000);
+        return diffDays <= 3;
+      });
+      if (match) { pairs.push({ hamlet:h, amly:match }); usedAmly.add(match.id); }
+    });
+    return pairs;
+  };
+
+  const previewMerge = () => {
+    const pairs = findWeddingPairs();
+    setMergePreview(pairs);
+  };
+
+  const runMerge = async () => {
+    if (!mergePreview || !mergePreview.length) return;
+    setMergeStatus("Merging…");
+    const removeIds = new Set();
+    const newBookings = [];
+    mergePreview.forEach(({ hamlet, amly }) => {
+      const hStay = ((hamlet.stays&&hamlet.stays.length)?hamlet.stays:[hamlet]).find(s=>s.propertyId==="hamlet");
+      const aStay = ((amly.stays&&amly.stays.length)?amly.stays:[amly]).find(s=>s.propertyId==="amly");
+      if (!hStay || !aStay) return;
+      // Merge: keep hamlet as the primary booking, add amly as a second stay
+      const merged = Object.assign({}, hamlet, {
+        guestName: hamlet.guestName || amly.guestName,
+        value: (Number(hamlet.value)||0) + (Number(amly.value)||0),
+        stays: [
+          Object.assign({}, hStay, { propertyName: hStay.propertyName||"The Hamlet" }),
+          Object.assign({}, aStay, { propertyName: aStay.propertyName||"Amly Barn" }),
+        ],
+      });
+      // Merge payment schedules
+      const combinedSched = (hamlet.schedule||[]).concat(amly.schedule||[]);
+      if (combinedSched.length) merged.schedule = combinedSched;
+      newBookings.push(merged);
+      removeIds.add(hamlet.id);
+      removeIds.add(amly.id);
+    });
+    const updated = (bookings||[])
+      .filter(b => !removeIds.has(b.id))
+      .concat(newBookings);
+    await saveBookings(updated);
+    setMergeStatus("Merged " + mergePreview.length + " pairs into " + newBookings.length + " two-stay bookings.");
+    setMergePreview(null);
+  };
+
   return (
-    <div style={{ maxWidth:560, border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", background:"#fff" }}>
-      <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:6 }}>Import from Bookalet</div>
-      <div style={{ fontSize:13, color:T.textMid, lineHeight:1.55, marginBottom:16 }}>
-        Load the one-off seed file (guests + bookings exported from Bookalet). This overwrites the Lettings data in Supabase, so it is safe to re-run. Running read-only alongside Bookalet — nothing is sent to Airbnb or Stripe.
+    <div style={{ maxWidth:620, display:"flex", flexDirection:"column", gap:18 }}>
+      <div style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", background:"#fff" }}>
+        <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:6 }}>Import from Bookalet</div>
+        <div style={{ fontSize:13, color:T.textMid, lineHeight:1.55, marginBottom:16 }}>
+          Load the one-off seed file (guests + bookings exported from Bookalet). This overwrites the Lettings data in Supabase, so it is safe to re-run. Running read-only alongside Bookalet — nothing is sent to Airbnb or Stripe.
+        </div>
+        <input type="file" accept="application/json,.json" onChange={handleFile}
+          style={{ fontSize:13, color:T.textMid }} />
+        {status && <div style={{ marginTop:14, fontSize:13, fontWeight:600, color: status.startsWith("Import failed") ? T.red : T.green }}>{status}</div>}
       </div>
-      <input type="file" accept="application/json,.json" onChange={handleFile}
-        style={{ fontSize:13, color:T.textMid }} />
-      {status && <div style={{ marginTop:14, fontSize:13, fontWeight:600, color: status.startsWith("Import failed") ? T.red : T.green }}>{status}</div>}
+
+      {/* Wedding pair merge migration */}
+      <div style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", background:"#fff" }}>
+        <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:4 }}>Merge Wedding Pairs</div>
+        <div style={{ fontSize:13, color:T.textMid, lineHeight:1.55, marginBottom:14 }}>
+          Finds Wedding-typed bookings where the same event has separate Hamlet and Amly single-stay entries and merges them into one two-stay booking. Preview first — the merge is irreversible without re-importing the seed.
+        </div>
+        {!mergePreview && (
+          <button onClick={previewMerge} style={{ background:"#fff", border:`1.5px solid ${T.border}`, color:T.text, fontFamily:"inherit", fontSize:13, fontWeight:600, padding:"9px 18px", borderRadius:8, cursor:"pointer" }}>Preview pairs</button>
+        )}
+        {mergePreview && mergePreview.length===0 && (
+          <div style={{ fontSize:13, color:T.green, fontWeight:600 }}>No mergeable pairs found — either already merged or none matched.</div>
+        )}
+        {mergePreview && mergePreview.length>0 && (
+          <div>
+            <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:10 }}>Found {mergePreview.length} pair{mergePreview.length===1?"":"s"}:</div>
+            {mergePreview.map(({ hamlet, amly }, i) => {
+              const hStay = ((hamlet.stays&&hamlet.stays.length)?hamlet.stays:[hamlet]).find(s=>s.propertyId==="hamlet")||{};
+              const aStay = ((amly.stays&&amly.stays.length)?amly.stays:[amly]).find(s=>s.propertyId==="amly")||{};
+              return (
+                <div key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7, padding:"10px 14px", marginBottom:8, fontSize:12, color:T.textMid }}>
+                  <span style={{ fontWeight:700, color:T.text }}>{hamlet.guestName||amly.guestName||"(no name)"}</span>
+                  <span style={{ marginLeft:10 }}>Hamlet {fmtDate(hStay.checkIn)}–{fmtDate(hStay.checkOut)}</span>
+                  <span style={{ marginLeft:6 }}>+ Amly {fmtDate(aStay.checkIn)}–{fmtDate(aStay.checkOut)}</span>
+                  <span style={{ marginLeft:10, color:T.green, fontWeight:600 }}>Total: {fmtMoney((Number(hamlet.value)||0)+(Number(amly.value)||0))}</span>
+                </div>
+              );
+            })}
+            <div style={{ display:"flex", gap:10, marginTop:14 }}>
+              <button onClick={runMerge} style={{ background:T.accent, color:"#fff", border:"none", fontFamily:"inherit", fontSize:13, fontWeight:700, padding:"9px 20px", borderRadius:8, cursor:"pointer" }}>Merge {mergePreview.length} pair{mergePreview.length===1?"":"s"}</button>
+              <button onClick={()=>setMergePreview(null)} style={{ background:"#fff", border:`1.5px solid ${T.border}`, color:T.textMid, fontFamily:"inherit", fontSize:13, fontWeight:600, padding:"9px 16px", borderRadius:8, cursor:"pointer" }}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {mergeStatus && <div style={{ marginTop:12, fontSize:13, fontWeight:600, color:T.green }}>{mergeStatus}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── Lettings Revenue Report ───────────────────────────────────────────────────
+function AccomReport({ properties, bookings }) {
+  const allYears = [...new Set(
+    bookings.flatMap(b => {
+      const stays = (b.stays && b.stays.length) ? b.stays : [b];
+      return stays.map(s => s.checkIn ? s.checkIn.slice(0,4) : null).filter(Boolean);
+    })
+  )].sort();
+  const currentYear = new Date().getFullYear().toString();
+  const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
+
+  const propName = (id) => (properties.find(p=>p.id===id)||{}).name || id;
+
+  // Filter to bookings with at least one stay in the selected year, not cancelled
+  const yearBookings = bookings.filter(b => {
+    if (b.status==="cancelled") return false;
+    const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    return stays.some(s => s.checkIn && s.checkIn.startsWith(year));
+  });
+
+  // Revenue by source category
+  const direct   = yearBookings.filter(b => b.source!=="airbnb" && !b.estimated && Number(b.value)>0);
+  const airbnbEst = yearBookings.filter(b => b.source==="airbnb" && Number(b.value)>0);
+  const wedding  = yearBookings.filter(b => b.bookingType==="Wedding" && Number(b.value)>0);
+
+  const sumVal = (arr) => arr.reduce((s,b) => s + (Number(b.value)||0), 0);
+
+  // Revenue by property (across all sources)
+  const byProp = {};
+  properties.forEach(p => { byProp[p.id] = { direct:0, airbnb:0, wedding:0, total:0 }; });
+  yearBookings.forEach(b => {
+    const val = Number(b.value)||0;
+    if (val<=0) return;
+    const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    // Distribute value equally across stays of this booking (simple split)
+    const perStay = val / stays.length;
+    stays.forEach(s => {
+      if (!s.checkIn || !s.checkIn.startsWith(year)) return;
+      if (!byProp[s.propertyId]) byProp[s.propertyId] = { direct:0, airbnb:0, wedding:0, total:0 };
+      const bucket = b.source==="airbnb" ? "airbnb" : b.bookingType==="Wedding" ? "wedding" : "direct";
+      byProp[s.propertyId][bucket] = (byProp[s.propertyId][bucket]||0) + perStay;
+      byProp[s.propertyId].total   = (byProp[s.propertyId].total||0)   + perStay;
+    });
+  });
+
+  const totalAll = sumVal(direct) + sumVal(airbnbEst) + sumVal(wedding);
+
+  const prevYear = allYears[allYears.indexOf(year)-1];
+  const nextYear = allYears[allYears.indexOf(year)+1];
+
+  const srcRow = (label, arr, colour) => {
+    const val = sumVal(arr);
+    return (
+      <div key={label} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+        <span style={{ width:160, color:T.textMid, fontSize:13 }}>{label}</span>
+        <div style={{ flex:1, background:"#f0f6ff", borderRadius:4, height:24, overflow:"hidden" }}>
+          <div style={{ width:totalAll>0?`${Math.min(100,(val/totalAll)*100)}%`:"0%", minWidth:val>0?40:0, height:"100%",
+            background:colour, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
+            {val>0 && <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{fmtMoney(val)}</span>}
+          </div>
+        </div>
+        <span style={{ fontSize:13, fontWeight:600, color:T.text, minWidth:80, textAlign:"right" }}>{fmtMoney(val)}</span>
+        <span style={{ fontSize:12, color:T.textLight, minWidth:40, textAlign:"right" }}>{arr.length} bkg{arr.length===1?"":"s"}</span>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {/* Year navigator */}
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22 }}>
+        <button onClick={()=>setYear(prevYear)} disabled={!prevYear} style={{ ...navBtn, opacity:prevYear?1:.4 }}>&#8249;</button>
+        <div style={{ display:"flex", gap:6 }}>
+          {allYears.map(y=>(
+            <button key={y} onClick={()=>setYear(y)} style={{ background:y===year?T.midBlue:"#fff", color:y===year?"#fff":T.textMid, border:`1.5px solid ${y===year?T.midBlue:T.border}`, padding:"6px 16px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:y===year?700:400 }}>{y}</button>
+          ))}
+        </div>
+        <button onClick={()=>setYear(nextYear)} disabled={!nextYear} style={{ ...navBtn, opacity:nextYear?1:.4 }}>&#8250;</button>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:24 }}>
+        <StatCard label="Direct / Manual" value={fmtMoney(sumVal(direct))} sub={`${direct.length} bookings`}/>
+        <StatCard label="Airbnb (estimated)" value={fmtMoney(sumVal(airbnbEst))} sub={`${airbnbEst.length} blocks — estimate only`}/>
+        <StatCard label="Wedding-linked" value={fmtMoney(sumVal(wedding))} sub={`${wedding.length} bookings`}/>
+      </div>
+
+      {/* Revenue by source bar chart */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", marginBottom:20, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15 }}>Revenue by source — {year}</h3>
+        {srcRow("Direct / Manual", direct, T.accent)}
+        {srcRow("Airbnb (est.)", airbnbEst, T.amber)}
+        {srcRow("Wedding-linked", wedding, T.green)}
+        <div style={{ borderTop:`1px solid ${T.border}`, marginTop:12, paddingTop:10, display:"flex", justifyContent:"flex-end", fontSize:14, fontWeight:700, color:T.midBlue }}>
+          Total: {fmtMoney(totalAll)}
+        </div>
+      </div>
+
+      {/* Revenue by property */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15 }}>Revenue by property — {year}</h3>
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead>
+              <tr style={{ background:T.bgInput }}>
+                {["Property","Direct","Airbnb est.","Wedding","Total"].map(h=>(
+                  <th key={h} style={{ padding:"9px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {properties.map((p,i) => {
+                const d = byProp[p.id] || { direct:0, airbnb:0, wedding:0, total:0 };
+                return (
+                  <tr key={p.id} style={{ borderTop:`1px solid ${T.border}` }}>
+                    <td style={{ padding:"10px 12px", fontWeight:600 }}>
+                      <span style={{ display:"inline-block", width:10, height:10, borderRadius:2, background:p.colour, marginRight:6, verticalAlign:"middle" }}/>
+                      {p.name}
+                    </td>
+                    <td style={{ padding:"10px 12px", color:d.direct>0?T.text:T.textLight }}>{d.direct>0?fmtMoney(Math.round(d.direct)):"—"}</td>
+                    <td style={{ padding:"10px 12px", color:d.airbnb>0?T.amber:T.textLight }}>{d.airbnb>0?fmtMoney(Math.round(d.airbnb))+" *":"—"}</td>
+                    <td style={{ padding:"10px 12px", color:d.wedding>0?T.green:T.textLight }}>{d.wedding>0?fmtMoney(Math.round(d.wedding)):"—"}</td>
+                    <td style={{ padding:"10px 12px", fontWeight:700, color:T.midBlue }}>{d.total>0?fmtMoney(Math.round(d.total)):"—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop:10, fontSize:11, color:T.textLight }}>* Airbnb figures are estimates based on stored booking values. Pricing rules applied when baseRate is configured.</div>
+      </div>
     </div>
   );
 }
@@ -877,7 +1231,7 @@ function LettingsView() {
   useEffect(() => {
     (async () => {
       try { const p = await sbGet(PROPERTIES_STORAGE); if (p && p.length) setProperties(p); } catch {}
-      try { const b = await sbGet(ACCOM_STORAGE);      setBookings(b || []); } catch { setBookings([]); }
+      try { const b = await sbGet(ACCOM_STORAGE);      setBookings((b || []).map(normalizeAccom)); } catch { setBookings([]); }
       try { const g = await sbGet(ACCOM_GUESTS_STORAGE); setGuests(g || []); } catch { setGuests([]); }
       setLoaded(true);
     })();
@@ -894,7 +1248,12 @@ function LettingsView() {
 
   const handleSave = async () => {
     const prop = properties.find(p=>p.id===form.propertyId);
-    const rec = { ...form, propertyName: prop ? prop.name : form.propertyName, nights: nightsBetween(form.checkIn, form.checkOut) };
+    const pName = prop ? prop.name : form.propertyName;
+    const nights = nightsBetween(form.checkIn, form.checkOut);
+    // Sync stays[] — preserve extra stays (multi-stay merged bookings), update primary stay
+    const primaryStay = { propertyId:form.propertyId, propertyName:pName, checkIn:form.checkIn, checkOut:form.checkOut, nights, value:Number(form.value)||0 };
+    const extraStays = (form.stays && form.stays.length>1) ? form.stays.slice(1) : [];
+    const rec = Object.assign({}, form, { propertyName:pName, nights, stays: [primaryStay].concat(extraStays) });
     const next = editId ? bookings.map(b=> b.id===editId ? rec : b) : bookings.concat([rec]);
     await saveBookings(next);
     setTab("calendar"); setForm(null); setEditId(null);
@@ -905,7 +1264,7 @@ function LettingsView() {
     setTab("calendar"); setForm(null); setEditId(null);
   };
 
-  const subTabs = [["calendar","Calendar"],["list","Bookings"],["import","Import"]];
+  const subTabs = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"]];
 
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"24px 28px" }}>
@@ -933,7 +1292,8 @@ function LettingsView() {
 
       {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} cursor={cursor} setCursor={setCursor} onOpen={openEdit} />}
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
-      {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b); setTab("calendar"); }} />}
+      {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
+      {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} saveBookings={saveBookings} bookings={bookings} />}
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
@@ -1170,6 +1530,7 @@ export default function App() {
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
+        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null}
           onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
@@ -1194,7 +1555,7 @@ export default function App() {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
-  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"lettings",label:"Lettings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"},{id:"settings",label:"Settings"}];
+  const tabs = [{id:"home",label:"Home"},{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"lettings",label:"Lettings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"},{id:"settings",label:"Settings"}];
   const isXeroConnected  = !!xeroToken;
   const isGmailConnected = !!gmailToken;
   return (
@@ -2209,6 +2570,31 @@ function SummaryReport({ bookings }) {
         })}
         {Object.keys(monthCounts).length===0 && <p style={{ color:T.textLight, fontSize:13 }}>No bookings in {year}.</p>}
       </div>
+
+      {/* Events by event type */}
+      {yearBookings.length>0 && (()=>{
+        const typeCounts = {};
+        yearBookings.forEach(b => {
+          const t = b.eventType || "Other";
+          typeCounts[t] = (typeCounts[t]||0)+1;
+        });
+        const maxCount = Math.max(...Object.values(typeCounts), 1);
+        return (
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, marginTop:16, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Events by Type</h3>
+            {Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).map(([type, count])=>(
+              <div key={type} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+                <span style={{ width:160, color:T.textMid, fontSize:13, flexShrink:0 }}>{type}</span>
+                <div style={{ flex:1, background:T.accentLight, borderRadius:4, height:22, overflow:"hidden" }}>
+                  <div style={{ width:`${Math.min(100,(count/maxCount)*100)}%`, minWidth:count>0?30:0, height:"100%", background:T.midBlue, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
+                    <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{count}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -3022,6 +3408,156 @@ function computeStock(products, events) {
     });
   });
   return stock;
+}
+
+// ─── Dashboard (Slice 2) ──────────────────────────────────────────────────────
+function DashboardView({ bookings, viewingRequests, setView }) {
+  const [accomBookings, setAccomBookings] = useState([]);
+  const [emailLog, setEmailLog]           = useState([]);
+  const [loaded, setLoaded]               = useState(false);
+
+  useEffect(()=>{
+    (async()=>{
+      try { const b = await sbGet(ACCOM_STORAGE); setAccomBookings((b||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
+      try { const l = await sbGet(EMAIL_LOG_STORAGE); setEmailLog(l||[]); } catch { setEmailLog([]); }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const today = new Date().toISOString().slice(0,10);
+  const in7   = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
+
+  // Upcoming wedding events in next 7 days
+  const upcomingEvents = bookings
+    .filter(b => b.couple && b.date && b.date >= today && b.date <= in7)
+    .sort((a,b)=>a.date>b.date?1:-1);
+
+  // Upcoming accom check-ins in next 7 days
+  const upcomingCheckIns = accomBookings.filter(b => {
+    if (b.status==="cancelled") return false;
+    const stays = b.stays||[];
+    return stays.some(s => s.checkIn && s.checkIn>=today && s.checkIn<=in7);
+  }).sort((a,b)=>{
+    const aCI = Math.min(...(a.stays||[]).map(s=>s.checkIn||"9").filter(d=>d>=today));
+    const bCI = Math.min(...(b.stays||[]).map(s=>s.checkIn||"9").filter(d=>d>=today));
+    return aCI>bCI?1:-1;
+  });
+
+  // Pending viewing requests
+  const pendingViewings = (viewingRequests||[]).filter(r=>r.status==="pending");
+
+  // Overdue accom payments: schedule entries where paid=false AND dueDate < today AND booking not cancelled
+  const overduePayments = [];
+  accomBookings.forEach(b => {
+    if (b.status==="cancelled") return;
+    (b.schedule||[]).forEach(s => {
+      if (!s.paid && s.dueDate && s.dueDate < today) {
+        overduePayments.push({ booking:b, entry:s });
+      }
+    });
+  });
+
+  const sectionStyle = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 };
+  const secHead = (label, count, colour) => (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+      <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>{label}</h3>
+      {count!=null && <span style={{ fontSize:12, fontWeight:700, color:colour||T.textMid, background: colour ? colour+"22" : T.bgInput, padding:"2px 10px", borderRadius:8 }}>{count}</span>}
+    </div>
+  );
+
+  const fmtDay = (d) => d ? new Date(d+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—";
+
+  return (
+    <div style={{ maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" }}>
+      <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:"0 0 6px" }}>Home</h2>
+      <p style={{ color:T.textMid, fontSize:13, margin:"0 0 24px" }}>Today: {fmtDay(today)}</p>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:18 }}>
+
+        {/* Upcoming events */}
+        <div style={sectionStyle}>
+          {secHead("Upcoming Events — next 7 days", upcomingEvents.length, upcomingEvents.length?T.green:null)}
+          {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
+          {loaded && upcomingEvents.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No events this week.</div>}
+          {upcomingEvents.map(b=>(
+            <div key={b.id} onClick={()=>setView("list")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+              <span style={{ fontSize:11, fontWeight:700, color:T.accent, background:T.accentLight, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(b.date)}</span>
+              <span style={{ fontSize:13, fontWeight:600, color:T.text }}>{b.couple}</span>
+              {b.eventType && <span style={{ fontSize:10, color:T.textLight }}>{b.eventType}</span>}
+            </div>
+          ))}
+        </div>
+
+        {/* Upcoming accom check-ins */}
+        <div style={sectionStyle}>
+          {secHead("Accom Check-ins — next 7 days", upcomingCheckIns.length, upcomingCheckIns.length?T.green:null)}
+          {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
+          {loaded && upcomingCheckIns.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No check-ins this week.</div>}
+          {upcomingCheckIns.map(b=>{
+            const nextStay = (b.stays||[]).filter(s=>s.checkIn&&s.checkIn>=today&&s.checkIn<=in7).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
+            return (
+              <div key={b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+                <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(nextStay&&nextStay.checkIn)}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"}</div>
+                  <div style={{ fontSize:11, color:T.textLight }}>{(b.stays||[]).map(s=>s.propertyName||s.propertyId).join(" + ")}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Pending viewing requests */}
+        <div style={sectionStyle}>
+          {secHead("Viewing Requests", pendingViewings.length, pendingViewings.length?T.amber:null)}
+          {pendingViewings.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No unresponded requests.</div>}
+          {pendingViewings.slice(0,6).map((r,i)=>(
+            <div key={r.id||i} onClick={()=>setView("viewings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+              <span style={{ fontSize:11, fontWeight:700, color:T.amber, background:T.amberBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>Pending</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{r.name||"(no name)"}</div>
+                <div style={{ fontSize:11, color:T.textLight }}>{r.eventType||""}{r.date?" - "+fmtDay(r.date):""}</div>
+              </div>
+            </div>
+          ))}
+          {pendingViewings.length>6 && <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("viewings")}>+ {pendingViewings.length-6} more</div>}
+        </div>
+
+        {/* Overdue payments */}
+        <div style={sectionStyle}>
+          {secHead("Overdue Accom Payments", overduePayments.length, overduePayments.length?T.red:null)}
+          {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
+          {loaded && overduePayments.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No overdue payments.</div>}
+          {overduePayments.slice(0,8).map(({ booking:b, entry:s },i)=>(
+            <div key={b.id+"-"+i} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+              <span style={{ fontSize:11, fontWeight:700, color:T.red, background:T.redBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>Due {fmtDay(s.dueDate)}</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"} — {s.label}</div>
+                <div style={{ fontSize:11, color:T.red, fontWeight:600 }}>{fmtMoney(s.amount)}</div>
+              </div>
+            </div>
+          ))}
+          {overduePayments.length>8 && <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("lettings")}>+ {overduePayments.length-8} more</div>}
+        </div>
+      </div>
+
+      {/* Email log */}
+      <div style={sectionStyle}>
+        {secHead("Recent Automated Emails", emailLog.length||null)}
+        {emailLog.length===0 && (
+          <div style={{ color:T.textLight, fontSize:13 }}>No emails logged yet. When the system sends automated emails (phase 2), they will appear here.</div>
+        )}
+        {emailLog.slice().reverse().slice(0,10).map(e=>(
+          <div key={e.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:`1px solid #f0f6ff`, fontSize:13 }}>
+            <span style={{ color:T.textLight, fontSize:11, flexShrink:0 }}>{e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : "—"}</span>
+            <span style={{ fontWeight:600, color:T.text, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.subject||"(no subject)"}</span>
+            <span style={{ color:T.textLight, fontSize:11 }}>{e.to||""}</span>
+            {e.opened && <span style={{ fontSize:10, fontWeight:700, color:T.green, background:T.greenBg, padding:"1px 6px", borderRadius:6 }}>Opened</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ─── BarView ──────────────────────────────────────────────────────────────────
