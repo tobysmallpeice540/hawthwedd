@@ -56,12 +56,27 @@ exports.handler = async function(event) {
     return { statusCode: 400, body: JSON.stringify({ error: "Invalid JSON" }) };
   }
 
-  const { propertyId, propertyName, checkIn, checkOut, nights, totalAmount, depositAmount, guestName, email, phone, guestCount } = body;
+  // Support both new multi-stay format (body.stays[]) and legacy single-property format
+  var stays = body.stays;
+  if (!stays || !stays.length) {
+    // Legacy single-property fallback
+    if (!body.propertyId) {
+      return { statusCode: 400, body: JSON.stringify({ error: "Missing stays or propertyId" }) };
+    }
+    stays = [{ propertyId: body.propertyId, propertyName: body.propertyName, checkIn: body.checkIn, checkOut: body.checkOut, nights: body.nights, value: body.totalAmount }];
+  }
 
-  // Basic validation
-  if (!propertyId || !checkIn || !checkOut || !totalAmount || !depositAmount || !guestName || !email) {
+  const { totalAmount, depositAmount, guestName, email, phone, guestCount, notes } = body;
+
+  if (!totalAmount || !depositAmount || !guestName || !email) {
     return { statusCode: 400, body: JSON.stringify({ error: "Missing required fields" }) };
   }
+
+  // Primary stay for metadata / URLs
+  const primaryStay = stays[0];
+  const propNamesJoined = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
+  const checkIn  = primaryStay.checkIn;
+  const checkOut = primaryStay.checkOut;
 
   // Determine origin for success/cancel URLs
   const origin = event.headers["origin"] || event.headers["referer"] || "https://cool-sorbet-b1d599.netlify.app";
@@ -70,57 +85,66 @@ exports.handler = async function(event) {
   try {
     // ── 1. Create Stripe Checkout session ────────────────────────────────────
     const depositPence = Math.round(depositAmount * 100);
+
+    // Build one line item per property (or a single combined line item)
+    var lineItems;
+    if (stays.length === 1) {
+      lineItems = [{
+        price_data: {
+          currency: "gbp",
+          product_data: {
+            name: "Deposit — " + (stays[0].propertyName || stays[0].propertyId),
+            description: fmtDate(checkIn) + " to " + fmtDate(checkOut) + " (" + (stays[0].nights || "") + " nights)"
+          },
+          unit_amount: depositPence
+        },
+        quantity: 1
+      }];
+    } else {
+      // Multi-property: one combined line item for the deposit
+      lineItems = [{
+        price_data: {
+          currency: "gbp",
+          product_data: {
+            name: "Deposit — " + propNamesJoined,
+            description: fmtDate(checkIn) + " to " + fmtDate(checkOut) + " (" + (primaryStay.nights || "") + " nights)"
+          },
+          unit_amount: depositPence
+        },
+        quantity: 1
+      }];
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
       customer_email: email,
-      line_items: [
-        {
-          price_data: {
-            currency: "gbp",
-            product_data: {
-              name: "Deposit — " + propertyName,
-              description: fmtDate(checkIn) + " to " + fmtDate(checkOut) + " (" + nights + " nights)"
-            },
-            unit_amount: depositPence
-          },
-          quantity: 1
-        }
-      ],
+      line_items: lineItems,
       metadata: {
-        bookingType: "accom_deposit",
-        propertyId: propertyId,
-        propertyName: propertyName,
-        checkIn: checkIn,
-        checkOut: checkOut,
-        guestName: guestName,
-        email: email,
-        totalAmount: String(totalAmount),
+        bookingType:   "accom_deposit",
+        propertyId:    stays.map(function(s) { return s.propertyId; }).join(","),
+        propertyName:  propNamesJoined,
+        checkIn:       checkIn,
+        checkOut:      checkOut,
+        guestName:     guestName,
+        email:         email,
+        totalAmount:   String(totalAmount),
         depositAmount: String(depositAmount)
       },
-      success_url: baseUrl + "/book-accom.html?booked=1&prop=" + encodeURIComponent(propertyName) + "&ci=" + checkIn + "&co=" + checkOut,
+      success_url: baseUrl + "/book-accom.html?booked=1&prop=" + encodeURIComponent(propNamesJoined) + "&ci=" + checkIn + "&co=" + checkOut,
       cancel_url:  baseUrl + "/book-accom.html?cancelled=1"
     });
 
     // ── 2. Save pending booking to Supabase ──────────────────────────────────
-    const bookingId = "web-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
-    const today = new Date().toISOString().slice(0,10);
-    const balanceWeeks = 6; // fallback; ideally read from property settings
-
-    const stay = {
-      propertyId:   propertyId,
-      propertyName: propertyName,
-      checkIn:      checkIn,
-      checkOut:     checkOut,
-      nights:       nights,
-      value:        totalAmount
-    };
+    const bookingId    = "web-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    const todayISO     = new Date().toISOString().slice(0,10);
+    const balanceWeeks = 6;
 
     const schedule = [
       {
         label:         "Deposit",
         amount:        depositAmount,
-        dueDate:       today,
+        dueDate:       todayISO,
         requested:     false,
         requestedDate: null,
         paid:          false,
@@ -139,27 +163,39 @@ exports.handler = async function(event) {
       }
     ];
 
+    // Normalise stays — ensure propertyName is populated
+    const normStays = stays.map(function(s) {
+      return {
+        propertyId:   s.propertyId   || "",
+        propertyName: s.propertyName || s.propertyId || "",
+        checkIn:      s.checkIn      || checkIn,
+        checkOut:     s.checkOut     || checkOut,
+        nights:       s.nights       || 0,
+        value:        Number(s.value) || 0
+      };
+    });
+
     const booking = {
-      id:          bookingId,
-      guestName:   guestName,
-      email:       email,
-      phone:       phone || "",
-      guestCount:  guestCount || 1,
-      source:      "direct",
-      status:      "pending",
-      bookingType: "",
-      linkedEventId: null,
-      stays:       [stay],
-      value:       totalAmount,
-      estimated:   false,
-      extras:      [],
-      breakage:    0,
+      id:              bookingId,
+      guestName:       guestName,
+      email:           email,
+      phone:           phone || "",
+      guestCount:      guestCount || 1,
+      source:          "direct",
+      status:          "pending",
+      bookingType:     "",
+      linkedEventId:   null,
+      stays:           normStays,
+      value:           totalAmount,
+      estimated:       false,
+      extras:          [],
+      breakage:        0,
       breakageStripeId: null,
-      discountCode: "",
-      discountAmount: 0,
-      schedule:    schedule,
-      notes:       "Online booking via book-accom.html — Stripe session: " + session.id,
-      createdAt:   new Date().toISOString(),
+      discountCode:    "",
+      discountAmount:  0,
+      schedule:        schedule,
+      notes:           (notes ? notes + "\n" : "") + "Online booking — Stripe session: " + session.id,
+      createdAt:       new Date().toISOString(),
       stripeSessionId: session.id
     };
 
