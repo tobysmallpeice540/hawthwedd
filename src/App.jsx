@@ -578,14 +578,118 @@ function LInput({ label, value, onChange, type="text", placeholder="", width, mo
 
 // ── Month timeline: one lane per property ────────────────────────────────────
 function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
-  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const [mode, setMode] = useState("year");
+
+  const year  = cursor.getFullYear();
+  const month = cursor.getMonth();
+
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const DOW    = ["M","T","W","T","F","S","S"];
+  const today  = new Date().toISOString().slice(0,10);
+
+  // Occupancy map for current year: dateStr -> [property, ...]
+  const occMap = {};
+  bookings.forEach(b => {
+    if (b.status === "cancelled") return;
+    const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    stays.forEach(s => {
+      if (!s.checkIn || !s.checkOut || !s.propertyId) return;
+      const prop = properties.find(p => p.id === s.propertyId);
+      if (!prop) return;
+      const ci  = new Date(s.checkIn+"T00:00:00");
+      const co  = new Date(s.checkOut+"T00:00:00");
+      const st  = new Date(Math.max(ci.getTime(), new Date(year,0,1).getTime()));
+      const en  = new Date(Math.min(co.getTime(), new Date(year+1,0,1).getTime()));
+      let d = new Date(st);
+      while (d < en) {
+        const ds = d.toISOString().slice(0,10);
+        if (!occMap[ds]) occMap[ds] = [];
+        if (!occMap[ds].find(x=>x.id===prop.id)) occMap[ds].push(prop);
+        d.setDate(d.getDate()+1);
+      }
+    });
+  });
+
+  // ── YEAR VIEW ──────────────────────────────────────────────────────────────
+  if (mode === "year") {
+    return (
+      <div>
+        <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18 }}>
+          <button onClick={()=>setCursor(new Date(year-1,0,1))} style={navBtn}>&#8249;</button>
+          <div style={{ fontSize:20, fontWeight:800, color:T.text, minWidth:70, textAlign:"center" }}>{year}</div>
+          <button onClick={()=>setCursor(new Date(year+1,0,1))} style={navBtn}>&#8250;</button>
+          <button onClick={()=>{ setCursor(new Date()); setMode("month"); }} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600 }}>This month</button>
+        </div>
+
+        <div style={{ display:"flex", gap:14, marginBottom:14, flexWrap:"wrap" }}>
+          {properties.map(p=>(
+            <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid }}>
+              <span style={{ width:10, height:10, borderRadius:2, background:p.colour, display:"inline-block" }}/>
+              {p.name}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+          {MONTHS.map((mName, mIdx) => {
+            const nD = daysInMonth(year, mIdx);
+            const firstDow = (new Date(year, mIdx, 1).getDay()+6)%7;
+            const cells = [];
+            for (let i=0; i<firstDow; i++) cells.push(null);
+            for (let d=1; d<=nD; d++) cells.push(d);
+            return (
+              <div key={mName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+                <div onClick={()=>{ setCursor(new Date(year,mIdx,1)); setMode("month"); }}
+                  style={{ padding:"8px 12px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>{mName}</span>
+                  <span style={{ fontSize:10, color:T.accent, fontWeight:600 }}>View &#8594;</span>
+                </div>
+                <div style={{ padding:"5px 6px 7px" }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, marginBottom:2 }}>
+                    {DOW.map((d,i)=><div key={i} style={{ textAlign:"center", fontSize:8, color:T.textLight, fontWeight:700 }}>{d}</div>)}
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1 }}>
+                    {cells.map((day,ci)=>{
+                      if (!day) return <div key={"e"+ci}/>;
+                      const ds = `${year}-${String(mIdx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+                      const propsOn = occMap[ds] || [];
+                      const isToday = ds===today;
+                      const colPos = ci % 7;
+                      const isSat = colPos===5, isSun = colPos===6;
+                      const bg = propsOn.length===1 ? propsOn[0].colour+"2a"
+                               : propsOn.length>1   ? propsOn[0].colour+"1e"
+                               : "transparent";
+                      return (
+                        <div key={day} style={{ textAlign:"center", padding:"1px 0", borderRadius:2, background:bg,
+                          outline: isToday ? `1.5px solid ${T.accent}` : "none" }}>
+                          <div style={{ fontSize:9, fontWeight:propsOn.length?600:400, color:isSat||isSun?T.accent:T.text, lineHeight:"1.3" }}>{day}</div>
+                          {propsOn.length>0 && (
+                            <div style={{ display:"flex", justifyContent:"center", gap:1 }}>
+                              {propsOn.slice(0,3).map(p=>(
+                                <span key={p.id} style={{ width:3, height:3, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── MONTH TIMELINE VIEW ────────────────────────────────────────────────────
   const nDays = daysInMonth(year, month);
   const dayW = 34;
   const monthStart = new Date(year, month, 1);
   const monthEnd   = new Date(year, month+1, 1);
   const monthLabel = cursor.toLocaleDateString("en-GB", { month:"long", year:"numeric" });
 
-  // Build lane entries for a property: expand stays[] so each stay segment gets its own bar entry
   const laneFor = (pid) => {
     const entries = [];
     bookings.forEach(b => {
@@ -612,7 +716,8 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
 
   return (
     <div>
-      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:14 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+        <button onClick={()=>setMode("year")} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600, color:T.accent, border:`1.5px solid ${T.accent}` }}>&#8592; Year</button>
         <button onClick={()=>setCursor(new Date(year, month-1, 1))} style={navBtn}>&#8249;</button>
         <div style={{ fontSize:17, fontWeight:700, color:T.text, minWidth:180, textAlign:"center" }}>{monthLabel}</div>
         <button onClick={()=>setCursor(new Date(year, month+1, 1))} style={navBtn}>&#8250;</button>
@@ -621,7 +726,6 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
 
       <div style={{ overflowX:"auto", border:`1px solid ${T.border}`, borderRadius:10, background:"#fff" }}>
         <div style={{ minWidth: 130 + nDays*dayW }}>
-          {/* Day header */}
           <div style={{ display:"flex", borderBottom:`1px solid ${T.border}`, background:T.bgInput }}>
             <div style={{ width:130, flexShrink:0, padding:"8px 10px", fontSize:12, fontWeight:700, color:T.textMid }}>Property</div>
             {Array.from({length:nDays}, (_,i)=>{
@@ -636,24 +740,16 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
               );
             })}
           </div>
-          {/* Property lanes */}
           {properties.map(p => {
             const lane = laneFor(p.id);
-
-            // Days in this month that have a check-in or check-out for this property
             const checkInDays = new Set(
-              lane.filter(e => {
-                const ci = new Date(e.checkIn+"T00:00:00");
-                return ci.getFullYear()===year && ci.getMonth()===month;
-              }).map(e => new Date(e.checkIn+"T00:00:00").getDate())
+              lane.filter(e => { const ci=new Date(e.checkIn+"T00:00:00"); return ci.getFullYear()===year&&ci.getMonth()===month; })
+                  .map(e => new Date(e.checkIn+"T00:00:00").getDate())
             );
             const checkOutDays = new Set(
-              lane.filter(e => {
-                const co = new Date(e.checkOut+"T00:00:00");
-                return co.getFullYear()===year && co.getMonth()===month;
-              }).map(e => new Date(e.checkOut+"T00:00:00").getDate())
+              lane.filter(e => { const co=new Date(e.checkOut+"T00:00:00"); return co.getFullYear()===year&&co.getMonth()===month; })
+                  .map(e => new Date(e.checkOut+"T00:00:00").getDate())
             );
-
             return (
               <div key={p.id} style={{ display:"flex", borderBottom:`1px solid ${T.border}` }}>
                 <div style={{ width:130, flexShrink:0, padding:"12px 10px", fontSize:13, fontWeight:700, color:T.text,
@@ -661,7 +757,6 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
                   <span style={{ width:11, height:11, borderRadius:3, background:p.colour, flexShrink:0 }}/>{p.name}
                 </div>
                 <div style={{ position:"relative", height:44, flex:1 }}>
-                  {/* Background stripes with check-in / check-out diagonal slice markers */}
                   {Array.from({length:nDays}, (_,i)=>{
                     const d = new Date(year, month, i+1);
                     const wknd = d.getDay()===0||d.getDay()===6;
@@ -671,20 +766,16 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
                     return (
                       <div key={i} style={{ position:"absolute", left:i*dayW, top:0, width:dayW, height:"100%",
                         background: wknd ? "#f6faff" : "transparent", borderRight:`1px solid #eef3fa`, overflow:"hidden" }}>
-                        {/* Checkout: lower-left triangle — guest is leaving this morning */}
                         {isCO && <div style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
                           background:p.colour, opacity:0.28, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>}
-                        {/* Checkin: upper-right triangle — guest is arriving this afternoon */}
                         {isCI && <div style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
                           background:p.colour, opacity:0.28, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>}
                       </div>
                     );
                   })}
-                  {/* Booking bars */}
                   {lane.map((e,i) => {
                     const g = barGeom(e.checkIn, e.checkOut);
                     const b = e.booking;
-                    const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
                     const airbnb = b.source==="airbnb";
                     return (
                       <div key={b.id+"-"+i} onClick={()=>onOpen(b)}
@@ -3437,10 +3528,10 @@ function DashboardView({ bookings, viewingRequests, setView }) {
     if (b.status==="cancelled") return false;
     const stays = b.stays||[];
     return stays.some(s => s.checkIn && s.checkIn>=today && s.checkIn<=in7);
-  }).sort((a,b)=>{
-    const aCI = Math.min(...(a.stays||[]).map(s=>s.checkIn||"9").filter(d=>d>=today));
-    const bCI = Math.min(...(b.stays||[]).map(s=>s.checkIn||"9").filter(d=>d>=today));
-    return aCI>bCI?1:-1;
+  }).sort((a,z)=>{
+    const aCI = (a.stays||[]).map(s=>s.checkIn||"").filter(d=>d>=today).sort()[0] || "9999";
+    const zCI = (z.stays||[]).map(s=>s.checkIn||"").filter(d=>d>=today).sort()[0] || "9999";
+    return aCI > zCI ? 1 : aCI < zCI ? -1 : 0;
   });
 
   // Pending viewing requests
