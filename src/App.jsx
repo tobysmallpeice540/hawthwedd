@@ -524,6 +524,60 @@ function calcAirbnbEstimate(b, prop) {
   return Math.round(rate * nights * 0.9 * 100) / 100;
 }
 
+// Return nightly rate for a property on a given ISO date, checking seasons first.
+function getPriceForNight(prop, dateStr) {
+  if (!prop) return 0;
+  if (prop.seasons && prop.seasons.length) {
+    for (let i = 0; i < prop.seasons.length; i++) {
+      const s = prop.seasons[i];
+      if (s.startDate && s.endDate && dateStr >= s.startDate && dateStr < s.endDate) {
+        return Number(s.ratePerNight) || 0;
+      }
+    }
+  }
+  return Number(prop.baseRate) || 0;
+}
+
+// Quote a stay: walk each night, sum rates, apply long-stay discount.
+// Returns { nights, subtotal, discount, total } or null if invalid.
+function quoteStay(prop, checkIn, checkOut) {
+  if (!prop || !checkIn || !checkOut) return null;
+  const ci = new Date(checkIn+"T00:00:00");
+  const co = new Date(checkOut+"T00:00:00");
+  const nights = Math.round((co - ci) / 86400000);
+  if (nights <= 0) return null;
+  let subtotal = 0;
+  const d = new Date(ci);
+  while (d < co) {
+    subtotal += getPriceForNight(prop, d.toISOString().slice(0,10));
+    d.setDate(d.getDate() + 1);
+  }
+  let discount = 0;
+  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0) {
+    discount = prop.longStayDiscount * nights;
+  }
+  const total = Math.max(0, subtotal - discount);
+  return { nights, subtotal, discount, total };
+}
+
+// Return true if propertyId is free for [checkIn, checkOut), optionally ignoring excludeId.
+function checkAvailability(bookings, propertyId, checkIn, checkOut, excludeId) {
+  if (!checkIn || !checkOut || !propertyId) return true;
+  const ci = new Date(checkIn+"T00:00:00");
+  const co = new Date(checkOut+"T00:00:00");
+  return !bookings.some(function(b) {
+    if (b.id === excludeId || b.status === "cancelled") return false;
+    const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    return stays.some(function(s) {
+      if (s.propertyId !== propertyId) return false;
+      if (!s.checkIn || !s.checkOut) return false;
+      const sCI = new Date(s.checkIn+"T00:00:00");
+      const sCO = new Date(s.checkOut+"T00:00:00");
+      return ci < sCO && co > sCI;
+    });
+  });
+}
+
 // Log an automated email to Supabase. Called from send handlers (phase 2).
 async function logEmail(entry) {
   try {
@@ -942,6 +996,24 @@ function AccomForm({ properties, form, setForm, onSave, onCancel, onDelete }) {
         </label>
       </div>
 
+      {/* Pricing engine quote */}
+      {prop && form.checkIn && form.checkOut && (function() {
+        const q = quoteStay(prop, form.checkIn, form.checkOut);
+        if (!q || !prop.baseRate) return null;
+        return (
+          <div style={{ background:T.accentLight, border:`1.5px solid ${T.accent}30`, borderRadius:9, padding:"11px 16px", marginBottom:12, display:"flex", alignItems:"center", gap:14 }}>
+            <div style={{ flex:1, fontSize:13, color:T.midBlue }}>
+              <span style={{ fontWeight:700 }}>Pricing engine: </span>
+              {q.nights} nights at variable rate = {fmtMoney(q.subtotal)}
+              {q.discount > 0 ? " − " + fmtMoney(q.discount) + " long-stay discount = " + fmtMoney(q.total) : ""}
+            </div>
+            <button type="button" onClick={() => upd("value", q.total)}
+              style={{ background:T.accent, color:"#fff", border:"none", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
+              Apply {fmtMoney(q.total)}
+            </button>
+          </div>
+        );
+      })()}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:8 }}>
         <LInput label="Accommodation price (£)" type="number" value={form.value} onChange={v=>upd("value",v)} />
         <LInput label="Discount code" value={form.discountCode} onChange={v=>upd("discountCode",v)} />
@@ -1305,6 +1377,167 @@ function AccomReport({ properties, bookings }) {
   );
 }
 
+// ── Property settings editor ─────────────────────────────────────────────────
+function PropertyEditor({ properties, setProperties, onSave }) {
+  const [openId, setOpenId] = useState(null);
+  const [flash,  setFlash]  = useState("");
+
+  const updProp = (pid, key, val) =>
+    setProperties(ps => ps.map(p => p.id === pid ? Object.assign({}, p, { [key]: val }) : p));
+
+  const addSeason = (pid) =>
+    setProperties(ps => ps.map(p =>
+      p.id !== pid ? p : Object.assign({}, p, {
+        seasons: p.seasons.concat([{ label:"", startDate:"", endDate:"", ratePerNight:0 }])
+      })
+    ));
+
+  const updSeason = (pid, si, key, val) =>
+    setProperties(ps => ps.map(p =>
+      p.id !== pid ? p : Object.assign({}, p, {
+        seasons: p.seasons.map((s, idx) => idx === si ? Object.assign({}, s, { [key]: val }) : s)
+      })
+    ));
+
+  const rmSeason = (pid, si) =>
+    setProperties(ps => ps.map(p =>
+      p.id !== pid ? p : Object.assign({}, p, {
+        seasons: p.seasons.filter((_, idx) => idx !== si)
+      })
+    ));
+
+  const handleSave = async () => {
+    await onSave();
+    setFlash("Saved");
+    setTimeout(() => setFlash(""), 2500);
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:T.text }}>Property settings</div>
+          <div style={{ fontSize:12, color:T.textMid, marginTop:2 }}>Pricing, seasons, booking rules — used by the public booking page</div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {flash && <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>{flash}</span>}
+          <button onClick={handleSave} style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Save all</button>
+        </div>
+      </div>
+
+      {properties.map(p => {
+        const open = openId === p.id;
+        return (
+          <div key={p.id} style={{ border:`1px solid ${T.border}`, borderRadius:10, marginBottom:12, overflow:"hidden", boxShadow:"0 2px 6px rgba(37,99,235,.05)" }}>
+            <div onClick={() => setOpenId(open ? null : p.id)}
+              style={{ display:"flex", alignItems:"center", gap:10, padding:"13px 16px", background:T.bgInput, cursor:"pointer", userSelect:"none" }}>
+              <span style={{ width:13, height:13, borderRadius:3, background:p.colour, flexShrink:0 }}/>
+              <span style={{ fontSize:14, fontWeight:700, color:T.text, flex:1 }}>{p.name}</span>
+              <span style={{ fontSize:12, color:T.textMid }}>
+                {p.baseRate ? "Base: " + String(fmtMoney(p.baseRate)) + "/night" : "No base rate"} ·{" "}
+                {p.seasons && p.seasons.length ? p.seasons.length + " season" + (p.seasons.length > 1 ? "s" : "") : "No seasons"}
+              </span>
+              <span style={{ fontSize:11, color:T.textLight, marginLeft:8 }}>{open ? "▲" : "▼"}</span>
+            </div>
+
+            {open && (
+              <div style={{ padding:"18px 18px 20px" }}>
+
+                {/* ── Pricing ── */}
+                <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:10 }}>Pricing</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:18 }}>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Base rate (£/night)</span>
+                    <input type="number" value={p.baseRate || ""} onChange={e => updProp(p.id, "baseRate", Number(e.target.value))} style={inpStyle} placeholder="e.g. 250" min="0" />
+                  </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Long-stay from (nights)</span>
+                    <input type="number" value={p.longStayThreshold || ""} onChange={e => updProp(p.id, "longStayThreshold", Number(e.target.value))} style={inpStyle} placeholder="e.g. 7" min="0" />
+                  </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Long-stay discount (£/night)</span>
+                    <input type="number" value={p.longStayDiscount || ""} onChange={e => updProp(p.id, "longStayDiscount", Number(e.target.value))} style={inpStyle} placeholder="e.g. 30" min="0" />
+                  </label>
+                </div>
+
+                {/* ── Seasons ── */}
+                <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:8 }}>Seasons (override base rate for date ranges)</div>
+                {p.seasons && p.seasons.map((s, si) => (
+                  <div key={si} style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr auto", gap:8, marginBottom:8, alignItems:"end" }}>
+                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>Label</span>}
+                      <input value={s.label || ""} onChange={e => updSeason(p.id, si, "label", e.target.value)} style={inpStyle} placeholder="e.g. Peak summer" />
+                    </label>
+                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>From</span>}
+                      <input type="date" value={s.startDate || ""} onChange={e => updSeason(p.id, si, "startDate", e.target.value)} style={inpStyle} />
+                    </label>
+                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>To (exclusive)</span>}
+                      <input type="date" value={s.endDate || ""} onChange={e => updSeason(p.id, si, "endDate", e.target.value)} style={inpStyle} />
+                    </label>
+                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>£/night</span>}
+                      <input type="number" value={s.ratePerNight || ""} onChange={e => updSeason(p.id, si, "ratePerNight", Number(e.target.value))} style={inpStyle} placeholder="0" min="0" />
+                    </label>
+                    <button onClick={() => rmSeason(p.id, si)}
+                      style={{ background:T.redBg, color:T.red, border:"1px solid #fca5a5", borderRadius:6, padding:"0 12px", cursor:"pointer", fontFamily:"inherit", fontSize:12, height:36, alignSelf:"end" }}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button onClick={() => addSeason(p.id)}
+                  style={{ background:"none", border:`1.5px dashed ${T.border}`, color:T.accent, borderRadius:7, padding:"6px 16px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, marginBottom:20 }}>
+                  + Add season
+                </button>
+
+                {/* ── Booking rules ── */}
+                <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:10 }}>Booking rules</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:12, marginBottom:18 }}>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Min nights</span>
+                    <input type="number" value={p.minNights || ""} onChange={e => updProp(p.id, "minNights", Number(e.target.value))} style={inpStyle} min="1" />
+                  </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Max nights</span>
+                    <input type="number" value={p.maxNights || ""} onChange={e => updProp(p.id, "maxNights", Number(e.target.value))} style={inpStyle} min="1" />
+                  </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-in from</span>
+                    <input value={p.checkInFrom || ""} onChange={e => updProp(p.id, "checkInFrom", e.target.value)} style={inpStyle} placeholder="16:00" />
+                  </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-out by</span>
+                    <input value={p.checkOutBy || ""} onChange={e => updProp(p.id, "checkOutBy", e.target.value)} style={inpStyle} placeholder="10:00" />
+                  </label>
+                </div>
+
+                {/* ── Payment ── */}
+                <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:10 }}>Payment</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Deposit %</span>
+                    <input type="number" value={p.depositPct || ""} onChange={e => updProp(p.id, "depositPct", Number(e.target.value))} style={inpStyle} min="0" max="100" />
+                  </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Balance due (weeks before check-in)</span>
+                    <input type="number" value={p.balanceWeeks || ""} onChange={e => updProp(p.id, "balanceWeeks", Number(e.target.value))} style={inpStyle} min="0" />
+                  </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Breakage deposit (£)</span>
+                    <input type="number" value={p.breakageDefault || ""} onChange={e => updProp(p.id, "breakageDefault", Number(e.target.value))} style={inpStyle} min="0" />
+                  </label>
+                </div>
+
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Main Lettings view ───────────────────────────────────────────────────────
 function LettingsView() {
   const [properties, setProperties] = useState(INITIAL_PROPERTIES);
@@ -1334,6 +1567,11 @@ function LettingsView() {
     catch (e) { console.error(e); setFlash("Save failed"); }
   };
 
+  const saveProperties = async () => {
+    try { await sbSet(PROPERTIES_STORAGE, properties); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
+    catch (e) { console.error(e); setFlash("Save failed"); }
+  };
+
   const openNew  = () => { setForm(blankAccom()); setEditId(null); setTab("form"); };
   const openEdit = (b) => { setForm({ ...blankAccom(b.propertyId), ...b, extras: (b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }); setEditId(b.id); setTab("form"); };
 
@@ -1355,7 +1593,7 @@ function LettingsView() {
     setTab("calendar"); setForm(null); setEditId(null);
   };
 
-  const subTabs = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"]];
+  const subTabs = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"],["settings","Settings"]];
 
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"24px 28px" }}>
@@ -1385,6 +1623,7 @@ function LettingsView() {
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
       {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
       {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} saveBookings={saveBookings} bookings={bookings} />}
+      {loaded && tab==="settings" && <PropertyEditor properties={properties} setProperties={setProperties} onSave={saveProperties} />}
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
