@@ -631,7 +631,7 @@ function LInput({ label, value, onChange, type="text", placeholder="", width, mo
 }
 
 // ── Month timeline: one lane per property ────────────────────────────────────
-function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
+function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen }) {
   const [mode, setMode] = useState("year");
 
   const year  = cursor.getFullYear();
@@ -664,6 +664,10 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
     });
   });
 
+  // Event dates set: any wedding/event that falls in the year
+  const eventDates = new Set();
+  (events || []).forEach(e => { if (e.date && e.date.startsWith(String(year))) eventDates.add(e.date); });
+
   // ── YEAR VIEW ──────────────────────────────────────────────────────────────
   if (mode === "year") {
     return (
@@ -675,22 +679,15 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
           <button onClick={()=>{ setCursor(new Date()); setMode("month"); }} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600 }}>This month</button>
         </div>
 
-        <div style={{ display:"flex", gap:14, marginBottom:14, flexWrap:"wrap" }}>
-          {properties.map(p=>(
-            <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid }}>
-              <span style={{ width:10, height:10, borderRadius:2, background:p.colour, display:"inline-block" }}/>
-              {p.name}
-            </span>
-          ))}
-        </div>
-
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:16 }}>
           {MONTHS.map((mName, mIdx) => {
             const nD = daysInMonth(year, mIdx);
             const firstDow = (new Date(year, mIdx, 1).getDay()+6)%7;
-            const cells = [];
-            for (let i=0; i<firstDow; i++) cells.push(null);
-            for (let d=1; d<=nD; d++) cells.push(d);
+            // Single flat array: 7 DOW headers + blank pads + date cells
+            const allCells = [];
+            DOW.forEach((d,i) => allCells.push({ type:"dow", label:d, key:"h"+i }));
+            for (let i=0; i<firstDow; i++) allCells.push({ type:"pad", key:"p"+i });
+            for (let d=1; d<=nD; d++) allCells.push({ type:"day", day:d });
             return (
               <div key={mName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
                 <div onClick={()=>{ setCursor(new Date(year,mIdx,1)); setMode("month"); }}
@@ -699,29 +696,34 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
                   <span style={{ fontSize:10, color:T.accent, fontWeight:600 }}>View &#8594;</span>
                 </div>
                 <div style={{ padding:"5px 6px 7px" }}>
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, marginBottom:2 }}>
-                    {DOW.map((d,i)=><div key={i} style={{ textAlign:"center", fontSize:8, color:T.textLight, fontWeight:700 }}>{d}</div>)}
-                  </div>
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1 }}>
-                    {cells.map((day,ci)=>{
-                      if (!day) return <div key={"e"+ci}/>;
+                    {allCells.map((cell, ci) => {
+                      if (cell.type === "dow") return (
+                        <div key={cell.key} style={{ textAlign:"center", fontSize:8, color:T.textLight, fontWeight:700, paddingBottom:2 }}>{cell.label}</div>
+                      );
+                      if (cell.type === "pad") return <div key={cell.key}/>;
+                      // day cell
+                      const day = cell.day;
                       const ds = `${year}-${String(mIdx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
                       const propsOn = occMap[ds] || [];
-                      const isToday = ds===today;
-                      const colPos = ci % 7;
-                      const isSat = colPos===5, isSun = colPos===6;
-                      const bg = propsOn.length===1 ? propsOn[0].colour+"2a"
-                               : propsOn.length>1   ? propsOn[0].colour+"1e"
+                      const hasEvent = eventDates.has(ds);
+                      const isToday  = ds === today;
+                      const colInRow = (ci - 7) % 7; // offset by 7 header cells
+                      const isSat = colInRow === 5, isSun = colInRow === 6;
+                      const bg = propsOn.length === 1 ? propsOn[0].colour+"2a"
+                               : propsOn.length > 1   ? propsOn[0].colour+"1e"
                                : "transparent";
                       return (
                         <div key={day} style={{ textAlign:"center", padding:"1px 0", borderRadius:2, background:bg,
                           outline: isToday ? `1.5px solid ${T.accent}` : "none" }}>
-                          <div style={{ fontSize:9, fontWeight:propsOn.length?600:400, color:isSat||isSun?T.accent:T.text, lineHeight:"1.3" }}>{day}</div>
-                          {propsOn.length>0 && (
+                          <div style={{ fontSize:9, fontWeight:propsOn.length||hasEvent?600:400,
+                            color: isSat||isSun ? T.accent : T.text, lineHeight:"1.3" }}>{day}</div>
+                          {(propsOn.length > 0 || hasEvent) && (
                             <div style={{ display:"flex", justifyContent:"center", gap:1 }}>
                               {propsOn.slice(0,3).map(p=>(
                                 <span key={p.id} style={{ width:3, height:3, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
                               ))}
+                              {hasEvent && <span style={{ width:3, height:3, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>}
                             </div>
                           )}
                         </div>
@@ -732,6 +734,26 @@ function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
               </div>
             );
           })}
+        </div>
+
+        {/* Legend */}
+        <div style={{ display:"flex", gap:18, flexWrap:"wrap", alignItems:"center", padding:"10px 14px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, fontSize:12, color:T.textMid }}>
+          <span style={{ fontWeight:700, color:T.text, fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>Key:</span>
+          {properties.map(p=>(
+            <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5 }}>
+              <span style={{ width:10, height:10, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
+              <span style={{ width:6, height:6, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
+              {p.name} booked
+            </span>
+          ))}
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ width:6, height:6, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>
+            Farm event (wedding/booking)
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ width:10, height:10, borderRadius:2, outline:`1.5px solid ${T.accent}`, display:"inline-block" }}/>
+            Today
+          </span>
         </div>
       </div>
     );
@@ -869,23 +891,35 @@ const navBtn = { width:36, height:36, borderRadius:8, border:`1.5px solid ${T.bo
 
 // ── Booking list ─────────────────────────────────────────────────────────────
 function AccomList({ properties, bookings, filterProp, setFilterProp, filterStatus, setFilterStatus, onOpen }) {
+  const [showPast, setShowPast] = useState(false);
+  const today = new Date().toISOString().slice(0,10);
+
   const propName = (id) => (properties.find(p=>p.id===id)||{}).name || id;
 
-  // For filtering + sorting, derive primary stay info
   const withPrimary = bookings.map(b => {
     const primary = (b.stays && b.stays[0]) || b;
     return { b, primary };
   });
 
-  const rows = withPrimary
+  const isCurrent = ({ primary }) => {
+    // A booking is "current/future" if its latest checkout is today or later
+    return (primary.checkOut || "") >= today;
+  };
+
+  const filtered = withPrimary
     .filter(({ b, primary }) => filterProp==="all" || (b.stays||[]).some(s=>s.propertyId===filterProp) || b.propertyId===filterProp)
-    .filter(({ b }) => filterStatus==="all" || b.status===filterStatus)
+    .filter(({ b }) => filterStatus==="all" || b.status===filterStatus);
+
+  const currentRows = filtered.filter(x => isCurrent(x))
     .sort((a,z)=> (a.primary.checkIn||"").localeCompare(z.primary.checkIn||""));
+
+  const pastRows = filtered.filter(x => !isCurrent(x))
+    .sort((a,z)=> (z.primary.checkIn||"").localeCompare(a.primary.checkIn||"")); // most recent first
 
   const paidState = (b) => {
     if (!b.schedule || !b.schedule.length) return b.value>0 ? "—" : "n/a";
     const paid = b.schedule.filter(s=>s.paid).length;
-    return paid===b.schedule.length ? "Paid" : `${paid}/${b.schedule.length}`;
+    return paid===b.schedule.length ? "Paid" : String(paid)+"/"+String(b.schedule.length);
   };
 
   const staysLabel = (b) => {
@@ -893,9 +927,29 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
     return b.stays.map(s=>propName(s.propertyId)).join(" + ");
   };
 
+  const Row = ({ b, primary }) => {
+    const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
+    return (
+      <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
+        <div style={{ padding:"11px 12px", fontWeight:600 }}>
+          {b.guestName || (b.source==="airbnb" ? "Airbnb block" : "(no name)")}
+          {b.bookingType && <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:T.accent, background:T.accentLight, padding:"1px 6px", borderRadius:8 }}>{b.bookingType}</span>}
+          {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}> est.</span>}
+        </div>
+        <div style={{ padding:"11px 12px", fontSize:12 }}>{staysLabel(b)}</div>
+        <div style={{ padding:"11px 12px" }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
+        <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
+        <div style={{ padding:"11px 12px" }}>{b.value>0 ? fmtMoney(b.value) : "—"}</div>
+        <div style={{ padding:"11px 12px" }}>{paidState(b)}</div>
+      </div>
+    );
+  };
+
+  const COLS = ["Guest","Property","Dates","Status","Value","Paid"];
+
   return (
     <div>
-      <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+      <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
         <select value={filterProp} onChange={e=>setFilterProp(e.target.value)} style={selStyle}>
           <option value="all">All properties</option>
           {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
@@ -907,31 +961,35 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
           <option value="completed">Completed</option>
           <option value="cancelled">Cancelled</option>
         </select>
-        <span style={{ alignSelf:"center", fontSize:13, color:T.textMid }}>{rows.length} booking{rows.length===1?"":"s"}</span>
+        <span style={{ alignSelf:"center", fontSize:13, color:T.textMid }}>{currentRows.length} upcoming · {pastRows.length} past</span>
       </div>
+
       <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", gap:0, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
-          {["Guest","Property","Dates","Status","Value","Paid"].map(h=><div key={h} style={{ padding:"10px 12px" }}>{h}</div>)}
+        <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
+          {COLS.map(h=><div key={h} style={{ padding:"10px 12px" }}>{h}</div>)}
         </div>
-        {rows.map(({ b, primary })=>{
-          const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
-          return (
-            <div key={b.id} onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
-              <div style={{ padding:"11px 12px", fontWeight:600 }}>
-                {b.guestName || (b.source==="airbnb" ? "Airbnb block" : "(no name)")}
-                {b.bookingType && <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:T.accent, background:T.accentLight, padding:"1px 6px", borderRadius:8 }}>{b.bookingType}</span>}
-                {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}> est.</span>}
-              </div>
-              <div style={{ padding:"11px 12px", fontSize:12 }}>{staysLabel(b)}</div>
-              <div style={{ padding:"11px 12px" }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
-              <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
-              <div style={{ padding:"11px 12px" }}>{b.value>0 ? fmtMoney(b.value) : "—"}</div>
-              <div style={{ padding:"11px 12px" }}>{paidState(b)}</div>
-            </div>
-          );
-        })}
-        {!rows.length && <div style={{ padding:"28px", textAlign:"center", color:T.textLight, fontSize:13 }}>No bookings match.</div>}
+        {currentRows.map(({ b, primary }) => <Row key={b.id} b={b} primary={primary}/>)}
+        {!currentRows.length && <div style={{ padding:"22px", textAlign:"center", color:T.textLight, fontSize:13 }}>No upcoming bookings match.</div>}
       </div>
+
+      <div style={{ marginTop:14, textAlign:"center" }}>
+        <button onClick={()=>setShowPast(v=>!v)}
+          style={{ background:"none", border:`1.5px solid ${T.border}`, color:T.textMid, borderRadius:8, padding:"8px 20px", cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+          {showPast ? "Hide past bookings" : "Show past bookings (" + pastRows.length + ")"}
+        </button>
+      </div>
+
+      {showPast && pastRows.length > 0 && (
+        <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff", marginTop:10, opacity:.85 }}>
+          <div style={{ padding:"8px 14px", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4 }}>
+            Past bookings (most recent first)
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
+            {COLS.map(h=><div key={h} style={{ padding:"10px 12px" }}>{h}</div>)}
+          </div>
+          {pastRows.map(({ b, primary }) => <Row key={b.id} b={b} primary={primary}/>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1539,7 +1597,7 @@ function PropertyEditor({ properties, setProperties, onSave }) {
 }
 
 // ── Main Lettings view ───────────────────────────────────────────────────────
-function LettingsView() {
+function LettingsView({ events }) {
   const [properties, setProperties] = useState(INITIAL_PROPERTIES);
   const [bookings, setBookings]     = useState([]);
   const [guests, setGuests]         = useState([]);
@@ -1619,7 +1677,7 @@ function LettingsView() {
 
       {!loaded && <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>}
 
-      {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} cursor={cursor} setCursor={setCursor} onOpen={openEdit} />}
+      {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} />}
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
       {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
       {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} saveBookings={saveBookings} bookings={bookings} />}
@@ -1867,7 +1925,7 @@ export default function App() {
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="lettings"   && <LettingsView/>}
+        {view==="lettings"   && <LettingsView events={bookings}/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
