@@ -610,6 +610,7 @@ function blankAccom(propId) {
   return {
     id: "a" + Date.now(),
     propertyId: propId || "hamlet", propertyName: "",
+    propertyIds: [propId || "hamlet"],
     guestName:"", email:"", phone:"",
     checkIn:"", checkOut:"", nights:null, guestCount:"",
     source:"manual", status:"confirmed", bookingType:"", linkedEventId:null,
@@ -714,16 +715,24 @@ const EMAIL_TOKENS = [
 // ── Month timeline: one lane per property ────────────────────────────────────
 function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen }) {
   const [mode, setMode] = useState("year");
+  const [tooltip, setTooltip] = useState(null);
 
   const year  = cursor.getFullYear();
   const month = cursor.getMonth();
 
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const DOW    = ["M","T","W","T","F","S","S"];
-  const today  = new Date().toISOString().slice(0,10);
+  const todayD = new Date();
+  const today  = todayD.getFullYear() + "-" + String(todayD.getMonth()+1).padStart(2,"0") + "-" + String(todayD.getDate()).padStart(2,"0");
 
-  // Occupancy map for current year: dateStr -> [property, ...]
-  const occMap = {};
+  // Helper: local-time ISO date string from a Date object (avoids UTC-shift bug)
+  function localDs(d) {
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  }
+
+  // Occupancy map: dateStr -> [property, ...]
+  // Booking map:   dateStr -> [{booking, stay, prop}]  (for hover tooltip)
+  const occMap = {}, bookingMap = {};
   bookings.forEach(b => {
     if (b.status === "cancelled") return;
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
@@ -737,9 +746,11 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
       const en  = new Date(Math.min(co.getTime(), new Date(year+1,0,1).getTime()));
       let d = new Date(st);
       while (d < en) {
-        const ds = d.toISOString().slice(0,10);
+        const ds = localDs(d);
         if (!occMap[ds]) occMap[ds] = [];
         if (!occMap[ds].find(x=>x.id===prop.id)) occMap[ds].push(prop);
+        if (!bookingMap[ds]) bookingMap[ds] = [];
+        if (!bookingMap[ds].find(e=>e.booking.id===b.id&&e.prop.id===prop.id)) bookingMap[ds].push({ booking:b, stay:s, prop:prop });
         d.setDate(d.getDate()+1);
       }
     });
@@ -793,14 +804,14 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
               <div key={mName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
                 <div onClick={()=>{ setCursor(new Date(year,mIdx,1)); setMode("month"); }}
                   style={{ padding:"8px 12px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                  <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>{mName}</span>
-                  <span style={{ fontSize:10, color:T.accent, fontWeight:600 }}>View &#8594;</span>
+                  <span style={{ fontSize:15, fontWeight:700, color:T.midBlue }}>{mName}</span>
+                  <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>View &#8594;</span>
                 </div>
-                <div style={{ padding:"5px 6px 7px" }}>
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1 }}>
+                <div style={{ padding:"8px 8px 10px" }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2 }}>
                     {allCells.map((cell, ci) => {
                       if (cell.type === "dow") return (
-                        <div key={cell.key} style={{ textAlign:"center", fontSize:8, color:T.textLight, fontWeight:700, paddingBottom:2 }}>{cell.label}</div>
+                        <div key={cell.key} style={{ textAlign:"center", fontSize:11, color:T.textLight, fontWeight:700, paddingBottom:3 }}>{cell.label}</div>
                       );
                       if (cell.type === "pad") return <div key={cell.key}/>;
                       // day cell
@@ -819,17 +830,26 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                         : propsOn.length === 1 ? propsOn[0].colour+"2a"
                         : propsOn.length > 1   ? propsOn[0].colour+"1e"
                         : "transparent";
+                      const dayEntries = bookingMap[ds] || [];
                       return (
-                        <div key={day} style={{ textAlign:"center", padding:"1px 0", borderRadius:2, background:bg,
-                          outline: isToday ? `1.5px solid ${T.accent}` : "none" }}>
-                          <div style={{ fontSize:9, fontWeight:propsOn.length||hasEvent?600:400,
+                        <div key={day}
+                          style={{ textAlign:"center", padding:"3px 0 5px", borderRadius:3, background:bg,
+                            outline: isToday ? `1.5px solid ${T.accent}` : "none",
+                            cursor: dayEntries.length ? "pointer" : "default", position:"relative" }}
+                          onMouseEnter={function(e) {
+                            if (!dayEntries.length && !hasEvent) return;
+                            var rect = e.currentTarget.getBoundingClientRect();
+                            setTooltip({ ds:ds, dayEntries:dayEntries, hasEvent:hasEvent, x:rect.left, y:rect.bottom+4 });
+                          }}
+                          onMouseLeave={function() { setTooltip(null); }}>
+                          <div style={{ fontSize:12, fontWeight:propsOn.length||hasEvent?700:400,
                             color: isSat||isSun ? T.accent : T.text, lineHeight:"1.3" }}>{day}</div>
                           {(propsOn.length > 0 || hasEvent) && (
-                            <div style={{ display:"flex", justifyContent:"center", gap:1 }}>
+                            <div style={{ display:"flex", justifyContent:"center", gap:2, marginTop:2 }}>
                               {propsOn.slice(0,3).map(p=>(
-                                <span key={p.id} style={{ width:3, height:3, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
+                                <span key={p.id} style={{ width:5, height:5, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
                               ))}
-                              {hasEvent && <span style={{ width:3, height:3, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>}
+                              {hasEvent && <span style={{ width:5, height:5, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>}
                             </div>
                           )}
                         </div>
@@ -842,27 +862,69 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           })}
         </div>
 
+        {/* Hover tooltip */}
+        {tooltip && (function() {
+          var vw = typeof window !== "undefined" ? window.innerWidth : 800;
+          var tLeft = Math.max(8, Math.min(tooltip.x - 130, vw - 280));
+          var dispDate = new Date(tooltip.ds+"T00:00:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" });
+          return (
+            <div style={{ position:"fixed", left:tLeft, top:tooltip.y, zIndex:9999, background:"#1e293b", color:"#f8fafc",
+              borderRadius:9, boxShadow:"0 8px 28px rgba(0,0,0,.35)", padding:"10px 14px", minWidth:220, maxWidth:280, pointerEvents:"none", fontSize:12, lineHeight:"1.55" }}>
+              <div style={{ fontWeight:700, marginBottom:6, borderBottom:"1px solid rgba(255,255,255,.18)", paddingBottom:4, fontSize:13 }}>{dispDate}</div>
+              {tooltip.dayEntries.map(function(entry, i) {
+                return (
+                  <div key={i} style={{ marginBottom: i < tooltip.dayEntries.length-1 ? 8 : 0 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ width:8, height:8, borderRadius:"50%", background:entry.prop.colour, display:"inline-block", flexShrink:0 }}/>
+                      <span style={{ fontWeight:700, color:"#cbd5e1" }}>{entry.prop.name}</span>
+                    </div>
+                    <div style={{ paddingLeft:14, color:"#e2e8f0" }}>
+                      {entry.booking.guestName || entry.booking.name || "Guest"}
+                    </div>
+                    {entry.stay.checkIn && (
+                      <div style={{ paddingLeft:14, color:"#94a3b8", fontSize:11 }}>
+                        {new Date(entry.stay.checkIn+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}
+                        {" - "}
+                        {new Date(entry.stay.checkOut+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {tooltip.hasEvent && (
+                <div style={{ marginTop: tooltip.dayEntries.length ? 6 : 0, display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={{ width:8, height:8, borderRadius:"50%", background:"#ef4444", display:"inline-block", flexShrink:0 }}/>
+                  <span style={{ color:"#fca5a5" }}>Farm event</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Legend */}
         <div style={{ display:"flex", gap:18, flexWrap:"wrap", alignItems:"center", padding:"10px 14px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, fontSize:12, color:T.textMid }}>
           <span style={{ fontWeight:700, color:T.text, fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>Key:</span>
           {properties.map(p=>(
             <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5 }}>
-              <span style={{ width:10, height:10, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
-              <span style={{ width:6, height:6, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
-              {p.name} booked
+              <span style={{ width:12, height:12, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
+              <span style={{ width:7, height:7, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
+              {p.name}
             </span>
           ))}
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ width:6, height:6, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>
-            Farm event (wedding/booking)
+            <span style={{ width:7, height:7, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>
+            Farm event
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ width:10, height:10, borderRadius:2, outline:`1.5px solid ${T.accent}`, display:"inline-block" }}/>
+            <span style={{ width:12, height:12, borderRadius:2, background:"linear-gradient(135deg, #1040a0 50%, #3b82f633 50%)", display:"inline-block" }}/>
+            Changeover
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ width:12, height:12, borderRadius:2, outline:`1.5px solid ${T.accent}`, display:"inline-block" }}/>
             Today
           </span>
-          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ width:10, height:10, borderRadius:2, background:"linear-gradient(135deg, #1040a0 50%, #3b82f633 50%)", display:"inline-block" }}/>
-            Changeover day
+          <span style={{ display:"flex", alignItems:"center", gap:5, color:T.textLight, fontStyle:"italic" }}>
+            Hover a date to see booking details
           </span>
         </div>
       </div>
@@ -1047,30 +1109,69 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
     return paid===b.schedule.length ? "Paid" : String(paid)+"/"+String(b.schedule.length);
   };
 
-  const staysLabel = (b) => {
-    if (!b.stays || b.stays.length<=1) return propName(b.propertyId || (b.stays&&b.stays[0]&&b.stays[0].propertyId));
-    return b.stays.map(s=>propName(s.propertyId)).join(" + ");
+  // Which property IDs are booked in this booking
+  const bookedPropIds = (b) => {
+    var ids = new Set();
+    if (b.stays && b.stays.length) {
+      b.stays.forEach(function(s){ if (s.propertyId) ids.add(s.propertyId); });
+    } else if (b.propertyId) {
+      ids.add(b.propertyId);
+    }
+    return ids;
   };
+
+  // Build dynamic grid: Guest | per-property | Dates | Event | Status | Value | Paid
+  const propCols = properties.map(function(){ return "0.55fr"; }).join(" ");
+  const gridTemplate = "1.5fr " + propCols + " 1.1fr 0.75fr 0.75fr 0.75fr 0.75fr";
+
+  const TableHeader = () => (
+    <div style={{ display:"grid", gridTemplateColumns:gridTemplate, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
+      <div style={{ padding:"10px 12px" }}>Guest</div>
+      {properties.map(p=>(
+        <div key={p.id} style={{ padding:"10px 4px", textAlign:"center" }}>
+          <span title={p.name} style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11 }}>
+            <span style={{ width:8, height:8, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
+            {p.name.split(" ")[0]}
+          </span>
+        </div>
+      ))}
+      <div style={{ padding:"10px 12px" }}>Dates</div>
+      <div style={{ padding:"10px 12px" }}>Type</div>
+      <div style={{ padding:"10px 12px" }}>Status</div>
+      <div style={{ padding:"10px 12px" }}>Value</div>
+      <div style={{ padding:"10px 12px" }}>Paid</div>
+    </div>
+  );
 
   const Row = ({ b, primary }) => {
     const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
+    const bProps = bookedPropIds(b);
     return (
-      <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
+      <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:gridTemplate, borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
         <div style={{ padding:"11px 12px", fontWeight:600 }}>
           {b.guestName || (b.source==="airbnb" ? "Airbnb block" : "(no name)")}
-          {b.bookingType && <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:T.accent, background:T.accentLight, padding:"1px 6px", borderRadius:8 }}>{b.bookingType}</span>}
-          {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}> est.</span>}
+          {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
         </div>
-        <div style={{ padding:"11px 12px", fontSize:12 }}>{staysLabel(b)}</div>
-        <div style={{ padding:"11px 12px" }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
+        {properties.map(p=>(
+          <div key={p.id} style={{ padding:"8px 4px", textAlign:"center" }}>
+            {bProps.has(p.id)
+              ? <span style={{ width:14, height:14, borderRadius:3, background:p.colour, display:"inline-block", boxShadow:"0 1px 3px "+p.colour+"66" }} title={p.name}/>
+              : <span style={{ width:14, height:14, borderRadius:3, border:`1.5px solid #e2e8f0`, display:"inline-block", background:"transparent" }}/>
+            }
+          </div>
+        ))}
+        <div style={{ padding:"11px 12px", fontSize:12 }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
+        <div style={{ padding:"11px 12px" }}>
+          {b.bookingType
+            ? <span style={{ fontSize:11, fontWeight:700, color:T.accent, background:T.accentLight, padding:"2px 7px", borderRadius:8 }}>{b.bookingType}</span>
+            : <span style={{ color:T.textLight, fontSize:11 }}>Let</span>}
+        </div>
         <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
         <div style={{ padding:"11px 12px" }}>{b.value>0 ? fmtMoney(b.value) : "—"}</div>
         <div style={{ padding:"11px 12px" }}>{paidState(b)}</div>
       </div>
     );
   };
-
-  const COLS = ["Guest","Property","Dates","Status","Value","Paid"];
 
   return (
     <div>
@@ -1090,9 +1191,7 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
       </div>
 
       <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
-          {COLS.map(h=><div key={h} style={{ padding:"10px 12px" }}>{h}</div>)}
-        </div>
+        <TableHeader/>
         {currentRows.map(({ b, primary }) => <Row key={b.id} b={b} primary={primary}/>)}
         {!currentRows.length && <div style={{ padding:"22px", textAlign:"center", color:T.textLight, fontSize:13 }}>No upcoming bookings match.</div>}
       </div>
@@ -1109,9 +1208,7 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
           <div style={{ padding:"8px 14px", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4 }}>
             Past bookings (most recent first)
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
-            {COLS.map(h=><div key={h} style={{ padding:"10px 12px" }}>{h}</div>)}
-          </div>
+          <TableHeader/>
           {pastRows.map(({ b, primary }) => <Row key={b.id} b={b} primary={primary}/>)}
         </div>
       )}
@@ -1123,9 +1220,17 @@ const selStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRa
 
 // ── Add / edit form ──────────────────────────────────────────────────────────
 function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel, onDelete }) {
-  const prop = properties.find(p=>p.id===form.propertyId);
+  const selPropIds = form.propertyIds && form.propertyIds.length ? form.propertyIds : [form.propertyId || "hamlet"];
+  const prop = properties.find(p=>p.id===selPropIds[0]);
   const upd = (k,v)=> setForm(f=>({ ...f, [k]:v }));
   const zeroValue = (Number(form.value)||0) <= 0;
+
+  const toggleProp = (pid, checked) => setForm(function(f) {
+    var cur = f.propertyIds && f.propertyIds.length ? f.propertyIds : [f.propertyId || "hamlet"];
+    var next = checked ? cur.concat([pid]) : cur.filter(function(id){ return id!==pid; });
+    if (!next.length) next = cur; // prevent empty selection
+    return Object.assign({}, f, { propertyIds: next, propertyId: next[0] });
+  });
 
   const regenSchedule = () => {
     const sched = buildAccomSchedule(form.value, prop, form.checkIn);
@@ -1142,12 +1247,23 @@ function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel,
   return (
     <div style={{ maxWidth:760 }}>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
-        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
-          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Property</span>
-          <select value={form.propertyId} onChange={e=>upd("propertyId", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
-            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </label>
+        <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Properties</span>
+          <div style={{ display:"flex", gap:14, flexWrap:"wrap", padding:"10px 12px", background:T.bgInput, borderRadius:8, border:`1.5px solid ${T.border}` }}>
+            {properties.map(function(p) {
+              var checked = selPropIds.includes(p.id);
+              return (
+                <label key={p.id} style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:13, fontWeight:checked?700:500, color:checked?T.text:T.textMid }}>
+                  <input type="checkbox" checked={checked}
+                    onChange={function(e){ toggleProp(p.id, e.target.checked); }}
+                    style={{ width:15, height:15, accentColor:p.colour, cursor:"pointer" }} />
+                  <span style={{ width:10, height:10, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
+                  {p.name}
+                </label>
+              );
+            })}
+          </div>
+        </div>
         <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Booking type</span>
           <select value={form.bookingType} onChange={e=>upd("bookingType", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
@@ -1179,20 +1295,37 @@ function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel,
         </label>
       </div>
 
-      {/* Pricing engine quote */}
-      {prop && form.checkIn && form.checkOut && (function() {
-        const q = quoteStay(prop, form.checkIn, form.checkOut);
-        if (!q || !prop.baseRate) return null;
+      {/* Pricing engine quote — shown per selected property */}
+      {form.checkIn && form.checkOut && (function() {
+        var quotes = selPropIds.map(function(pid) {
+          var p = properties.find(function(pp){ return pp.id===pid; });
+          if (!p || !p.baseRate) return null;
+          var q = quoteStay(p, form.checkIn, form.checkOut);
+          if (!q) return null;
+          return { prop:p, q:q };
+        }).filter(Boolean);
+        if (!quotes.length) return null;
+        var total = quotes.reduce(function(s,x){ return s+x.q.total; }, 0);
         return (
-          <div style={{ background:T.accentLight, border:`1.5px solid ${T.accent}30`, borderRadius:9, padding:"11px 16px", marginBottom:12, display:"flex", alignItems:"center", gap:14 }}>
-            <div style={{ flex:1, fontSize:13, color:T.midBlue }}>
-              <span style={{ fontWeight:700 }}>Pricing engine: </span>
-              {q.nights} nights at variable rate = {fmtMoney(q.subtotal)}
-              {q.discount > 0 ? " − " + fmtMoney(q.discount) + " long-stay discount = " + fmtMoney(q.total) : ""}
-            </div>
-            <button type="button" onClick={() => upd("value", q.total)}
-              style={{ background:T.accent, color:"#fff", border:"none", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
-              Apply {fmtMoney(q.total)}
+          <div style={{ background:T.accentLight, border:`1.5px solid ${T.accent}30`, borderRadius:9, padding:"11px 16px", marginBottom:12 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:T.midBlue, marginBottom:6 }}>Pricing engine estimate</div>
+            {quotes.map(function(x) {
+              return (
+                <div key={x.prop.id} style={{ fontSize:13, color:T.midBlue, marginBottom:3 }}>
+                  <span style={{ fontWeight:600 }}>{x.prop.name}:</span>
+                  {" "}{x.q.nights} nights = {fmtMoney(x.q.subtotal)}
+                  {x.q.discount>0 ? " − "+fmtMoney(x.q.discount)+" discount = "+fmtMoney(x.q.total) : ""}
+                </div>
+              );
+            })}
+            {quotes.length>1 && (
+              <div style={{ fontSize:13, fontWeight:700, color:T.text, marginTop:4, borderTop:`1px solid ${T.accent}30`, paddingTop:4 }}>
+                Total estimate: {fmtMoney(total)}
+              </div>
+            )}
+            <button type="button" onClick={function(){ upd("value", total); }}
+              style={{ marginTop:8, background:T.accent, color:"#fff", border:"none", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
+              Apply {fmtMoney(total)}
             </button>
           </div>
         );
@@ -2238,17 +2371,29 @@ function LettingsView({ events }) {
   };
 
   const openNew  = () => { setForm(blankAccom()); setEditId(null); setTab("form"); };
-  const openEdit = (b) => { setForm({ ...blankAccom(b.propertyId), ...b, extras: (b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }); setEditId(b.id); setTab("form"); };
+  const openEdit = (b) => {
+    // Derive propertyIds from stays[] for multi-property bookings
+    var pIds = (b.stays && b.stays.length) ? b.stays.map(function(s){ return s.propertyId; }).filter(Boolean) : [b.propertyId];
+    if (!pIds.length) pIds = [b.propertyId || "hamlet"];
+    setForm(Object.assign({}, blankAccom(pIds[0]), b, { propertyIds: pIds, extras: (b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }));
+    setEditId(b.id); setTab("form");
+  };
 
   const handleSave = async () => {
-    const prop = properties.find(p=>p.id===form.propertyId);
-    const pName = prop ? prop.name : form.propertyName;
-    const nights = nightsBetween(form.checkIn, form.checkOut);
-    // Sync stays[] — preserve extra stays (multi-stay merged bookings), update primary stay
-    const primaryStay = { propertyId:form.propertyId, propertyName:pName, checkIn:form.checkIn, checkOut:form.checkOut, nights, value:Number(form.value)||0 };
-    const extraStays = (form.stays && form.stays.length>1) ? form.stays.slice(1) : [];
-    const rec = Object.assign({}, form, { propertyName:pName, nights, stays: [primaryStay].concat(extraStays) });
-    const next = editId ? bookings.map(b=> b.id===editId ? rec : b) : bookings.concat([rec]);
+    var pIds = (form.propertyIds && form.propertyIds.length) ? form.propertyIds : [form.propertyId || "hamlet"];
+    var nights = nightsBetween(form.checkIn, form.checkOut);
+    var stays = pIds.map(function(pid) {
+      var p = properties.find(function(pp){ return pp.id===pid; });
+      return { propertyId:pid, propertyName: p ? p.name : pid, checkIn:form.checkIn, checkOut:form.checkOut, nights:nights, value:0 };
+    });
+    var primaryProp = properties.find(function(p){ return p.id===pIds[0]; });
+    var rec = Object.assign({}, form, {
+      propertyId: pIds[0],
+      propertyName: primaryProp ? primaryProp.name : pIds[0],
+      nights: nights,
+      stays: stays
+    });
+    var next = editId ? bookings.map(function(b){ return b.id===editId ? rec : b; }) : bookings.concat([rec]);
     await saveBookings(next);
     setTab("calendar"); setForm(null); setEditId(null);
   };
