@@ -460,6 +460,491 @@ function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData,
   );
 }
 
+// ─── LETTINGS (HOLIDAY LETS / ACCOMMODATION) ─────────────────────────────────
+const PROPERTIES_STORAGE   = "hbf_properties_v1";
+const ACCOM_STORAGE        = "hbf_accom_v1";
+const ACCOM_GUESTS_STORAGE = "hbf_accom_guests_v1";
+
+const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
+
+const ACCOM_STATUS_META = {
+  confirmed: { label:"Confirmed", bg:T.greenBg,  text:T.green },
+  pending:   { label:"Pending",   bg:T.amberBg,  text:T.amber },
+  completed: { label:"Completed", bg:T.midBlueBg, text:T.midBlue },
+  cancelled: { label:"Cancelled", bg:T.redBg,    text:T.red },
+};
+
+function fmtMoney(n) {
+  const v = Number(n) || 0;
+  return "£" + v.toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+function daysInMonth(year, month) { return new Date(year, month + 1, 0).getDate(); }
+
+function isoAddWeeks(iso, weeks) {
+  if (!iso) return null;
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() - weeks * 7);
+  return d.toISOString().slice(0, 10);
+}
+
+function nightsBetween(ci, co) {
+  if (!ci || !co) return null;
+  const a = new Date(ci + "T00:00:00"), b = new Date(co + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+}
+
+// Auto-build a deposit + balance schedule for a manual booking. Zero value -> no schedule.
+function buildAccomSchedule(value, prop, checkIn) {
+  const total = Number(value) || 0;
+  if (total <= 0) return [];
+  const pct = prop ? prop.depositPct : 50;
+  const bweeks = prop ? prop.balanceWeeks : 4;
+  const dep = Math.round(total * pct) / 100;
+  const bal = Math.round((total - dep) * 100) / 100;
+  return [
+    { label:"Deposit", amount:dep, dueDate:null, requested:false, requestedDate:null, paid:false, paidDate:null, stripeId:"" },
+    { label:"Balance", amount:bal, dueDate: isoAddWeeks(checkIn, bweeks), requested:false, requestedDate:null, paid:false, paidDate:null, stripeId:"" },
+  ];
+}
+
+function blankAccom(propId) {
+  return {
+    id: "a" + Date.now(),
+    propertyId: propId || "hamlet", propertyName: "",
+    guestName:"", email:"", phone:"",
+    checkIn:"", checkOut:"", nights:null, guestCount:"",
+    source:"manual", status:"confirmed", bookingType:"", linkedEventId:null,
+    value:0, estimated:false,
+    extras:[], breakage:0, breakageStripeId:"",
+    discountCode:"", discountAmount:0,
+    schedule:[], notes:"", createdAt: new Date().toISOString().slice(0,10),
+  };
+}
+
+// Small styled input used across the form
+function LInput({ label, value, onChange, type="text", placeholder="", width, mono }) {
+  const [f, setF] = useState(false);
+  return (
+    <label style={{ display:"flex", flexDirection:"column", gap:5, width: width || "auto" }}>
+      {label && <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>{label}</span>}
+      <input type={type} value={value} placeholder={placeholder}
+        onChange={e=>onChange(e.target.value)} onFocus={()=>setF(true)} onBlur={()=>setF(false)}
+        style={{ background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:7, color:T.text,
+          fontFamily: mono ? "ui-monospace,monospace" : "inherit", fontSize:14, padding:"9px 11px", outline:"none",
+          boxShadow: f ? "0 0 0 3px #dbeafe" : "none" }} />
+    </label>
+  );
+}
+
+// ── Month timeline: one lane per property ────────────────────────────────────
+function AccomCalendar({ properties, bookings, cursor, setCursor, onOpen }) {
+  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const nDays = daysInMonth(year, month);
+  const dayW = 34;
+  const monthStart = new Date(year, month, 1);
+  const monthLabel = cursor.toLocaleDateString("en-GB", { month:"long", year:"numeric" });
+
+  const laneFor = (pid) => bookings.filter(b =>
+    b.propertyId === pid && b.status !== "cancelled" && b.checkIn && b.checkOut &&
+    new Date(b.checkOut+"T00:00:00") > monthStart &&
+    new Date(b.checkIn+"T00:00:00") < new Date(year, month+1, 1)
+  );
+
+  const barGeom = (b) => {
+    const ci = new Date(b.checkIn+"T00:00:00"), co = new Date(b.checkOut+"T00:00:00");
+    const startDay = ci < monthStart ? 0 : (ci.getDate() - 1);
+    const endDay   = co > new Date(year, month+1, 1) ? nDays : (co.getDate() - 1);
+    const span = Math.max(1, endDay - startDay);
+    return { left: startDay * dayW, width: span * dayW - 3 };
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:14 }}>
+        <button onClick={()=>setCursor(new Date(year, month-1, 1))} style={navBtn}>‹</button>
+        <div style={{ fontSize:17, fontWeight:700, color:T.text, minWidth:180, textAlign:"center" }}>{monthLabel}</div>
+        <button onClick={()=>setCursor(new Date(year, month+1, 1))} style={navBtn}>›</button>
+        <button onClick={()=>setCursor(new Date())} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600 }}>Today</button>
+      </div>
+
+      <div style={{ overflowX:"auto", border:`1px solid ${T.border}`, borderRadius:10, background:"#fff" }}>
+        <div style={{ minWidth: 130 + nDays*dayW }}>
+          {/* Day header */}
+          <div style={{ display:"flex", borderBottom:`1px solid ${T.border}`, background:T.bgInput }}>
+            <div style={{ width:130, flexShrink:0, padding:"8px 10px", fontSize:12, fontWeight:700, color:T.textMid }}>Property</div>
+            {Array.from({length:nDays}, (_,i)=>{
+              const d = new Date(year, month, i+1);
+              const wknd = d.getDay()===0 || d.getDay()===6;
+              return (
+                <div key={i} style={{ width:dayW, flexShrink:0, textAlign:"center", padding:"6px 0", fontSize:11,
+                  color: wknd ? T.accent : T.textLight, fontWeight: wknd?700:500, background: wknd ? "#f0f6ff" : "transparent" }}>
+                  <div>{"SMTWTFS".charAt(d.getDay())}</div>
+                  <div style={{ fontSize:12, color:T.text }}>{i+1}</div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Property lanes */}
+          {properties.map(p => {
+            const lane = laneFor(p.id);
+            return (
+              <div key={p.id} style={{ display:"flex", borderBottom:`1px solid ${T.border}` }}>
+                <div style={{ width:130, flexShrink:0, padding:"12px 10px", fontSize:13, fontWeight:700, color:T.text,
+                  display:"flex", alignItems:"center", gap:7, borderRight:`1px solid ${T.border}` }}>
+                  <span style={{ width:11, height:11, borderRadius:3, background:p.colour, flexShrink:0 }}/>{p.name}
+                </div>
+                <div style={{ position:"relative", height:44, flex:1 }}>
+                  {Array.from({length:nDays}, (_,i)=>{
+                    const d = new Date(year, month, i+1); const wknd = d.getDay()===0||d.getDay()===6;
+                    return <div key={i} style={{ position:"absolute", left:i*dayW, top:0, width:dayW, height:"100%",
+                      background: wknd ? "#f6faff" : "transparent", borderRight:`1px solid #eef3fa` }}/>;
+                  })}
+                  {lane.map(b => {
+                    const g = barGeom(b);
+                    const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
+                    const airbnb = b.source==="airbnb";
+                    return (
+                      <div key={b.id} onClick={()=>onOpen(b)} title={`${b.guestName||"(no name)"} · ${fmtDate(b.checkIn)}–${fmtDate(b.checkOut)}`}
+                        style={{ position:"absolute", left:g.left+2, top:8, width:g.width, height:28, borderRadius:6,
+                          background: airbnb ? "#fff" : p.colourBg, border:`1.5px ${airbnb?"dashed":"solid"} ${p.colour}`,
+                          color:p.colour, fontSize:11, fontWeight:600, padding:"0 6px", display:"flex", alignItems:"center",
+                          overflow:"hidden", whiteSpace:"nowrap", cursor:"pointer", opacity: b.status==="pending"?0.75:1 }}>
+                        {airbnb ? "Airbnb" : (b.guestName || "Booking")}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:16, marginTop:10, fontSize:12, color:T.textMid, flexWrap:"wrap" }}>
+        <span><span style={{ display:"inline-block", width:20, height:10, background:T.accentLight, border:`1.5px solid ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Direct / manual booking</span>
+        <span><span style={{ display:"inline-block", width:20, height:10, background:"#fff", border:`1.5px dashed ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Airbnb (blocked dates)</span>
+        <span style={{ opacity:.7 }}>Faded = pending</span>
+      </div>
+    </div>
+  );
+}
+
+const navBtn = { width:36, height:36, borderRadius:8, border:`1.5px solid ${T.border}`, background:"#fff", color:T.text, fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" };
+
+// ── Booking list ─────────────────────────────────────────────────────────────
+function AccomList({ properties, bookings, filterProp, setFilterProp, filterStatus, setFilterStatus, onOpen }) {
+  const propName = (id) => (properties.find(p=>p.id===id)||{}).name || id;
+  const rows = bookings
+    .filter(b => filterProp==="all" || b.propertyId===filterProp)
+    .filter(b => filterStatus==="all" || b.status===filterStatus)
+    .sort((a,b)=> (a.checkIn||"").localeCompare(b.checkIn||""));
+  const paidState = (b) => {
+    if (!b.schedule || !b.schedule.length) return b.value>0 ? "—" : "n/a";
+    const paid = b.schedule.filter(s=>s.paid).length;
+    return paid===b.schedule.length ? "Paid" : `${paid}/${b.schedule.length}`;
+  };
+  return (
+    <div>
+      <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+        <select value={filterProp} onChange={e=>setFilterProp(e.target.value)} style={selStyle}>
+          <option value="all">All properties</option>
+          {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={selStyle}>
+          <option value="all">All statuses</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="pending">Pending</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <span style={{ alignSelf:"center", fontSize:13, color:T.textMid }}>{rows.length} booking{rows.length===1?"":"s"}</span>
+      </div>
+      <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", gap:0, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
+          {["Guest","Property","Dates","Status","Value","Paid"].map(h=><div key={h} style={{ padding:"10px 12px" }}>{h}</div>)}
+        </div>
+        {rows.map(b=>{
+          const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
+          return (
+            <div key={b.id} onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 0.8fr 0.8fr 0.8fr", borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
+              <div style={{ padding:"11px 12px", fontWeight:600 }}>
+                {b.guestName || (b.source==="airbnb" ? "Airbnb block" : "(no name)")}
+                {b.bookingType && <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:T.accent, background:T.accentLight, padding:"1px 6px", borderRadius:8 }}>{b.bookingType}</span>}
+                {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.textLight }}>est.</span>}
+              </div>
+              <div style={{ padding:"11px 12px" }}>{propName(b.propertyId)}</div>
+              <div style={{ padding:"11px 12px" }}>{fmtDate(b.checkIn)} – {fmtDate(b.checkOut)}</div>
+              <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
+              <div style={{ padding:"11px 12px" }}>{b.value>0 ? fmtMoney(b.value) : "—"}</div>
+              <div style={{ padding:"11px 12px" }}>{paidState(b)}</div>
+            </div>
+          );
+        })}
+        {!rows.length && <div style={{ padding:"28px", textAlign:"center", color:T.textLight, fontSize:13 }}>No bookings match.</div>}
+      </div>
+    </div>
+  );
+}
+
+const selStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 11px", outline:"none", cursor:"pointer" };
+
+// ── Add / edit form ──────────────────────────────────────────────────────────
+function AccomForm({ properties, form, setForm, onSave, onCancel, onDelete }) {
+  const prop = properties.find(p=>p.id===form.propertyId);
+  const upd = (k,v)=> setForm(f=>({ ...f, [k]:v }));
+  const zeroValue = (Number(form.value)||0) <= 0;
+
+  const regenSchedule = () => {
+    const sched = buildAccomSchedule(form.value, prop, form.checkIn);
+    setForm(f=>({ ...f, schedule: sched }));
+  };
+  const updSched = (i, k, v) => setForm(f=>{
+    const s = f.schedule.map((row,idx)=> idx===i ? { ...row, [k]:v } : row);
+    return { ...f, schedule: s };
+  });
+  const addExtra = () => setForm(f=>({ ...f, extras: f.extras.concat([{ desc:"", amount:0 }]) }));
+  const updExtra = (i,k,v)=> setForm(f=>({ ...f, extras: f.extras.map((e,idx)=> idx===i ? { ...e, [k]:v } : e) }));
+  const rmExtra = (i)=> setForm(f=>({ ...f, extras: f.extras.filter((_,idx)=> idx!==i) }));
+
+  return (
+    <div style={{ maxWidth:760 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
+        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Property</span>
+          <select value={form.propertyId} onChange={e=>upd("propertyId", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
+            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Booking type</span>
+          <select value={form.bookingType} onChange={e=>upd("bookingType", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
+            <option value="">Standard let</option>
+            <option value="Wedding">Wedding</option>
+            <option value="Owner">Owner / comp</option>
+          </select>
+        </label>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:16 }}>
+        <LInput label="Guest name" value={form.guestName} onChange={v=>upd("guestName",v)} />
+        <LInput label="Email" value={form.email} onChange={v=>upd("email",v)} />
+        <LInput label="Phone" value={form.phone} onChange={v=>upd("phone",v)} />
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
+        <LInput label="Check-in" type="date" value={form.checkIn} onChange={v=>upd("checkIn",v)} />
+        <LInput label="Check-out" type="date" value={form.checkOut} onChange={v=>upd("checkOut",v)} />
+        <LInput label="Guests" value={form.guestCount} onChange={v=>upd("guestCount",v)} />
+        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Status</span>
+          <select value={form.status} onChange={e=>upd("status", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
+            <option value="confirmed">Confirmed</option>
+            <option value="pending">Pending</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </label>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:8 }}>
+        <LInput label="Accommodation price (£)" type="number" value={form.value} onChange={v=>upd("value",v)} />
+        <LInput label="Discount code" value={form.discountCode} onChange={v=>upd("discountCode",v)} />
+        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Source</span>
+          <select value={form.source} onChange={e=>upd("source", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
+            <option value="manual">Manual</option>
+            <option value="direct">Direct (online)</option>
+            <option value="airbnb">Airbnb</option>
+            <option value="wedding">Wedding-linked</option>
+          </select>
+        </label>
+      </div>
+      {zeroValue && <div style={{ fontSize:12, color:T.textMid, background:T.amberBg, border:`1px solid #fcd34d`, borderRadius:7, padding:"8px 11px", marginBottom:16 }}>Zero value — this booking blocks the calendar but generates no payment schedule and is never chased.</div>}
+
+      {/* Extras */}
+      <div style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"14px 16px", marginBottom:16, background:T.bgInput }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: form.extras.length?10:0 }}>
+          <span style={{ fontSize:13, fontWeight:700, color:T.text }}>Extras</span>
+          <button onClick={addExtra} style={smallBtn}>+ Add extra</button>
+        </div>
+        {form.extras.map((e,i)=>(
+          <div key={i} style={{ display:"flex", gap:10, marginBottom:8 }}>
+            <input value={e.desc} placeholder="Description" onChange={ev=>updExtra(i,"desc",ev.target.value)} style={{ flex:1, ...inlineInput }} />
+            <input type="number" value={e.amount} placeholder="£" onChange={ev=>updExtra(i,"amount",ev.target.value)} style={{ width:110, ...inlineInput }} />
+            <button onClick={()=>rmExtra(i)} style={{ ...smallBtn, color:T.red, borderColor:"#fca5a5" }}>Remove</button>
+          </div>
+        ))}
+      </div>
+
+      {/* Breakage */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16, alignItems:"end" }}>
+        <LInput label="Breakage deposit (£, refundable)" type="number" value={form.breakage} onChange={v=>upd("breakage",v)} />
+        {Number(form.breakage)>0 && (
+          <button onClick={()=>alert("Refund breakage via Stripe — wired to the Stripe refund function in phase 2 (uses the stored charge ID).")}
+            style={{ ...smallBtn, padding:"9px 14px", fontSize:13 }}>Refund breakage from Stripe</button>
+        )}
+      </div>
+
+      {/* Payment schedule */}
+      <div style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"14px 16px", marginBottom:16 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+          <span style={{ fontSize:13, fontWeight:700, color:T.text }}>Payment schedule</span>
+          <button onClick={regenSchedule} style={smallBtn} disabled={zeroValue}>Auto-build deposit + balance</button>
+        </div>
+        {!form.schedule.length && <div style={{ fontSize:12, color:T.textLight }}>No schedule. {zeroValue ? "Zero-value booking." : "Use auto-build, or leave blank if paid."}</div>}
+        {form.schedule.map((s,i)=>(
+          <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 0.9fr 1.1fr auto", gap:10, alignItems:"center", marginBottom:8 }}>
+            <input value={s.label} onChange={e=>updSched(i,"label",e.target.value)} style={inlineInput} />
+            <input type="number" value={s.amount} onChange={e=>updSched(i,"amount",e.target.value)} style={inlineInput} />
+            <input type="date" value={s.dueDate||""} onChange={e=>updSched(i,"dueDate",e.target.value)} style={inlineInput} />
+            <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>
+              <input type="checkbox" checked={!!s.paid} onChange={e=>updSched(i,"paid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent }} />paid
+            </label>
+          </div>
+        ))}
+      </div>
+
+      <label style={{ display:"flex", flexDirection:"column", gap:5, marginBottom:18 }}>
+        <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Notes</span>
+        <textarea value={form.notes} onChange={e=>upd("notes",e.target.value)} rows={3}
+          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 11px", outline:"none", resize:"vertical" }} />
+      </label>
+
+      <div style={{ display:"flex", gap:10 }}>
+        <button onClick={onSave} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save booking</button>
+        <button onClick={onCancel} style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Cancel</button>
+        {onDelete && <button onClick={onDelete} style={{ marginLeft:"auto", background:"#fff", color:T.red, border:`1.5px solid #fca5a5`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Delete</button>}
+      </div>
+    </div>
+  );
+}
+
+const smallBtn = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:12, fontWeight:600, padding:"6px 12px", cursor:"pointer" };
+const inlineInput = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 10px", outline:"none" };
+
+// ── One-off Bookalet importer (file upload) ──────────────────────────────────
+function AccomImport({ onImported }) {
+  const [status, setStatus] = useState("");
+  const handleFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const data = JSON.parse(reader.result);
+        const props = Array.isArray(data.properties) && data.properties.length ? data.properties : INITIAL_PROPERTIES;
+        const guests = Array.isArray(data.guests) ? data.guests : [];
+        const bookings = Array.isArray(data.bookings) ? data.bookings : [];
+        setStatus("Saving " + bookings.length + " bookings and " + guests.length + " guests…");
+        await sbSet(PROPERTIES_STORAGE, props);
+        await sbSet(ACCOM_GUESTS_STORAGE, guests);
+        await sbSet(ACCOM_STORAGE, bookings);
+        setStatus("Imported " + bookings.length + " bookings and " + guests.length + " guests.");
+        onImported(props, guests, bookings);
+      } catch (err) {
+        setStatus("Import failed: " + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+  return (
+    <div style={{ maxWidth:560, border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", background:"#fff" }}>
+      <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:6 }}>Import from Bookalet</div>
+      <div style={{ fontSize:13, color:T.textMid, lineHeight:1.55, marginBottom:16 }}>
+        Load the one-off seed file (guests + bookings exported from Bookalet). This overwrites the Lettings data in Supabase, so it is safe to re-run. Running read-only alongside Bookalet — nothing is sent to Airbnb or Stripe.
+      </div>
+      <input type="file" accept="application/json,.json" onChange={handleFile}
+        style={{ fontSize:13, color:T.textMid }} />
+      {status && <div style={{ marginTop:14, fontSize:13, fontWeight:600, color: status.startsWith("Import failed") ? T.red : T.green }}>{status}</div>}
+    </div>
+  );
+}
+
+// ── Main Lettings view ───────────────────────────────────────────────────────
+function LettingsView() {
+  const [properties, setProperties] = useState(INITIAL_PROPERTIES);
+  const [bookings, setBookings]     = useState([]);
+  const [guests, setGuests]         = useState([]);
+  const [loaded, setLoaded]         = useState(false);
+  const [tab, setTab]               = useState("calendar");
+  const [cursor, setCursor]         = useState(()=> new Date());
+  const [form, setForm]             = useState(null);
+  const [editId, setEditId]         = useState(null);
+  const [filterProp, setFilterProp] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [flash, setFlash]           = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try { const p = await sbGet(PROPERTIES_STORAGE); if (p && p.length) setProperties(p); } catch {}
+      try { const b = await sbGet(ACCOM_STORAGE);      setBookings(b || []); } catch { setBookings([]); }
+      try { const g = await sbGet(ACCOM_GUESTS_STORAGE); setGuests(g || []); } catch { setGuests([]); }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const saveBookings = async (data) => {
+    setBookings(data);
+    try { await sbSet(ACCOM_STORAGE, data); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
+    catch (e) { console.error(e); setFlash("Save failed"); }
+  };
+
+  const openNew  = () => { setForm(blankAccom()); setEditId(null); setTab("form"); };
+  const openEdit = (b) => { setForm({ ...blankAccom(b.propertyId), ...b, extras: (b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }); setEditId(b.id); setTab("form"); };
+
+  const handleSave = async () => {
+    const prop = properties.find(p=>p.id===form.propertyId);
+    const rec = { ...form, propertyName: prop ? prop.name : form.propertyName, nights: nightsBetween(form.checkIn, form.checkOut) };
+    const next = editId ? bookings.map(b=> b.id===editId ? rec : b) : bookings.concat([rec]);
+    await saveBookings(next);
+    setTab("calendar"); setForm(null); setEditId(null);
+  };
+  const handleDelete = async () => {
+    const next = bookings.filter(b=> b.id!==editId);
+    await saveBookings(next);
+    setTab("calendar"); setForm(null); setEditId(null);
+  };
+
+  const subTabs = [["calendar","Calendar"],["list","Bookings"],["import","Import"]];
+
+  return (
+    <div style={{ maxWidth:1200, margin:"0 auto", padding:"24px 28px" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
+        <div>
+          <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0 }}>Lettings</h2>
+          <div style={{ fontSize:13, color:T.textMid, marginTop:3 }}>Holiday lets across {properties.map(p=>p.name).join(", ")} · read-only alongside Bookalet</div>
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+          {flash && <span style={{ fontSize:12, fontWeight:600, color:T.green }}>{flash}</span>}
+          <button onClick={openNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>+ New booking</button>
+        </div>
+      </div>
+
+      {tab!=="form" && (
+        <div style={{ display:"flex", gap:4, marginBottom:20, borderBottom:`1px solid ${T.border}` }}>
+          {subTabs.map(([id,label])=>(
+            <button key={id} onClick={()=>setTab(id)} style={{ background:"none", border:"none", borderBottom: tab===id?`3px solid ${T.accent}`:"3px solid transparent",
+              color: tab===id?T.accent:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight: tab===id?700:500, padding:"8px 16px 12px", cursor:"pointer" }}>{label}</button>
+          ))}
+        </div>
+      )}
+
+      {!loaded && <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>}
+
+      {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} cursor={cursor} setCursor={setCursor} onOpen={openEdit} />}
+      {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
+      {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b); setTab("calendar"); }} />}
+      {tab==="form" && form && (
+        <div>
+          <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
+          <AccomForm properties={properties} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? handleDelete : null} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [bookings, setBookings] = useState([]);
@@ -691,6 +1176,7 @@ export default function App() {
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
+        {view==="lettings"   && <LettingsView/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
@@ -700,6 +1186,7 @@ export default function App() {
           saveBookings={saveBookings}
           onSelectEnquiry={goToEnquiry}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry}/>}
+        {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}/>}
       </div>
     </div>
   );
@@ -707,7 +1194,7 @@ export default function App() {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
-  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"}];
+  const tabs = [{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"lettings",label:"Lettings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"},{id:"settings",label:"Settings"}];
   const isXeroConnected  = !!xeroToken;
   const isGmailConnected = !!gmailToken;
   return (
@@ -5124,8 +5611,7 @@ function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
 // ─── VIEWING REQUESTS INBOX ───────────────────────────────────────────────────
 const VIEWING_SLOTS = ["10:00","12:00","14:00","16:00","18:00"];
 
-function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, saveBookings }) {
-  const [tab, setTab]               = useState("pending");
+function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, saveBookings, mode="requests", confirmedSlot=null }) {
   const [acting, setActing]         = useState(null);
   const [blockDate,   setBlockDate]   = useState("");
   const [blockDateTo, setBlockDateTo] = useState("");
@@ -5298,8 +5784,63 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   };
 
   const tabData = { pending, confirmed, declined };
-  const tabRows = tabData[tab] || [];
-  const tabCounts = { pending:pending.length, confirmed:confirmed.length, declined:declined.length };
+  const pendingRows  = [...pending].sort((a,b)=>a.date>b.date?1:-1);
+  const declinedRows = [...declined].sort((a,b)=>a.date>b.date?1:-1);
+
+  // A single request card (used in the Pending and Declined sections)
+  const renderReqCard = (req) => {
+    const niceDate = fmtDate(req.date);
+    return (
+      <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 6px rgba(37,99,235,.06)" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
+              <span style={{ fontWeight:700, fontSize:15, color:T.text }}>{req.name}</span>
+              {statusBadge(req.status)}
+              <span style={{ fontSize:12, color:T.textLight }}>{req.submittedAt ? new Date(req.submittedAt).toLocaleDateString("en-GB") : ""}</span>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:"4px 16px", fontSize:13, color:T.textMid }}>
+              <span>Date: {niceDate} at {req.time}</span>
+              {req.eventType && <span>Event type: {req.eventType}</span>}
+              <span>Email: {req.email}</span>
+              {req.phone && <span>Phone: {req.phone}</span>}
+              {req.dayGuests && <span>Day guests: {req.dayGuests}</span>}
+              {req.eveGuests && <span>Eve guests: {req.eveGuests}</span>}
+              {req.preferredDate && <span>Year: {req.preferredDate}</span>}
+              {req.source && <span>Source: {req.source}</span>}
+              {req.midweek && <span style={{ color:T.green, fontWeight:600 }}>Midweek interest</span>}
+              {req.ceremony && <span style={{ color:T.green, fontWeight:600 }}>Ceremony onsite</span>}
+            </div>
+            {req.notes && <div style={{ marginTop:8, fontSize:12, color:T.textMid, fontStyle:"italic", background:T.bgInput, borderRadius:5, padding:"6px 10px" }}>{req.notes}</div>}
+          </div>
+          <div style={{ display:"flex", gap:8, flexShrink:0, alignItems:"center" }}>
+            {req.status==="pending" && (<>
+              <button onClick={()=>handleConfirmClick(req)} disabled={acting===req.id}
+                style={{ background:T.green, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:acting===req.id?0.7:1 }}>
+                {acting===req.id?"…":"✓ Confirm"}
+              </button>
+              <button onClick={()=>handleDeclineClick(req)} disabled={acting===req.id}
+                style={{ background:T.redBg, color:T.red, border:`1px solid #fca5a5`, padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                ✕ Decline
+              </button>
+            </>)}
+            <button onClick={()=>handleDeleteClick(req)} disabled={acting===req.id} title="Delete request (no email sent)"
+              style={{ background:"none", color:T.textLight, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+              🗑 Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const sectionHeading = (label, count, color) => (
+    <div style={{ display:"flex", alignItems:"center", gap:10, margin:"0 0 14px" }}>
+      <span style={{ fontSize:12, letterSpacing:1.2, textTransform:"uppercase", color:color, fontWeight:700 }}>{label}</span>
+      {count!=null && <span style={{ background:T.bgInput, color:T.textMid, borderRadius:10, padding:"1px 9px", fontSize:11, fontWeight:700 }}>{count}</span>}
+      <div style={{ flex:1, height:1, background:T.border }}/>
+    </div>
+  );
 
   return (
     <div>
@@ -5452,69 +5993,27 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
         );
       })()}
 
-      {/* Tab bar */}
-      <div style={{ display:"flex", gap:8, marginBottom:20 }}>
-        {["pending","confirmed","declined"].map(t=>(
-          <button key={t} onClick={()=>setTab(t)}
-            style={{ background:tab===t?T.midBlue:"#fff", color:tab===t?"#fff":T.textMid, border:`1.5px solid ${tab===t?T.midBlue:T.border}`, padding:"7px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:tab===t?700:400, textTransform:"capitalize", display:"flex", alignItems:"center", gap:7 }}>
-            {t}
-            {tabCounts[t]>0 && <span style={{ background:tab===t?"rgba(255,255,255,.3)":T.midBlueBg, color:tab===t?"#fff":T.midBlue, borderRadius:10, padding:"1px 7px", fontSize:11, fontWeight:700 }}>{tabCounts[t]}</span>}
-          </button>
-        ))}
-      </div>
+      {/* ── Requests mode: Pending → Confirmed → Declined, all on one page ── */}
+      {mode==="requests" && (<>
+        {sectionHeading("Pending", pendingRows.length, "#92400e")}
+        {pendingRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"6px 0 20px" }}>No pending requests.</div>}
+        <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:32 }}>
+          {pendingRows.map(renderReqCard)}
+        </div>
 
-      {/* Request cards */}
-      {tabRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"20px 0" }}>No {tab} requests.</div>}
-      <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:32 }}>
-        {tabRows.sort((a,b)=>a.date>b.date?1:-1).map(req=>{
-          const niceDate = fmtDate(req.date);
-          return (
-            <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 6px rgba(37,99,235,.06)" }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
-                    <span style={{ fontWeight:700, fontSize:15, color:T.text }}>{req.name}</span>
-                    {statusBadge(req.status)}
-                    <span style={{ fontSize:12, color:T.textLight }}>{req.submittedAt ? new Date(req.submittedAt).toLocaleDateString("en-GB") : ""}</span>
-                  </div>
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:"4px 16px", fontSize:13, color:T.textMid }}>
-                    <span>Date: {niceDate} at {req.time}</span>
-                    {req.eventType && <span>Event type: {req.eventType}</span>}
-                    <span>Email: {req.email}</span>
-                    {req.phone && <span>Phone: {req.phone}</span>}
-                    {req.dayGuests && <span>Day guests: {req.dayGuests}</span>}
-                    {req.eveGuests && <span>Eve guests: {req.eveGuests}</span>}
-                    {req.preferredDate && <span>Year: {req.preferredDate}</span>}
-                    {req.source && <span>Source: {req.source}</span>}
-                    {req.midweek && <span style={{ color:T.green, fontWeight:600 }}>Midweek interest</span>}
-                    {req.ceremony && <span style={{ color:T.green, fontWeight:600 }}>Ceremony onsite</span>}
-                  </div>
-                  {req.notes && <div style={{ marginTop:8, fontSize:12, color:T.textMid, fontStyle:"italic", background:T.bgInput, borderRadius:5, padding:"6px 10px" }}>{req.notes}</div>}
-                </div>
-                <div style={{ display:"flex", gap:8, flexShrink:0, alignItems:"center" }}>
-                  {req.status==="pending" && (<>
-                    <button onClick={()=>handleConfirmClick(req)} disabled={acting===req.id}
-                      style={{ background:T.green, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:acting===req.id?0.7:1 }}>
-                      {acting===req.id?"…":"✓ Confirm"}
-                    </button>
-                    <button onClick={()=>handleDeclineClick(req)} disabled={acting===req.id}
-                      style={{ background:T.redBg, color:T.red, border:`1px solid #fca5a5`, padding:"8px 16px", borderRadius:6, cursor:acting===req.id?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-                      ✕ Decline
-                    </button>
-                  </>)}
-                  <button onClick={()=>handleDeleteClick(req)} disabled={acting===req.id} title="Delete request (no email sent)"
-                    style={{ background:"none", color:T.textLight, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-                    🗑 Delete
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+        {sectionHeading("Confirmed", null, T.green)}
+        <div style={{ marginBottom:32 }}>{confirmedSlot}</div>
 
-      {/* Block management */}
-      <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:24 }}>
+        {sectionHeading("Declined", declinedRows.length, T.red)}
+        {declinedRows.length===0 && <div style={{ color:T.textLight, fontSize:13, padding:"6px 0 20px" }}>No declined requests.</div>}
+        <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:12 }}>
+          {declinedRows.map(renderReqCard)}
+        </div>
+      </>)}
+
+      {/* ── Blocks mode: block management only ── */}
+      {mode==="blocks" && (
+      <div style={{ paddingTop:4 }}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Manage Blocked Dates / Slots</div>
         <p style={{ fontSize:12, color:T.textLight, marginBottom:14 }}>Block a whole day (leave slot empty) or a specific time slot. Events/weddings are automatically blocked.</p>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10, alignItems:"center" }}>
@@ -5559,7 +6058,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
               return groups.map((g,i) => (
                 <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:7, fontSize:13 }}>
                   <span style={{ fontWeight:600, color:T.text }}>
-                    {g.dateFrom === g.dateTo ? g.dateFrom : `${g.dateFrom} → ${g.dateTo}`}
+                    {g.dateFrom === g.dateTo ? fmtDate(g.dateFrom) : `${fmtDate(g.dateFrom)} → ${fmtDate(g.dateTo)}`}
                   </span>
                   <span style={{ color:T.textMid }}>{g.slot || "All day"}</span>
                   {g.note && <span style={{ color:T.textLight, fontStyle:"italic", flex:1 }}>{g.note}</span>}
@@ -5572,43 +6071,46 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
 
 function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
   const [filter,    setFilter]    = useState("upcoming");
-  const [viewTab,   setViewTab]   = useState("requests");
+  const [viewTab,   setViewTab]   = useState("viewings");
   const [refreshing, setRefreshing] = useState(false);
   const [editKey, setEditKey]     = useState(null); // `${sourceType}:${sourceId}:${vIndex}` currently being edited
   const [editV,   setEditV]       = useState(null);
   const [vFlash,  setVFlash]      = useState(false);
-  const [feedCopied, setFeedCopied] = useState(false);
   const loaded = true;
 
   const flashSaved = () => { setVFlash(true); setTimeout(()=>setVFlash(false), 2000); };
 
-  // Reload viewing requests + bookings + enquiries fresh from Supabase.
-  // Bookings and enquiries are reloaded because viewings added on a booking or
-  // enquiry page are the same database — this keeps the confirmed list in sync,
-  // including viewings added on another device/session.
-  const refreshRequests = async () => {
+  // Reload requests + enquiries (and, on a manual refresh, bookings) from Supabase.
+  // Enquiries are reloaded because the Enquiries page keeps its own copy, so the
+  // confirmed list can otherwise miss enquiry viewings. Bookings are NOT reloaded on
+  // auto-open because App state already holds the freshest bookings (same source the
+  // Year Calendar uses) — reloading there risks overwriting an in-session edit.
+  const refreshRequests = async (full=false) => {
     setRefreshing(true);
     try {
       const r = await sbGet(VR_STORAGE);
       setViewingRequests(r || []);
       const b = await sbGet(VB_STORAGE);
       setViewingBlocks(b || []);
-      const bk = await sbGet(BOOKING_STORAGE);
-      if (bk && setBookings) setBookings(bk);
       const enq = await sbGet(ENQUIRIES_STORAGE);
       if (enq && setEnquiries) setEnquiries(enq);
+      if (full) {
+        const bk = await sbGet(BOOKING_STORAGE);
+        if (bk && setBookings) setBookings(bk);
+      }
     } catch(e) { console.warn("Refresh failed:", e); }
     finally { setRefreshing(false); }
   };
 
-  // Auto-refresh when Viewings tab is opened
-  useEffect(() => { refreshRequests(); }, []);
+  // Auto-refresh when Viewings tab is opened (requests + enquiries only)
+  useEffect(() => { refreshRequests(false); }, []);
   const today = new Date().toISOString().slice(0,10);
 
   // Gather all viewings from both bookings and enquiries.
@@ -5667,44 +6169,44 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
 
   return (
     <div style={{ paddingTop:28 }}>
-      {/* Top-level tab: Requests | Viewings | Blocks */}
+      {vFlash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:T.green, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>✓ Saved</div>}
+      {/* Tabs: Viewings | Blocks | Year Calendar */}
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24, flexWrap:"wrap" }}>
         <h2 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:22, marginRight:8 }}>Viewings</h2>
-        {[["requests","Requests"],["confirmed","Confirmed"],["blocks","Blocks"]].map(([v,l])=>(
+        {[["viewings","Viewings"],["blocks","Blocks"]].map(([v,l])=>{
+          const pendCount = (viewingRequests||[]).filter(r=>r.status==="pending").length;
+          return (
           <button key={v} onClick={()=>setViewTab(v)} style={{ background:viewTab===v?T.midBlue:"#fff", color:viewTab===v?"#fff":T.textMid, border:`1.5px solid ${viewTab===v?T.midBlue:T.border}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:viewTab===v?700:400 }}>
-            {v==="requests" && (viewingRequests||[]).filter(r=>r.status==="pending").length>0 ? "Requests ("+( viewingRequests||[]).filter(r=>r.status==="pending").length+")" : l}
+            {v==="viewings" && pendCount>0 ? "Viewings ("+pendCount+")" : l}
           </button>
-        ))}
+          );
+        })}
         {setReportType && (
           <button onClick={()=>{ setReportType("calendar"); setView("reports"); }}
             style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
             📅 Year Calendar →
           </button>
         )}
-        <button onClick={refreshRequests} disabled={refreshing}
+        <button onClick={()=>refreshRequests(true)} disabled={refreshing}
           style={{ marginLeft:"auto", background:"none", border:`1px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, opacity:refreshing?0.5:1 }}>
           {refreshing ? "…" : "↻ Refresh"}
         </button>
       </div>
 
-      {viewTab==="requests" && (
-        <ViewingRequestsInbox
-          requests={viewingRequests||[]} setRequests={setViewingRequests}
-          blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
-          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
-        />
-      )}
-
       {viewTab==="blocks" && (
-        <ViewingRequestsInbox
+        <ViewingRequestsInbox mode="blocks"
           requests={[]} setRequests={()=>{}}
           blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
           bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
         />
       )}
 
-      {viewTab==="confirmed" && (<>
-      {vFlash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:T.green, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>✓ Saved</div>}
+      {viewTab==="viewings" && (
+        <ViewingRequestsInbox mode="requests"
+          requests={viewingRequests||[]} setRequests={setViewingRequests}
+          blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
+          confirmedSlot={(<>
       <div style={{ display:"flex", gap:6, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
         {[["upcoming","Upcoming"],["all","All"],["past","Past"]].map(([v,l])=>(
           <button key={v} onClick={()=>setFilter(v)} style={{ background:filter===v?"#6d28d9":"#fff", color:filter===v?"#fff":T.textMid, border:`1.5px solid ${filter===v?"#6d28d9":T.border}`, padding:"6px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:filter===v?700:400 }}>{l}</button>
@@ -5713,7 +6215,7 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
       </div>
 
       {filtered.length === 0 && (
-        <div style={{ textAlign:"center", padding:60, color:T.textLight, fontSize:15 }}>No {filter==="all"?"":""+filter+" "}viewings found.</div>
+        <div style={{ textAlign:"center", padding:40, color:T.textLight, fontSize:14 }}>No {filter==="all"?"":""+filter+" "}viewings found.</div>
       )}
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
@@ -5764,31 +6266,66 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
           );
         })}
       </div>
-    </>)}
+      </>)}
+        />
+      )}
+    </div>
+  );
+}
 
-      {/* Hosted calendar feed — subscribe in Google / Apple / Outlook */}
-      {(() => {
-        const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
-        return (
-          <div style={{ marginTop:32, borderTop:`2px solid ${T.border}`, paddingTop:20 }}>
-            <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Calendar Feed (Subscribe)</div>
-            <p style={{ fontSize:12, color:T.textLight, margin:"0 0 10px", maxWidth:640 }}>
-              A live iCalendar feed of all events and viewings. Add it to Google, Apple or Outlook calendar via "Subscribe from URL" / "Add calendar by URL" — it refreshes automatically.
-            </p>
-            <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-              <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"7px 12px", fontSize:12, color:T.text, wordBreak:"break-all" }}>{feedUrl}</code>
-              <button onClick={()=>{ try{ navigator.clipboard.writeText(feedUrl); setFeedCopied(true); setTimeout(()=>setFeedCopied(false),2000); }catch(e){} }}
-                style={{ background:feedCopied?T.green:T.midBlue, color:"#fff", border:"none", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-                {feedCopied ? "✓ Copied" : "Copy URL"}
-              </button>
-              <a href={feedUrl} target="_blank" rel="noreferrer"
-                style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, textDecoration:"none", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-                Download .ics
-              </a>
+// ─── SETTINGS ─────────────────────────────────────────────────────────────────
+function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
+  const [feedCopied, setFeedCopied] = useState(false);
+  const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
+  return (
+    <div style={{ paddingTop:28, maxWidth:820 }}>
+      <h2 style={{ margin:"0 0 20px", color:T.midBlue, fontWeight:700, fontSize:22 }}>Settings</h2>
+
+      {/* Calendar feed */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Calendar Feed (Subscribe)</div>
+        <p style={{ fontSize:13, color:T.textMid, margin:"0 0 14px", lineHeight:1.5 }}>
+          A live iCalendar feed of all events and viewings. Add it to Google, Apple or Outlook calendar via "Subscribe from URL" / "Add calendar by URL" — it refreshes automatically. New URL subscriptions in Google Calendar can take several hours to first appear.
+        </p>
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"8px 12px", fontSize:12, color:T.text, wordBreak:"break-all" }}>{feedUrl}</code>
+          <button onClick={()=>{ try{ navigator.clipboard.writeText(feedUrl); setFeedCopied(true); setTimeout(()=>setFeedCopied(false),2000); }catch(e){} }}
+            style={{ background:feedCopied?T.green:T.midBlue, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+            {feedCopied ? "✓ Copied" : "Copy URL"}
+          </button>
+          <a href={feedUrl} target="_blank" rel="noreferrer"
+            style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"8px 16px", borderRadius:6, textDecoration:"none", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+            Download .ics
+          </a>
+        </div>
+      </div>
+
+      {/* Integrations */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Integrations</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+            <div>
+              <div style={{ fontSize:14, fontWeight:600, color:T.text }}>Xero</div>
+              <div style={{ fontSize:12, color:T.textLight }}>{xeroToken ? "Connected" : "Not connected"}</div>
             </div>
+            {xeroToken
+              ? <button onClick={onXeroDisconnect} style={{ background:"#e6f7fd", border:"1px solid #13B5EA", color:"#0e8ab0", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Disconnect</button>
+              : <button onClick={onXeroConnect} style={{ background:"#13B5EA", border:"none", color:"#fff", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Connect Xero</button>}
           </div>
-        );
-      })()}
+          <div style={{ height:1, background:T.border }}/>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+            <div>
+              <div style={{ fontSize:14, fontWeight:600, color:T.text }}>Gmail</div>
+              <div style={{ fontSize:12, color:T.textLight }}>{gmailToken ? "Connected" : "Not connected"}</div>
+            </div>
+            {gmailToken
+              ? <button onClick={onGmailDisconnect} style={{ background:"#fef2f2", border:"1px solid #fca5a5", color:"#dc2626", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Disconnect</button>
+              : <button onClick={onGmailConnect} style={{ background:"#ea4335", border:"none", color:"#fff", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Connect Gmail</button>}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
