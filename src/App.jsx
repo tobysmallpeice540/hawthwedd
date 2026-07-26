@@ -461,10 +461,12 @@ function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData,
 }
 
 // ─── LETTINGS (HOLIDAY LETS / ACCOMMODATION) ─────────────────────────────────
-const PROPERTIES_STORAGE   = "hbf_properties_v1";
-const ACCOM_STORAGE        = "hbf_accom_v1";
-const ACCOM_GUESTS_STORAGE = "hbf_accom_guests_v1";
-const EMAIL_LOG_STORAGE    = "hbf_email_log_v1";
+const PROPERTIES_STORAGE     = "hbf_properties_v1";
+const ACCOM_STORAGE          = "hbf_accom_v1";
+const ACCOM_GUESTS_STORAGE   = "hbf_accom_guests_v1";
+const EMAIL_LOG_STORAGE      = "hbf_email_log_v1";
+const DISCOUNT_CODES_STORAGE = "hbf_discount_codes_v1";
+const SITE_URL = "https://cool-sorbet-b1d599.netlify.app";
 
 const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
 
@@ -997,7 +999,7 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
 const selStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 11px", outline:"none", cursor:"pointer" };
 
 // ── Add / edit form ──────────────────────────────────────────────────────────
-function AccomForm({ properties, form, setForm, onSave, onCancel, onDelete }) {
+function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel, onDelete }) {
   const prop = properties.find(p=>p.id===form.propertyId);
   const upd = (k,v)=> setForm(f=>({ ...f, [k]:v }));
   const zeroValue = (Number(form.value)||0) <= 0;
@@ -1074,7 +1076,30 @@ function AccomForm({ properties, form, setForm, onSave, onCancel, onDelete }) {
       })()}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:8 }}>
         <LInput label="Accommodation price (£)" type="number" value={form.value} onChange={v=>upd("value",v)} />
-        <LInput label="Discount code" value={form.discountCode} onChange={v=>upd("discountCode",v)} />
+        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Discount code</span>
+          <input value={form.discountCode || ""} onChange={e => {
+            const code = e.target.value.toUpperCase();
+            upd("discountCode", code);
+            const today = new Date().toISOString().slice(0,10);
+            const match = (discountCodes || []).find(c => c.active && c.code === code && (!c.expiresAt || c.expiresAt >= today));
+            if (match) {
+              const disc = match.type === "pct" ? Math.round((Number(form.value)||0) * match.value / 100 * 100) / 100 : match.value;
+              upd("discountAmount", disc);
+            } else {
+              upd("discountAmount", 0);
+            }
+          }} style={inpStyle} placeholder="e.g. SUMMER10" />
+          {(function() {
+            const today = new Date().toISOString().slice(0,10);
+            const match = (discountCodes || []).find(c => c.code === (form.discountCode || "").toUpperCase());
+            if (!form.discountCode) return null;
+            if (!match) return <span style={{ fontSize:11, color:T.red }}>Code not found</span>;
+            if (!match.active) return <span style={{ fontSize:11, color:T.red }}>Code inactive</span>;
+            if (match.expiresAt && match.expiresAt < today) return <span style={{ fontSize:11, color:T.red }}>Code expired</span>;
+            return <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>Valid — {match.type === "pct" ? match.value+"% off" : fmtMoney(match.value)+" off"}</span>;
+          })()}
+        </label>
         <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Source</span>
           <select value={form.source} onChange={e=>upd("source", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
@@ -1596,12 +1621,268 @@ function PropertyEditor({ properties, setProperties, onSave }) {
   );
 }
 
+// ── Discount codes editor ────────────────────────────────────────────────────
+function DiscountCodesEditor({ codes, setCodes, onSave }) {
+  const [flash, setFlash] = useState("");
+  const [newCode, setNewCode] = useState({ code:"", type:"pct", value:"", description:"", expiresAt:"" });
+
+  const updNew = (k, v) => setNewCode(c => Object.assign({}, c, { [k]: v }));
+
+  const addCode = () => {
+    if (!newCode.code.trim() || !newCode.value) return;
+    const rec = {
+      id:          "dc-" + Date.now(),
+      code:        newCode.code.trim().toUpperCase(),
+      type:        newCode.type,
+      value:       Number(newCode.value),
+      description: newCode.description.trim(),
+      active:      true,
+      expiresAt:   newCode.expiresAt || null,
+    };
+    setCodes(cs => cs.concat([rec]));
+    setNewCode({ code:"", type:"pct", value:"", description:"", expiresAt:"" });
+  };
+
+  const toggleActive = (id) =>
+    setCodes(cs => cs.map(c => c.id === id ? Object.assign({}, c, { active: !c.active }) : c));
+
+  const removeCode = (id) => setCodes(cs => cs.filter(c => c.id !== id));
+
+  const handleSave = async () => {
+    await onSave();
+    setFlash("Saved");
+    setTimeout(() => setFlash(""), 2000);
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:T.text }}>Discount codes</div>
+          <div style={{ fontSize:12, color:T.textMid, marginTop:2 }}>Applied at booking — fixed £ off or percentage off the total</div>
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+          {flash && <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>{flash}</span>}
+          <button onClick={handleSave} style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Save</button>
+        </div>
+      </div>
+
+      {/* Existing codes */}
+      {codes.length > 0 && (
+        <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff", marginBottom:18 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr 1.5fr 1fr 0.7fr 0.6fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid }}>
+            {["Code","Type","Value","Description","Expires","Active",""].map(h => (
+              <div key={h} style={{ padding:"9px 12px" }}>{h}</div>
+            ))}
+          </div>
+          {codes.map(c => (
+            <div key={c.id} style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr 1.5fr 1fr 0.7fr 0.6fr", borderBottom:`1px solid #eef3fa`, fontSize:13, color:T.text, alignItems:"center", opacity: c.active ? 1 : .55 }}>
+              <div style={{ padding:"10px 12px", fontWeight:700, letterSpacing:.5, color:T.midBlue }}>{c.code}</div>
+              <div style={{ padding:"10px 12px" }}>{c.type === "pct" ? "% off" : "£ off"}</div>
+              <div style={{ padding:"10px 12px" }}>{c.type === "pct" ? c.value + "%" : fmtMoney(c.value)}</div>
+              <div style={{ padding:"10px 12px", fontSize:12, color:T.textMid }}>{c.description || "—"}</div>
+              <div style={{ padding:"10px 12px", fontSize:12 }}>{c.expiresAt ? fmtDate(c.expiresAt) : "No expiry"}</div>
+              <div style={{ padding:"10px 12px" }}>
+                <button onClick={() => toggleActive(c.id)}
+                  style={{ fontSize:11, fontWeight:700, padding:"3px 10px", borderRadius:8, border:"none", cursor:"pointer", fontFamily:"inherit",
+                    background: c.active ? T.greenBg : T.redBg, color: c.active ? T.green : T.red }}>
+                  {c.active ? "Active" : "Off"}
+                </button>
+              </div>
+              <div style={{ padding:"10px 12px" }}>
+                <button onClick={() => removeCode(c.id)}
+                  style={{ fontSize:11, color:T.red, background:T.redBg, border:"none", borderRadius:6, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit" }}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add new code */}
+      <div style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 18px", background:"#fff" }}>
+        <div style={{ fontSize:12, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:12 }}>Add new code</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 0.7fr 0.7fr 1.5fr 1fr auto", gap:10, alignItems:"end" }}>
+          <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Code</span>
+            <input value={newCode.code} onChange={e => updNew("code", e.target.value.toUpperCase())}
+              style={inpStyle} placeholder="e.g. SUMMER10" />
+          </label>
+          <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Type</span>
+            <select value={newCode.type} onChange={e => updNew("type", e.target.value)} style={{ ...inpStyle }}>
+              <option value="pct">% off</option>
+              <option value="fixed">£ off</option>
+            </select>
+          </label>
+          <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>{newCode.type === "pct" ? "%" : "£"} value</span>
+            <input type="number" value={newCode.value} onChange={e => updNew("value", e.target.value)}
+              style={inpStyle} placeholder={newCode.type === "pct" ? "10" : "50"} min="0" />
+          </label>
+          <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Description (optional)</span>
+            <input value={newCode.description} onChange={e => updNew("description", e.target.value)}
+              style={inpStyle} placeholder="e.g. Summer 2026 discount" />
+          </label>
+          <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Expires (optional)</span>
+            <input type="date" value={newCode.expiresAt} onChange={e => updNew("expiresAt", e.target.value)}
+              style={inpStyle} />
+          </label>
+          <button onClick={addCode}
+            style={{ background:T.accent, color:"#fff", border:"none", borderRadius:8, padding:"9px 18px", cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, height:38, alignSelf:"end" }}>
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── iCal / Airbnb sync settings ───────────────────────────────────────────────
+function ICalSettings({ properties, setProperties, onSave }) {
+  const [syncState, setSyncState] = useState({});
+  const [flash, setFlash] = useState("");
+
+  const updProp = (pid, key, val) =>
+    setProperties(ps => ps.map(p => p.id === pid ? Object.assign({}, p, { [key]: val }) : p));
+
+  const handleSave = async () => {
+    await onSave();
+    setFlash("Saved");
+    setTimeout(() => setFlash(""), 2000);
+  };
+
+  const syncNow = async (pid) => {
+    setSyncState(s => Object.assign({}, s, { [pid]: { loading: true, result: null } }));
+    try {
+      const res = await fetch("/.netlify/functions/sync-property-ical", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyId: pid })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncState(s => Object.assign({}, s, { [pid]: { loading: false, result: "Error: " + data.error } }));
+      } else {
+        const msg = "Synced — " + data.imported + " new block" + (data.imported === 1 ? "" : "s") + " from " + data.total + " in feed";
+        setSyncState(s => Object.assign({}, s, { [pid]: { loading: false, result: msg } }));
+        // Update lastSyncedAt in local property state
+        setProperties(ps => ps.map(p => p.id === pid ? Object.assign({}, p, { lastSyncedAt: new Date().toISOString() }) : p));
+      }
+    } catch (e) {
+      setSyncState(s => Object.assign({}, s, { [pid]: { loading: false, result: "Network error — check console" } }));
+    }
+  };
+
+  const copyUrl = (url) => {
+    if (navigator.clipboard) navigator.clipboard.writeText(url);
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:T.text }}>Airbnb / iCal sync</div>
+          <div style={{ fontSize:12, color:T.textMid, marginTop:2 }}>Export your availability to Airbnb; import Airbnb blocks back in</div>
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+          {flash && <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>{flash}</span>}
+          <button onClick={handleSave} style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Save URLs</button>
+        </div>
+      </div>
+      <div style={{ fontSize:12, color:T.textMid, background:T.accentLight, borderRadius:8, padding:"10px 14px", marginBottom:20, lineHeight:1.6 }}>
+        <strong>Setup:</strong> For each property, (1) copy the Export URL and paste it into Airbnb as your availability calendar URL,
+        then (2) paste Airbnb's iCal import URL here and click Sync. Airbnb's URL is found in your Airbnb listing under Calendar settings.
+      </div>
+
+      {properties.map(p => {
+        const exportUrl = SITE_URL + "/.netlify/functions/property-calendar?id=" + p.id;
+        const ss = syncState[p.id] || {};
+        return (
+          <div key={p.id} style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", marginBottom:14, background:"#fff", boxShadow:"0 2px 6px rgba(37,99,235,.04)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+              <span style={{ width:13, height:13, borderRadius:3, background:p.colour, flexShrink:0 }}/>
+              <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{p.name}</span>
+              {p.lastSyncedAt && (
+                <span style={{ fontSize:11, color:T.textLight, marginLeft:"auto" }}>
+                  Last synced: {new Date(p.lastSyncedAt).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}
+                </span>
+              )}
+            </div>
+
+            <div style={{ marginBottom:14 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:T.textMid, marginBottom:6, textTransform:"uppercase", letterSpacing:.4 }}>
+                1. Export URL — paste this into Airbnb
+              </div>
+              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                <input readOnly value={exportUrl} style={{ ...inpStyle, flex:1, fontSize:11, background:"#f7f9fc", color:T.textMid }} />
+                <button onClick={() => copyUrl(exportUrl)}
+                  style={{ background:T.accentLight, color:T.accent, border:`1.5px solid ${T.accent}30`, borderRadius:7, padding:"8px 16px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:T.textMid, marginBottom:6, textTransform:"uppercase", letterSpacing:.4 }}>
+                2. Import URL — from Airbnb
+              </div>
+              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                <input value={p.airbnbImportUrl || ""}
+                  onChange={e => updProp(p.id, "airbnbImportUrl", e.target.value)}
+                  style={{ ...inpStyle, flex:1, fontSize:12 }}
+                  placeholder="https://www.airbnb.co.uk/calendar/ical/..." />
+                <button onClick={() => syncNow(p.id)} disabled={!p.airbnbImportUrl || ss.loading}
+                  style={{ background: ss.loading ? T.bgInput : T.green, color: ss.loading ? T.textLight : "#fff", border:"none", borderRadius:7, padding:"8px 16px", cursor: p.airbnbImportUrl && !ss.loading ? "pointer" : "not-allowed", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
+                  {ss.loading ? "Syncing…" : "Sync now"}
+                </button>
+              </div>
+              {ss.result && (
+                <div style={{ marginTop:6, fontSize:12, color: ss.result.startsWith("Error") ? T.red : T.green, fontWeight:600 }}>
+                  {ss.result}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Setup wrapper (sub-tabs: Pricing | Discount Codes | Airbnb Sync) ──────────
+function LettingsSetup({ properties, setProperties, onSaveProperties, discountCodes, setDiscountCodes, onSaveDiscountCodes }) {
+  const [setupTab, setSetupTab] = useState("pricing");
+  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"]];
+  return (
+    <div>
+      <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}` }}>
+        {tabs.map(([id, label]) => (
+          <button key={id} onClick={() => setSetupTab(id)}
+            style={{ background:"none", border:"none", borderBottom: setupTab===id ? `3px solid ${T.midBlue}` : "3px solid transparent",
+              color: setupTab===id ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13, fontWeight: setupTab===id ? 700 : 500,
+              padding:"6px 16px 10px", cursor:"pointer" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {setupTab === "pricing" && <PropertyEditor properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
+      {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
+      {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
+    </div>
+  );
+}
+
 // ── Main Lettings view ───────────────────────────────────────────────────────
 function LettingsView({ events }) {
-  const [properties, setProperties] = useState(INITIAL_PROPERTIES);
-  const [bookings, setBookings]     = useState([]);
-  const [guests, setGuests]         = useState([]);
-  const [loaded, setLoaded]         = useState(false);
+  const [properties, setProperties]       = useState(INITIAL_PROPERTIES);
+  const [bookings, setBookings]           = useState([]);
+  const [guests, setGuests]               = useState([]);
+  const [discountCodes, setDiscountCodes] = useState([]);
+  const [loaded, setLoaded]               = useState(false);
   const [tab, setTab]               = useState("calendar");
   const [cursor, setCursor]         = useState(()=> new Date());
   const [form, setForm]             = useState(null);
@@ -1615,6 +1896,7 @@ function LettingsView({ events }) {
       try { const p = await sbGet(PROPERTIES_STORAGE); if (p && p.length) setProperties(p); } catch {}
       try { const b = await sbGet(ACCOM_STORAGE);      setBookings((b || []).map(normalizeAccom)); } catch { setBookings([]); }
       try { const g = await sbGet(ACCOM_GUESTS_STORAGE); setGuests(g || []); } catch { setGuests([]); }
+      try { const dc = await sbGet(DISCOUNT_CODES_STORAGE); setDiscountCodes(dc || []); } catch { setDiscountCodes([]); }
       setLoaded(true);
     })();
   }, []);
@@ -1627,6 +1909,11 @@ function LettingsView({ events }) {
 
   const saveProperties = async () => {
     try { await sbSet(PROPERTIES_STORAGE, properties); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
+    catch (e) { console.error(e); setFlash("Save failed"); }
+  };
+
+  const saveDiscountCodes = async () => {
+    try { await sbSet(DISCOUNT_CODES_STORAGE, discountCodes); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
     catch (e) { console.error(e); setFlash("Save failed"); }
   };
 
@@ -1681,11 +1968,16 @@ function LettingsView({ events }) {
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
       {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
       {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} saveBookings={saveBookings} bookings={bookings} />}
-      {loaded && tab==="settings" && <PropertyEditor properties={properties} setProperties={setProperties} onSave={saveProperties} />}
+      {loaded && tab==="settings" && (
+        <LettingsSetup
+          properties={properties} setProperties={setProperties} onSaveProperties={saveProperties}
+          discountCodes={discountCodes} setDiscountCodes={setDiscountCodes} onSaveDiscountCodes={saveDiscountCodes}
+        />
+      )}
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
-          <AccomForm properties={properties} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? handleDelete : null} />
+          <AccomForm properties={properties} discountCodes={discountCodes} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? handleDelete : null} />
         </div>
       )}
     </div>
