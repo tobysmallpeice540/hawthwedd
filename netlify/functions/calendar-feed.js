@@ -1,35 +1,31 @@
 // netlify/functions/calendar-feed.js
-// Hosted iCalendar (.ics) feed exposing Hawthbush Farm events (bookings) and viewings.
-// Subscribe in Google Calendar / Apple Calendar / Outlook using the URL:
-//   https://hawthbushfarm.netlify.app/calendar.ics
-// (also served directly at /.netlify/functions/calendar-feed)
+// Hosted iCalendar (.ics) feed — events, viewings, and lettings bookings.
+// Subscribe via: https://hawthbushfarm.netlify.app/calendar.ics
 
-const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+const SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+const SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 
 const BOOKINGS_KEY  = "hawthbush_bookings_v6";
 const ENQUIRIES_KEY = "hbf_enquiries_v1";
+const ACCOM_KEY     = "hbf_accom_v1";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const sbGet = async (key) => {
   const res = await fetch(
     SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value",
-    { headers: { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY } }
+    { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } }
   );
   if (!res.ok) return null;
   const rows = await res.json();
   return (Array.isArray(rows) && rows[0]) ? rows[0].value : null;
 };
 
-// Escape text for an ICS property value
 const esc = (s) => String(s == null ? "" : s)
   .replace(/\\/g, "\\\\")
   .replace(/;/g, "\\;")
   .replace(/,/g, "\\,")
   .replace(/\r?\n/g, "\\n");
 
-// Fold long lines to 75 octets per RFC 5545 (continuation lines start with a space)
 const fold = (line) => {
   if (line.length <= 75) return line;
   let out = "";
@@ -43,32 +39,44 @@ const fold = (line) => {
 };
 
 const pad = (n) => String(n).padStart(2, "0");
-const dateCompact = (ymd) => (ymd || "").replace(/-/g, ""); // 2026-05-23 -> 20260523
+
+const dateCompact = (ymd) => (ymd || "").replace(/-/g, "");
+
 const addDay = (ymd) => {
   const d = new Date(ymd + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() + 1);
   return d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate());
 };
+
 const dtStamp = () => {
   const d = new Date();
   return d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate()) +
     "T" + pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + pad(d.getUTCSeconds()) + "Z";
 };
+
 const timeCompact = (t) => {
-  // "14:00" -> "140000"
   const m = /^(\d{1,2}):(\d{2})/.exec(t || "");
   if (!m) return null;
   return pad(m[1]) + pad(m[2]) + "00";
 };
-// add one hour to an HH:MM for a default viewing end time
+
 const addHour = (t) => {
   const m = /^(\d{1,2}):(\d{2})/.exec(t || "");
   if (!m) return null;
-  let h = (parseInt(m[1], 10) + 1) % 24;
+  const h = (parseInt(m[1], 10) + 1) % 24;
   return pad(h) + m[2] + "00";
 };
 
-// Minimal Europe/London VTIMEZONE so timed viewings map to UK local time everywhere
+// Shorten property display names for calendar summaries
+const shortProp = (name) => {
+  if (!name) return name;
+  if (/hamlet/i.test(name)) return "Hamlet";
+  if (/amly/i.test(name))   return "Amly";
+  if (/glamp/i.test(name) || /camping/i.test(name)) return "Glamp";
+  return name;
+};
+
+// Minimal Europe/London VTIMEZONE
 const VTIMEZONE = [
   "BEGIN:VTIMEZONE",
   "TZID:Europe/London",
@@ -91,15 +99,18 @@ const VTIMEZONE = [
 ];
 
 exports.handler = async () => {
-  let bookings = [];
+  let bookings  = [];
   let enquiries = [];
-  try { bookings = (await sbGet(BOOKINGS_KEY)) || []; } catch (e) { bookings = []; }
+  let accom     = [];
+
+  try { bookings  = (await sbGet(BOOKINGS_KEY))  || []; } catch (e) { bookings = []; }
   try { enquiries = (await sbGet(ENQUIRIES_KEY)) || []; } catch (e) { enquiries = []; }
+  try { accom     = (await sbGet(ACCOM_KEY))     || []; } catch (e) { accom = []; }
 
   const stamp = dtStamp();
   const lines = [];
 
-  // Booking (event) VEVENTs — all-day on the event date
+  // ── 1. Wedding/event bookings — all-day ──────────────────────────────────
   bookings.forEach((b) => {
     if (!b || !b.date || !b.couple) return;
     const start = dateCompact(b.date);
@@ -107,18 +118,20 @@ exports.handler = async () => {
     const holding = (b.status === "Holding");
     const summary = (holding ? "[HOLD] " : "") + b.couple;
     const descParts = [];
-    if (b.status) descParts.push("Status: " + b.status);
+    if (b.status)     descParts.push("Status: " + b.status);
     if (b.mealGuests) descParts.push("Day guests: " + b.mealGuests);
-    if (b.eveGuests) descParts.push("Eve guests: " + b.eveGuests);
-    if (b.phone) descParts.push("Phone: " + b.phone);
-    if (b.email) descParts.push("Email: " + b.email);
+    if (b.eveGuests)  descParts.push("Eve guests: " + b.eveGuests);
+    if (b.phone)      descParts.push("Phone: " + b.phone);
+    if (b.email)      descParts.push("Email: " + b.email);
+    // Multi-day: use endDate if present
+    const endYmd = (b.endDate && b.endDate > b.date) ? b.endDate : b.date;
     lines.push("BEGIN:VEVENT");
     lines.push("UID:booking-" + (b.id != null ? b.id : start) + "@hawthbushfarm.co.uk");
     lines.push("DTSTAMP:" + stamp);
     lines.push("SEQUENCE:0");
     lines.push("STATUS:CONFIRMED");
     lines.push("DTSTART;VALUE=DATE:" + start);
-    lines.push("DTEND;VALUE=DATE:" + addDay(b.date));
+    lines.push("DTEND;VALUE=DATE:" + addDay(endYmd));
     lines.push(fold("SUMMARY:" + esc(summary)));
     if (descParts.length) lines.push(fold("DESCRIPTION:" + esc(descParts.join("\n"))));
     lines.push("CATEGORIES:Event");
@@ -126,7 +139,7 @@ exports.handler = async () => {
     lines.push("END:VEVENT");
   });
 
-  // Viewing VEVENTs from both bookings and enquiries
+  // ── 2. Viewings from bookings and enquiries ───────────────────────────────
   const pushViewing = (v, name, kind, srcId, vi) => {
     if (!v || !v.date) return;
     const start = dateCompact(v.date);
@@ -164,6 +177,47 @@ exports.handler = async () => {
     });
   });
 
+  // ── 3. Lettings bookings — one VEVENT per stay ────────────────────────────
+  accom.forEach((ab) => {
+    if (!ab || ab.status === "cancelled") return;
+    // Normalise: use stays[] if present, else treat flat booking as single stay
+    var stays = (ab.stays && ab.stays.length) ? ab.stays : [{
+      propertyId:   ab.propertyId,
+      propertyName: ab.propertyName,
+      checkIn:      ab.checkIn,
+      checkOut:     ab.checkOut,
+    }];
+    stays.forEach(function(s, si) {
+      if (!s.checkIn) return;
+      const startStr = dateCompact(s.checkIn);
+      if (startStr.length !== 8) return;
+      const endYmd   = s.checkOut || s.checkIn;
+      const propName = shortProp(s.propertyName || s.propertyId || "Accommodation");
+      const guest    = ab.guestName || "Guest";
+      const summary  = propName + ": " + guest;
+      const descParts = [];
+      if (ab.guestName)   descParts.push("Guest: " + ab.guestName);
+      if (ab.phone)       descParts.push("Phone: " + ab.phone);
+      if (ab.email)       descParts.push("Email: " + ab.email);
+      if (ab.guestCount)  descParts.push("Guests: " + ab.guestCount);
+      if (ab.source && ab.source !== "manual") descParts.push("Source: " + ab.source);
+      if (ab.bookingType) descParts.push("Type: " + ab.bookingType);
+      const uid = "accom-" + (ab.id || "x") + "-" + si + "@hawthbushfarm.co.uk";
+      lines.push("BEGIN:VEVENT");
+      lines.push("UID:" + uid);
+      lines.push("DTSTAMP:" + stamp);
+      lines.push("SEQUENCE:0");
+      lines.push("STATUS:CONFIRMED");
+      lines.push("DTSTART;VALUE=DATE:" + startStr);
+      lines.push("DTEND;VALUE=DATE:" + dateCompact(endYmd));
+      lines.push(fold("SUMMARY:" + esc(summary)));
+      if (descParts.length) lines.push(fold("DESCRIPTION:" + esc(descParts.join("\n"))));
+      lines.push("CATEGORIES:Lettings");
+      lines.push("TRANSP:OPAQUE");
+      lines.push("END:VEVENT");
+    });
+  });
+
   const ics = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -171,7 +225,7 @@ exports.handler = async () => {
     "CALSCALE:GREGORIAN",
     "X-WR-CALNAME:Hawthbush Farm",
     "X-WR-TIMEZONE:Europe/London",
-    "X-WR-CALDESC:Events and viewings at Hawthbush Farm",
+    "X-WR-CALDESC:Events\\, viewings and lettings bookings at Hawthbush Farm",
     "X-PUBLISHED-TTL:PT1H",
     "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
   ]
@@ -184,7 +238,7 @@ exports.handler = async () => {
     statusCode: 200,
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
-      "Content-Disposition": 'inline; filename="hawthbush-farm.ics"',
+      "Content-Disposition": "inline; filename=\"hawthbush-farm.ics\"",
       "Cache-Control": "public, max-age=600",
       "Access-Control-Allow-Origin": "*",
     },
