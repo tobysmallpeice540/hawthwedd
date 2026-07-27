@@ -483,7 +483,7 @@ function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
 }
 
 // Read-only panel: shows lettings bookings linked to a wedding event by date proximity
-function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking }) {
+function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking }) {
   var [hideUnlinked, setHideUnlinked] = useState(true); // default: show linked only
   var nearby = findLinkedAccom(eventDate, accomBookings, 7, eventEndDate);
   var explicitlyLinked = (accomBookings||[]).filter(function(b) {
@@ -533,19 +533,25 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
         var paidAmt = (b.schedule||[]).filter(function(s){ return s.paid; }).reduce(function(sum,s){ return sum+(Number(s.amount)||0); }, 0);
         var outstanding = (Number(b.value)||0) - paidAmt;
         var isLinked = canLink && String(b.linkedEventId) === String(eventId);
+        var canOpen = !!onOpenAccomBooking;
         return (
-          <div key={b.id} style={{ border:`1.5px solid ${isLinked ? T.accent : T.border}`, borderRadius:9, padding:"12px 14px", background: isLinked ? T.accentLight : "#fff" }}>
+          <div key={b.id}
+            onClick={canOpen ? function(){ onOpenAccomBooking(b.id); } : undefined}
+            title={canOpen ? "Open this lettings booking" : undefined}
+            style={{ border:`1.5px solid ${isLinked ? T.accent : T.border}`, borderRadius:9, padding:"12px 14px", background: isLinked ? T.accentLight : "#fff", cursor: canOpen ? "pointer" : "default" }}>
             {/* Header: checkbox + name + value */}
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                 {canLink && (
-                  <input type="checkbox" checked={isLinked} onChange={function(e) {
+                  <input type="checkbox" checked={isLinked}
+                    onClick={function(e){ e.stopPropagation(); }}
+                    onChange={function(e) {
                     var patch = { linkedEventId: e.target.checked ? eventId : null };
                     if (e.target.checked) patch.bookingType = "Wedding";
                     onSaveAccomBooking(b.id, patch);
                   }} style={{ width:16, height:16, accentColor:T.accent, cursor:"pointer", flexShrink:0 }} />
                 )}
-                <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>
+                <span style={{ fontWeight:700, color:T.text, fontSize:13, textDecoration: canOpen ? "underline" : "none", textDecorationStyle:"dotted", textDecorationColor:T.textLight }}>
                   {b.guestName || "(no name)"}
                   {b.bookingType && <span style={{ marginLeft:8, fontSize:11, fontWeight:600, color:T.accent, background:"#e0e7ff", padding:"1px 6px", borderRadius:6 }}>{b.bookingType}</span>}
                   {isLinked && <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.accent }}>Linked</span>}
@@ -3042,8 +3048,22 @@ export default function App() {
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking}
-          onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking}
+          onAutoSave={async(fd)=>{
+            if(!fd.couple||!fd.date) return;
+            let updated;
+            if(editId) {
+              updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b);
+            } else {
+              // First autosave of a brand-new booking: mint an id and remember it,
+              // so subsequent autosaves update this same record instead of creating duplicates
+              const newId=Math.max(0,...bookings.map(b=>b.id))+1;
+              updated=[...bookings,{...fd,id:newId}];
+              setEditId(newId);
+              setFormData(f=>({...f, id:newId}));
+            }
+            await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1));
+          }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
@@ -3618,10 +3638,32 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
+
+  // ── Autosave: silently persist the whole form ~1.5s after typing stops, so
+  // navigating away (e.g. to open a linked accom booking) never loses data.
+  const [autoSaveState, setAutoSaveState] = useState("idle"); // idle | saving | saved | error
+  const autoSaveTimerRef = useRef(null);
+  const autoSaveSkipFirstRef = useRef(true);
+  useEffect(function() {
+    // Skip the very first run (form just loaded — nothing to save yet)
+    if (autoSaveSkipFirstRef.current) { autoSaveSkipFirstRef.current = false; return; }
+    if (!onAutoSave) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(function() {
+      setAutoSaveState("saving");
+      Promise.resolve(onAutoSave(formData)).then(function() {
+        setAutoSaveState("saved");
+        setTimeout(function() { setAutoSaveState(function(s){ return s==="saved" ? "idle" : s; }); }, 2500);
+      }).catch(function() {
+        setAutoSaveState("error");
+      });
+    }, 1500);
+    return function() { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
+  }, [formData]);
 
   const countFilled = s => {
     if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
@@ -3670,6 +3712,14 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           <div style={{ marginTop:16, display:"flex", flexDirection:"column", gap:8 }}>
             <button onClick={onSubmit} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>{isEdit?"Save Changes":"Create Booking"}</button>
             <button onClick={onCancel} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+            {autoSaveState!=="idle" && (
+              <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", fontSize:11, fontWeight:600,
+                color: autoSaveState==="saving" ? T.textLight : autoSaveState==="error" ? T.red : T.green }}>
+                {autoSaveState==="saving" && "Saving…"}
+                {autoSaveState==="saved"  && "✓ All changes saved"}
+                {autoSaveState==="error"  && "Autosave failed — click Save Changes"}
+              </div>
+            )}
           </div>
         </div>
 
@@ -3842,7 +3892,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>
                   Lettings bookings with check-in within 7 days of this event date
                 </div>
-                <LinkedAccomPanel eventDate={formData.date} eventEndDate={formData.endDate} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking}/>
+                <LinkedAccomPanel eventDate={formData.date} eventEndDate={formData.endDate} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking} onOpenAccomBooking={onOpenAccomBooking}/>
               </div>
 
               {/* Payment notes */}
