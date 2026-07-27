@@ -105,20 +105,22 @@ const T = {
 };
 
 // ─── CONFIRM DIALOG ───────────────────────────────────────────────────────────
-function ConfirmDialog({ message, subMessage, confirmLabel="Delete", onConfirm, onCancel }) {
+function ConfirmDialog({ message, subMessage, confirmLabel="Delete", cancelLabel="Cancel", onConfirm, onCancel, icon="🗑", iconBg, confirmColor }) {
+  var iBg = iconBg || T.redBg;
+  var cColor = confirmColor || T.red;
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(15,30,60,.45)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}
       onClick={onCancel}>
       <div style={{ background:"#fff", borderRadius:12, padding:"28px 32px", maxWidth:400, width:"90%", boxShadow:"0 16px 48px rgba(0,0,0,.18)", border:`1px solid ${T.border}` }}
         onClick={e=>e.stopPropagation()}>
-        <div style={{ width:44, height:44, borderRadius:"50%", background:T.redBg, display:"flex", alignItems:"center", justifyContent:"center", marginBottom:16 }}>
-          <span style={{ fontSize:22 }}>🗑</span>
+        <div style={{ width:44, height:44, borderRadius:"50%", background:iBg, display:"flex", alignItems:"center", justifyContent:"center", marginBottom:16 }}>
+          <span style={{ fontSize:22 }}>{icon}</span>
         </div>
         <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:8 }}>{message}</div>
         {subMessage && <div style={{ fontSize:13, color:T.textMid, marginBottom:20, lineHeight:1.5 }}>{subMessage}</div>}
         <div style={{ display:"flex", gap:10, marginTop:20 }}>
-          <button onClick={onConfirm} style={{ flex:1, background:T.red, color:"#fff", border:"none", padding:"11px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>{confirmLabel}</button>
-          <button onClick={onCancel}  style={{ flex:1, background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"11px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Cancel</button>
+          <button onClick={onConfirm} style={{ flex:1, background:cColor, color:"#fff", border:"none", padding:"11px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>{confirmLabel}</button>
+          <button onClick={onCancel}  style={{ flex:1, background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"11px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>{cancelLabel}</button>
         </div>
       </div>
     </div>
@@ -482,6 +484,31 @@ function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
   });
 }
 
+// Attribute a booking's flat schedule[] (Deposit/Balance entries) to the individual
+// stays (properties) they belong to, so multi-property bookings can show each
+// stay's Dep/Bal badges on that stay's own row instead of a separate combined row.
+// Prefers an explicit sc.propertyId tag; falls back to splitting the schedule
+// into equal-sized ordered chunks (one per stay) for older untagged data; if
+// neither is possible, everything is returned as "leftover" so nothing is lost.
+function attributeScheduleToStays(schedule, stays) {
+  var sched = schedule || [];
+  if (!stays || stays.length <= 1) return { byStay: [sched], leftover: [] };
+  var hasTags = sched.some(function(sc) { return sc.propertyId; });
+  if (hasTags) {
+    var byStay = stays.map(function(s) {
+      return sched.filter(function(sc) { return sc.propertyId === s.propertyId; });
+    });
+    var leftover = sched.filter(function(sc) { return !sc.propertyId; });
+    return { byStay: byStay, leftover: leftover };
+  }
+  if (sched.length > 0 && sched.length % stays.length === 0) {
+    var chunkSize = sched.length / stays.length;
+    var byStayChunks = stays.map(function(s, i) { return sched.slice(i * chunkSize, (i + 1) * chunkSize); });
+    return { byStay: byStayChunks, leftover: [] };
+  }
+  return { byStay: stays.map(function() { return []; }), leftover: sched };
+}
+
 // Read-only panel: shows lettings bookings linked to a wedding event by date proximity
 function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking }) {
   var [hideUnlinked, setHideUnlinked] = useState(true); // default: show linked only
@@ -559,33 +586,35 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
               </div>
               <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>{fmtMoney(Number(b.value)||0)}</span>
             </div>
-            {/* Stay rows — each with inline Dep/Bal badges */}
-            {stays.map(function(s, i) {
-              var prop = (accomProperties||[]).find(function(p){ return p.id===s.propertyId; });
-              // Assign schedule items to this stay: if single stay show all, else show none inline (shown below)
-              var staySchedule = stays.length === 1 ? (b.schedule||[]) : [];
-              return (
-                <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4, flexWrap:"wrap" }}>
-                  {prop && <span style={{ width:8, height:8, borderRadius:"50%", background:prop.colour, display:"inline-block", flexShrink:0 }}/>}
-                  <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>{s.propertyName || s.propertyId}</span>
-                  <span style={{ fontSize:12, color:T.textMid }}>{fmtDate(s.checkIn)} – {fmtDate(s.checkOut)}</span>
-                  {s.nights ? <span style={{ fontSize:11, color:T.textLight }}>({s.nights}n)</span> : null}
-                  {staySchedule.map(function(sc, si) {
-                    return (
-                      <span key={si} style={{ fontSize:11, padding:"1px 7px", borderRadius:5, fontWeight:600,
-                        background: sc.paid ? T.greenBg : T.amberBg,
-                        color:      sc.paid ? T.green   : T.amber }}>
-                        {shortLabel(sc.label)}: {fmtMoney(Number(sc.amount)||0)}{sc.paid ? " paid" : sc.dueDate ? " due "+fmtDate(sc.dueDate) : ""}
-                      </span>
-                    );
-                  })}
-                </div>
-              );
-            })}
-            {/* For multi-property bookings show schedule below all stays */}
-            {stays.length > 1 && (b.schedule||[]).length > 0 && (
+            {/* Stay rows — each with its own Dep/Bal badges inline */}
+            {(function() {
+              var attributed = attributeScheduleToStays(b.schedule, stays);
+              return stays.map(function(s, i) {
+                var prop = (accomProperties||[]).find(function(p){ return p.id===s.propertyId; });
+                var staySchedule = stays.length === 1 ? (b.schedule||[]) : attributed.byStay[i];
+                return (
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4, flexWrap:"wrap" }}>
+                    {prop && <span style={{ width:8, height:8, borderRadius:"50%", background:prop.colour, display:"inline-block", flexShrink:0 }}/>}
+                    <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>{s.propertyName || s.propertyId}</span>
+                    <span style={{ fontSize:12, color:T.textMid }}>{fmtDate(s.checkIn)} – {fmtDate(s.checkOut)}</span>
+                    {s.nights ? <span style={{ fontSize:11, color:T.textLight }}>({s.nights}n)</span> : null}
+                    {staySchedule.map(function(sc, si) {
+                      return (
+                        <span key={si} style={{ fontSize:11, padding:"1px 7px", borderRadius:5, fontWeight:600,
+                          background: sc.paid ? T.greenBg : T.amberBg,
+                          color:      sc.paid ? T.green   : T.amber }}>
+                          {shortLabel(sc.label)}: {fmtMoney(Number(sc.amount)||0)}{sc.paid ? " paid" : sc.dueDate ? " due "+fmtDate(sc.dueDate) : ""}
+                        </span>
+                      );
+                    })}
+                  </div>
+                );
+              });
+            })()}
+            {/* Any schedule entries that couldn't be attributed to a specific stay */}
+            {stays.length > 1 && attributeScheduleToStays(b.schedule, stays).leftover.length > 0 && (
               <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginTop:4 }}>
-                {(b.schedule||[]).map(function(sc, si) {
+                {attributeScheduleToStays(b.schedule, stays).leftover.map(function(sc, si) {
                   return (
                     <span key={si} style={{ fontSize:11, padding:"1px 7px", borderRadius:5, fontWeight:600,
                       background: sc.paid ? T.greenBg : T.amberBg,
@@ -812,18 +841,18 @@ const DEFAULT_EMAIL_TEMPLATES = [
     id: "deposit_request",
     name: "Deposit Request",
     triggerLabel: "Days before deposit due date",
-    triggerDays: 7,
+    triggerDays: 3,
     subject: "Deposit Due – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThis is a reminder that your deposit is due for your upcoming stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDeposit due: £{{depositAmount}}\nDue date: {{depositDueDate}}\n\nPlease make payment at your earliest convenience.\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nThis is a reminder that your deposit is due for your upcoming stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDeposit due: £{{depositAmount}}\nDue date: {{depositDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
     id: "balance_request",
     name: "Balance Request",
     triggerLabel: "Days before balance due date",
-    triggerDays: 14,
+    triggerDays: 28,
     subject: "Balance Due – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nYour balance is now due ahead of your stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nBalance due: £{{balanceAmount}}\nDue date: {{balanceDueDate}}\n\nWe look forward to welcoming you!\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nYour balance is now due ahead of your stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nBalance due: £{{balanceAmount}}\nDue date: {{balanceDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWe look forward to welcoming you!\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -838,17 +867,21 @@ const DEFAULT_EMAIL_TEMPLATES = [
   {
     id: "arrival_general",
     name: "Arrival Info (General)",
-    triggerLabel: "Days before check-in (general bookings)",
-    triggerDays: 5,
+    triggerLabel: "Days before check-in (1st reminder)",
+    triggerDays: 28,
+    triggerLabel2: "Days before check-in (2nd reminder)",
+    triggerDays2: 3,
     subject: "Your Arrival at Hawthbush Farm – {{checkIn}}",
-    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}} in just a few days!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\nDuration: {{nights}} nights\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}}!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\nDuration: {{nights}} nights\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
     id: "arrival_event",
     name: "Arrival Info (Wedding/Event)",
-    triggerLabel: "Days before check-in (event/wedding bookings)",
-    triggerDays: 7,
+    triggerLabel: "Days before check-in (1st reminder)",
+    triggerDays: 28,
+    triggerLabel2: "Days before check-in (2nd reminder)",
+    triggerDays2: 3,
     subject: "Your Wedding Weekend at Hawthbush Farm – {{checkIn}}",
     body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\n\nYour event information pack and site map are attached. Please do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm",
     attachments: []
@@ -861,7 +894,7 @@ const EMAIL_TOKENS = [
   "{{checkIn}}", "{{checkOut}}", "{{nights}}",
   "{{checkInTime}}", "{{checkOutTime}}",
   "{{totalAmount}}", "{{depositAmount}}", "{{balanceAmount}}",
-  "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}"
+  "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}", "{{paymentLink}}"
 ];
 
 // ── Month timeline: one lane per property ────────────────────────────────────
@@ -1789,7 +1822,9 @@ function AccomImport({ onImported, saveBookings, bookings }) {
           Object.assign({}, s2, { value:0 }),
         ],
       });
-      var combinedSched = (b1.schedule||[]).concat(b2.schedule||[]);
+      var sched1 = (b1.schedule||[]).map(function(sc){ return Object.assign({}, sc, { propertyId: sc.propertyId || s1.propertyId }); });
+      var sched2 = (b2.schedule||[]).map(function(sc){ return Object.assign({}, sc, { propertyId: sc.propertyId || s2.propertyId }); });
+      var combinedSched = sched1.concat(sched2);
       if (combinedSched.length) merged.schedule = combinedSched;
       newBookings.push(merged);
       removeIds.add(b1.id); removeIds.add(b2.id);
@@ -2551,12 +2586,23 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px" }}>
             {/* Trigger days row (for timed templates) */}
             {tmpl.triggerDays !== null && (
-              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16, padding:"10px 14px", background:T.accentLight, borderRadius:8, border:`1px solid ${T.accent}30` }}>
-                <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{tmpl.triggerLabel}:</span>
-                <input type="number" min="0" max="365" value={tmpl.triggerDays || 0}
-                  onChange={function(e) { upd("triggerDays", parseInt(e.target.value) || 0); }}
-                  style={{ width:60, border:`1.5px solid ${T.border}`, borderRadius:6, padding:"5px 8px", fontFamily:"inherit", fontSize:13, textAlign:"center" }} />
-                <span style={{ fontSize:12, color:T.textLight }}>days before (set to 0 to disable)</span>
+              <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:16, padding:"10px 14px", background:T.accentLight, borderRadius:8, border:`1px solid ${T.accent}30` }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{tmpl.triggerLabel}:</span>
+                  <input type="number" min="0" max="365" value={tmpl.triggerDays || 0}
+                    onChange={function(e) { upd("triggerDays", parseInt(e.target.value) || 0); }}
+                    style={{ width:60, border:`1.5px solid ${T.border}`, borderRadius:6, padding:"5px 8px", fontFamily:"inherit", fontSize:13, textAlign:"center" }} />
+                  <span style={{ fontSize:12, color:T.textLight }}>days before (set to 0 to disable)</span>
+                </div>
+                {tmpl.triggerDays2 !== undefined && (
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{tmpl.triggerLabel2 || "2nd reminder"}:</span>
+                    <input type="number" min="0" max="365" value={tmpl.triggerDays2 || 0}
+                      onChange={function(e) { upd("triggerDays2", parseInt(e.target.value) || 0); }}
+                      style={{ width:60, border:`1.5px solid ${T.border}`, borderRadius:6, padding:"5px 8px", fontFamily:"inherit", fontSize:13, textAlign:"center" }} />
+                    <span style={{ fontSize:12, color:T.textLight }}>days before (set to 0 to disable)</span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2667,6 +2713,9 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   const [filterProp, setFilterProp] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [flash, setFlash]           = useState("");
+  const [askSendConfirm, setAskSendConfirm] = useState(null); // holds the just-created booking record, or null
+  const [sendingConfirm, setSendingConfirm] = useState(false);
+  const [askDeleteBooking, setAskDeleteBooking] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -2746,20 +2795,67 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       value: totalValue,
       stays: stays
     });
+    var isNew = !editId;
     var next = editId ? bookings.map(function(b){ return b.id===editId ? rec : b; }) : bookings.concat([rec]);
     await saveBookings(next);
     setTab("calendar"); setForm(null); setEditId(null);
+    // Newly-created manual booking with a guest email — offer to send the Booking Confirmed email
+    if (isNew && rec.email && rec.bookingType !== "Blocked") {
+      setAskSendConfirm(rec);
+    }
+  };
+  const sendBookingConfirmedEmail = async () => {
+    if (!askSendConfirm) return;
+    setSendingConfirm(true);
+    try {
+      await fetch("/.netlify/functions/send-accom-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: askSendConfirm.id, emailType: "booking_confirmed" }),
+      });
+      setFlash("Confirmation email sent");
+      setTimeout(function(){ setFlash(""); }, 2000);
+    } catch (e) {
+      console.error(e);
+      setFlash("Email send failed");
+      setTimeout(function(){ setFlash(""); }, 2500);
+    }
+    setSendingConfirm(false);
+    setAskSendConfirm(null);
   };
   const handleDelete = async () => {
     const next = bookings.filter(b=> b.id!==editId);
     await saveBookings(next);
-    setTab("calendar"); setForm(null); setEditId(null);
+    setTab("calendar"); setForm(null); setEditId(null); setAskDeleteBooking(false);
   };
 
   const subTabs = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"],["settings","Settings"]];
 
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"24px 28px" }}>
+      {askSendConfirm && (
+        <ConfirmDialog
+          message="Send booking confirmation email?"
+          subMessage={`Email "${askSendConfirm.guestName || "this guest"}" at ${askSendConfirm.email} to confirm their new booking.`}
+          confirmLabel={sendingConfirm ? "Sending…" : "Send Email"}
+          cancelLabel="Skip"
+          icon="✉️"
+          iconBg={T.accentLight}
+          confirmColor={T.accent}
+          onConfirm={sendBookingConfirmedEmail}
+          onCancel={()=>setAskSendConfirm(null)}
+        />
+      )}
+      {askDeleteBooking && (
+        <ConfirmDialog
+          message="Delete this booking?"
+          subMessage={`"${(form && form.guestName) || "This booking"}" will be permanently removed. This cannot be undone.`}
+          confirmLabel="Yes, Delete"
+          cancelLabel="Cancel"
+          onConfirm={handleDelete}
+          onCancel={()=>setAskDeleteBooking(false)}
+        />
+      )}
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
         <div>
           <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0 }}>Lettings</h2>
@@ -2797,7 +2893,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
-          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? handleDelete : null} />
+          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} />
         </div>
       )}
     </div>
@@ -3047,7 +3143,7 @@ export default function App() {
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
-        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking}/>}
+        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking}
           onAutoSave={async(fd)=>{
             if(!fd.couple||!fd.date) return;
@@ -3134,7 +3230,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
 }
 
 // ─── BOOKINGS LIST ────────────────────────────────────────────────────────────
-function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom }) {
+function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom, xeroToken }) {
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b=>b.date>=today);
   const past     = bookings.filter(b=>b.date<today);
@@ -3145,17 +3241,48 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
           style={{ flex:1, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 14px", outline:"none", boxShadow:"0 1px 3px rgba(37,99,235,.06)" }}/>
         <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} booking{bookings.length!==1?"s":""}</span>
       </div>
-      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom}/> : <>
-        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom}/>
-        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom}/>}
+      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken}/> : <>
+        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken}/>
+        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken}/>}
       </>}
       {bookings.length===0 && <div style={{ textAlign:"center", padding:60, color:T.textLight }}><p style={{ fontSize:18, marginBottom:16 }}>No bookings yet</p><button onClick={onNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 28px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:15 }}>Create First Booking</button></div>}
     </div>
   );
 }
 
-function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings, onOpenAccom }) {
+function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings, onOpenAccom, xeroToken }) {
   if(rows.length===0) return null;
+
+  // Bulk-fetch Xero invoices (one request covering every contact ID on this
+  // page) so the Payment column reflects real Xero data instead of the
+  // manually-typed deposit/2nd payment/final payment fields.
+  const [xeroInvoicesByContact, setXeroInvoicesByContact] = useState({});
+  const contactIds = rows.map(function(b){ return (b.xeroContactId||"").trim(); }).filter(Boolean);
+  const contactIdsKey = contactIds.slice().sort().join(",");
+
+  useEffect(function() {
+    if (!xeroToken || !contactIds.length) { setXeroInvoicesByContact({}); return; }
+    let cancelled = false;
+    (async function() {
+      try {
+        const data = await xeroFetch(`Invoices?ContactIDs=${contactIds.join(",")}&order=Date DESC`);
+        if (cancelled) return;
+        const byContact = {};
+        (data.Invoices||[]).forEach(function(inv){
+          const cid = inv.Contact && inv.Contact.ContactID;
+          if (!cid) return;
+          if (!byContact[cid]) byContact[cid] = [];
+          byContact[cid].push(inv);
+        });
+        setXeroInvoicesByContact(byContact);
+      } catch(e) {
+        console.warn("Xero invoice bulk fetch failed:", e.message);
+        if (!cancelled) setXeroInvoicesByContact({});
+      }
+    })();
+    return function(){ cancelled = true; };
+  }, [xeroToken?.access_token, contactIdsKey]);
+
   return (
     <div style={{ marginBottom:36 }}>
       <h3 style={{ color:T.midBlue, fontSize:11, letterSpacing:2, textTransform:"uppercase", marginBottom:10, fontWeight:700 }}>{label} ({rows.length})</h3>
@@ -3170,8 +3297,19 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
           </thead>
           <tbody>
             {rows.map((b,i)=>{
-              const paid=parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment);
-              const total=parseMoney(b.venueFee), balance=total-paid, isFullyPaid=total>0&&balance<=0;
+              const total=parseMoney(b.venueFee);
+              // Payment column reflects live Xero invoice data for this booking's
+              // contact, rather than the manually-typed deposit/2nd/final fields.
+              const xeroContactId = (b.xeroContactId||"").trim();
+              const xeroInvoices = xeroContactId ? xeroInvoicesByContact[xeroContactId] : null;
+              let payment;
+              if (!xeroToken || !xeroContactId || !xeroInvoices || xeroInvoices.length===0) {
+                payment = { mode:"na" };
+              } else {
+                const xTotal = xeroInvoices.reduce(function(s,inv){ return s+(Number(inv.Total)||0); }, 0);
+                const xDue   = xeroInvoices.reduce(function(s,inv){ return s+(Number(inv.AmountDue)||0); }, 0);
+                payment = { mode:"xero", due:xDue, isFullyPaid: xTotal>0 && xDue<=0.01 };
+              }
               const linkedAccom = (accomBookings||[]).filter(function(ab){ return ab.linkedEventId && String(ab.linkedEventId)===String(b.id); });
               // Keep each badge tied to its underlying accom booking id so it can be clicked through to open it
               const accomBadges = linkedAccom.map(function(ab) {
@@ -3222,7 +3360,9 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                         : <span style={{ color:T.textLight, fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 12px" }}>
-                    {total>0?(<span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:isFullyPaid?T.greenBg:balance>0?T.amberBg:T.redBg, color:isFullyPaid?T.green:balance>0?T.amber:T.red, fontWeight:600 }}>{isFullyPaid?"✓ Paid":balance>0?`£${balance.toLocaleString()} due`:"Overpaid"}</span>):<span style={{ color:T.textLight,fontSize:11 }}>—</span>}
+                    {payment.mode==="xero"
+                      ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:payment.isFullyPaid?T.greenBg:payment.due>0?T.amberBg:T.redBg, color:payment.isFullyPaid?T.green:payment.due>0?T.amber:T.red, fontWeight:600 }}>{payment.isFullyPaid?"✓ Paid":payment.due>0?`£${payment.due.toLocaleString()} due`:"Overpaid"}</span>
+                      : <span style={{ color:T.textLight, fontSize:11 }} title="No Xero invoices linked to this booking">N/A</span>}
                   </td>
                   <td style={{ padding:"10px 12px", minWidth:120 }}>
                     {(b.viewings||[]).length===0
