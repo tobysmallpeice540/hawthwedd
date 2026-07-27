@@ -139,6 +139,7 @@
 var SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 var SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 var CHECKOUT_FN   = "/.netlify/functions/create-accom-checkout";
+var SYNC_FN       = "/.netlify/functions/sync-all-icals";
 var MONTH_NAMES   = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 var DOW_LABELS    = ["M","T","W","T","F","S","S"];
 
@@ -646,33 +647,52 @@ function showSuccess(prop, ci, co) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 (function init() {
   var params = new URLSearchParams(window.location.search);
+
+  // Skip sync on the post-booking success/cancel return pages
   if (params.get("booked") === "1") {
     Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function() {
       showSuccess(params.get("prop"), params.get("ci"), params.get("co"));
     });
     return;
   }
-  Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function(results) {
-    var propsData  = results[0];
-    var accomData  = results[1];
-    S.properties = (propsData && propsData.length) ? propsData : [
-      { id:"hamlet",   name:"The Hamlet",  sleeps:14, colour:"#2563eb", depositPct:50, balanceWeeks:4, minNights:2, maxNights:28, baseRate:0, seasons:[] },
-      { id:"amly",     name:"Amly Barn",   sleeps:6,  colour:"#16a34a", depositPct:50, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] },
-      { id:"glamping", name:"Glamping",    sleeps:20, colour:"#9333ea", depositPct:20, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] }
-    ];
-    // normalise stays
-    S.bookings = (accomData || []).map(function(b) {
-      if (b.stays && b.stays.length) return b;
-      return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
+
+  function loadAndRender() {
+    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function(results) {
+      var propsData = results[0];
+      var accomData = results[1];
+      S.properties = (propsData && propsData.length) ? propsData : [
+        { id:"hamlet",   name:"The Hamlet",  sleeps:14, colour:"#2563eb", depositPct:50, balanceWeeks:4, minNights:2, maxNights:28, baseRate:0, seasons:[] },
+        { id:"amly",     name:"Amly Barn",   sleeps:6,  colour:"#16a34a", depositPct:50, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] },
+        { id:"glamping", name:"Glamping",    sleeps:20, colour:"#9333ea", depositPct:20, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] }
+      ];
+      S.bookings = (accomData || []).map(function(b) {
+        if (b.stays && b.stays.length) return b;
+        return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
+      });
+      buildAvailability();
+      if (params.get("cancelled") === "1") {
+        renderStep1();
+        document.getElementById("app").insertAdjacentHTML("afterbegin",
+          '<div class="alert alert-warn" style="margin-bottom:16px">Your booking was not completed &mdash; you have not been charged.</div>');
+      } else {
+        renderStep1();
+      }
     });
-    buildAvailability();
-    if (params.get("cancelled") === "1") {
-      renderStep1();
-      document.getElementById("app").insertAdjacentHTML("afterbegin",
-        '<div class="alert alert-warn" style="margin-bottom:16px">Your booking was not completed &mdash; you have not been charged.</div>');
-    } else {
-      renderStep1();
-    }
+  }
+
+  // Trigger an Airbnb iCal sync so availability is up to date before the
+  // guest sees the calendar. We race it against a 6-second timeout — if
+  // Airbnb is slow we fall through and show existing data rather than
+  // making the guest wait.
+  var syncDone = false;
+  var syncPromise = fetch(SYNC_FN, { method: "POST" })
+    .then(function() { syncDone = true; })
+    .catch(function() { syncDone = true; }); // silent failure — always proceed
+
+  var timeout = new Promise(function(resolve) { setTimeout(resolve, 6000); });
+
+  Promise.race([syncPromise, timeout]).then(function() {
+    return loadAndRender();
   }).catch(function(e) {
     console.error(e);
     mount('<div class="alert alert-error">Could not load availability. Please refresh the page.</div>');
