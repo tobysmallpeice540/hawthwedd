@@ -470,6 +470,7 @@ function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
   var win = windowDays || 7;
   return accomBookings.filter(function(b) {
     if (b.status === "cancelled") return false;
+    if (b.bookingType === "Blocked") return false; // not-available blocks aren't guest bookings
     var stays = (b.stays&&b.stays.length) ? b.stays : [b];
     return stays.some(function(s) {
       if (!s.checkIn) return false;
@@ -877,9 +878,11 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
 
   // Occupancy map: dateStr -> [property, ...]
   // Booking map:   dateStr -> [{booking, stay, prop}]  (for hover tooltip)
-  const occMap = {}, bookingMap = {};
+  // Blocked set:   "dateStr:propId" -> true, for manually blocked "not available" ranges
+  const occMap = {}, bookingMap = {}, blockedSet = new Set();
   bookings.forEach(b => {
     if (b.status === "cancelled") return;
+    const isBlocked = b.bookingType === "Blocked";
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
     stays.forEach(s => {
       if (!s.checkIn || !s.checkOut || !s.propertyId) return;
@@ -896,6 +899,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
         if (!occMap[ds].find(x=>x.id===prop.id)) occMap[ds].push(prop);
         if (!bookingMap[ds]) bookingMap[ds] = [];
         if (!bookingMap[ds].find(e=>e.booking.id===b.id&&e.prop.id===prop.id)) bookingMap[ds].push({ booking:b, stay:s, prop:prop });
+        if (isBlocked) blockedSet.add(ds + ":" + prop.id);
         d.setDate(d.getDate()+1);
       }
     });
@@ -989,7 +993,10 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       const chgProps = propsOn.filter(p => changeoverSet.has(ds + ":" + p.id));
                       const isChgover = chgProps.length > 0;
                       const cp0 = isChgover ? chgProps[0] : null;
-                      const bg = isChgover && cp0
+                      const allBlocked = propsOn.length > 0 && propsOn.every(p => blockedSet.has(ds + ":" + p.id));
+                      const bg = allBlocked
+                        ? "repeating-linear-gradient(135deg, #e2e8f0, #e2e8f0 4px, #eef2f7 4px, #eef2f7 8px)"
+                        : isChgover && cp0
                         ? "linear-gradient(135deg, " + darkenHex(cp0.colour, 60) + " 50%, " + cp0.colour + "44 50%)"
                         : propsOn.length === 1 ? propsOn[0].colour+"2a"
                         : propsOn.length > 1   ? propsOn[0].colour+"1e"
@@ -1012,8 +1019,9 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                           {(propsOn.length > 0 || hasEvent) && (
                             <div style={{ display:"flex", justifyContent:"center", gap:2, marginTop:2, flexWrap:"wrap" }}>
                               {propsOn.slice(0,3).map(function(p){
+                                const isPropBlocked = blockedSet.has(ds + ":" + p.id);
                                 return (
-                                  <span key={p.id} style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:p.colour, color:"#fff", fontSize:8, fontWeight:800, lineHeight:1 }}>
+                                  <span key={p.id} title={isPropBlocked ? p.name + " — not available" : p.name} style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background: isPropBlocked ? "#94a3b8" : p.colour, color:"#fff", fontSize:8, fontWeight:800, lineHeight:1 }}>
                                     {(p.id||p.name||"?")[0].toUpperCase()}
                                   </span>
                                 );
@@ -1091,6 +1099,10 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#ef4444", color:"#fff", fontSize:8, fontWeight:800 }}>E</span>
             Farm event
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#94a3b8", color:"#fff", fontSize:8, fontWeight:800 }}>×</span>
+            Blocked / not available
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{ width:12, height:12, borderRadius:2, background:"linear-gradient(135deg, #1040a0 50%, #3b82f633 50%)", display:"inline-block" }}/>
@@ -1207,14 +1219,16 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                     const g = barGeom(e.checkIn, e.checkOut);
                     const b = e.booking;
                     const airbnb = b.source==="airbnb";
+                    const blocked = b.bookingType==="Blocked";
                     return (
                       <div key={b.id+"-"+i} onClick={()=>onOpen(b)}
-                        title={`${b.guestName||"(no name)"} - ${fmtDate(e.checkIn)} to ${fmtDate(e.checkOut)}`}
+                        title={`${blocked ? "Not available" : (b.guestName||"(no name)")} - ${fmtDate(e.checkIn)} to ${fmtDate(e.checkOut)}`}
                         style={{ position:"absolute", left:g.left+2, top:8, width:g.width, height:28, borderRadius:6,
-                          background: airbnb ? "#fff" : p.colourBg, border:`1.5px ${airbnb?"dashed":"solid"} ${p.colour}`,
-                          color:p.colour, fontSize:11, fontWeight:600, padding:"0 6px", display:"flex", alignItems:"center",
+                          background: blocked ? "repeating-linear-gradient(135deg, #e2e8f0, #e2e8f0 4px, #eef2f7 4px, #eef2f7 8px)" : airbnb ? "#fff" : p.colourBg,
+                          border: blocked ? "1.5px solid #94a3b8" : `1.5px ${airbnb?"dashed":"solid"} ${p.colour}`,
+                          color: blocked ? "#64748b" : p.colour, fontSize:11, fontWeight:600, padding:"0 6px", display:"flex", alignItems:"center",
                           overflow:"hidden", whiteSpace:"nowrap", cursor:"pointer", opacity: b.status==="pending"?0.75:1 }}>
-                        {airbnb ? "Airbnb" : (b.guestName || "Booking")}
+                        {blocked ? "Not available" : airbnb ? "Airbnb" : (b.guestName || "Booking")}
                       </div>
                     );
                   })}
@@ -1254,6 +1268,29 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
 const navBtn = { width:36, height:36, borderRadius:8, border:`1.5px solid ${T.border}`, background:"#fff", color:T.text, fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" };
 
 // ── Booking list ─────────────────────────────────────────────────────────────
+// Short display label for a property (used in table headers / badges)
+function shortPropLabel(p) {
+  var n = (p && (p.name || p.id)) || "";
+  if (/hamlet/i.test(n)) return "Hamlet";
+  if (/amly/i.test(n)) return "Amly";
+  if (/glamp/i.test(n) || /camping/i.test(n)) return "Glamping";
+  return n.split(" ")[0] || n;
+}
+
+// Source label for a lettings booking: Manual / Website / Airbnb / Blocked
+function accomSourceLabel(b) {
+  if (b.bookingType === "Blocked") return "Blocked";
+  if (b.source === "airbnb") return "Airbnb";
+  if (b.source === "direct" || b.source === "website") return "Website";
+  return "Manual";
+}
+const ACCOM_SOURCE_META = {
+  Manual:  { bg:"#e0e7ff", text:"#4338ca" },
+  Website: { bg:"#dcfce7", text:"#15803d" },
+  Airbnb:  { bg:"#fee2e2", text:"#b91c1c" },
+  Blocked: { bg:"#f1f5f9", text:"#64748b" },
+};
+
 function AccomList({ properties, bookings, filterProp, setFilterProp, filterStatus, setFilterStatus, onOpen }) {
   const [showPast, setShowPast] = useState(false);
   const today = new Date().toISOString().slice(0,10);
@@ -1297,9 +1334,9 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
     return ids;
   };
 
-  // Build dynamic grid: Guest | per-property | Dates | Event | Status | Value | Paid
+  // Build dynamic grid: Guest | per-property | Dates | Source | Event | Status | Value | Paid
   const propCols = properties.map(function(){ return "0.55fr"; }).join(" ");
-  const gridTemplate = "1.5fr " + propCols + " 1.1fr 0.75fr 0.75fr 0.75fr 0.75fr";
+  const gridTemplate = "1.5fr " + propCols + " 1.1fr 0.7fr 0.75fr 0.75fr 0.75fr 0.75fr";
 
   const TableHeader = () => (
     <div style={{ display:"grid", gridTemplateColumns:gridTemplate, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
@@ -1308,11 +1345,12 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
         <div key={p.id} style={{ padding:"10px 4px", textAlign:"center" }}>
           <span title={p.name} style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11 }}>
             <span style={{ width:8, height:8, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
-            {p.name.split(" ")[0]}
+            {shortPropLabel(p)}
           </span>
         </div>
       ))}
       <div style={{ padding:"10px 12px" }}>Dates</div>
+      <div style={{ padding:"10px 12px" }}>Source</div>
       <div style={{ padding:"10px 12px" }}>Type</div>
       <div style={{ padding:"10px 12px" }}>Status</div>
       <div style={{ padding:"10px 12px" }}>Value</div>
@@ -1323,24 +1361,29 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
   const Row = ({ b, primary }) => {
     const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
     const bProps = bookedPropIds(b);
+    const srcLabel = accomSourceLabel(b);
+    const srcMeta = ACCOM_SOURCE_META[srcLabel] || ACCOM_SOURCE_META.Manual;
     return (
       <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:gridTemplate, borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
         <div style={{ padding:"11px 12px", fontWeight:600 }}>
-          {b.guestName || (b.source==="airbnb" ? "Airbnb block" : "(no name)")}
+          {b.guestName || (b.bookingType==="Blocked" ? "Not available" : b.source==="airbnb" ? "Airbnb block" : "(no name)")}
           {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
         </div>
         {properties.map(p=>(
           <div key={p.id} style={{ padding:"8px 4px", textAlign:"center" }}>
             {bProps.has(p.id)
-              ? <span style={{ width:14, height:14, borderRadius:3, background:p.colour, display:"inline-block", boxShadow:"0 1px 3px "+p.colour+"66" }} title={p.name}/>
+              ? <span style={{ width:14, height:14, borderRadius:3, background: b.bookingType==="Blocked" ? "#94a3b8" : p.colour, display:"inline-block", boxShadow:"0 1px 3px "+(b.bookingType==="Blocked"?"#94a3b8":p.colour)+"66" }} title={p.name}/>
               : <span style={{ width:14, height:14, borderRadius:3, border:`1.5px solid #e2e8f0`, display:"inline-block", background:"transparent" }}/>
             }
           </div>
         ))}
         <div style={{ padding:"11px 12px", fontSize:12 }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
         <div style={{ padding:"11px 12px" }}>
+          <span style={{ fontSize:11, fontWeight:700, color:srcMeta.text, background:srcMeta.bg, padding:"2px 7px", borderRadius:8 }}>{srcLabel}</span>
+        </div>
+        <div style={{ padding:"11px 12px" }}>
           {b.bookingType
-            ? <span style={{ fontSize:11, fontWeight:700, color:T.accent, background:T.accentLight, padding:"2px 7px", borderRadius:8 }}>{b.bookingType}</span>
+            ? <span style={{ fontSize:11, fontWeight:700, color: b.bookingType==="Blocked" ? "#64748b" : T.accent, background: b.bookingType==="Blocked" ? "#f1f5f9" : T.accentLight, padding:"2px 7px", borderRadius:8 }}>{b.bookingType}</span>
             : <span style={{ color:T.textLight, fontSize:11 }}>Let</span>}
         </div>
         <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
@@ -1441,6 +1484,11 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
 
   return (
     <div style={{ maxWidth:860 }}>
+      {form.bookingType === "Blocked" && (
+        <div style={{ marginBottom:16, padding:"10px 14px", background:"#f1f5f9", border:`1.5px solid #cbd5e1`, borderRadius:8, fontSize:12, color:T.textMid, lineHeight:1.5 }}>
+          This marks the property as unavailable for the selected dates. It won't be treated as a guest booking, and will sync out to Airbnb as blocked.
+        </div>
+      )}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:16 }}>
         <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Properties</span>
@@ -1461,10 +1509,15 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         </div>
         <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Booking type</span>
-          <select value={form.bookingType} onChange={e=>upd("bookingType", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
+          <select value={form.bookingType} onChange={function(e){
+            var v = e.target.value;
+            upd("bookingType", v);
+            if (v === "Blocked" && !form.guestName) upd("guestName", "Not available");
+          }} style={{ ...selStyle, padding:"9px 11px" }}>
             <option value="">Standard let</option>
             <option value="Wedding">Wedding</option>
             <option value="Owner">Owner / comp</option>
+            <option value="Blocked">Blocked (not available)</option>
           </select>
         </label>
         {(events && events.length > 0) && (
@@ -1934,6 +1987,38 @@ function AccomReport({ properties, bookings }) {
 }
 
 // ── Property settings editor ─────────────────────────────────────────────────
+// Weekday toggle row — used for allowed check-in / check-out days, at property
+// level and as an optional per-season override. Days are stored as an array of
+// 0=Mon..6=Sun indices; empty/undefined array means "no restriction, any day".
+const DOW_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+function DayToggles({ label, hint, value, onChange, compact }) {
+  const days = value || [];
+  const toggle = (i) => {
+    const next = days.includes(i) ? days.filter(d => d !== i) : days.concat([i]).sort();
+    onChange(next);
+  };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:compact?3:4 }}>
+      {label && <span style={{ fontSize:compact?10:11, color:T.textMid, fontWeight:600 }}>{label}</span>}
+      <div style={{ display:"flex", gap:4 }}>
+        {DOW_SHORT.map((d,i) => {
+          const on = days.includes(i);
+          return (
+            <button key={i} type="button" onClick={()=>toggle(i)}
+              title={d}
+              style={{ width:compact?24:28, height:compact?24:28, borderRadius:6, border:`1.5px solid ${on?T.accent:T.border}`,
+                background: on ? T.accent : "#fff", color: on ? "#fff" : T.textMid, fontSize:compact?10:11, fontWeight:700,
+                cursor:"pointer", fontFamily:"inherit", padding:0 }}>
+              {d[0]}
+            </button>
+          );
+        })}
+      </div>
+      {hint && <span style={{ fontSize:10, color:T.textLight }}>{days.length ? hint : "No restriction — any day allowed"}</span>}
+    </div>
+  );
+}
+
 function PropertyEditor({ properties, setProperties, onSave }) {
   const [openId, setOpenId] = useState(null);
   const [flash,  setFlash]  = useState("");
@@ -2019,27 +2104,35 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                 {/* ── Seasons ── */}
                 <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:8 }}>Seasons (override base rate for date ranges)</div>
                 {p.seasons && p.seasons.map((s, si) => (
-                  <div key={si} style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr auto", gap:8, marginBottom:8, alignItems:"end" }}>
-                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>Label</span>}
-                      <input value={s.label || ""} onChange={e => updSeason(p.id, si, "label", e.target.value)} style={inpStyle} placeholder="e.g. Peak summer" />
-                    </label>
-                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>From</span>}
-                      <input type="date" value={s.startDate || ""} onChange={e => updSeason(p.id, si, "startDate", e.target.value)} style={inpStyle} />
-                    </label>
-                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>To (exclusive)</span>}
-                      <input type="date" value={s.endDate || ""} onChange={e => updSeason(p.id, si, "endDate", e.target.value)} style={inpStyle} />
-                    </label>
-                    <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                      {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>£/night</span>}
-                      <input type="number" value={s.ratePerNight || ""} onChange={e => updSeason(p.id, si, "ratePerNight", Number(e.target.value))} style={inpStyle} placeholder="0" min="0" />
-                    </label>
-                    <button onClick={() => rmSeason(p.id, si)}
-                      style={{ background:T.redBg, color:T.red, border:"1px solid #fca5a5", borderRadius:6, padding:"0 12px", cursor:"pointer", fontFamily:"inherit", fontSize:12, height:36, alignSelf:"end" }}>
-                      Remove
-                    </button>
+                  <div key={si} style={{ marginBottom:12, paddingBottom:12, borderBottom: si < p.seasons.length-1 ? `1px dashed ${T.border}` : "none" }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr auto", gap:8, alignItems:"end" }}>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>Label</span>}
+                        <input value={s.label || ""} onChange={e => updSeason(p.id, si, "label", e.target.value)} style={inpStyle} placeholder="e.g. Peak summer" />
+                      </label>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>From</span>}
+                        <input type="date" value={s.startDate || ""} onChange={e => updSeason(p.id, si, "startDate", e.target.value)} style={inpStyle} />
+                      </label>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>To (exclusive)</span>}
+                        <input type="date" value={s.endDate || ""} onChange={e => updSeason(p.id, si, "endDate", e.target.value)} style={inpStyle} />
+                      </label>
+                      <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>£/night</span>}
+                        <input type="number" value={s.ratePerNight || ""} onChange={e => updSeason(p.id, si, "ratePerNight", Number(e.target.value))} style={inpStyle} placeholder="0" min="0" />
+                      </label>
+                      <button onClick={() => rmSeason(p.id, si)}
+                        style={{ background:T.redBg, color:T.red, border:"1px solid #fca5a5", borderRadius:6, padding:"0 12px", cursor:"pointer", fontFamily:"inherit", fontSize:12, height:36, alignSelf:"end" }}>
+                        Remove
+                      </button>
+                    </div>
+                    <div style={{ display:"flex", gap:24, marginTop:8, paddingLeft:2 }}>
+                      <DayToggles compact label="Check-in days override" value={s.checkInDays}
+                        onChange={(v)=>updSeason(p.id, si, "checkInDays", v)} />
+                      <DayToggles compact label="Check-out days override" value={s.checkOutDays}
+                        onChange={(v)=>updSeason(p.id, si, "checkOutDays", v)} />
+                    </div>
                   </div>
                 ))}
                 <button onClick={() => addSeason(p.id)}
@@ -2049,7 +2142,7 @@ function PropertyEditor({ properties, setProperties, onSave }) {
 
                 {/* ── Booking rules ── */}
                 <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:10 }}>Booking rules</div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:16 }}>
                   <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
                     <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Min nights</span>
                     <input type="number" value={p.minNights || ""} onChange={e => updProp(p.id, "minNights", Number(e.target.value))} style={inpStyle} min="1" />
@@ -2058,7 +2151,19 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                     <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Max nights</span>
                     <input type="number" value={p.maxNights || ""} onChange={e => updProp(p.id, "maxNights", Number(e.target.value))} style={inpStyle} min="1" />
                   </label>
+                  <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Booking window (months ahead)</span>
+                    <input type="number" value={p.bookingHorizonMonths || ""} onChange={e => updProp(p.id, "bookingHorizonMonths", Number(e.target.value))} style={inpStyle} placeholder="e.g. 6 — blank = no limit" min="0" />
+                  </label>
                 </div>
+
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20, marginBottom:18, padding:"12px 14px", background:T.bgInput, borderRadius:8, border:`1px solid ${T.border}` }}>
+                  <DayToggles label="Allowed check-in days" hint="Only these days can be selected as an arrival day on the public calendar"
+                    value={p.checkInDays} onChange={(v)=>updProp(p.id, "checkInDays", v)} />
+                  <DayToggles label="Allowed check-out days" hint="Stay lengths that would land checkout on another day are hidden"
+                    value={p.checkOutDays} onChange={(v)=>updProp(p.id, "checkOutDays", v)} />
+                </div>
+
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:6 }}>
                   <div style={{ background:T.accentLight, borderRadius:8, padding:"10px 14px" }}>
                     <div style={{ fontSize:10, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:8 }}>General bookings</div>
@@ -2590,6 +2695,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   };
 
   const openNew  = () => { setForm(blankAccom()); setEditId(null); setTab("form"); };
+  const openNewBlock = () => { setForm(Object.assign({}, blankAccom(), { bookingType:"Blocked", guestName:"Not available" })); setEditId(null); setTab("form"); };
   const openEdit = (b) => {
     var editStays;
     if (b.stays && b.stays.length) {
@@ -2647,6 +2753,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
         </div>
         <div style={{ display:"flex", gap:10, alignItems:"center" }}>
           {flash && <span style={{ fontSize:12, fontWeight:600, color:T.green }}>{flash}</span>}
+          <button onClick={openNewBlock} style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"10px 16px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>+ Block dates</button>
           <button onClick={openNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>+ New booking</button>
         </div>
       </div>
