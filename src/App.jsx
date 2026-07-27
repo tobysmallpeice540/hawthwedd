@@ -483,12 +483,15 @@ function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
 
 // Read-only panel: shows lettings bookings linked to a wedding event by date proximity
 function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking }) {
+  var [hideUnlinked, setHideUnlinked] = useState(false);
   var nearby = findLinkedAccom(eventDate, accomBookings, 7, eventEndDate);
   // Also include any explicitly linked bookings that might be outside 7-day window
   var explicitlyLinked = (accomBookings||[]).filter(function(b) {
     return b.linkedEventId && String(b.linkedEventId) === String(eventId) && !nearby.find(function(n){ return n.id===b.id; });
   });
   var allBookings = nearby.concat(explicitlyLinked);
+  var hasAnyLinked = allBookings.some(function(b){ return String(b.linkedEventId) === String(eventId); });
+  var visibleBookings = hideUnlinked ? allBookings.filter(function(b){ return String(b.linkedEventId) === String(eventId); }) : allBookings;
 
   if (!allBookings.length) return (
     <div style={{ fontSize:12, color:T.textLight, background:T.bgInput, borderRadius:8, padding:"12px 14px", lineHeight:1.6 }}>
@@ -501,12 +504,20 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-      {canLink && (
-        <div style={{ fontSize:11, color:T.textMid, background:T.bgInput, borderRadius:7, padding:"7px 12px" }}>
-          Tick a booking to confirm it is attached to this event.
-        </div>
-      )}
-      {allBookings.map(function(b) {
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+        {canLink && (
+          <div style={{ fontSize:11, color:T.textMid, background:T.bgInput, borderRadius:7, padding:"7px 12px" }}>
+            Tick a booking to confirm it is attached to this event.
+          </div>
+        )}
+        {hasAnyLinked && canLink && (
+          <label style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:12, color:T.text, fontWeight:600, padding:"6px 12px", background: hideUnlinked ? T.accentLight : T.bgInput, borderRadius:7, border:`1.5px solid ${hideUnlinked ? T.accent : T.border}` }}>
+            <input type="checkbox" checked={hideUnlinked} onChange={function(e){ setHideUnlinked(e.target.checked); }} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }} />
+            Show linked only
+          </label>
+        )}
+      </div>
+      {visibleBookings.map(function(b) {
         var stays = (b.stays&&b.stays.length) ? b.stays : [b];
         var paidAmt = (b.schedule||[]).filter(function(s){ return s.paid; }).reduce(function(sum,s){ return sum+(Number(s.amount)||0); }, 0);
         var outstanding = (Number(b.value)||0) - paidAmt;
@@ -970,11 +981,17 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                           <div style={{ fontSize:12, fontWeight:propsOn.length||hasEvent?700:400,
                             color: isSat||isSun ? T.accent : T.text, lineHeight:"1.3" }}>{day}</div>
                           {(propsOn.length > 0 || hasEvent) && (
-                            <div style={{ display:"flex", justifyContent:"center", gap:2, marginTop:2 }}>
-                              {propsOn.slice(0,3).map(p=>(
-                                <span key={p.id} style={{ width:5, height:5, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
-                              ))}
-                              {hasEvent && <span style={{ width:5, height:5, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>}
+                            <div style={{ display:"flex", justifyContent:"center", gap:2, marginTop:2, flexWrap:"wrap" }}>
+                              {propsOn.slice(0,3).map(function(p){
+                                return (
+                                  <span key={p.id} style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:p.colour, color:"#fff", fontSize:8, fontWeight:800, lineHeight:1 }}>
+                                    {(p.name||"?")[0].toUpperCase()}
+                                  </span>
+                                );
+                              })}
+                              {hasEvent && (
+                                <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#ef4444", color:"#fff", fontSize:8, fontWeight:800, lineHeight:1 }}>E</span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1033,15 +1050,17 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
         {/* Legend */}
         <div style={{ display:"flex", gap:18, flexWrap:"wrap", alignItems:"center", padding:"10px 14px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, fontSize:12, color:T.textMid }}>
           <span style={{ fontWeight:700, color:T.text, fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>Key:</span>
-          {properties.map(p=>(
-            <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5 }}>
-              <span style={{ width:12, height:12, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
-              <span style={{ width:7, height:7, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
-              {p.name}
-            </span>
-          ))}
+          {properties.map(function(p){
+            return (
+              <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5 }}>
+                <span style={{ width:12, height:12, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
+                <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:p.colour, color:"#fff", fontSize:8, fontWeight:800 }}>{(p.name||"?")[0].toUpperCase()}</span>
+                {p.name}
+              </span>
+            );
+          })}
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ width:7, height:7, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>
+            <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#ef4444", color:"#fff", fontSize:8, fontWeight:800 }}>E</span>
             Farm event
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
@@ -3813,15 +3832,15 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
     <div style={{ paddingTop:28 }}>
       <div style={{ marginBottom:22, display:"flex", gap:8, flexWrap:"wrap" }}>
         {types.map(t=>(
-          <button key={t.id} onClick={()=>setReportType(t.id)} style={{ background:activeType===t.id?T.midBlue:"#fff", color:activeType===t.id?"#fff":T.textMid, border:`1.5px solid ${activeType===t.id?T.midBlue:T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:activeType===t.id?700:400 }}>{t.label}</button>
+          <button key={t.id} onClick={()=>{ if(t.id==="accommodation"){ setView("lettings"); } else { setReportType(t.id); } }}
+            style={{ background:activeType===t.id?T.midBlue:"#fff", color:activeType===t.id?"#fff":T.textMid, border:`1.5px solid ${activeType===t.id?T.midBlue:T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:activeType===t.id?700:400 }}>{t.label}</button>
         ))}
       </div>
-      {activeType==="summary"       && <SummaryReport bookings={bookings}/>}
-      {activeType==="calendar"       && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
-      {activeType==="accommodation" && <AccommodationReport bookings={bookings} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]}/>}
-      {activeType==="staffing"      && <StaffingRota bookings={bookings} staff={staff}/>}
-      {activeType==="hours"          && <HoursReport bookings={bookings} staff={staff}/>}
-      {activeType==="timeline"        && <StaffTimelineReport bookings={bookings} staff={staff}/>}
+      {activeType==="summary"   && <SummaryReport bookings={bookings}/>}
+      {activeType==="calendar"  && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
+      {activeType==="staffing"  && <StaffingRota bookings={bookings} staff={staff}/>}
+      {activeType==="hours"     && <HoursReport bookings={bookings} staff={staff}/>}
+      {activeType==="timeline"  && <StaffTimelineReport bookings={bookings} staff={staff}/>}
     </div>
   );
 }
