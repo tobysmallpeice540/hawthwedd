@@ -48,6 +48,21 @@ function parseDate(s) {
   return m[1] + "-" + m[2] + "-" + m[3];
 }
 
+// RFC5545 line folding: continuation lines start with a single space or tab.
+// Airbnb's DESCRIPTION field (which carries the reservation URL) is long enough
+// to get folded, so we need to unfold before reading fields off it.
+function unfoldIcal(text) {
+  return (text || "").replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
+}
+
+function unescapeIcalText(s) {
+  return (s || "")
+    .replace(/\\n/g, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\\\\/g, "\\");
+}
+
 function getField(block, field) {
   var re = new RegExp("^" + field + "[^:]*:(.+)$", "im");
   var m = block.match(re);
@@ -63,8 +78,9 @@ function isIgnorableBlock(summary) {
 }
 
 function parseIcal(text) {
+  var unfolded = unfoldIcal(text);
   var events = [];
-  var parts = text.split("BEGIN:VEVENT");
+  var parts = unfolded.split("BEGIN:VEVENT");
   for (var i = 1; i < parts.length; i++) {
     var block = parts[i];
     var uid     = getField(block, "UID")     || "";
@@ -73,7 +89,9 @@ function parseIcal(text) {
     var end     = parseDate(getField(block, "DTEND")   || "");
     if (!start || !end) continue;
     if (isIgnorableBlock(summary)) continue;
-    events.push({ uid: uid, summary: summary, start: start, end: end });
+    // DESCRIPTION carries "Reservation URL: ...\nPhone Number (Last 4 Digits): ...."
+    var description = unescapeIcalText(getField(block, "DESCRIPTION") || "");
+    events.push({ uid: uid, summary: summary, start: start, end: end, description: description });
   }
   return events;
 }
@@ -125,7 +143,7 @@ async function syncProperty(prop, bookings, now) {
       discountCode:     "",
       discountAmount:   0,
       schedule:         [],
-      notes:            "Auto-synced from Airbnb iCal (" + now.slice(0,10) + ")",
+      notes:            fe.description || ("Auto-synced from Airbnb iCal (" + now.slice(0,10) + ")"),
       createdAt:        now,
       airbnbUid:        fe.uid
     });
