@@ -1,5 +1,47 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
+// ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
+// Pure viewport-width detection (no device/user-agent sniffing) — recalculates
+// on resize, so rotating a phone or resizing a browser window both work.
+const MOBILE_BREAKPOINT = 768;
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth <= MOBILE_BREAKPOINT : false));
+  useEffect(function() {
+    function onResize() { setIsMobile(window.innerWidth <= MOBILE_BREAKPOINT); }
+    window.addEventListener("resize", onResize);
+    return function() { window.removeEventListener("resize", onResize); };
+  }, []);
+  return isMobile;
+}
+
+// Global responsive stylesheet. Rather than hand-editing every one of the
+// app's inline-styled layouts, this uses attribute selectors to reflow the
+// most common patterns on narrow screens:
+//  - multi-column CSS grids collapse to a single column (except the 7-day
+//    calendar grids, which must always stay at 7 columns)
+//  - flex rows that don't already opt into wrapping get to wrap
+//  - anything wrapping a <table> becomes horizontally scrollable
+// Mounted once near the app root.
+function MobileGlobalStyles() {
+  return (
+    <style>{`
+      @media (max-width: ${MOBILE_BREAKPOINT}px) {
+        html, body, #root { overflow-x: hidden; }
+        .app-shell { padding-left: 10px !important; padding-right: 10px !important; }
+        [style*="grid-template-columns"]:not([style*="repeat(7"]) {
+          grid-template-columns: 1fr !important;
+        }
+        [style*="display:flex"]:not([style*="flex-wrap"]),
+        [style*="display: flex"]:not([style*="flex-wrap"]) {
+          flex-wrap: wrap !important;
+        }
+        div:has(> table) { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+        table { min-width: 600px; }
+      }
+    `}</style>
+  );
+}
+
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
@@ -2832,7 +2874,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   const subTabs = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"],["settings","Settings"]];
 
   return (
-    <div style={{ maxWidth:1200, margin:"0 auto", padding:"24px 28px" }}>
+    <div className="app-shell" style={{ maxWidth:1200, margin:"0 auto", padding:"24px 28px" }}>
       {askSendConfirm && (
         <ConfirmDialog
           message="Send booking confirmation email?"
@@ -3139,9 +3181,10 @@ export default function App() {
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
+      <MobileGlobalStyles/>
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
-      <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
+      <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking}
@@ -3195,11 +3238,58 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
   ];
   const isXeroConnected  = !!xeroToken;
   const isGmailConnected = !!gmailToken;
+  const isMobile = useIsMobile();
+  const [menuOpen, setMenuOpen] = useState(false);
   // "calendar" virtual tab is active when we're on lettings (it switches to lettings calendar sub-tab)
   function isActive(t) {
     if (t.id === "calendar") return false; // never highlight calendar; lettings tab is the real home
     return view === t.id;
   }
+  const connectButtons = (
+    <>
+      {isXeroConnected
+        ? <button onClick={onXeroDisconnect} title="Disconnect Xero" style={{ background:"#e6f7fd", border:"1px solid #13B5EA", color:"#0e8ab0", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}><span style={{ color:"#13B5EA" }}>✓</span> Xero</button>
+        : <button onClick={onXeroConnect} style={{ background:"#13B5EA", border:"none", color:"#fff", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Connect Xero</button>
+      }
+      {isGmailConnected
+        ? <button onClick={onGmailDisconnect} title="Disconnect Gmail" style={{ background:"#fef2f2", border:"1px solid #fca5a5", color:"#dc2626", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}><span style={{ color:"#ea4335" }}>✓</span> Gmail</button>
+        : <button onClick={onGmailConnect} style={{ background:"#ea4335", border:"none", color:"#fff", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Connect Gmail</button>
+      }
+    </>
+  );
+
+  if (isMobile) {
+    return (
+      <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, boxShadow:"0 2px 12px rgba(37,99,235,.08)", position:"relative" }}>
+        <div style={{ padding:"0 14px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <div style={{ display:"flex", alignItems:"center", padding:"8px 0" }}>
+            <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:38, width:"auto", imageRendering:"crisp-edges" }} />
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"8px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>+ New</button>
+            <button onClick={()=>setMenuOpen(function(v){ return !v; })} aria-label="Menu"
+              style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:6, width:38, height:38, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, color:T.text }}>
+              {menuOpen ? "✕" : "☰"}
+            </button>
+          </div>
+        </div>
+        {menuOpen && (
+          <div style={{ position:"absolute", top:"100%", left:0, right:0, background:"#fff", borderBottom:`2px solid ${T.border}`, boxShadow:"0 8px 20px rgba(0,0,0,.12)", zIndex:50, maxHeight:"80vh", overflowY:"auto" }}>
+            <nav style={{ display:"flex", flexDirection:"column", padding:"6px 0" }}>
+              {tabs.map(t=>(
+                <button key={t.id} onClick={function(){ setMenuOpen(false); if (t.virtual) onCalendarTab(); else setView(t.id); }}
+                  style={{ background: isActive(t) ? T.accentLight : "none", border:"none", borderLeft: isActive(t) ? `3px solid ${T.accent}` : "3px solid transparent", color:isActive(t)?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:15, fontWeight:isActive(t)?700:400, padding:"13px 18px", textAlign:"left", cursor:"pointer" }}>{t.label}</button>
+              ))}
+            </nav>
+            <div style={{ display:"flex", gap:8, padding:"12px 18px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+              {connectButtons}
+            </div>
+          </div>
+        )}
+      </header>
+    );
+  }
+
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -3210,16 +3300,8 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
           <button key={t.id} onClick={t.virtual ? onCalendarTab : ()=>setView(t.id)}
             style={{ background:"none", border:"none", color:isActive(t)?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:isActive(t)?700:400, padding:"22px 20px 18px", cursor:"pointer", borderBottom:isActive(t)?`3px solid ${T.accent}`:"3px solid transparent", transition:"all .2s", letterSpacing:.2 }}>{t.label}</button>
         ))}
-        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", paddingRight:8 }}>
-          {isXeroConnected
-            ? <button onClick={onXeroDisconnect} title="Disconnect Xero" style={{ background:"#e6f7fd", border:"1px solid #13B5EA", color:"#0e8ab0", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}><span style={{ color:"#13B5EA" }}>✓</span> Xero</button>
-            : <button onClick={onXeroConnect} style={{ background:"#13B5EA", border:"none", color:"#fff", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Connect Xero</button>
-          }
-          <div style={{ width:1, height:20, background:T.border, margin:"0 6px" }}/>
-          {isGmailConnected
-            ? <button onClick={onGmailDisconnect} title="Disconnect Gmail" style={{ background:"#fef2f2", border:"1px solid #fca5a5", color:"#dc2626", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}><span style={{ color:"#ea4335" }}>✓</span> Gmail</button>
-            : <button onClick={onGmailConnect} style={{ background:"#ea4335", border:"none", color:"#fff", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Connect Gmail</button>
-          }
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6, paddingRight:8 }}>
+          {connectButtons}
         </div>
       </nav>
       <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)", flexShrink:0 }}>
@@ -3248,6 +3330,64 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
       {bookings.length===0 && <div style={{ textAlign:"center", padding:60, color:T.textLight }}><p style={{ fontSize:18, marginBottom:16 }}>No bookings yet</p><button onClick={onNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 28px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:15 }}>Create First Booking</button></div>}
     </div>
   );
+}
+
+// Small presentational pieces shared between BookingTable's desktop <table>
+// rows and its mobile card layout. Kept at module scope (not nested inside
+// BookingTable) so they aren't redefined as new component types every render.
+function AccomBadgeList({ accomBadges, onOpenAccom }) {
+  return accomBadges.length===0 ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
+    : accomBadges.map(function(entry){
+        return entry.labels.map(function(lbl){
+          return (
+            <span key={entry.id+"-"+lbl}
+              onClick={function(e){ e.stopPropagation(); if (onOpenAccom) onOpenAccom(entry.id); }}
+              title="Open lettings booking"
+              style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600, cursor: onOpenAccom ? "pointer" : "default", textDecoration: onOpenAccom ? "underline" : "none", textDecorationStyle:"dotted" }}>
+              {lbl}
+            </span>
+          );
+        });
+      });
+}
+
+function BookingStatusBadge({ b }) {
+  return b.status==="Holding"
+    ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:"#fef9c3", color:"#854d0e", fontWeight:600 }}>Holding</span>
+    : b.status==="Confirmed"
+      ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:T.greenBg, color:T.green, fontWeight:600 }}>Confirmed</span>
+      : <span style={{ color:T.textLight, fontSize:11 }}>—</span>;
+}
+
+function BookingPaymentBadge({ payment }) {
+  return payment.mode==="xero"
+    ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:payment.isFullyPaid?T.greenBg:payment.due>0?T.amberBg:T.redBg, color:payment.isFullyPaid?T.green:payment.due>0?T.amber:T.red, fontWeight:600 }}>{payment.isFullyPaid?"✓ Paid":payment.due>0?`£${payment.due.toLocaleString()} due`:"Overpaid"}</span>
+    : <span style={{ color:T.textLight, fontSize:11 }} title="No Xero invoices linked to this booking">N/A</span>;
+}
+
+function BookingFileTicks({ b }) {
+  const bFiles = b.files||[];
+  const has = (type) => bFiles.some(f=>f.docType===type);
+  const Tick = ({label,short}) => (
+    <span title={label} style={{ display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:20,borderRadius:4,marginRight:2,fontSize:9,fontWeight:700,background:has(label)?T.greenBg:"#f1f5f9",color:has(label)?T.green:T.textLight,border:`1px solid ${has(label)?"#86efac":T.border}` }}>{short}</span>
+  );
+  return <div style={{display:"flex",alignItems:"center",gap:1}}>
+    <Tick label="Event Booking Form" short="EBF"/>
+    <Tick label="Accommodation Booking Form" short="ABF"/>
+    <Tick label="Event Timesheet" short="TS"/>
+  </div>;
+}
+
+function BookingViewingsList({ b }) {
+  return (b.viewings||[]).length===0
+    ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
+    : <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+        {[...(b.viewings||[])].sort((a,z)=>a.date>z.date?1:-1).map((v,i)=>(
+          <div key={i} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", whiteSpace:"nowrap", fontWeight:600 }}>
+            📅 {v.date}{v.time?" "+v.time:""}
+          </div>
+        ))}
+      </div>;
 }
 
 function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings, onOpenAccom, xeroToken }) {
@@ -3283,6 +3423,76 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
     return function(){ cancelled = true; };
   }, [xeroToken?.access_token, contactIdsKey]);
 
+  const isMobile = useIsMobile();
+
+  // Compute the extra per-row data (accom badges, payment status) once,
+  // shared between the desktop table and the mobile card layout below.
+  const rowsData = rows.map(function(b) {
+    const total = parseMoney(b.venueFee);
+    const xeroContactId = (b.xeroContactId||"").trim();
+    const xeroInvoices = xeroContactId ? xeroInvoicesByContact[xeroContactId] : null;
+    let payment;
+    if (!xeroToken || !xeroContactId || !xeroInvoices || xeroInvoices.length===0) {
+      payment = { mode:"na" };
+    } else {
+      const xTotal = xeroInvoices.reduce(function(s,inv){ return s+(Number(inv.Total)||0); }, 0);
+      const xDue   = xeroInvoices.reduce(function(s,inv){ return s+(Number(inv.AmountDue)||0); }, 0);
+      payment = { mode:"xero", due:xDue, isFullyPaid: xTotal>0 && xDue<=0.01 };
+    }
+    const linkedAccom = (accomBookings||[]).filter(function(ab){ return ab.linkedEventId && String(ab.linkedEventId)===String(b.id); });
+    const accomBadges = linkedAccom.map(function(ab) {
+      var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
+      var labels = stays.map(function(s){
+        var n = s.propertyName || s.propertyId || "Accom";
+        if (/hamlet/i.test(n)) return "Hamlet";
+        if (/amly/i.test(n)) return "Amly";
+        if (/glamp/i.test(n) || /camping/i.test(n)) return "Glamp";
+        return n;
+      }).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
+      return { id: ab.id, labels: labels };
+    });
+    return { b: b, total: total, payment: payment, accomBadges: accomBadges };
+  });
+
+  if (isMobile) {
+    return (
+      <div style={{ marginBottom:28 }}>
+        <h3 style={{ color:T.midBlue, fontSize:11, letterSpacing:2, textTransform:"uppercase", marginBottom:10, fontWeight:700 }}>{label} ({rows.length})</h3>
+        <div style={{ display:"flex", flexDirection:"column", gap:10, opacity:dimmed?.65:1 }}>
+          {rowsData.map(function({ b, total, payment, accomBadges }) {
+            return (
+              <div key={b.id} onClick={()=>onEdit(b.id)}
+                style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:"0 2px 8px rgba(37,99,235,.06)", padding:"12px 14px", cursor:"pointer" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                  <div>
+                    <div style={{ fontWeight:700, color:T.text, fontSize:15 }}>{b.couple||"—"}</div>
+                    <div style={{ fontSize:12, color:T.accent, fontWeight:600, marginTop:2 }}>
+                      {b.date?fmtDate(b.date)+(b.endDate&&b.endDate>b.date?" – "+fmtDate(b.endDate):""):"—"}
+                      {" · "}<DayBadge dateStr={b.date}/>
+                    </div>
+                  </div>
+                  <BookingStatusBadge b={b}/>
+                </div>
+                <div style={{ fontSize:12, color:T.textMid, marginBottom:8 }}>{b.eventType||"—"}</div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 16px", fontSize:12, color:T.textMid, marginBottom:8 }}>
+                  <span>Day guests: <strong style={{ color:T.text }}>{b.mealGuests||"—"}</strong></span>
+                  <span>Eve guests: <strong style={{ color:T.text }}>{b.eveGuests||"—"}</strong></span>
+                  <span>Venue fee: <strong style={{ color:T.text }}>{total>0?`£${total.toLocaleString()}`:"—"}</strong></span>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, paddingTop:8, borderTop:`1px solid ${T.border}` }}>
+                  <div onClick={e=>e.stopPropagation()}><AccomBadgeList accomBadges={accomBadges} onOpenAccom={onOpenAccom}/></div>
+                  <BookingPaymentBadge payment={payment}/>
+                </div>
+                {(b.viewings||[]).length>0 && <div style={{ marginTop:8 }}><BookingViewingsList b={b}/></div>}
+                <div style={{ marginTop:8 }}><BookingFileTicks b={b}/></div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ marginBottom:36 }}>
       <h3 style={{ color:T.midBlue, fontSize:11, letterSpacing:2, textTransform:"uppercase", marginBottom:10, fontWeight:700 }}>{label} ({rows.length})</h3>
@@ -3296,33 +3506,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
             </tr>
           </thead>
           <tbody>
-            {rows.map((b,i)=>{
-              const total=parseMoney(b.venueFee);
-              // Payment column reflects live Xero invoice data for this booking's
-              // contact, rather than the manually-typed deposit/2nd/final fields.
-              const xeroContactId = (b.xeroContactId||"").trim();
-              const xeroInvoices = xeroContactId ? xeroInvoicesByContact[xeroContactId] : null;
-              let payment;
-              if (!xeroToken || !xeroContactId || !xeroInvoices || xeroInvoices.length===0) {
-                payment = { mode:"na" };
-              } else {
-                const xTotal = xeroInvoices.reduce(function(s,inv){ return s+(Number(inv.Total)||0); }, 0);
-                const xDue   = xeroInvoices.reduce(function(s,inv){ return s+(Number(inv.AmountDue)||0); }, 0);
-                payment = { mode:"xero", due:xDue, isFullyPaid: xTotal>0 && xDue<=0.01 };
-              }
-              const linkedAccom = (accomBookings||[]).filter(function(ab){ return ab.linkedEventId && String(ab.linkedEventId)===String(b.id); });
-              // Keep each badge tied to its underlying accom booking id so it can be clicked through to open it
-              const accomBadges = linkedAccom.map(function(ab) {
-                var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
-                var labels = stays.map(function(s){
-                  var n = s.propertyName || s.propertyId || "Accom";
-                  if (/hamlet/i.test(n)) return "Hamlet";
-                  if (/amly/i.test(n)) return "Amly";
-                  if (/glamp/i.test(n) || /camping/i.test(n)) return "Glamp";
-                  return n;
-                }).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
-                return { id: ab.id, labels: labels };
-              });
+            {rowsData.map(function({ b, total, payment, accomBadges }, i) {
               return (
                 <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s", cursor:"pointer" }}
                   onClick={()=>onEdit(b.id)}
@@ -3338,57 +3522,19 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.eveGuests||"—"}</td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.text, fontWeight:500 }}>{total>0?`£${total.toLocaleString()}`:"—"}</td>
                   <td style={{ padding:"10px 12px" }} onClick={e=>e.stopPropagation()}>
-                    {accomBadges.length===0 ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
-                      : accomBadges.map(function(entry){
-                          return entry.labels.map(function(lbl){
-                            return (
-                              <span key={entry.id+"-"+lbl}
-                                onClick={function(){ if (onOpenAccom) onOpenAccom(entry.id); }}
-                                title="Open lettings booking"
-                                style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600, cursor: onOpenAccom ? "pointer" : "default", textDecoration: onOpenAccom ? "underline" : "none", textDecorationStyle:"dotted" }}>
-                                {lbl}
-                              </span>
-                            );
-                          });
-                        })}
+                    <AccomBadgeList accomBadges={accomBadges} onOpenAccom={onOpenAccom}/>
                   </td>
                   <td style={{ padding:"10px 12px" }}>
-                    {b.status==="Holding"
-                      ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:"#fef9c3", color:"#854d0e", fontWeight:600 }}>Holding</span>
-                      : b.status==="Confirmed"
-                        ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:T.greenBg, color:T.green, fontWeight:600 }}>Confirmed</span>
-                        : <span style={{ color:T.textLight, fontSize:11 }}>—</span>}
+                    <BookingStatusBadge b={b}/>
                   </td>
                   <td style={{ padding:"10px 12px" }}>
-                    {payment.mode==="xero"
-                      ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:payment.isFullyPaid?T.greenBg:payment.due>0?T.amberBg:T.redBg, color:payment.isFullyPaid?T.green:payment.due>0?T.amber:T.red, fontWeight:600 }}>{payment.isFullyPaid?"✓ Paid":payment.due>0?`£${payment.due.toLocaleString()} due`:"Overpaid"}</span>
-                      : <span style={{ color:T.textLight, fontSize:11 }} title="No Xero invoices linked to this booking">N/A</span>}
+                    <BookingPaymentBadge payment={payment}/>
                   </td>
                   <td style={{ padding:"10px 12px", minWidth:120 }}>
-                    {(b.viewings||[]).length===0
-                      ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
-                      : <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                          {[...(b.viewings||[])].sort((a,z)=>a.date>z.date?1:-1).map((v,i)=>(
-                            <div key={i} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", whiteSpace:"nowrap", fontWeight:600 }}>
-                              📅 {v.date}{v.time?" "+v.time:""}
-                            </div>
-                          ))}
-                        </div>
-                    }
+                    <BookingViewingsList b={b}/>
                   </td>
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                    {(()=>{
-                      const bFiles = b.files||[];
-                      const has = (type) => bFiles.some(f=>f.docType===type);
-                      const Tick = ({label,short}) => (
-                        <span title={label} style={{ display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:20,borderRadius:4,marginRight:2,fontSize:9,fontWeight:700,background:has(label)?T.greenBg:"#f1f5f9",color:has(label)?T.green:T.textLight,border:`1px solid ${has(label)?"#86efac":T.border}` }}>{short}</span>
-                      );
-                      return <div style={{display:"flex",alignItems:"center",gap:1}}>
-                        <Tick label="Event Booking Form" short="EBF"/>
-                        <Tick label="Accommodation Booking Form" short="ABF"/>
-                        <Tick label="Event Timesheet" short="TS"/>
-                      </div>;
-                    })()}
+                    <BookingFileTicks b={b}/>
                   </td>
                 </tr>
               );
