@@ -479,27 +479,50 @@ function findLinkedAccom(eventDate, accomBookings, windowDays) {
 }
 
 // Read-only panel: shows lettings bookings linked to a wedding event by date proximity
-function LinkedAccomPanel({ eventDate, accomBookings, accomProperties }) {
-  var linked = findLinkedAccom(eventDate, accomBookings, 7);
-  if (!linked.length) return (
+function LinkedAccomPanel({ eventDate, eventId, accomBookings, accomProperties, onSaveAccomBooking }) {
+  var nearby = findLinkedAccom(eventDate, accomBookings, 7);
+  // Also include any explicitly linked bookings that might be outside 7-day window
+  var explicitlyLinked = (accomBookings||[]).filter(function(b) {
+    return b.linkedEventId && String(b.linkedEventId) === String(eventId) && !nearby.find(function(n){ return n.id===b.id; });
+  });
+  var allBookings = nearby.concat(explicitlyLinked);
+
+  if (!allBookings.length) return (
     <div style={{ fontSize:12, color:T.textLight, background:T.bgInput, borderRadius:8, padding:"12px 14px", lineHeight:1.6 }}>
       No lettings bookings found within 7 days of this event.
       To link one, go to Lettings, add or edit a booking, and set its check-in near this event date.
     </div>
   );
+
+  var canLink = !!(eventId && onSaveAccomBooking);
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-      {linked.map(function(b) {
+      {canLink && (
+        <div style={{ fontSize:11, color:T.textMid, background:T.bgInput, borderRadius:7, padding:"7px 12px" }}>
+          Tick a booking to confirm it is attached to this event.
+        </div>
+      )}
+      {allBookings.map(function(b) {
         var stays = (b.stays&&b.stays.length) ? b.stays : [b];
         var paidAmt = (b.schedule||[]).filter(function(s){ return s.paid; }).reduce(function(sum,s){ return sum+(Number(s.amount)||0); }, 0);
         var outstanding = (Number(b.value)||0) - paidAmt;
+        var isLinked = canLink && String(b.linkedEventId) === String(eventId);
         return (
-          <div key={b.id} style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"12px 14px", background:"#fff" }}>
+          <div key={b.id} style={{ border:`1.5px solid ${isLinked ? T.accent : T.border}`, borderRadius:9, padding:"12px 14px", background: isLinked ? T.accentLight : "#fff" }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
-              <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>
-                {b.guestName || "(no name)"}
-                {b.bookingType && <span style={{ marginLeft:8, fontSize:11, fontWeight:600, color:T.accent, background:T.accentLight, padding:"1px 6px", borderRadius:6 }}>{b.bookingType}</span>}
-              </span>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                {canLink && (
+                  <input type="checkbox" checked={isLinked} onChange={function(e) {
+                    onSaveAccomBooking(b.id, { linkedEventId: e.target.checked ? eventId : null });
+                  }} style={{ width:16, height:16, accentColor:T.accent, cursor:"pointer", flexShrink:0 }} />
+                )}
+                <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>
+                  {b.guestName || "(no name)"}
+                  {b.bookingType && <span style={{ marginLeft:8, fontSize:11, fontWeight:600, color:T.accent, background:"#e0e7ff", padding:"1px 6px", borderRadius:6 }}>{b.bookingType}</span>}
+                  {isLinked && <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.accent }}>Linked</span>}
+                </span>
+              </div>
               <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>{fmtMoney(Number(b.value)||0)}</span>
             </div>
             {stays.map(function(s, i) {
@@ -1313,7 +1336,7 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
 const selStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 11px", outline:"none", cursor:"pointer" };
 
 // ── Add / edit form ──────────────────────────────────────────────────────────
-function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel, onDelete }) {
+function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onCancel, onDelete }) {
   var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
   var selPropIds = formStays.map(function(s){ return s.propertyId; });
   var totalValue = formStays.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
@@ -1358,7 +1381,7 @@ function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel,
 
   return (
     <div style={{ maxWidth:860 }}>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:16 }}>
         <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Properties</span>
           <div style={{ display:"flex", gap:14, flexWrap:"wrap", padding:"10px 12px", background:T.bgInput, borderRadius:8, border:`1.5px solid ${T.border}` }}>
@@ -1384,6 +1407,24 @@ function AccomForm({ properties, discountCodes, form, setForm, onSave, onCancel,
             <option value="Owner">Owner / comp</option>
           </select>
         </label>
+        {(events && events.length > 0) && (
+          <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+            <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Link to farm event</span>
+            <select value={form.linkedEventId || ""} onChange={function(e){ upd("linkedEventId", e.target.value ? Number(e.target.value) : null); }} style={{ ...selStyle, padding:"9px 11px" }}>
+              <option value="">No event link</option>
+              {(events||[]).slice().sort(function(a,b){ return a.date>b.date?1:-1; }).map(function(ev) {
+                return (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.date} — {ev.couple || ev.bookingType || "Event"}{ev.eventType ? " (" + ev.eventType + ")" : ""}
+                  </option>
+                );
+              })}
+            </select>
+            {form.linkedEventId && (
+              <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>Linked to event #{form.linkedEventId}</span>
+            )}
+          </label>
+        )}
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
@@ -2573,7 +2614,7 @@ function LettingsView({ events }) {
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
-          <AccomForm properties={properties} discountCodes={discountCodes} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? handleDelete : null} />
+          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? handleDelete : null} />
         </div>
       )}
     </div>
@@ -2724,6 +2765,14 @@ export default function App() {
   const saveBookings = useCallback(async data=>{ setBookings(data); try{await sbSet(BOOKING_STORAGE, data);}catch(e){console.error(e);} },[]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
 
+  const saveAccomBooking = useCallback(async (bookingId, patch) => {
+    setAccomBookings(function(prev) {
+      var next = prev.map(function(b) { return b.id===bookingId ? Object.assign({}, b, patch) : b; });
+      sbSet(ACCOM_STORAGE, next).catch(function(e){ console.error(e); });
+      return next;
+    });
+  }, []);
+
   const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
 
   const safeArr = v => Array.isArray(v) ? v : [];
@@ -2812,7 +2861,7 @@ export default function App() {
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking}
           onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
@@ -3350,7 +3399,7 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -3574,7 +3623,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>
                   Lettings bookings with check-in within 7 days of this event date
                 </div>
-                <LinkedAccomPanel eventDate={formData.date} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]}/>
+                <LinkedAccomPanel eventDate={formData.date} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking}/>
               </div>
 
               {/* Payment notes */}
