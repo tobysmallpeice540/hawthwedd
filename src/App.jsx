@@ -3037,7 +3037,13 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
               const linkedAccom = (accomBookings||[]).filter(function(ab){ return ab.linkedEventId && String(ab.linkedEventId)===String(b.id); });
               const accomBadges = linkedAccom.map(function(ab) {
                 var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
-                return stays.map(function(s){ return s.propertyName || s.propertyId || "Accom"; });
+                return stays.map(function(s){
+                  var n = s.propertyName || s.propertyId || "Accom";
+                  if (/hamlet/i.test(n)) return "Hamlet";
+                  if (/amly/i.test(n)) return "Amly";
+                  if (/glamp/i.test(n) || /camping/i.test(n)) return "Glamp";
+                  return n;
+                });
               }).reduce(function(a,b){ return a.concat(b); }, []).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
               return (
                 <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s", cursor:"pointer" }}
