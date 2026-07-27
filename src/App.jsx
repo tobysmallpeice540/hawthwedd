@@ -463,9 +463,10 @@ function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData,
 }
 
 // Find lettings bookings whose check-in falls within windowDays of an event date
-function findLinkedAccom(eventDate, accomBookings, windowDays) {
+function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
   if (!eventDate || !accomBookings) return [];
-  var eDate = new Date(eventDate+"T00:00:00");
+  var eStart = new Date(eventDate+"T00:00:00");
+  var eEnd = (eventEndDate && eventEndDate > eventDate) ? new Date(eventEndDate+"T00:00:00") : eStart;
   var win = windowDays || 7;
   return accomBookings.filter(function(b) {
     if (b.status === "cancelled") return false;
@@ -473,14 +474,16 @@ function findLinkedAccom(eventDate, accomBookings, windowDays) {
     return stays.some(function(s) {
       if (!s.checkIn) return false;
       var ci = new Date(s.checkIn+"T00:00:00");
-      return Math.abs((ci-eDate)/86400000) <= win;
+      var co = s.checkOut ? new Date(s.checkOut+"T00:00:00") : ci;
+      // Match if stay overlaps the event window
+      return ci <= new Date(eEnd.getTime() + win*86400000) && co >= new Date(eStart.getTime() - win*86400000);
     });
   });
 }
 
 // Read-only panel: shows lettings bookings linked to a wedding event by date proximity
-function LinkedAccomPanel({ eventDate, eventId, accomBookings, accomProperties, onSaveAccomBooking }) {
-  var nearby = findLinkedAccom(eventDate, accomBookings, 7);
+function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking }) {
+  var nearby = findLinkedAccom(eventDate, accomBookings, 7, eventEndDate);
   // Also include any explicitly linked bookings that might be outside 7-day window
   var explicitlyLinked = (accomBookings||[]).filter(function(b) {
     return b.linkedEventId && String(b.linkedEventId) === String(eventId) && !nearby.find(function(n){ return n.id===b.id; });
@@ -572,7 +575,7 @@ const ACCOM_GUESTS_STORAGE   = "hbf_accom_guests_v1";
 const EMAIL_LOG_STORAGE      = "hbf_email_log_v1";
 const DISCOUNT_CODES_STORAGE  = "hbf_discount_codes_v1";
 const EMAIL_TEMPLATES_STORAGE = "hbf_email_templates_v1";
-const SITE_URL = "https://cool-sorbet-b1d599.netlify.app";
+const SITE_URL = "https://hawthbushfarm.netlify.app";
 
 const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
 
@@ -865,10 +868,19 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
   const eventDates = new Set();
   const eventByDate = {};
   (events || []).forEach(function(e) {
-    if (e.date && e.date.startsWith(String(year))) {
-      eventDates.add(e.date);
-      if (!eventByDate[e.date]) eventByDate[e.date] = [];
-      eventByDate[e.date].push(e);
+    if (!e.date) return;
+    var start = e.date;
+    var end = (e.endDate && e.endDate > start) ? e.endDate : start;
+    var cur = new Date(start + "T00:00:00");
+    var endD = new Date(end + "T00:00:00");
+    while (cur <= endD) {
+      var ds = cur.getFullYear() + "-" + String(cur.getMonth()+1).padStart(2,"0") + "-" + String(cur.getDate()).padStart(2,"0");
+      if (ds.startsWith(String(year))) {
+        eventDates.add(ds);
+        if (!eventByDate[ds]) eventByDate[ds] = [];
+        if (!eventByDate[ds].find(function(x){ return x.id===e.id; })) eventByDate[ds].push(e);
+      }
+      cur.setDate(cur.getDate() + 1);
     }
   });
 
@@ -2773,7 +2785,7 @@ export default function App() {
     });
   }, []);
 
-  const emptyBooking = ()=>({ couple:"", date:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+  const emptyBooking = ()=>({ couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -2963,7 +2975,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
                   onClick={()=>onEdit(b.id)}
                   onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                  <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?fmtDate(b.date):"—"}</td>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?fmtDate(b.date)+(b.endDate&&b.endDate>b.date?" – "+fmtDate(b.endDate):""):"—"}</td>
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date}/></td>
                   <td style={{ padding:"10px 12px", maxWidth:180 }}>
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
@@ -3429,7 +3441,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           </div>
           {(formData.date || formData.eventType) && (
             <div style={{ fontSize:12, color:T.textMid, marginTop:2, display:"flex", alignItems:"center", gap:8 }}>
-              {formData.date && <span>{fmtDate(formData.date)}</span>}
+              {formData.date && <span>{fmtDate(formData.date)}{formData.endDate && formData.endDate > formData.date ? " – " + fmtDate(formData.endDate) : ""}</span>}
               {formData.eventType && <span style={{ background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"1px 7px", fontSize:11, fontWeight:600 }}>{formData.eventType}</span>}
             </div>
           )}
@@ -3623,7 +3635,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>
                   Lettings bookings with check-in within 7 days of this event date
                 </div>
-                <LinkedAccomPanel eventDate={formData.date} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking}/>
+                <LinkedAccomPanel eventDate={formData.date} eventEndDate={formData.endDate} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking}/>
               </div>
 
               {/* Payment notes */}
@@ -3640,9 +3652,24 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <div key={field.key} style={{ gridColumn:field.type==="textarea"?"1 / -1":"auto" }}>
                   <FLabel required={field.required}>{field.label}</FLabel>
                   {field.key==="date" ? (
-                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                      <FInput type="date" value={formData[field.key]} onChange={v=>update(field.key,v)}/>
-                      <DayBadge dateStr={formData.date} style={{ fontSize:13, padding:"6px 12px" }}/>
+                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <FInput type="date" value={formData.date} onChange={v=>update("date",v)}/>
+                        <DayBadge dateStr={formData.date} style={{ fontSize:13, padding:"6px 12px" }}/>
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <div style={{ fontSize:12, fontWeight:600, color:T.textMid, width:80, flexShrink:0 }}>End date</div>
+                        <FInput type="date" value={formData.endDate||""} onChange={v=>update("endDate",v)}/>
+                        {formData.endDate && formData.endDate > formData.date && (
+                          <span style={{ fontSize:12, color:T.textMid }}>
+                            {Math.round((new Date(formData.endDate+"T00:00:00") - new Date(formData.date+"T00:00:00")) / 86400000)} day(s)
+                          </span>
+                        )}
+                        {formData.endDate && (
+                          <button type="button" onClick={function(){ update("endDate",""); }}
+                            style={{ fontSize:11, color:T.red, background:"none", border:"none", cursor:"pointer", fontFamily:"inherit", padding:"2px 6px" }}>clear</button>
+                        )}
+                      </div>
                     </div>
                   ) : field.type==="select" ? (
                     <select value={formData[field.key]||""} onChange={e=>update(field.key,e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
@@ -3950,11 +3977,21 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
   const openEnquiry = (id) => { if (onSelectEnquiry) onSelectEnquiry(id); };
   const openViewing = (v) => { if (v.source==="booking") openBooking(v.sourceId); else openEnquiry(v.sourceId); };
 
-  // Index bookings by date string
+  // Index bookings by date string — multi-day events fill every day in range
   const byDate = {};
-  bookings.filter(b=>b.date&&b.couple&&b.date.startsWith(year)).forEach(b=>{
-    byDate[b.date] = byDate[b.date] || [];
-    byDate[b.date].push(b);
+  bookings.filter(b=>b.date&&b.couple&&b.date.startsWith(year)).forEach(function(b) {
+    var start = b.date;
+    var end = (b.endDate && b.endDate > start) ? b.endDate : start;
+    var cur = new Date(start + "T00:00:00");
+    var endD = new Date(end + "T00:00:00");
+    while (cur <= endD) {
+      var ds = cur.getFullYear() + "-" + String(cur.getMonth()+1).padStart(2,"0") + "-" + String(cur.getDate()).padStart(2,"0");
+      if (ds.startsWith(year)) {
+        byDate[ds] = byDate[ds] || [];
+        if (!byDate[ds].find(function(x){ return x.id===b.id; })) byDate[ds].push(b);
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
   });
 
   // Collect all viewings from bookings and enquiries (with source id for click-through)
@@ -4163,7 +4200,7 @@ function AccommodationReport({ bookings, accomBookings, accomProperties }) {
 
   // For each event, find linked lettings bookings (check-in within 7 days)
   var rowsWithAccom = rows.map(function(b) {
-    return { event:b, linked: findLinkedAccom(b.date, accomBookings, 7) };
+    return { event:b, linked: findLinkedAccom(b.date, accomBookings, 7, b.endDate) };
   });
 
   // Stats: count events that have at least one linked accom booking + total revenue
