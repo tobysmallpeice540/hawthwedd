@@ -79,7 +79,7 @@ exports.handler = async function(event) {
   const checkOut = primaryStay.checkOut;
 
   // Determine origin for success/cancel URLs
-  const origin = event.headers["origin"] || event.headers["referer"] || "https://cool-sorbet-b1d599.netlify.app";
+  const origin = event.headers["origin"] || event.headers["referer"] || "https://hawthbushfarm.netlify.app";
   const baseUrl = origin.replace(/\/$/, "");
 
   try {
