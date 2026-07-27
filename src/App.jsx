@@ -2645,7 +2645,7 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
 }
 
 // ── Main Lettings view ───────────────────────────────────────────────────────
-function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType }) {
+function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType, focusBookingId, clearFocusBooking }) {
   const [properties, setProperties]         = useState(INITIAL_PROPERTIES);
   const [bookings, setBookings]             = useState([]);
   const [guests, setGuests]                 = useState([]);
@@ -2712,6 +2712,14 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     setForm(Object.assign({}, blankAccom(pIds[0]), b, { propertyIds:pIds, propertyId:pIds[0], stays:editStays, extras:(b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }));
     setEditId(b.id); setTab("form");
   };
+
+  // Deep-link: open a specific accom booking when arriving via the Bookings accommodation column
+  useEffect(function() {
+    if (!focusBookingId || !loaded) return;
+    var target = bookings.find(function(b) { return String(b.id) === String(focusBookingId); });
+    if (target) openEdit(target);
+    if (clearFocusBooking) clearFocusBooking();
+  }, [focusBookingId, loaded, bookings]);
 
   const handleSave = async () => {
     var rawStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
@@ -2900,11 +2908,14 @@ export default function App() {
   const [editStaffId, setEditStaffId] = useState(null);
   const [staffForm, setStaffForm]     = useState(null);
   const [focusEnquiryId, setFocusEnquiryId] = useState(null);
+  const [focusAccomBookingId, setFocusAccomBookingId] = useState(null);
   const [accomBookings, setAccomBookings]     = useState([]);
   const [accomProperties, setAccomProperties] = useState([]);
 
   // Navigate straight to a specific enquiry's detail page (used from Viewings + Year Calendar)
   const goToEnquiry = (id) => { setFocusEnquiryId(id); setView("enquiries"); };
+  // Navigate straight to a specific lettings booking (used from the Bookings accommodation column)
+  const goToAccomBooking = (id) => { setFocusAccomBookingId(id); setView("lettings"); };
 
   useEffect(()=>{
     (async()=>{
@@ -3030,13 +3041,13 @@ export default function App() {
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
-        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings}/>}
+        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking}
           onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType}/>}
+        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)}/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
@@ -3103,7 +3114,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
 }
 
 // ─── BOOKINGS LIST ────────────────────────────────────────────────────────────
-function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings }) {
+function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom }) {
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b=>b.date>=today);
   const past     = bookings.filter(b=>b.date<today);
@@ -3114,16 +3125,16 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
           style={{ flex:1, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 14px", outline:"none", boxShadow:"0 1px 3px rgba(37,99,235,.06)" }}/>
         <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} booking{bookings.length!==1?"s":""}</span>
       </div>
-      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff} accomBookings={accomBookings}/> : <>
-        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff} accomBookings={accomBookings}/>
-        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff} accomBookings={accomBookings}/>}
+      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom}/> : <>
+        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom}/>
+        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom}/>}
       </>}
       {bookings.length===0 && <div style={{ textAlign:"center", padding:60, color:T.textLight }}><p style={{ fontSize:18, marginBottom:16 }}>No bookings yet</p><button onClick={onNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 28px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:15 }}>Create First Booking</button></div>}
     </div>
   );
 }
 
-function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings }) {
+function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings, onOpenAccom }) {
   if(rows.length===0) return null;
   return (
     <div style={{ marginBottom:36 }}>
@@ -3132,7 +3143,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Day Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Viewings","Files"].map(h=>(
+              {["Date","Day","Couple / Event","Event Type","Day Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Viewings","Files"].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -3142,16 +3153,18 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
               const paid=parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment);
               const total=parseMoney(b.venueFee), balance=total-paid, isFullyPaid=total>0&&balance<=0;
               const linkedAccom = (accomBookings||[]).filter(function(ab){ return ab.linkedEventId && String(ab.linkedEventId)===String(b.id); });
+              // Keep each badge tied to its underlying accom booking id so it can be clicked through to open it
               const accomBadges = linkedAccom.map(function(ab) {
                 var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
-                return stays.map(function(s){
+                var labels = stays.map(function(s){
                   var n = s.propertyName || s.propertyId || "Accom";
                   if (/hamlet/i.test(n)) return "Hamlet";
                   if (/amly/i.test(n)) return "Amly";
                   if (/glamp/i.test(n) || /camping/i.test(n)) return "Glamp";
                   return n;
-                });
-              }).reduce(function(a,b){ return a.concat(b); }, []).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
+                }).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
+                return { id: ab.id, labels: labels };
+              });
               return (
                 <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s", cursor:"pointer" }}
                   onClick={()=>onEdit(b.id)}
@@ -3162,12 +3175,24 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                   <td style={{ padding:"10px 12px", maxWidth:180 }}>
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
                   </td>
+                  <td style={{ padding:"10px 12px", fontSize:12, color:T.textMid }}>{b.eventType||"—"}</td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.mealGuests||"—"}</td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.eveGuests||"—"}</td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.text, fontWeight:500 }}>{total>0?`£${total.toLocaleString()}`:"—"}</td>
-                  <td style={{ padding:"10px 12px" }}>
+                  <td style={{ padding:"10px 12px" }} onClick={e=>e.stopPropagation()}>
                     {accomBadges.length===0 ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
-                      : accomBadges.map(a=><span key={a} style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600 }}>{a}</span>)}
+                      : accomBadges.map(function(entry){
+                          return entry.labels.map(function(lbl){
+                            return (
+                              <span key={entry.id+"-"+lbl}
+                                onClick={function(){ if (onOpenAccom) onOpenAccom(entry.id); }}
+                                title="Open lettings booking"
+                                style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"2px 6px", marginRight:3, fontWeight:600, cursor: onOpenAccom ? "pointer" : "default", textDecoration: onOpenAccom ? "underline" : "none", textDecorationStyle:"dotted" }}>
+                                {lbl}
+                              </span>
+                            );
+                          });
+                        })}
                   </td>
                   <td style={{ padding:"10px 12px" }}>
                     {b.status==="Holding"
