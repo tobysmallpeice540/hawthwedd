@@ -47,11 +47,14 @@
     .cal-cell { position: relative; aspect-ratio: 1; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; overflow: hidden; transition: transform .1s; }
     .cal-cell.pad { background: transparent; }
     .cal-cell.past { background: #f4f2ef; color: #ccc8c0; cursor: not-allowed; }
+    .cal-cell.closed { background: #f4f2ef; color: #ccc8c0; cursor: not-allowed; } /* beyond booking window */
     .cal-cell.avail { background: #c8f0d0; color: #1a6630; cursor: pointer; }
     .cal-cell.avail:hover { transform: scale(1.1); z-index: 2; }
+    .cal-cell.avail-closed { background: #e9e4d8; color: #a89f8e; cursor: not-allowed; } /* free, but check-in not allowed this weekday */
     .cal-cell.booked { background: #f5bfbf; color: #8b2020; cursor: not-allowed; }
     .cal-cell.checkout-free { cursor: pointer; } /* departure day - available for new checkin */
     .cal-cell.checkout-free:hover { transform: scale(1.1); z-index: 2; }
+    .cal-cell.checkout-free-closed { cursor: not-allowed; opacity: .6; } /* departure day, but check-in not allowed this weekday */
     .cal-cell.changeover { cursor: not-allowed; } /* both checkout and checkin already booked */
     .cal-cell.selected { background: #2d2a25 !important; color: #fff !important; font-weight: 700; z-index: 3; }
     .cal-cell.selected-end { background: #7a7060 !important; color: #fff !important; z-index: 3; }
@@ -215,6 +218,69 @@ function quoteStay(prop, ci, co) {
   return { nights: nights, subtotal: sub, discount: disc, total: Math.max(0, sub - disc) };
 }
 
+// ── Booking rules: allowed check-in/out weekdays + booking window ────────────
+function seasonForDate(prop, ds) {
+  if (!prop.seasons) return null;
+  for (var i = 0; i < prop.seasons.length; i++) {
+    var s = prop.seasons[i];
+    if (s.startDate && s.endDate && ds >= s.startDate && ds < s.endDate) return s;
+  }
+  return null;
+}
+// 0=Mon..6=Sun, to match the DOW_LABELS / DayToggles ordering used in Settings
+function isoWeekday(ds) {
+  var jsDay = new Date(ds + "T00:00:00").getDay(); // 0=Sun..6=Sat
+  return (jsDay + 6) % 7;
+}
+function allowedCheckInDays(prop, ds) {
+  var season = seasonForDate(prop, ds);
+  if (season && season.checkInDays && season.checkInDays.length) return season.checkInDays;
+  if (prop.checkInDays && prop.checkInDays.length) return prop.checkInDays;
+  return null; // no restriction
+}
+function allowedCheckOutDays(prop, ds) {
+  var season = seasonForDate(prop, ds);
+  if (season && season.checkOutDays && season.checkOutDays.length) return season.checkOutDays;
+  if (prop.checkOutDays && prop.checkOutDays.length) return prop.checkOutDays;
+  return null;
+}
+function propsForSelected() {
+  return S.selProps.map(function(pid) {
+    return S.properties.filter(function(x) { return x.id === pid; })[0];
+  }).filter(Boolean);
+}
+// A date can start a new stay only if every selected property allows check-in that weekday
+function checkInAllowed(ds) {
+  var props = propsForSelected();
+  for (var i = 0; i < props.length; i++) {
+    var allowed = allowedCheckInDays(props[i], ds);
+    if (allowed && allowed.indexOf(isoWeekday(ds)) === -1) return false;
+  }
+  return true;
+}
+// A checkout date is valid only if every selected property allows check-out that weekday
+function checkOutAllowed(ds) {
+  var props = propsForSelected();
+  for (var i = 0; i < props.length; i++) {
+    var allowed = allowedCheckOutDays(props[i], ds);
+    if (allowed && allowed.indexOf(isoWeekday(ds)) === -1) return false;
+  }
+  return true;
+}
+// Booking window: a date is within range only if it's within every selected
+// property's horizon (blank/0 = unlimited for that property)
+function withinBookingHorizon(ds) {
+  var props = propsForSelected();
+  for (var i = 0; i < props.length; i++) {
+    var p = props[i];
+    if (!p.bookingHorizonMonths) continue;
+    var limit = new Date();
+    limit.setMonth(limit.getMonth() + Number(p.bookingHorizonMonths));
+    if (ds > limit.toISOString().slice(0, 10)) return false;
+  }
+  return true;
+}
+
 // ── Build availability maps ───────────────────────────────────────────────────
 function buildAvailability() {
   S.occupied = {}; S.checkInDates = {}; S.checkOutDates = {};
@@ -237,10 +303,13 @@ function buildAvailability() {
 }
 
 // Status for a date across currently selected properties:
-// "past" | "avail" | "booked" | "checkout-free" | "changeover"
+// "past" | "closed" | "avail" | "avail-closed" | "booked" | "checkout-free" |
+// "checkout-free-closed" | "changeover"
+// "-closed" suffix = free, but check-in isn't allowed this weekday (or property rule)
 function dayStatus(ds) {
   var t = today();
   if (ds < t) return "past";
+  if (!withinBookingHorizon(ds)) return "closed"; // beyond the booking window
   var pids = S.selProps;
   if (!pids.length) return "avail";
   var anyOccupied = false;
@@ -253,10 +322,11 @@ function dayStatus(ds) {
     if (S.checkInDates[pid]  && S.checkInDates[pid].has(ds))  anyCheckin  = true;
   }
   if (anyOccupied) return "booked";
+  var canStart = checkInAllowed(ds);
   // Not occupied by any selected property
   if (anyCheckout && anyCheckin) return "changeover"; // another booking already starts this day
-  if (anyCheckout) return "checkout-free"; // guests leaving in morning, can check in same day
-  return "avail";
+  if (anyCheckout) return canStart ? "checkout-free" : "checkout-free-closed"; // guests leaving in morning, can check in same day
+  return canStart ? "avail" : "avail-closed";
 }
 
 // How many consecutive FREE nights from checkIn across ALL selected properties?
@@ -370,10 +440,14 @@ function renderCal() {
     var onclick = "";
     if (status === "avail" || status === "checkout-free") onclick = ' onclick="selectDate(\'' + ds + '\')"';
 
-    html += '<div class="' + cls + '"' + onclick + '>';
+    var title = "";
+    if (status === "avail-closed" || status === "checkout-free-closed") title = ' title="Free, but check-in isn\'t available this day"';
+    else if (status === "closed") title = ' title="Not yet open for booking"';
+
+    html += '<div class="' + cls + '"' + onclick + title + '>';
 
     // Triangles for special statuses
-    if (status === "checkout-free") {
+    if (status === "checkout-free" || status === "checkout-free-closed") {
       // Lower-left = departure (pink), upper-right = available (green)
       html += '<div class="tri tri-co" style="background:#f5bfbf"></div>';
       html += '<div class="tri tri-ci" style="background:#c8f0d0"></div>';
@@ -393,6 +467,8 @@ function renderCal() {
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#c8f0d0;border:1px solid #6dcc8a"></div>Available</div>';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#f5bfbf;border:1px solid #e07070"></div>Booked</div>';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:linear-gradient(135deg,#f5bfbf 50%,#c8f0d0 50%);border:1px solid #ddd"></div>Changeover (available for arrival)</div>';
+  html += '<div class="leg-item"><div class="leg-swatch" style="background:#e9e4d8;border:1px solid #d8d0c0"></div>Free, but not an arrival day</div>';
+  html += '<div class="leg-item"><div class="leg-swatch" style="background:#f4f2ef;border:1px solid #ddd"></div>Not yet open for booking</div>';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#2d2a25"></div>Selected</div>';
   html += '</div>';
 
@@ -476,8 +552,12 @@ function renderNightsPicker() {
   }
 
   html += '<div class="nights-grid">';
+  var anyOption = false;
   for (var n = minN; n <= Math.min(maxN, 28); n++) {
     var co = addDays(S.checkIn, n);
+    // Skip stay lengths that would land checkout on a day this property doesn't allow
+    if (!checkOutAllowed(co)) continue;
+    anyOption = true;
     var totalPrice = 0; var hasPrice = true;
     selPropsData.forEach(function(p) {
       var q = quoteStay(p, S.checkIn, co);
@@ -492,6 +572,9 @@ function renderNightsPicker() {
     html += '</div>';
   }
   html += '</div>';
+  if (!anyOption) {
+    html += '<div class="alert alert-warn">No stay length from this arrival date lands on an allowed check-out day. Please choose a different arrival date.</div>';
+  }
 
   if (S.nights) {
     html += renderQuote(selPropsData);
