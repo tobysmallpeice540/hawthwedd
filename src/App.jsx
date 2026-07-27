@@ -483,15 +483,17 @@ function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
 
 // Read-only panel: shows lettings bookings linked to a wedding event by date proximity
 function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking }) {
-  var [hideUnlinked, setHideUnlinked] = useState(false);
+  var [hideUnlinked, setHideUnlinked] = useState(true); // default: show linked only
   var nearby = findLinkedAccom(eventDate, accomBookings, 7, eventEndDate);
-  // Also include any explicitly linked bookings that might be outside 7-day window
   var explicitlyLinked = (accomBookings||[]).filter(function(b) {
     return b.linkedEventId && String(b.linkedEventId) === String(eventId) && !nearby.find(function(n){ return n.id===b.id; });
   });
   var allBookings = nearby.concat(explicitlyLinked);
   var hasAnyLinked = allBookings.some(function(b){ return String(b.linkedEventId) === String(eventId); });
-  var visibleBookings = hideUnlinked ? allBookings.filter(function(b){ return String(b.linkedEventId) === String(eventId); }) : allBookings;
+  // Only hide when there are linked entries — if nothing linked yet, show all so user can tick one
+  var visibleBookings = (hideUnlinked && hasAnyLinked)
+    ? allBookings.filter(function(b){ return String(b.linkedEventId) === String(eventId); })
+    : allBookings;
 
   if (!allBookings.length) return (
     <div style={{ fontSize:12, color:T.textLight, background:T.bgInput, borderRadius:8, padding:"12px 14px", lineHeight:1.6 }}>
@@ -502,18 +504,26 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
 
   var canLink = !!(eventId && onSaveAccomBooking);
 
+  // Abbreviate common schedule labels
+  function shortLabel(lbl) {
+    var l = (lbl||"").toLowerCase();
+    if (l.indexOf("deposit") !== -1 || l.indexOf("dep") === 0) return "Dep";
+    if (l.indexOf("balance") !== -1 || l.indexOf("bal") === 0) return "Bal";
+    return lbl;
+  }
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-        {canLink && (
+        {canLink && !hasAnyLinked && (
           <div style={{ fontSize:11, color:T.textMid, background:T.bgInput, borderRadius:7, padding:"7px 12px" }}>
             Tick a booking to confirm it is attached to this event.
           </div>
         )}
-        {hasAnyLinked && canLink && (
-          <label style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:12, color:T.text, fontWeight:600, padding:"6px 12px", background: hideUnlinked ? T.accentLight : T.bgInput, borderRadius:7, border:`1.5px solid ${hideUnlinked ? T.accent : T.border}` }}>
+        {canLink && (
+          <label style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:12, color:T.text, fontWeight:600, padding:"6px 12px", background: hideUnlinked ? T.accentLight : T.bgInput, borderRadius:7, border:`1.5px solid ${hideUnlinked ? T.accent : T.border}`, marginLeft:"auto" }}>
             <input type="checkbox" checked={hideUnlinked} onChange={function(e){ setHideUnlinked(e.target.checked); }} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }} />
-            Show linked only
+            Linked only
           </label>
         )}
       </div>
@@ -524,11 +534,14 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
         var isLinked = canLink && String(b.linkedEventId) === String(eventId);
         return (
           <div key={b.id} style={{ border:`1.5px solid ${isLinked ? T.accent : T.border}`, borderRadius:9, padding:"12px 14px", background: isLinked ? T.accentLight : "#fff" }}>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+            {/* Header: checkbox + name + value */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                 {canLink && (
                   <input type="checkbox" checked={isLinked} onChange={function(e) {
-                    onSaveAccomBooking(b.id, { linkedEventId: e.target.checked ? eventId : null });
+                    var patch = { linkedEventId: e.target.checked ? eventId : null };
+                    if (e.target.checked) patch.bookingType = "Wedding";
+                    onSaveAccomBooking(b.id, patch);
                   }} style={{ width:16, height:16, accentColor:T.accent, cursor:"pointer", flexShrink:0 }} />
                 )}
                 <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>
@@ -539,32 +552,45 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
               </div>
               <span style={{ fontWeight:700, color:T.text, fontSize:13 }}>{fmtMoney(Number(b.value)||0)}</span>
             </div>
+            {/* Stay rows — each with inline Dep/Bal badges */}
             {stays.map(function(s, i) {
               var prop = (accomProperties||[]).find(function(p){ return p.id===s.propertyId; });
+              // Assign schedule items to this stay: if single stay show all, else show none inline (shown below)
+              var staySchedule = stays.length === 1 ? (b.schedule||[]) : [];
               return (
-                <div key={i} style={{ fontSize:12, color:T.textMid, display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4, flexWrap:"wrap" }}>
                   {prop && <span style={{ width:8, height:8, borderRadius:"50%", background:prop.colour, display:"inline-block", flexShrink:0 }}/>}
-                  <span style={{ fontWeight:600 }}>{s.propertyName || s.propertyId}</span>
-                  <span>{fmtDate(s.checkIn)} – {fmtDate(s.checkOut)}</span>
-                  {s.nights ? <span style={{ color:T.textLight }}>({s.nights} nights)</span> : null}
+                  <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>{s.propertyName || s.propertyId}</span>
+                  <span style={{ fontSize:12, color:T.textMid }}>{fmtDate(s.checkIn)} – {fmtDate(s.checkOut)}</span>
+                  {s.nights ? <span style={{ fontSize:11, color:T.textLight }}>({s.nights}n)</span> : null}
+                  {staySchedule.map(function(sc, si) {
+                    return (
+                      <span key={si} style={{ fontSize:11, padding:"1px 7px", borderRadius:5, fontWeight:600,
+                        background: sc.paid ? T.greenBg : T.amberBg,
+                        color:      sc.paid ? T.green   : T.amber }}>
+                        {shortLabel(sc.label)}: {fmtMoney(Number(sc.amount)||0)}{sc.paid ? " paid" : sc.dueDate ? " due "+fmtDate(sc.dueDate) : ""}
+                      </span>
+                    );
+                  })}
                 </div>
               );
             })}
-            {(b.schedule||[]).length > 0 && (
-              <div style={{ marginTop:8, display:"flex", gap:6, flexWrap:"wrap" }}>
-                {(b.schedule||[]).map(function(s, si) {
+            {/* For multi-property bookings show schedule below all stays */}
+            {stays.length > 1 && (b.schedule||[]).length > 0 && (
+              <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginTop:4 }}>
+                {(b.schedule||[]).map(function(sc, si) {
                   return (
-                    <span key={si} style={{ fontSize:11, padding:"2px 8px", borderRadius:6, fontWeight:600,
-                      background: s.paid ? T.greenBg : T.amberBg,
-                      color:      s.paid ? T.green   : T.amber }}>
-                      {s.label}: {fmtMoney(Number(s.amount)||0)} {s.paid ? "paid" : (s.dueDate ? "due "+fmtDate(s.dueDate) : "pending")}
+                    <span key={si} style={{ fontSize:11, padding:"1px 7px", borderRadius:5, fontWeight:600,
+                      background: sc.paid ? T.greenBg : T.amberBg,
+                      color:      sc.paid ? T.green   : T.amber }}>
+                      {shortLabel(sc.label)}: {fmtMoney(Number(sc.amount)||0)}{sc.paid ? " paid" : sc.dueDate ? " due "+fmtDate(sc.dueDate) : ""}
                     </span>
                   );
                 })}
               </div>
             )}
             {(Number(b.value)||0) > 0 && (
-              <div style={{ marginTop:6, fontSize:12 }}>
+              <div style={{ marginTop:5, fontSize:12 }}>
                 {outstanding <= 0
                   ? <span style={{ color:T.green, fontWeight:600 }}>Fully paid</span>
                   : paidAmt > 0
@@ -832,7 +858,7 @@ const EMAIL_TOKENS = [
 ];
 
 // ── Month timeline: one lane per property ────────────────────────────────────
-function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen }) {
+function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen, onViewEventsCalendar }) {
   const [mode, setMode] = useState("year");
   const [tooltip, setTooltip] = useState(null);
 
@@ -924,6 +950,9 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           <div style={{ fontSize:20, fontWeight:800, color:T.text, minWidth:70, textAlign:"center" }}>{year}</div>
           <button onClick={()=>setCursor(new Date(year+1,0,1))} style={navBtn}>&#8250;</button>
           <button onClick={()=>{ setCursor(new Date()); setMode("month"); }} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600 }}>This month</button>
+          {onViewEventsCalendar && (
+            <button onClick={onViewEventsCalendar} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600, marginLeft:"auto", background:T.accentLight, color:T.accent, border:`1.5px solid ${T.accent}` }}>Events calendar</button>
+          )}
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:16 }}>
@@ -985,7 +1014,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                               {propsOn.slice(0,3).map(function(p){
                                 return (
                                   <span key={p.id} style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:p.colour, color:"#fff", fontSize:8, fontWeight:800, lineHeight:1 }}>
-                                    {(p.name||"?")[0].toUpperCase()}
+                                    {(p.id||p.name||"?")[0].toUpperCase()}
                                   </span>
                                 );
                               })}
@@ -1054,7 +1083,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
             return (
               <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5 }}>
                 <span style={{ width:12, height:12, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
-                <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:p.colour, color:"#fff", fontSize:8, fontWeight:800 }}>{(p.name||"?")[0].toUpperCase()}</span>
+                <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:p.colour, color:"#fff", fontSize:8, fontWeight:800 }}>{(p.id||p.name||"?")[0].toUpperCase()}</span>
                 {p.name}
               </span>
             );
@@ -2511,7 +2540,7 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
 }
 
 // ── Main Lettings view ───────────────────────────────────────────────────────
-function LettingsView({ events }) {
+function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType }) {
   const [properties, setProperties]         = useState(INITIAL_PROPERTIES);
   const [bookings, setBookings]             = useState([]);
   const [guests, setGuests]                 = useState([]);
@@ -2519,6 +2548,8 @@ function LettingsView({ events }) {
   const [emailTemplates, setEmailTemplates] = useState(DEFAULT_EMAIL_TEMPLATES);
   const [loaded, setLoaded]                 = useState(false);
   const [tab, setTab]               = useState("calendar");
+  // Jump to calendar sub-tab when the Calendar nav item is clicked
+  useEffect(function() { if (calendarTrigger > 0) setTab("calendar"); }, [calendarTrigger]);
   const [cursor, setCursor]         = useState(()=> new Date());
   const [form, setForm]             = useState(null);
   const [editId, setEditId]         = useState(null);
@@ -2631,7 +2662,7 @@ function LettingsView({ events }) {
 
       {!loaded && <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>}
 
-      {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} />}
+      {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} onViewEventsCalendar={setAppView && setAppReportType ? function(){ setAppReportType("calendar"); setAppView("reports"); } : null} />}
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
       {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
       {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} saveBookings={saveBookings} bookings={bookings} />}
@@ -2658,6 +2689,7 @@ export default function App() {
   const [bookings, setBookings] = useState([]);
   const [staff, setStaff]       = useState([]);
   const [view, setView]         = useState("home");
+  const [lettingsCalTrigger, setLettingsCalTrigger] = useState(0);
   const [xeroToken, setXeroToken]   = useState(() => xeroGetToken());
   const [gmailToken, setGmailToken] = useState(() => gmailGetToken());
 
@@ -2888,16 +2920,16 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
-      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}/>
+      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
       <div style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
-        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff}/>}
+        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking}
           onAutoSave={async(fd)=>{ if(!fd.couple||!fd.date) return; let updated; if(editId) updated=bookings.map(b=>b.id===editId?{...fd,id:editId}:b); else { const newId=Math.max(0,...bookings.map(b=>b.id))+1; updated=[...bookings,{...fd,id:newId}]; } await saveBookings(updated.sort((a,b)=>a.date>b.date?1:-1)); }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="lettings"   && <LettingsView events={bookings}/>}
+        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType}/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
@@ -2907,17 +2939,33 @@ export default function App() {
           saveBookings={saveBookings}
           onSelectEnquiry={goToEnquiry}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties}/>}
-        {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}/>}
+        {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
       </div>
     </div>
   );
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
-function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
-  const tabs = [{id:"home",label:"Home"},{id:"enquiries",label:"Enquiries"},{id:"list",label:"Bookings"},{id:"viewings",label:"Viewings"},{id:"lettings",label:"Lettings"},{id:"staff",label:"Staff"},{id:"bar",label:"Bar"},{id:"reports",label:"Reports"},{id:"settings",label:"Settings"}];
+function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab }) {
+  // "calendar" is a virtual tab that maps to view="lettings" (calendar sub-tab)
+  const tabs = [
+    {id:"home",label:"Home"},
+    {id:"calendar",label:"Calendar",virtual:true},
+    {id:"lettings",label:"Lettings"},
+    {id:"list",label:"Bookings"},
+    {id:"enquiries",label:"Enquiries"},
+    {id:"viewings",label:"Viewings"},
+    {id:"bar",label:"Bar"},
+    {id:"reports",label:"Reports"},
+    {id:"settings",label:"Settings"},
+  ];
   const isXeroConnected  = !!xeroToken;
   const isGmailConnected = !!gmailToken;
+  // "calendar" virtual tab is active when we're on lettings (it switches to lettings calendar sub-tab)
+  function isActive(t) {
+    if (t.id === "calendar") return false; // never highlight calendar; lettings tab is the real home
+    return view === t.id;
+  }
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
       <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
@@ -2925,7 +2973,8 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
       </div>
       <nav style={{ display:"flex", gap:0, flex:1 }}>
         {tabs.map(t=>(
-          <button key={t.id} onClick={()=>setView(t.id)} style={{ background:"none", border:"none", color:view===t.id?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:view===t.id?700:400, padding:"22px 20px 18px", cursor:"pointer", borderBottom:view===t.id?`3px solid ${T.accent}`:"3px solid transparent", transition:"all .2s", letterSpacing:.2 }}>{t.label}</button>
+          <button key={t.id} onClick={t.virtual ? onCalendarTab : ()=>setView(t.id)}
+            style={{ background:"none", border:"none", color:isActive(t)?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:isActive(t)?700:400, padding:"22px 20px 18px", cursor:"pointer", borderBottom:isActive(t)?`3px solid ${T.accent}`:"3px solid transparent", transition:"all .2s", letterSpacing:.2 }}>{t.label}</button>
         ))}
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", paddingRight:8 }}>
           {isXeroConnected
@@ -2947,7 +2996,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
 }
 
 // ─── BOOKINGS LIST ────────────────────────────────────────────────────────────
-function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff }) {
+function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings }) {
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b=>b.date>=today);
   const past     = bookings.filter(b=>b.date<today);
@@ -2958,16 +3007,16 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff 
           style={{ flex:1, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 14px", outline:"none", boxShadow:"0 1px 3px rgba(37,99,235,.06)" }}/>
         <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} booking{bookings.length!==1?"s":""}</span>
       </div>
-      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff}/> : <>
-        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff}/>
-        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff}/>}
+      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff} accomBookings={accomBookings}/> : <>
+        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff} accomBookings={accomBookings}/>
+        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff} accomBookings={accomBookings}/>}
       </>}
       {bookings.length===0 && <div style={{ textAlign:"center", padding:60, color:T.textLight }}><p style={{ fontSize:18, marginBottom:16 }}>No bookings yet</p><button onClick={onNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 28px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:15 }}>Create First Booking</button></div>}
     </div>
   );
 }
 
-function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
+function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings }) {
   if(rows.length===0) return null;
   return (
     <div style={{ marginBottom:36 }}>
@@ -2985,10 +3034,11 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff }) {
             {rows.map((b,i)=>{
               const paid=parseMoney(b.deposit)+parseMoney(b.payment2)+parseMoney(b.finalPayment);
               const total=parseMoney(b.venueFee), balance=total-paid, isFullyPaid=total>0&&balance<=0;
-              const accomBadges = [];
-              if(b.amlyBooked==="yes")    accomBadges.push("Amly");
-              if(b.hamletBooked==="yes")  accomBadges.push("Hamlet");
-              if(b.campingBooked==="yes") accomBadges.push("Camping");
+              const linkedAccom = (accomBookings||[]).filter(function(ab){ return ab.linkedEventId && String(ab.linkedEventId)===String(b.id); });
+              const accomBadges = linkedAccom.map(function(ab) {
+                var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
+                return stays.map(function(s){ return s.propertyName || s.propertyId || "Accom"; });
+              }).reduce(function(a,b){ return a.concat(b); }, []).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
               return (
                 <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s", cursor:"pointer" }}
                   onClick={()=>onEdit(b.id)}
@@ -8289,13 +8339,22 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
 }
 
 // ─── SETTINGS ─────────────────────────────────────────────────────────────────
-function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
+function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, setView }) {
   const [feedCopied, setFeedCopied] = useState(false);
   const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
   const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
   return (
     <div style={{ paddingTop:28, maxWidth:820 }}>
       <h2 style={{ margin:"0 0 20px", color:T.midBlue, fontWeight:700, fontSize:22 }}>Settings</h2>
+
+      {/* Staff */}
+      {setView && (
+        <div style={card}>
+          <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Staff</div>
+          <p style={{ fontSize:13, color:T.textMid, margin:"0 0 14px", lineHeight:1.5 }}>Manage staff members used for rota assignments.</p>
+          <button onClick={()=>setView("staff")} style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Manage Staff</button>
+        </div>
+      )}
 
       {/* Calendar feed */}
       <div style={card}>
