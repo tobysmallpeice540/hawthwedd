@@ -3,6 +3,7 @@ const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const RESEND_KEY  = process.env.RESEND_API_KEY;
 const STORAGE_KEY = "hbf_viewing_requests_v1";
+const EMAIL_LOG_KEY = "hbf_email_log_v1";
 const FROM_EMAIL  = "hello@hawthbushfarm.co.uk";
 
 const cors = {
@@ -11,6 +12,41 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
+
+async function sbGet(key) {
+  const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
+    headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+  });
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return (Array.isArray(rows) && rows[0]) ? rows[0].value : null;
+}
+
+async function sbSet(key, value) {
+  const res = await fetch(SUPABASE_URL + "/rest/v1/app_data", {
+    method: "POST",
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": "Bearer " + SUPABASE_KEY,
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates",
+    },
+    body: JSON.stringify({ key: key, value: value }),
+  });
+  if (!res.ok) throw new Error("sbSet failed: " + await res.text());
+}
+
+// Record a sent email so it shows up in the Home dashboard's "Recent Automated Emails" panel
+async function logEmail(entry) {
+  try {
+    var log = (await sbGet(EMAIL_LOG_KEY)) || [];
+    var rec = Object.assign({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString() }, entry);
+    log.push(rec);
+    await sbSet(EMAIL_LOG_KEY, log.slice(-500));
+  } catch (e) {
+    console.error("logEmail failed:", e.message);
+  }
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: cors, body: "" };
@@ -90,19 +126,28 @@ exports.handler = async (event) => {
       ? "Your Viewing at Hawthbush Farm - " + niceDate + " at " + req.time
       : "Your Viewing Request - Hawthbush Farm";
 
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + RESEND_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: FROM_EMAIL,
-        to: req.email,
-        subject: subject,
-        html: emailBody,
-      }),
-    }).catch(function(e) { console.log("Email error:", e.message); });
+    try {
+      const sendRes = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + RESEND_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: FROM_EMAIL,
+          to: req.email,
+          subject: subject,
+          html: emailBody,
+        }),
+      });
+      if (sendRes.ok) {
+        await logEmail({ subject: subject, to: req.email, type: "viewing_" + action, requestId: id });
+      } else {
+        console.log("Email send failed:", await sendRes.text());
+      }
+    } catch (e) {
+      console.log("Email error:", e.message);
+    }
   }
 
   return { statusCode: 200, headers: cors, body: JSON.stringify({ ok: true }) };
