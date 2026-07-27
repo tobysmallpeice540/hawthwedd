@@ -57,6 +57,14 @@ function getField(block, field) {
   return m ? m[1].trim().replace(/\r/g, "") : null;
 }
 
+// Airbnb pads its export feed with placeholder blocks (host-set "Not available"
+// ranges, min-stay padding, etc.) that aren't real guest reservations. These are
+// not imported — we don't want them cluttering the accommodation calendar.
+function isIgnorableBlock(summary) {
+  var s = (summary || "").trim().toLowerCase();
+  return s.indexOf("not available") !== -1 || s === "blocked" || s === "airbnb (not available)";
+}
+
 function parseIcal(text) {
   var events = [];
   // Split on BEGIN:VEVENT — index 0 is before first event
@@ -69,6 +77,8 @@ function parseIcal(text) {
     var end     = parseDate(getField(block, "DTEND")   || "");
     // Skip events with no valid dates
     if (!start || !end) continue;
+    // Skip Airbnb's own "not available" placeholder blocks — not real bookings
+    if (isIgnorableBlock(summary)) continue;
     events.push({ uid: uid, summary: summary, start: start, end: end });
   }
   return events;

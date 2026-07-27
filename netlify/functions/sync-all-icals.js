@@ -9,7 +9,7 @@
 //   schedule = "0 * * * *"
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const ACCOM_KEY    = "hbf_accom_v1";
 const PROPS_KEY    = "hbf_properties_v1";
 
@@ -54,6 +54,14 @@ function getField(block, field) {
   return m ? m[1].trim().replace(/\r/g, "") : null;
 }
 
+// Airbnb pads its export feed with placeholder blocks (host-set "Not available"
+// ranges, min-stay padding, etc.) that aren't real guest reservations. These are
+// not imported — we don't want them cluttering the accommodation calendar.
+function isIgnorableBlock(summary) {
+  var s = (summary || "").trim().toLowerCase();
+  return s.indexOf("not available") !== -1 || s === "blocked" || s === "airbnb (not available)";
+}
+
 function parseIcal(text) {
   var events = [];
   var parts = text.split("BEGIN:VEVENT");
@@ -64,6 +72,7 @@ function parseIcal(text) {
     var start   = parseDate(getField(block, "DTSTART") || "");
     var end     = parseDate(getField(block, "DTEND")   || "");
     if (!start || !end) continue;
+    if (isIgnorableBlock(summary)) continue;
     events.push({ uid: uid, summary: summary, start: start, end: end });
   }
   return events;

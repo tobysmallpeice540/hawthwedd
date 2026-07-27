@@ -9,7 +9,7 @@
 // Required env vars: SUPABASE_ANON_KEY (or hardcoded fallback below)
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const ACCOM_KEY    = "hbf_accom_v1";
 
 async function sbGet(key) {
@@ -67,8 +67,9 @@ exports.handler = async function(event) {
       if (!s.checkIn || !s.checkOut) return;
 
       var uid = String(b.id) + "-" + String(s.propertyId) + "@hawthbushfarm.co.uk";
-      var summary = b.source === "airbnb" ? "Airbnb block"
-                  : b.guestName           ? b.guestName
+      var summary = b.bookingType === "Blocked" ? "Not available"
+                  : b.source === "airbnb"        ? "Airbnb block"
+                  : b.guestName                  ? b.guestName
                   : "Booked";
       var created = b.createdAt
         ? b.createdAt.replace(/[-:]/g, "").replace(/\.\d+/, "").slice(0, 15) + "Z"
