@@ -543,8 +543,15 @@ function attributeScheduleToStays(schedule, stays) {
     var leftover = sched.filter(function(sc) { return !sc.propertyId; });
     return { byStay: byStay, leftover: leftover };
   }
-  if (sched.length > 0 && sched.length % stays.length === 0) {
-    var chunkSize = sched.length / stays.length;
+  // Only attempt positional chunking when there's at least one full Deposit+
+  // Balance pair per stay (2+ entries each) — this matches the shape of
+  // older merged bookings from before per-property tagging existed. A single
+  // combined Deposit/Balance pair for the whole multi-property booking (the
+  // correct shape now that payments are per booking, not per property) is
+  // shown as one unattributed row below instead of being incorrectly split
+  // one entry per stay.
+  var chunkSize = sched.length / stays.length;
+  if (sched.length > 0 && Number.isInteger(chunkSize) && chunkSize >= 2) {
     var byStayChunks = stays.map(function(s, i) { return sched.slice(i * chunkSize, (i + 1) * chunkSize); });
     return { byStay: byStayChunks, leftover: [] };
   }
@@ -1006,6 +1013,41 @@ function buildAccomSchedule(value, prop, checkIn) {
   ];
 }
 
+// Collapse a schedule array down to one entry per label (Deposit/Balance etc.)
+// so a multi-property booking is always billed once per booking, never once
+// per property. Used when merging previously-separate single-property
+// bookings into one multi-property booking, where each side brought its own
+// Deposit+Balance pair.
+function consolidateSchedule(schedule) {
+  var byLabel = {};
+  var order = [];
+  (schedule || []).forEach(function(sc) {
+    var label = sc.label || "Other";
+    if (!byLabel[label]) { byLabel[label] = []; order.push(label); }
+    byLabel[label].push(sc);
+  });
+  return order.map(function(label) {
+    var entries = byLabel[label];
+    var amount = entries.reduce(function(s, e) { return s + (Number(e.amount) || 0); }, 0);
+    var dueDates = entries.map(function(e) { return e.dueDate; }).filter(Boolean).sort();
+    var allPaid = entries.every(function(e) { return e.paid; });
+    var paidDates = entries.map(function(e) { return e.paidDate; }).filter(Boolean).sort();
+    var stripeId = entries.map(function(e) { return e.stripeId; }).filter(Boolean)[0] || "";
+    var anyRequested = entries.some(function(e) { return e.requested; });
+    var requestedDates = entries.map(function(e) { return e.requestedDate; }).filter(Boolean).sort();
+    return {
+      label: label,
+      amount: Math.round(amount * 100) / 100,
+      dueDate: dueDates[0] || null,
+      requested: anyRequested,
+      requestedDate: requestedDates[0] || null,
+      paid: allPaid,
+      paidDate: allPaid ? (paidDates[paidDates.length - 1] || null) : null,
+      stripeId: stripeId,
+    };
+  });
+}
+
 function blankAccom(propId) {
   var pid = propId || "hamlet";
   return {
@@ -1055,7 +1097,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerLabel: "Send on booking creation",
     triggerDays: null,
     subject: "Booking Confirmed – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThank you for booking with Hawthbush Farm! Your reservation is confirmed.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDuration: {{nights}} nights\nTotal: £{{totalAmount}}\n\nA deposit of £{{depositAmount}} is due by {{depositDueDate}}.\n\nIf you have any questions, please don't hesitate to get in touch.\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nThank you for booking with Hawthbush Farm! Your reservation is confirmed.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\n\nTotal: £{{totalAmount}}\n\nA deposit of £{{depositAmount}} is due by {{depositDueDate}}.\n\nIf you have any questions, please don't hesitate to get in touch.\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -1064,7 +1106,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerLabel: "Days before deposit due date",
     triggerDays: 3,
     subject: "Deposit Due – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThis is a reminder that your deposit is due for your upcoming stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDeposit due: £{{depositAmount}}\nDue date: {{depositDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nThis is a reminder that your deposit is due for your upcoming stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nDeposit due: £{{depositAmount}}\nDue date: {{depositDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -1073,7 +1115,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerLabel: "Days before balance due date",
     triggerDays: 28,
     subject: "Balance Due – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nYour balance is now due ahead of your stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nBalance due: £{{balanceAmount}}\nDue date: {{balanceDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWe look forward to welcoming you!\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nYour balance is now due ahead of your stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nBalance due: £{{balanceAmount}}\nDue date: {{balanceDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWe look forward to welcoming you!\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -1082,7 +1124,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerLabel: "Send on payment receipt",
     triggerDays: null,
     subject: "Payment Received – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThank you – we have received your payment of £{{amountPaid}} for your booking at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nAmount received: £{{amountPaid}}\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nThank you – we have received your payment of £{{amountPaid}} for your booking at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nAmount received: £{{amountPaid}}\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -1094,7 +1136,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerDays2: 3,
     triggerDays2Enabled: false,
     subject: "Your Arrival at Hawthbush Farm – {{checkIn}}",
-    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}}!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\nDuration: {{nights}} nights\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}}!\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nCheck-in from {{checkInTime}} · Check-out by {{checkOutTime}}\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -1106,14 +1148,14 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerDays2: 3,
     triggerDays2Enabled: false,
     subject: "Your Wedding Weekend at Hawthbush Farm – {{checkIn}}",
-    body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\n\nYour event information pack and site map are attached. Please do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nCheck-in from {{checkInTime}} · Check-out by {{checkOutTime}}\n\nYour event information pack and site map are attached. Please do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm",
     attachments: []
   }
 ];
 
 const EMAIL_TOKENS = [
   "{{guestName}}", "{{guestEmail}}", "{{guestPhone}}",
-  "{{bookingRef}}", "{{propertyName}}",
+  "{{bookingRef}}", "{{propertyName}}", "{{stayDetails}}",
   "{{checkIn}}", "{{checkOut}}", "{{nights}}",
   "{{checkInTime}}", "{{checkOutTime}}",
   "{{totalAmount}}", "{{depositAmount}}", "{{balanceAmount}}",
@@ -2081,9 +2123,11 @@ function AccomImport({ onImported, saveBookings, bookings }) {
           Object.assign({}, s2, { value:0 }),
         ],
       });
-      var sched1 = (b1.schedule||[]).map(function(sc){ return Object.assign({}, sc, { propertyId: sc.propertyId || s1.propertyId }); });
-      var sched2 = (b2.schedule||[]).map(function(sc){ return Object.assign({}, sc, { propertyId: sc.propertyId || s2.propertyId }); });
-      var combinedSched = sched1.concat(sched2);
+      // Payments are per booking, not per property — merging two previously
+      // separate single-property bookings must not leave two Deposit/Balance
+      // pairs. Consolidate down to one Deposit + one Balance covering the
+      // combined total.
+      var combinedSched = consolidateSchedule((b1.schedule||[]).concat(b2.schedule||[]));
       if (combinedSched.length) merged.schedule = combinedSched;
       newBookings.push(merged);
       removeIds.add(b1.id); removeIds.add(b2.id);
@@ -4264,12 +4308,13 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 return (
                   <div>
                     <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12, marginTop:4, borderTop:`1px solid ${T.border}`, paddingTop:16 }}>Shift Times &amp; Hours Worked</div>
-                    <div style={{ display:"grid", gridTemplateColumns:"44px 1fr 90px 90px 90px 16px", alignItems:"center", gap:"6px 10px", marginBottom:8, padding:"0 11px" }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"44px 1fr 90px 90px 70px 90px 16px", alignItems:"center", gap:"6px 10px", marginBottom:8, padding:"0 11px" }}>
                       <div/>
                       <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase" }}>Name</div>
                       <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>From</div>
                       <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>To</div>
-                      <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>Hrs</div>
+                      <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>Est.</div>
+                      <div style={{ fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase", textAlign:"center" }}>Actual Hrs</div>
                       <div/>
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
@@ -4281,7 +4326,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                         const expected = diff > 0 ? +(diff/60).toFixed(2) : null;
                         const tStyle  = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px", outline:"none", width:90 };
                         return (
-                          <div key={id} style={{ display:"grid", gridTemplateColumns:"44px 1fr 90px 90px 90px 16px", alignItems:"center", gap:"6px 10px", padding:"7px 10px", background:isSetup?"#fffbeb":T.bgInput, borderRadius:7, border:`1px solid ${isSetup?"#fde68a":T.border}` }}>
+                          <div key={id} style={{ display:"grid", gridTemplateColumns:"44px 1fr 90px 90px 70px 90px 16px", alignItems:"center", gap:"6px 10px", padding:"7px 10px", background:isSetup?"#fffbeb":T.bgInput, borderRadius:7, border:`1px solid ${isSetup?"#fde68a":T.border}` }}>
                             <StaffChip initials={id} staff={staff}/>
                             <span style={{ fontSize:13, color:T.text, fontWeight:500 }}>
                               {person?.name||id}
@@ -4289,16 +4334,12 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                             </span>
                             <input type="time" value={sh.start||""} onChange={e=>updateShift(id,"start",e.target.value)} style={tStyle}/>
                             <input type="time" value={sh.end||""} onChange={e=>updateShift(id,"end",e.target.value)} style={tStyle}/>
-                            <div style={{ position:"relative" }}>
-                              <input type="number" min="0" step="0.5"
-                                value={hw[id]!==undefined ? hw[id] : ""}
-                                onChange={e=>updateHours(id, e.target.value)}
-                                placeholder={expected!==null ? String(expected) : ""}
-                                style={{ ...tStyle, width:80, textAlign:"center" }}/>
-                              {expected!==null && hw[id]===undefined && (
-                                <span style={{ position:"absolute", right:4, top:"50%", transform:"translateY(-50%)", fontSize:9, color:T.textLight, pointerEvents:"none" }}>est</span>
-                              )}
-                            </div>
+                            <span style={{ fontSize:13, color:T.textLight, textAlign:"center" }}>{expected!==null ? expected+"h" : "—"}</span>
+                            <input type="number" min="0" step="0.5"
+                              value={hw[id]!==undefined ? hw[id] : ""}
+                              onChange={e=>updateHours(id, e.target.value)}
+                              placeholder="—"
+                              style={{ ...tStyle, width:80, textAlign:"center" }}/>
                             <span style={{ fontSize:12, color:T.textLight }}>h</span>
                           </div>
                         );
@@ -6060,7 +6101,12 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent 
       type,
       date,
       label: label || (type === "order" ? "Order" : "Stocktake"),
-      lines: Object.fromEntries(Object.entries(lines).filter(([,v]) => v !== "" && v !== 0 && v != null)),
+      // Orders: 0/blank means "don't order this", so those lines are dropped.
+      // Stocktakes: 0 is a genuine, meaningful count (out of stock) and must
+      // be kept — computeStock() sets stock absolutely from the latest
+      // stocktake's lines, so dropping a 0 here meant that product's stock
+      // silently kept its old (non-zero) value instead of being zeroed out.
+      lines: Object.fromEntries(Object.entries(lines).filter(([,v]) => v !== "" && v != null && (type === "order" ? v !== 0 : true))),
     };
     await onSave(ev);
     setSaving(false);
