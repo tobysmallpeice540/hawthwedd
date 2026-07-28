@@ -25,16 +25,16 @@ const SITE_ORIGIN   = "https://hawthbushfarm.netlify.app";
 const DEFAULT_TEMPLATES = [
   { id: "deposit_request", triggerDays: 3,
     subject: "Deposit Due – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThis is a reminder that your deposit is due for your upcoming stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDeposit due: £{{depositAmount}}\nDue date: {{depositDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWarm regards,\nHawthbush Farm", attachments: [] },
+    body: "Dear {{guestName}},\n\nThis is a reminder that your deposit is due for your upcoming stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nDeposit due: £{{depositAmount}}\nDue date: {{depositDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWarm regards,\nHawthbush Farm", attachments: [] },
   { id: "balance_request", triggerDays: 28,
     subject: "Balance Due – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nYour balance is now due ahead of your stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nBalance due: £{{balanceAmount}}\nDue date: {{balanceDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWe look forward to welcoming you!\n\nWarm regards,\nHawthbush Farm", attachments: [] },
-  { id: "arrival_general", triggerDays: 28, triggerDays2: 3,
+    body: "Dear {{guestName}},\n\nYour balance is now due ahead of your stay at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nBalance due: £{{balanceAmount}}\nDue date: {{balanceDueDate}}\n\nYou can pay securely here: {{paymentLink}}\n\nWe look forward to welcoming you!\n\nWarm regards,\nHawthbush Farm", attachments: [] },
+  { id: "arrival_general", triggerDays: 28, triggerDays2: 3, triggerDays2Enabled: false,
     subject: "Your Arrival at Hawthbush Farm – {{checkIn}}",
-    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}}!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\nDuration: {{nights}} nights\n\nPlease don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm", attachments: [] },
-  { id: "arrival_event", triggerDays: 28, triggerDays2: 3,
+    body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}}!\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nCheck-in from {{checkInTime}} · Check-out by {{checkOutTime}}\n\nPlease don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm", attachments: [] },
+  { id: "arrival_event", triggerDays: 28, triggerDays2: 3, triggerDays2Enabled: false,
     subject: "Your Wedding Weekend at Hawthbush Farm – {{checkIn}}",
-    body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\n\nPlease do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm", attachments: [] },
+    body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nCheck-in from {{checkInTime}} · Check-out by {{checkOutTime}}\n\nPlease do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm", attachments: [] },
 ];
 
 async function sbGet(key) {
@@ -80,6 +80,22 @@ function escapeHtml(s) {
     .replace(/\n/g, "<br>");
 }
 
+// One line per stay: "PropertyName: 2 October 2026 – 5 October 2026 (3 nights)"
+// — so a multi-property booking lists every property with its own dates,
+// not just the primary/first stay.
+function buildStayDetailsText(booking) {
+  var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
+  return stays.map(function(s) {
+    var nights = s.nights;
+    if (!nights && s.checkIn && s.checkOut) {
+      nights = Math.round((new Date(s.checkOut + "T00:00:00") - new Date(s.checkIn + "T00:00:00")) / 86400000);
+    }
+    var name = s.propertyName || s.propertyId || "Property";
+    var range = fmtDateNice(s.checkIn) + " – " + fmtDateNice(s.checkOut);
+    return name + ": " + range + (nights ? " (" + nights + " night" + (nights === 1 ? "" : "s") + ")" : "");
+  }).join("\n");
+}
+
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -94,6 +110,7 @@ function buildTokens(booking, property, extra) {
     guestPhone:     booking.phone || "",
     bookingRef:     String(booking.id || "").toUpperCase(),
     propertyName:   propNames,
+    stayDetails:    buildStayDetailsText(booking),
     checkIn:        fmtDateNice(booking.checkIn),
     checkOut:       fmtDateNice(booking.checkOut),
     nights:         booking.nights || "",
@@ -257,7 +274,7 @@ exports.handler = async function() {
         }
 
         var days2 = (arrTmpl.triggerDays2 !== undefined && arrTmpl.triggerDays2 !== null) ? arrTmpl.triggerDays2 : 3;
-        if (!flags.arrivalInfo2Sent && days2 > 0 && daysToArrival >= 0 && daysToArrival <= days2) {
+        if (arrTmpl.triggerDays2Enabled && !flags.arrivalInfo2Sent && days2 > 0 && daysToArrival >= 0 && daysToArrival <= days2) {
           try {
             var arr2Res = await sendViaResend(booking.email, arrSubject, arrBody);
             if (arr2Res.ok) {

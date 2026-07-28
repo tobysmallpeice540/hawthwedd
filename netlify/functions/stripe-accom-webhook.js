@@ -34,9 +34,9 @@ const EMAIL_LOG_KEY = "hbf_email_log_v1";
 
 const DEFAULT_TEMPLATES = [
   { id: "booking_confirmed", subject: "Booking Confirmed – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThank you for booking with Hawthbush Farm! Your reservation is confirmed.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nDuration: {{nights}} nights\nTotal: £{{totalAmount}}\n\nA deposit of £{{depositAmount}} is due by {{depositDueDate}}.\n\nIf you have any questions, please don't hesitate to get in touch.\n\nWarm regards,\nHawthbush Farm", attachments: [] },
+    body: "Dear {{guestName}},\n\nThank you for booking with Hawthbush Farm! Your reservation is confirmed.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\n\nTotal: £{{totalAmount}}\n\nA deposit of £{{depositAmount}} is due by {{depositDueDate}}.\n\nIf you have any questions, please don't hesitate to get in touch.\n\nWarm regards,\nHawthbush Farm", attachments: [] },
   { id: "payment_confirmation", subject: "Payment Received – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThank you – we have received your payment of £{{amountPaid}} for your booking at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}}\nCheck-out: {{checkOut}}\nAmount received: £{{amountPaid}}\n\nWarm regards,\nHawthbush Farm", attachments: [] },
+    body: "Dear {{guestName}},\n\nThank you – we have received your payment of £{{amountPaid}} for your booking at Hawthbush Farm.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\nAmount received: £{{amountPaid}}\n\nWarm regards,\nHawthbush Farm", attachments: [] },
 ];
 
 // ── Supabase helpers (no header spread) ──────────────────────────────────────
@@ -85,6 +85,22 @@ function escapeHtml(s) {
     .replace(/\n/g, "<br>");
 }
 
+// One line per stay: "PropertyName: 2 October 2026 – 5 October 2026 (3 nights)"
+// — so a multi-property booking lists every property with its own dates,
+// not just the primary/first stay.
+function buildStayDetailsText(booking) {
+  var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
+  return stays.map(function(s) {
+    var nights = s.nights;
+    if (!nights && s.checkIn && s.checkOut) {
+      nights = Math.round((new Date(s.checkOut + "T00:00:00") - new Date(s.checkIn + "T00:00:00")) / 86400000);
+    }
+    var name = s.propertyName || s.propertyId || "Property";
+    var range = fmtDateNice(s.checkIn) + " – " + fmtDateNice(s.checkOut);
+    return name + ": " + range + (nights ? " (" + nights + " night" + (nights === 1 ? "" : "s") + ")" : "");
+  }).join("\n");
+}
+
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -93,6 +109,7 @@ function buildTokens(booking, property, extra) {
     guestName:      booking.guestName || "Guest",
     bookingRef:     String(booking.id || "").toUpperCase(),
     propertyName:   propNames,
+    stayDetails:    buildStayDetailsText(booking),
     checkIn:        fmtDateNice(booking.checkIn),
     checkOut:       fmtDateNice(booking.checkOut),
     nights:         booking.nights || "",

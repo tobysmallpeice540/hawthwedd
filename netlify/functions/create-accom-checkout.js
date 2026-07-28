@@ -138,7 +138,13 @@ exports.handler = async function(event) {
     // ── 2. Save pending booking to Supabase ──────────────────────────────────
     const bookingId    = "web-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
     const todayISO     = new Date().toISOString().slice(0,10);
-    const balanceWeeks = 6;
+    // Balance timing should follow the booking's earliest check-in (not
+    // necessarily the first stay added), and respect whatever balanceWeeks
+    // the booking page computed from the properties in the cart.
+    const balanceWeeks  = Number(body.balanceWeeks) > 0 ? Number(body.balanceWeeks) : 6;
+    const earliestCheckIn = stays.reduce(function(a, s) {
+      return (!a || (s.checkIn && s.checkIn < a)) ? s.checkIn : a;
+    }, null) || checkIn;
 
     const schedule = [
       {
@@ -154,7 +160,7 @@ exports.handler = async function(event) {
       {
         label:         "Balance",
         amount:        Math.round((totalAmount - depositAmount) * 100) / 100,
-        dueDate:       addWeeksISO(checkIn, -balanceWeeks),
+        dueDate:       addWeeksISO(earliestCheckIn, -balanceWeeks),
         requested:     false,
         requestedDate: null,
         paid:          false,
