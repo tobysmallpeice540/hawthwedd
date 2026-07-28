@@ -692,6 +692,185 @@ const DISCOUNT_CODES_STORAGE  = "hbf_discount_codes_v1";
 const EMAIL_TEMPLATES_STORAGE = "hbf_email_templates_v1";
 const SITE_URL = "https://hawthbushfarm.netlify.app";
 
+// Shows automated emails logged in hbf_email_log_v1 that relate to a specific
+// lettings booking (matched by bookingId) or a specific person (matched by
+// recipient email address — used for viewing confirm/decline emails, which
+// are logged against the original viewing request rather than a booking id).
+// Used on the accom booking page, and in the Contact sections of bookings/enquiries.
+function EmailHistoryPanel({ title, emptyLabel, bookingId, emails, typeFilter }) {
+  const [log, setLog] = useState(null);
+
+  useEffect(function() {
+    let cancelled = false;
+    (async function() {
+      try { const l = await sbGet(EMAIL_LOG_STORAGE); if (!cancelled) setLog(l || []); }
+      catch (e) { if (!cancelled) setLog([]); }
+    })();
+    return function() { cancelled = true; };
+  }, []);
+
+  if (log === null) return <div style={{ color:T.textLight, fontSize:12 }}>Loading…</div>;
+
+  const emailSet = (emails || []).filter(Boolean).map(function(e) { return e.toLowerCase(); });
+  const matches = log.filter(function(e) {
+    const byBooking = bookingId && e.bookingId && String(e.bookingId) === String(bookingId);
+    const byEmail = emailSet.length && e.to && emailSet.indexOf(String(e.to).toLowerCase()) !== -1;
+    if (!byBooking && !byEmail) return false;
+    if (typeFilter && !typeFilter(e.type || e.template || "")) return false;
+    return true;
+  }).sort(function(a, z) { return (z.sentAt || "") > (a.sentAt || "") ? 1 : -1; });
+
+  return (
+    <div>
+      <h3 style={{ margin:"0 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>
+        {title || "Emails Sent"} <span style={{ fontSize:12, color:T.textLight, fontWeight:400 }}>({matches.length})</span>
+      </h3>
+      {matches.length === 0
+        ? <div style={{ color:T.textLight, fontSize:13 }}>{emptyLabel || "No emails sent yet."}</div>
+        : (
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {matches.map(function(e) {
+              return (
+                <div key={e.id || (e.sentAt + e.subject)} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"9px 12px" }}>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text }}>{e.subject || "(no subject)"}</span>
+                    <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap", flexShrink:0 }}>
+                      {e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" }) : ""}
+                    </span>
+                  </div>
+                  <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>To {e.to || "—"}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
+  );
+}
+
+// Generic "Contact History" log (date + method + note entries), reusable
+// anywhere a manual contact log is needed. Manages its own add/edit UI state
+// and reports the updated contacts array back via onChange.
+function ContactHistoryPanel({ contacts, onChange }) {
+  const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+  const [adding, setAdding] = useState(false);
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+
+  const list = contacts || [];
+  const sorted = [...list].sort(function(a, b) {
+    if (!a.date) return 1; if (!b.date) return -1;
+    return b.date > a.date ? 1 : -1;
+  });
+
+  const addContact = function() {
+    if (!newContact.note.trim()) return;
+    onChange(list.concat([{ ...newContact }]));
+    setNewContact({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+    setAdding(false);
+  };
+
+  const startEdit = function(i) {
+    const actualIdx = list.indexOf(sorted[i]);
+    setEditingIdx(actualIdx);
+    setEditForm({ ...sorted[i] });
+  };
+
+  const saveEdit = function() {
+    onChange(list.map(function(c, i) { return i === editingIdx ? editForm : c; }));
+    setEditingIdx(null); setEditForm(null);
+  };
+
+  const deleteContact = function(i) {
+    const actualIdx = list.indexOf(sorted[i]);
+    onChange(list.filter(function(_, ii) { return ii !== actualIdx; }));
+  };
+
+  const methodLabel = function(m) { return m==="email" ? "Email" : m==="phone" ? "Phone" : m==="inperson" ? "In Person" : "Other"; };
+  const iStyle = { width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.border}`, paddingBottom:10, marginBottom:14 }}>
+        <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Contact History <span style={{ fontSize:12, color:T.textLight, fontWeight:400 }}>({list.length})</span></h3>
+        {!adding && editingIdx===null && <button onClick={function(){ setAdding(true); }} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>+ Add Contact</button>}
+      </div>
+
+      {adding && (
+        <div style={{ background:T.accentLight, border:`1.5px solid ${T.accentMid}`, borderRadius:8, padding:14, marginBottom:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Date</label>
+              <input type="date" value={newContact.date} onChange={function(e){ setNewContact(function(n){ return { ...n, date:e.target.value }; }); }} style={iStyle}/>
+            </div>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
+              <select value={newContact.method} onChange={function(e){ setNewContact(function(n){ return { ...n, method:e.target.value }; }); }} style={iStyle}>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+                <option value="inperson">In Person</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+          </div>
+          <textarea value={newContact.note} onChange={function(e){ setNewContact(function(n){ return { ...n, note:e.target.value }; }); }} placeholder="Contact note…" rows={3}
+            style={{ ...iStyle, resize:"vertical", marginBottom:10 }}/>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={addContact} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Add</button>
+            <button onClick={function(){ setAdding(false); }} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"7px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {sorted.length === 0 && !adding && <div style={{ color:T.textLight, fontSize:13, textAlign:"center", padding:"12px 0" }}>No contact history yet.</div>}
+
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {sorted.map(function(c, i) {
+          const isEditing = editingIdx !== null && list.indexOf(c) === editingIdx;
+          if (isEditing && editForm) {
+            return (
+              <div key={i} style={{ background:T.accentLight, border:`1.5px solid ${T.accentMid}`, borderRadius:8, padding:14 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+                  <div>
+                    <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Date</label>
+                    <input type="date" value={editForm.date||""} onChange={function(e){ setEditForm(function(f){ return { ...f, date:e.target.value }; }); }} style={iStyle}/>
+                  </div>
+                  <div>
+                    <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
+                    <select value={editForm.method||"email"} onChange={function(e){ setEditForm(function(f){ return { ...f, method:e.target.value }; }); }} style={iStyle}>
+                      <option value="email">Email</option>
+                      <option value="phone">Phone</option>
+                      <option value="inperson">In Person</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                </div>
+                <textarea value={editForm.note||""} onChange={function(e){ setEditForm(function(f){ return { ...f, note:e.target.value }; }); }} rows={3}
+                  style={{ ...iStyle, resize:"vertical", marginBottom:10 }}/>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={saveEdit} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Save</button>
+                  <button onClick={function(){ setEditingIdx(null); setEditForm(null); }} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"7px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+                  <button onClick={function(){ deleteContact(i); setEditingIdx(null); setEditForm(null); }} style={{ marginLeft:"auto", background:T.redBg, border:"none", color:T.red, padding:"7px 12px", borderRadius:5, cursor:"pointer", fontSize:12, fontWeight:600 }}>Delete</button>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 14px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
+                <span style={{ fontSize:11, fontWeight:700, color:T.midBlue, background:T.midBlueBg, padding:"2px 8px", borderRadius:6 }}>{methodLabel(c.method)}</span>
+                <span style={{ fontSize:12, color:T.textLight }}>{c.date ? fmtDate(c.date) : "No date"}</span>
+                {editingIdx===null && <button onClick={function(){ startEdit(i); }} style={{ marginLeft:"auto", background:T.midBlueBg, border:"none", color:T.midBlue, cursor:"pointer", fontSize:12, fontWeight:600, padding:"2px 10px", borderRadius:4 }}>Edit</button>}
+              </div>
+              {c.note && <p style={{ margin:0, fontSize:13, color:T.text, lineHeight:1.5 }}>{c.note}</p>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
 
 const ACCOM_STATUS_META = {
@@ -913,6 +1092,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerDays: 28,
     triggerLabel2: "Days before check-in (2nd reminder)",
     triggerDays2: 3,
+    triggerDays2Enabled: false,
     subject: "Your Arrival at Hawthbush Farm – {{checkIn}}",
     body: "Dear {{guestName}},\n\nWe're looking forward to welcoming you to {{propertyName}}!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\nDuration: {{nights}} nights\n\nDirections and access information are attached. Please don't hesitate to contact us if you have any questions before your arrival.\n\nWarm regards,\nHawthbush Farm",
     attachments: []
@@ -924,6 +1104,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerDays: 28,
     triggerLabel2: "Days before check-in (2nd reminder)",
     triggerDays2: 3,
+    triggerDays2Enabled: false,
     subject: "Your Wedding Weekend at Hawthbush Farm – {{checkIn}}",
     body: "Dear {{guestName}},\n\nWe are so excited to be part of your special day at Hawthbush Farm!\n\nBooking reference: {{bookingRef}}\nProperty: {{propertyName}}\nCheck-in: {{checkIn}} from {{checkInTime}}\nCheck-out: {{checkOut}} by {{checkOutTime}}\n\nYour event information pack and site map are attached. Please do reach out if there is anything you need ahead of your celebration.\n\nWith warmest wishes,\nHawthbush Farm",
     attachments: []
@@ -1545,7 +1726,32 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
 
   const updStay = (idx, key, val) => setForm(function(f) {
     var cur = (f.stays&&f.stays.length) ? f.stays : [];
-    var next = cur.map(function(s,i){ return i===idx ? Object.assign({}, s, { [key]:val }) : s; });
+    var next = cur.map(function(s,i){
+      if (i !== idx) return s;
+      var patch = { [key]: val };
+      // When a check-in date is picked and there's no check-out yet, seed the
+      // check-out field with a date in the same month — the browser's native
+      // date picker opens to whatever month the field's current value is in,
+      // so this makes choosing the check-out date land on the right month.
+      if (key === "checkIn" && val && !s.checkOut) {
+        var d = new Date(val + "T00:00:00");
+        d.setDate(d.getDate() + 1);
+        patch.checkOut = d.toISOString().slice(0,10);
+      }
+      return Object.assign({}, s, patch);
+    });
+    var tot = next.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
+    return Object.assign({}, f, { stays:next, value:tot });
+  });
+
+  // Copy the check-in/check-out dates from the stay row directly above this
+  // one — used by the small "copy" button shown on every property row after
+  // the first, so multi-property bookings can be dated in one click.
+  const copyDatesFromAbove = (idx) => setForm(function(f) {
+    var cur = (f.stays&&f.stays.length) ? f.stays : [];
+    if (idx <= 0 || !cur[idx-1]) return f;
+    var above = cur[idx-1];
+    var next = cur.map(function(s,i){ return i===idx ? Object.assign({}, s, { checkIn: above.checkIn||"", checkOut: above.checkOut||"" }) : s; });
     var tot = next.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
     return Object.assign({}, f, { stays:next, value:tot });
   });
@@ -1649,7 +1855,14 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             <div key={s.propertyId} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 50px 60px 1fr", borderBottom: idx < formStays.length-1 ? `1px solid ${T.border}` : "none", background:"#fff", alignItems:"center" }}>
               <div style={{ padding:"10px 12px", display:"flex", alignItems:"center", gap:7, fontSize:13, fontWeight:600 }}>
                 {p && <span style={{ width:10, height:10, borderRadius:"50%", background:p.colour, display:"inline-block", flexShrink:0 }}/>}
-                {p ? p.name : s.propertyId}
+                <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p ? p.name : s.propertyId}</span>
+                {idx > 0 && (
+                  <button type="button" onClick={function(){ copyDatesFromAbove(idx); }}
+                    title="Copy check-in/check-out dates from the property above"
+                    style={{ ...smallBtn, padding:"3px 8px", fontSize:11, whiteSpace:"nowrap", flexShrink:0, marginLeft:"auto" }}>
+                    ⧉ Copy dates
+                  </button>
+                )}
               </div>
               <div style={{ padding:"6px 8px" }}>
                 <input type="date" value={s.checkIn||""} onChange={function(e){ updStay(idx,"checkIn",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
@@ -1767,6 +1980,10 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         <textarea value={form.notes} onChange={e=>upd("notes",e.target.value)} rows={3}
           style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 11px", outline:"none", resize:"vertical" }} />
       </label>
+
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"16px 18px", marginBottom:18 }}>
+        <EmailHistoryPanel bookingId={form.id} title="Emails Sent" emptyLabel="No emails sent for this booking yet."/>
+      </div>
 
       <div style={{ display:"flex", gap:10 }}>
         <button onClick={onSave} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save booking</button>
@@ -2638,11 +2855,16 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
                 </div>
                 {tmpl.triggerDays2 !== undefined && (
                   <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                    <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{tmpl.triggerLabel2 || "2nd reminder"}:</span>
-                    <input type="number" min="0" max="365" value={tmpl.triggerDays2 || 0}
+                    <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", fontSize:12, color:T.textMid, fontWeight:600 }}>
+                      <input type="checkbox" checked={!!tmpl.triggerDays2Enabled}
+                        onChange={function(e) { upd("triggerDays2Enabled", e.target.checked); }}
+                        style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }} />
+                      Send a second email — {tmpl.triggerLabel2 || "2nd reminder"}:
+                    </label>
+                    <input type="number" min="0" max="365" value={tmpl.triggerDays2 || 0} disabled={!tmpl.triggerDays2Enabled}
                       onChange={function(e) { upd("triggerDays2", parseInt(e.target.value) || 0); }}
-                      style={{ width:60, border:`1.5px solid ${T.border}`, borderRadius:6, padding:"5px 8px", fontFamily:"inherit", fontSize:13, textAlign:"center" }} />
-                    <span style={{ fontSize:12, color:T.textLight }}>days before (set to 0 to disable)</span>
+                      style={{ width:60, border:`1.5px solid ${T.border}`, borderRadius:6, padding:"5px 8px", fontFamily:"inherit", fontSize:13, textAlign:"center", opacity: tmpl.triggerDays2Enabled ? 1 : .5 }} />
+                    <span style={{ fontSize:12, color:T.textLight }}>days before</span>
                   </div>
                 )}
               </div>
@@ -3098,7 +3320,7 @@ export default function App() {
     });
   }, []);
 
-  const emptyBooking = ()=>({ couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} });
+  const emptyBooking = ()=>({ couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{}, contacts:[] });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -3229,7 +3451,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
     {id:"home",label:"Home"},
     {id:"calendar",label:"Calendar",virtual:true},
     {id:"lettings",label:"Lettings"},
-    {id:"list",label:"Bookings"},
+    {id:"list",label:"Events"},
     {id:"enquiries",label:"Enquiries"},
     {id:"viewings",label:"Viewings"},
     {id:"bar",label:"Bar"},
@@ -4232,8 +4454,23 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             </div>
           )}
 
-          {activeSection==="contact" && (formData.email || formData.email2) && (
-            <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken} formData={formData} update={update} onAutoSave={onAutoSave}/>
+          {activeSection==="contact" && (
+            <>
+              {(formData.email || formData.email2) && (
+                <div style={{ marginBottom:18 }}>
+                  <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken} formData={formData} update={update} onAutoSave={onAutoSave}/>
+                </div>
+              )}
+              <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, marginBottom:18 }}>
+                <ContactHistoryPanel contacts={formData.contacts||[]} onChange={(c)=>update("contacts",c)}/>
+              </div>
+              {(formData.email || formData.email2) && (
+                <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22 }}>
+                  <EmailHistoryPanel emails={[formData.email, formData.email2].filter(Boolean)} typeFilter={(t)=>t.indexOf("viewing_")===0}
+                    title="Viewing Emails Sent" emptyLabel="No viewing emails sent yet."/>
+                </div>
+              )}
+            </>
           )}
 
           {activeSection==="core" && isEdit && onDelete && (
@@ -5446,6 +5683,20 @@ function DashboardView({ bookings, viewingRequests, setView }) {
     return aCI > zCI ? 1 : aCI < zCI ? -1 : 0;
   });
 
+  // Guests already checked in and still on site (checked in before today, not
+  // yet checked out) — shown at the top of the check-ins list alongside
+  // upcoming arrivals so the dashboard reflects who is actually here now too.
+  const currentlyStaying = accomBookings.filter(b => {
+    if (b.status==="cancelled") return false;
+    if (b.bookingType==="Blocked") return false;
+    const stays = b.stays||[];
+    return stays.some(s => s.checkIn && s.checkOut && s.checkIn<today && s.checkOut>=today);
+  }).sort((a,z)=>{
+    const aCI = (a.stays||[]).map(s=>s.checkIn||"").filter(Boolean).sort()[0] || "9999";
+    const zCI = (z.stays||[]).map(s=>s.checkIn||"").filter(Boolean).sort()[0] || "9999";
+    return aCI > zCI ? 1 : aCI < zCI ? -1 : 0;
+  });
+
   // Pending viewing requests
   const pendingViewings = (viewingRequests||[]).filter(r=>r.status==="pending");
 
@@ -5491,11 +5742,24 @@ function DashboardView({ bookings, viewingRequests, setView }) {
           ))}
         </div>
 
-        {/* Upcoming accom check-ins */}
+        {/* Upcoming accom check-ins (currently-staying guests shown first) */}
         <div style={sectionStyle}>
-          {secHead("Accom Check-ins — next 7 days", upcomingCheckIns.length, upcomingCheckIns.length?T.green:null)}
+          {secHead("Accom Check-ins — next 7 days", currentlyStaying.length + upcomingCheckIns.length, (currentlyStaying.length + upcomingCheckIns.length) ? T.green : null)}
           {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
-          {loaded && upcomingCheckIns.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No check-ins this week.</div>}
+          {loaded && currentlyStaying.length===0 && upcomingCheckIns.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No check-ins this week.</div>}
+          {currentlyStaying.map(b=>{
+            const stay = (b.stays||[]).filter(s=>s.checkIn&&s.checkOut&&s.checkIn<today&&s.checkOut>=today).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
+            return (
+              <div key={"staying-"+b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+                <span title={stay ? "Checked in "+fmtDay(stay.checkIn)+" · leaves "+fmtDay(stay.checkOut) : "Currently staying"}
+                  style={{ fontSize:11, fontWeight:700, color:T.midBlue, background:T.midBlueBg, padding:"2px 8px", borderRadius:6, flexShrink:0, whiteSpace:"nowrap" }}>In house</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"}</div>
+                  <div style={{ fontSize:11, color:T.textLight }}>{(b.stays||[]).map(s=>s.propertyName||s.propertyId).join(" + ")}{stay ? " · leaves "+fmtDay(stay.checkOut) : ""}</div>
+                </div>
+              </div>
+            );
+          })}
           {upcomingCheckIns.map(b=>{
             const nextStay = (b.stays||[]).filter(s=>s.checkIn&&s.checkIn>=today&&s.checkIn<=in7).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
             return (
@@ -9278,6 +9542,13 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
               );
             })}
           </div>
+
+          {form.email && (
+            <div style={{ marginTop:6, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
+              <EmailHistoryPanel emails={[form.email]} typeFilter={(t)=>t.indexOf("viewing_")===0}
+                title="Viewing Emails Sent" emptyLabel="No viewing emails sent yet."/>
+            </div>
+          )}
 
           {dirty && (
             <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, marginTop:"auto" }}>Save Changes</button>
