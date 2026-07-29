@@ -531,7 +531,7 @@ function renderPendingNightsSelect(prop) {
 //    this section waits for a check-in date before showing the nights picker.
 function renderPropertyAndNightsSection() {
   var usedIds = S.cart.map(function(s) { return s.propertyId; });
-  var html = '<h3 class="section-heading"><em>Or</em> choose your property</h3>';
+  var html = '<h3 class="section-heading"><em>Either</em> choose your property</h3>';
   html += '<div class="panel">';
 
   if (S.pendingCheckIn) {
@@ -595,14 +595,14 @@ function renderCalendarView() {
   html += '<h2 class="page-title">Book Your Stay</h2>';
   html += '<p class="page-sub">Choose your check-in date below, or pick a property first to see just its availability. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.</p>';
   html += renderCartSummary();
-  html += '<h3 class="section-heading"><em>Either</em> choose your date</h3>';
+  html += renderPropertyAndNightsSection();
+  html += '<h3 class="section-heading"><em>Or</em> choose your date</h3>';
   html += renderCalNav();
   var calProps = calendarFilterProperties();
   html += '<div class="cal-months-grid">';
   S.calMonths.forEach(function(m) { html += renderMiniMonth(m.year, m.month, calProps); });
   html += '</div>';
   html += renderCalLegend(calProps);
-  html += renderPropertyAndNightsSection();
   mount(html);
 }
 
