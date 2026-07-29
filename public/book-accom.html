@@ -23,6 +23,8 @@
 
     .page-title { font-family: 'Cormorant Garamond', serif; font-size: 30px; font-weight: 600; margin-bottom: 6px; color: #2d2a25; }
     .page-sub { font-size: 14px; color: #7a7060; margin-bottom: 24px; line-height: 1.5; }
+    .section-heading { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; color: #2d2a25; margin: 24px 0 12px; }
+    .section-heading em { font-style: italic; color: #9a8360; }
 
     /* Property cards (used for the per-stay property picker) */
     .prop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 6px; }
@@ -40,6 +42,11 @@
     .panel h3 { font-family: 'Cormorant Garamond', serif; font-size: 21px; font-weight: 600; color: #2d2a25; margin-bottom: 14px; }
 
     /* 6-month calendar grid */
+    .cal-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+    .cal-nav-btn { width: 38px; height: 38px; border-radius: 9px; border: 1.5px solid #e0d9ce; background: #fff; color: #2d2a25; font-size: 19px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: border-color .15s, color .15s; }
+    .cal-nav-btn:hover:not(:disabled) { border-color: #b8a88a; }
+    .cal-nav-btn:disabled { color: #d8d2c6; cursor: not-allowed; }
+    .cal-nav-label { font-family: 'Cormorant Garamond', serif; font-size: 19px; font-weight: 600; color: #2d2a25; min-width: 190px; text-align: center; }
     .cal-months-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 14px; }
     @media (max-width: 900px) { .cal-months-grid { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 600px) { .cal-months-grid { grid-template-columns: 1fr; } }
@@ -143,7 +150,8 @@ var MAX_PROPERTIES_PER_BOOKING = 3;
 var S = {
   properties: [],
   bookings: [],
-  calMonths: [],          // the fixed 6 {year,month} entries shown on the calendar
+  calMonths: [],          // the 6 {year,month} entries currently shown on the calendar
+  calOffset: 0,           // how many months forward the 6-month window has been scrolled
   occupied: {},           // propId -> Set of dateStr  [ci, co) exclusive
   // the stay currently being configured (not yet added to the cart)
   pendingCheckIn: null,
@@ -320,15 +328,32 @@ function maxFreeNightsForProp(prop, ci) {
 }
 
 // Which properties are available / valid-check-in on a given date
-function dayInfo(ds) {
+function dayInfo(ds, propList) {
+  var list = propList || S.properties;
   var avail = [], checkinOk = [];
-  S.properties.forEach(function(p) {
+  list.forEach(function(p) {
     if (propAvailable(p, ds)) {
       avail.push(p);
       if (checkInAllowedForProp(p, ds)) checkinOk.push(p);
     }
   });
   return { avail: avail, checkinOk: checkinOk };
+}
+
+// Which properties the calendar should currently be showing: if the guest
+// has already picked a property (property-first path, or after picking one
+// from the date-first picker), narrow the calendar down to just that one so
+// its availability is what's shown. Otherwise show every property not yet
+// committed to the booking (a property already in the cart can't be picked
+// again for a second stay).
+function calendarFilterProperties() {
+  var usedIds = S.cart.map(function(s) { return s.propertyId; });
+  var remaining = S.properties.filter(function(p) { return usedIds.indexOf(p.id) === -1; });
+  if (S.pendingPropertyId) {
+    var only = remaining.filter(function(p) { return p.id === S.pendingPropertyId; });
+    if (only.length) return only;
+  }
+  return remaining;
 }
 
 // ── Render infrastructure ─────────────────────────────────────────────────────
@@ -345,19 +370,29 @@ function stepsHtml(active) {
 
 function mount(html) { document.getElementById("app").innerHTML = html; }
 
-function calMonthsList() {
+function calMonthsList(offset) {
+  offset = offset || 0;
   var n = new Date();
   var list = [];
   for (var i = 0; i < 6; i++) {
-    var y = n.getFullYear(), m = n.getMonth() + i;
+    var y = n.getFullYear(), m = n.getMonth() + offset + i;
     while (m > 11) { m -= 12; y++; }
+    while (m < 0)  { m += 12; y--; }
     list.push({ year: y, month: m });
   }
   return list;
 }
 
+function shiftCalMonths(delta) {
+  var next = S.calOffset + delta;
+  if (next < 0) next = 0; // never scroll back before the current month
+  S.calOffset = next;
+  S.calMonths = calMonthsList(S.calOffset);
+  renderCalendarView();
+}
+
 // ── One mini month calendar ───────────────────────────────────────────────────
-function renderMiniMonth(year, month) {
+function renderMiniMonth(year, month, propList) {
   var nDays = daysInMonth(year, month);
   var firstDow = (new Date(year, month, 1).getDay() + 6) % 7; // 0=Mon
   var html = '<div class="mini-cal">';
@@ -370,7 +405,7 @@ function renderMiniMonth(year, month) {
     var ds = isoDate(year, month, d);
     var isPast = ds < today();
     var isSel = ds === S.pendingCheckIn;
-    var info = isPast ? { avail: [], checkinOk: [] } : dayInfo(ds);
+    var info = isPast ? { avail: [], checkinOk: [] } : dayInfo(ds, propList);
 
     var cls = "cal-cell";
     var onclick = "";
@@ -395,14 +430,34 @@ function renderMiniMonth(year, month) {
   return html;
 }
 
-function renderCalLegend() {
+function renderCalNav() {
+  var first = S.calMonths[0], last = S.calMonths[S.calMonths.length - 1];
+  var rangeLabel = MONTH_NAMES[first.month].slice(0, 3) + " " + first.year + " &ndash; " + MONTH_NAMES[last.month].slice(0, 3) + " " + last.year;
+  var prevDisabled = S.calOffset <= 0;
+  var html = '<div class="cal-nav">';
+  html += '<button class="cal-nav-btn" ' + (prevDisabled ? "disabled" : "") + ' onclick="shiftCalMonths(-6)" aria-label="Earlier months">&#8249;</button>';
+  html += '<div class="cal-nav-label">' + rangeLabel + '</div>';
+  html += '<button class="cal-nav-btn" onclick="shiftCalMonths(6)" aria-label="Later months">&#8250;</button>';
+  if (S.calOffset > 0) html += '<button class="btn-ghost" style="margin-left:auto" onclick="jumpToThisMonth()">Back to today</button>';
+  html += '</div>';
+  return html;
+}
+
+function jumpToThisMonth() {
+  S.calOffset = 0;
+  S.calMonths = calMonthsList(0);
+  renderCalendarView();
+}
+
+function renderCalLegend(propList) {
+  var list = propList || S.properties;
   var html = '<div class="legend">';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#8fdba0"></div>Available to check in</div>';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#e3f7e6"></div>Available (not a check-in day)</div>';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#fff;border:1px solid #ddd"></div>Not available</div>';
   html += '</div>';
   html += '<div class="letter-key">';
-  S.properties.forEach(function(p) {
+  list.forEach(function(p) {
     html += '<span><b style="color:' + (p.colour || "#333") + '">' + propLetter(p) + '</b>' + escHtml(p.name) + '</span>';
   });
   html += '</div>';
@@ -469,28 +524,41 @@ function renderPendingNightsSelect(prop) {
   return html;
 }
 
-function renderPendingPicker() {
-  if (!S.pendingCheckIn) {
-    return '<div class="alert alert-info">Click a green check-in day above to ' + (S.cart.length ? "add another property to your booking" : "start your booking") + '.</div>';
+// Combined "Or choose your property" section. Works both ways round:
+//  - date chosen first: property list narrows to whatever's valid for that date.
+//  - property chosen first (or picked here with no date yet): the calendar
+//    above (see calendarFilterProperties) narrows to just that property, and
+//    this section waits for a check-in date before showing the nights picker.
+function renderPropertyAndNightsSection() {
+  var usedIds = S.cart.map(function(s) { return s.propertyId; });
+  var html = '<h3 class="section-heading"><em>Or</em> choose your property</h3>';
+  html += '<div class="panel">';
+
+  if (S.pendingCheckIn) {
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">';
+    html += '<span style="font-size:14px;color:#7a7060">Check-in <strong style="color:#2d2a25">' + fmtDate(S.pendingCheckIn) + '</strong></span>';
+    html += '<button class="btn-ghost" style="padding:5px 13px;font-size:12px" onclick="clearPendingCheckIn()">Change date</button>';
+    html += '</div>';
   }
 
-  var usedIds = S.cart.map(function(s) { return s.propertyId; });
-  var info = dayInfo(S.pendingCheckIn);
-  var avail = info.checkinOk.filter(function(p) { return usedIds.indexOf(p.id) === -1; });
+  var candidates;
+  if (S.pendingCheckIn) {
+    var remaining = S.properties.filter(function(p) { return usedIds.indexOf(p.id) === -1; });
+    candidates = dayInfo(S.pendingCheckIn, remaining).checkinOk;
+  } else {
+    candidates = S.properties.filter(function(p) { return usedIds.indexOf(p.id) === -1; });
+  }
 
-  var html = '<div class="panel">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">';
-  html += '<h3 style="margin:0">Check-in ' + fmtDate(S.pendingCheckIn) + '</h3>';
-  html += '<button class="btn-ghost" onclick="clearPendingCheckIn()">Change date</button>';
-  html += '</div>';
-
-  if (!avail.length) {
-    html += '<div class="alert alert-warn">No properties are available to check in on this date' + (usedIds.length ? " (or they’re already in your booking)" : "") + '. Please choose a different date above.</div></div>';
+  if (!candidates.length) {
+    html += S.pendingCheckIn
+      ? '<div class="alert alert-warn">No properties are available to check in on this date' + (usedIds.length ? " (or they’re already in your booking)" : "") + '. Please choose a different date above.</div>'
+      : '<div class="alert alert-info">All properties have been added to this booking.</div>';
+    html += '</div>';
     return html;
   }
 
   html += '<div class="prop-grid">';
-  avail.forEach(function(p) {
+  candidates.forEach(function(p) {
     var sel = S.pendingPropertyId === p.id;
     var col = p.colour || "#2d2a25";
     var rateStr = p.baseRate > 0 ? "From " + fmt(p.baseRate) + " / night" : "Contact for pricing";
@@ -507,7 +575,13 @@ function renderPendingPicker() {
 
   if (S.pendingPropertyId && usedIds.indexOf(S.pendingPropertyId) === -1) {
     var prop = S.properties.filter(function(x) { return x.id === S.pendingPropertyId; })[0];
-    if (prop) html += renderPendingNightsSelect(prop);
+    if (prop) {
+      if (!S.pendingCheckIn) {
+        html += '<div class="alert alert-info" style="margin-top:14px">The calendar above now shows only ' + escHtml(prop.name) + '&rsquo;s availability &mdash; click a check-in date to continue.</div>';
+      } else {
+        html += renderPendingNightsSelect(prop);
+      }
+    }
   }
 
   html += '</div>';
@@ -519,24 +593,29 @@ function renderCalendarView() {
   S.view = "calendar";
   var html = stepsHtml(1);
   html += '<h2 class="page-title">Book Your Stay</h2>';
-  html += '<p class="page-sub">Click an available check-in date below, then choose a property and length of stay. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.</p>';
+  html += '<p class="page-sub">Choose your check-in date below, or pick a property first to see just its availability. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.</p>';
   html += renderCartSummary();
+  html += '<h3 class="section-heading"><em>Either</em> choose your date</h3>';
+  html += renderCalNav();
+  var calProps = calendarFilterProperties();
   html += '<div class="cal-months-grid">';
-  S.calMonths.forEach(function(m) { html += renderMiniMonth(m.year, m.month); });
+  S.calMonths.forEach(function(m) { html += renderMiniMonth(m.year, m.month, calProps); });
   html += '</div>';
-  html += renderCalLegend();
-  html += renderPendingPicker();
+  html += renderCalLegend(calProps);
+  html += renderPropertyAndNightsSection();
   mount(html);
 }
 
+// Note: neither of these touches pendingPropertyId — a property already
+// chosen (property-first path) stays fixed while the guest changes date,
+// and the calendar/property-picker stay filtered to it.
 function selectCheckInDate(ds) {
   S.pendingCheckIn = ds;
-  S.pendingPropertyId = null;
   S.pendingNights = null;
   renderCalendarView();
 }
 function clearPendingCheckIn() {
-  S.pendingCheckIn = null; S.pendingPropertyId = null; S.pendingNights = null;
+  S.pendingCheckIn = null; S.pendingNights = null;
   renderCalendarView();
 }
 function selectPendingProperty(pid) {
