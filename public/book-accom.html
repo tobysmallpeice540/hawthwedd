@@ -227,7 +227,7 @@ var MAX_PROPERTIES_PER_BOOKING = 3;
 var S = {
   properties: [],
   bookings: [],
-  compact: false,         // compact/mobile-friendly layout — opt-in via ?compact=1
+  compact: true,          // compact/mobile-friendly layout — the default; opt out via ?compact=0
   calMonths: [],          // the {year,month} entries currently shown on the calendar
   calOffset: 0,           // how many months forward the calendar window has been scrolled
   occupied: {},           // propId -> Set of dateStr  [ci, co) exclusive
@@ -483,8 +483,9 @@ function setCompact(on) {
   S.calMonths = calMonthsList(S.calOffset);
   try {
     var url = new URL(window.location.href);
-    if (S.compact) url.searchParams.set("compact", "1");
-    else url.searchParams.delete("compact");
+    // Compact is the default, so it needs no param; only the opt-out is stored.
+    if (S.compact) url.searchParams.delete("compact");
+    else url.searchParams.set("compact", "0");
     window.history.replaceState({}, "", url);
   } catch (e) { /* non-fatal — layout still switches */ }
   if (S.view === "summary") renderSummaryView(); else renderCalendarView();
@@ -884,9 +885,9 @@ function showSuccess(prop, ci, co) {
 (function init() {
   var params = new URLSearchParams(window.location.search);
 
-  // Compact layout is strictly opt-in: without ?compact=1 the page renders
-  // exactly as it did before this option existed.
-  S.compact = params.get("compact") === "1";
+  // Compact layout is the default. ?compact=0 falls back to the original
+  // roomier layout, which is still fully supported by the Standard toggle.
+  S.compact = params.get("compact") !== "0";
   applyCompactClass();
 
   // Skip sync on the post-booking success/cancel return pages
