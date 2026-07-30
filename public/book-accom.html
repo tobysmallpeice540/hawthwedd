@@ -120,6 +120,83 @@
       .form-grid { grid-template-columns: 1fr; }
       .prop-grid { grid-template-columns: 1fr; }
     }
+
+    /* ── View toggle (compact vs standard) ─────────────────────────────────── */
+    .view-toggle { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-bottom: 10px; font-size: 12px; color: #9a9080; }
+    .view-toggle button { padding: 5px 12px; background: none; border: 1.5px solid #e0d9ce; border-radius: 20px; font-family: 'Jost', sans-serif; font-size: 12px; color: #7a7060; cursor: pointer; }
+    .view-toggle button.on { background: #2d2a25; border-color: #2d2a25; color: #fff; font-weight: 600; }
+
+    /* ══ COMPACT MODE ══════════════════════════════════════════════════════════
+       Purely additive overrides, all scoped under body.compact-mode. Removing
+       the class (or the ?compact=1 param) restores the standard layout exactly,
+       so this is safe to trial and trivial to roll back.                        */
+    body.compact-mode .main { max-width: 760px; padding: 18px 14px 50px; }
+    body.compact-mode .header { padding: 12px 20px; }
+    body.compact-mode .header h1 { font-size: 21px; }
+    body.compact-mode .header .sub { font-size: 11px; }
+
+    body.compact-mode .steps { margin-bottom: 16px; border-radius: 8px; }
+    body.compact-mode .step { padding: 7px 5px; font-size: 10.5px; }
+
+    body.compact-mode .page-title { font-size: 23px; margin-bottom: 3px; }
+    body.compact-mode .page-sub { font-size: 12.5px; margin-bottom: 14px; }
+    body.compact-mode .section-heading { font-size: 17px; margin: 15px 0 8px; }
+
+    body.compact-mode .panel { padding: 14px 15px; margin-bottom: 12px; border-radius: 11px; }
+    body.compact-mode .panel h3 { font-size: 17px; margin-bottom: 9px; }
+
+    /* Property cards: tighter, 3-across on desktop, 2-across even on phones */
+    body.compact-mode .prop-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+    body.compact-mode .prop-card { padding: 9px 10px; border-radius: 9px; border-width: 1.5px; }
+    body.compact-mode .prop-card-head { gap: 6px; margin-bottom: 3px; }
+    body.compact-mode .prop-dot { width: 9px; height: 9px; }
+    body.compact-mode .prop-name { font-size: 14.5px; }
+    body.compact-mode .prop-meta { font-size: 10.5px; line-height: 1.35; }
+    body.compact-mode .prop-rate { font-size: 10.5px; margin-top: 2px; }
+
+    /* Calendar: 3 months, tighter cells */
+    body.compact-mode .cal-nav { gap: 8px; margin-bottom: 10px; }
+    body.compact-mode .cal-nav-btn { width: 32px; height: 32px; font-size: 17px; border-radius: 8px; }
+    body.compact-mode .cal-nav-label { font-size: 16px; min-width: 150px; }
+    body.compact-mode .cal-months-grid { grid-template-columns: repeat(3, 1fr); gap: 9px; margin-bottom: 10px; }
+    body.compact-mode .mini-cal { padding: 8px 7px; border-radius: 9px; }
+    body.compact-mode .mini-cal-title { font-size: 13px; margin-bottom: 5px; }
+    body.compact-mode .cal-grid { gap: 2px; }
+    body.compact-mode .cal-dow { font-size: 8px; padding-bottom: 2px; }
+    body.compact-mode .cal-cell { min-height: 27px; border-radius: 4px; gap: 0; }
+    body.compact-mode .cal-num { font-size: 10px; }
+    body.compact-mode .day-letter { font-size: 7px; }
+    body.compact-mode .day-letters { gap: 1px; }
+
+    body.compact-mode .legend { gap: 9px; font-size: 10.5px; margin-bottom: 10px; }
+    body.compact-mode .leg-swatch { width: 10px; height: 10px; }
+    body.compact-mode .letter-key { font-size: 10.5px; gap: 8px; margin-bottom: 12px; }
+    body.compact-mode .letter-key b { font-size: 10.5px; }
+
+    body.compact-mode .quote-box { padding: 11px 13px; margin: 10px 0 12px; }
+    body.compact-mode .q-row { font-size: 12.5px; }
+    body.compact-mode .q-row.tot { font-size: 14px; }
+    body.compact-mode .btn-primary { padding: 11px 20px; font-size: 14px; margin-top: 11px; }
+    body.compact-mode .btn-ghost { padding: 7px 14px; font-size: 12px; }
+    body.compact-mode .nights-select { padding: 8px 11px; font-size: 13px; max-width: 100%; }
+    body.compact-mode .alert { padding: 8px 12px; font-size: 12px; margin-bottom: 10px; }
+    body.compact-mode .form-grid { gap: 9px; }
+    body.compact-mode .form-field input, body.compact-mode .form-field textarea { padding: 8px 11px; font-size: 13px; }
+    body.compact-mode .divider { margin: 15px 0; }
+    body.compact-mode .cart-row { padding: 5px 0; }
+
+    /* Compact on small screens: keep 3 calendars side by side as long as we can,
+       drop to 2 only when genuinely too narrow. */
+    @media (max-width: 560px) {
+      body.compact-mode .cal-months-grid { grid-template-columns: repeat(2, 1fr); gap: 7px; }
+      body.compact-mode .cal-cell { min-height: 25px; }
+      body.compact-mode .prop-grid { grid-template-columns: repeat(2, 1fr); }
+      body.compact-mode .main { padding: 14px 9px 40px; }
+    }
+    @media (max-width: 380px) {
+      body.compact-mode .cal-months-grid { grid-template-columns: 1fr; }
+      body.compact-mode .prop-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -150,8 +227,9 @@ var MAX_PROPERTIES_PER_BOOKING = 3;
 var S = {
   properties: [],
   bookings: [],
-  calMonths: [],          // the 6 {year,month} entries currently shown on the calendar
-  calOffset: 0,           // how many months forward the 6-month window has been scrolled
+  compact: false,         // compact/mobile-friendly layout — opt-in via ?compact=1
+  calMonths: [],          // the {year,month} entries currently shown on the calendar
+  calOffset: 0,           // how many months forward the calendar window has been scrolled
   occupied: {},           // propId -> Set of dateStr  [ci, co) exclusive
   // the stay currently being configured (not yet added to the cart)
   pendingCheckIn: null,
@@ -370,11 +448,16 @@ function stepsHtml(active) {
 
 function mount(html) { document.getElementById("app").innerHTML = html; }
 
+// Compact mode shows 3 months at a time (nicer on a phone); standard shows 6.
+// The nav arrows always step by exactly one screenful.
+function monthsShown() { return S.compact ? 3 : 6; }
+
 function calMonthsList(offset) {
   offset = offset || 0;
   var n = new Date();
   var list = [];
-  for (var i = 0; i < 6; i++) {
+  var count = monthsShown();
+  for (var i = 0; i < count; i++) {
     var y = n.getFullYear(), m = n.getMonth() + offset + i;
     while (m > 11) { m -= 12; y++; }
     while (m < 0)  { m += 12; y--; }
@@ -389,6 +472,36 @@ function shiftCalMonths(delta) {
   S.calOffset = next;
   S.calMonths = calMonthsList(S.calOffset);
   renderCalendarView();
+}
+
+// Flip between compact and standard. Keeps the guest's place in the calendar,
+// syncs the URL so the choice survives a refresh / can be shared, and simply
+// re-renders — no reload, nothing else in the flow is affected.
+function setCompact(on) {
+  S.compact = !!on;
+  applyCompactClass();
+  S.calMonths = calMonthsList(S.calOffset);
+  try {
+    var url = new URL(window.location.href);
+    if (S.compact) url.searchParams.set("compact", "1");
+    else url.searchParams.delete("compact");
+    window.history.replaceState({}, "", url);
+  } catch (e) { /* non-fatal — layout still switches */ }
+  if (S.view === "summary") renderSummaryView(); else renderCalendarView();
+}
+
+function applyCompactClass() {
+  if (typeof document === "undefined") return;
+  if (S.compact) document.body.classList.add("compact-mode");
+  else document.body.classList.remove("compact-mode");
+}
+
+function renderViewToggle() {
+  var html = '<div class="view-toggle"><span>Layout</span>';
+  html += '<button class="' + (S.compact ? "" : "on") + '" onclick="setCompact(false)">Standard</button>';
+  html += '<button class="' + (S.compact ? "on" : "") + '" onclick="setCompact(true)">Compact</button>';
+  html += '</div>';
+  return html;
 }
 
 // ── One mini month calendar ───────────────────────────────────────────────────
@@ -434,10 +547,11 @@ function renderCalNav() {
   var first = S.calMonths[0], last = S.calMonths[S.calMonths.length - 1];
   var rangeLabel = MONTH_NAMES[first.month].slice(0, 3) + " " + first.year + " &ndash; " + MONTH_NAMES[last.month].slice(0, 3) + " " + last.year;
   var prevDisabled = S.calOffset <= 0;
+  var step = monthsShown();
   var html = '<div class="cal-nav">';
-  html += '<button class="cal-nav-btn" ' + (prevDisabled ? "disabled" : "") + ' onclick="shiftCalMonths(-6)" aria-label="Earlier months">&#8249;</button>';
+  html += '<button class="cal-nav-btn" ' + (prevDisabled ? "disabled" : "") + ' onclick="shiftCalMonths(-' + step + ')" aria-label="Earlier months">&#8249;</button>';
   html += '<div class="cal-nav-label">' + rangeLabel + '</div>';
-  html += '<button class="cal-nav-btn" onclick="shiftCalMonths(6)" aria-label="Later months">&#8250;</button>';
+  html += '<button class="cal-nav-btn" onclick="shiftCalMonths(' + step + ')" aria-label="Later months">&#8250;</button>';
   if (S.calOffset > 0) html += '<button class="btn-ghost" style="margin-left:auto" onclick="jumpToThisMonth()">Back to today</button>';
   html += '</div>';
   return html;
@@ -591,7 +705,8 @@ function renderPropertyAndNightsSection() {
 // ── View 1: calendar + build-your-booking ────────────────────────────────────
 function renderCalendarView() {
   S.view = "calendar";
-  var html = stepsHtml(1);
+  var html = renderViewToggle();
+  html += stepsHtml(1);
   html += '<h2 class="page-title">Book Your Stay</h2>';
   html += '<p class="page-sub">Choose your check-in date below, or pick a property first to see just its availability. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.</p>';
   html += renderCartSummary();
@@ -768,6 +883,11 @@ function showSuccess(prop, ci, co) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 (function init() {
   var params = new URLSearchParams(window.location.search);
+
+  // Compact layout is strictly opt-in: without ?compact=1 the page renders
+  // exactly as it did before this option existed.
+  S.compact = params.get("compact") === "1";
+  applyCompactClass();
 
   // Skip sync on the post-booking success/cancel return pages
   if (params.get("booked") === "1") {
