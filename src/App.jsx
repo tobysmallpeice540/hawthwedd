@@ -530,6 +530,62 @@ function invoiceLinesFingerprint(lines) {
   }).join("~");
 }
 
+// Xero's JSON API returns dates as "/Date(1234567890000+0000)/" on some
+// endpoints and ISO on others (DateString). Normalise both to YYYY-MM-DD.
+function xeroDateToIso(v) {
+  if (!v) return null;
+  var s = String(v);
+  var m = s.match(/\/Date\((-?\d+)/);
+  if (m) {
+    var d = new Date(parseInt(m[1], 10));
+    return isNaN(d) ? null : d.toISOString().slice(0, 10);
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return null;
+}
+
+function isoDayDiff(a, b) {
+  if (!a || !b) return 99999;
+  return Math.round((new Date(a + "T00:00:00") - new Date(b + "T00:00:00")) / 86400000);
+}
+
+// Match computed stages against invoices that already exist in Xero, so events
+// invoiced before this feature existed aren't offered up for pushing again.
+// A stage matches when an unclaimed, non-voided invoice has the same total to
+// the penny; where several match, the one dated nearest the stage wins. Each
+// Xero invoice can only be claimed once.
+function matchStagesToXeroInvoices(stages, invoices, alreadyLinkedIds) {
+  var used = {};
+  (alreadyLinkedIds || []).forEach(function(id) { if (id) used[id] = true; });
+  var live = (invoices || []).filter(function(inv) {
+    var s = String(inv.Status || "").toUpperCase();
+    return s !== "VOIDED" && s !== "DELETED";
+  });
+  var out = {};
+  stages.forEach(function(st) {
+    out[st.stage] = null;
+    if (!(st.total > 0)) return;
+    var cands = live.filter(function(inv) {
+      return !used[inv.InvoiceID] && Math.abs(Number(inv.Total || 0) - st.total) <= 0.01;
+    });
+    if (!cands.length) return;
+    cands.sort(function(a, b) {
+      var da = Math.abs(isoDayDiff(xeroDateToIso(a.DateString || a.Date), st.invoiceDate));
+      var db = Math.abs(isoDayDiff(xeroDateToIso(b.DateString || b.Date), st.invoiceDate));
+      return da - db;
+    });
+    used[cands[0].InvoiceID] = true;
+    out[st.stage] = cands[0];
+  });
+  return out;
+}
+
+// Only events that haven't happened yet are worth invoicing.
+function isFutureEvent(ev, todayIso) {
+  var end = eventEndDate(ev);
+  return !!end && end >= todayIso;
+}
+
 // The stored record for a pushed invoice, keyed by event + stage.
 function findPushedInvoice(records, eventId, stage) {
   return (records || []).find(function(r) {
@@ -3674,6 +3730,7 @@ export default function App() {
     let n = 0;
     bookings.forEach(function(ev) {
       if (!isValidEventDate(ev.date)) return;
+      if (!isFutureEvent(ev, todayIso)) return; // past events are never invoiceable
       computeEventInvoiceStages(ev, accomBookings).forEach(function(st) {
         const pushed = findPushedInvoice(invoiceRecords, ev.id, st.stage);
         if (pushed) {
@@ -3696,8 +3753,8 @@ export default function App() {
       <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
-        {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings}
+        {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -3922,76 +3979,265 @@ async function pushInvoiceToXero(ev, stageObj, accomBookings) {
   return data;
 }
 
-function InvoiceStageRow({ ev, stageObj, pushed, drifted, blockers, busy, onPush, onOpenEvent }) {
-  const canPush = !pushed && !blockers.length && stageObj.total > 0 && !busy;
+const XERO_ORG_SHORTCODE = "!qhzr2";
+function xeroInvoiceUrl(invoiceId) {
+  return "https://go.xero.com/app/" + XERO_ORG_SHORTCODE + "/invoicing/view/" + invoiceId;
+}
+function invMoney(n) {
+  return "£" + Number(n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Payment state of a linked invoice, taken from the live Xero record.
+function XeroInvoiceSummary({ linked, xeroInv, onUnlink }) {
+  const status  = String((xeroInv && xeroInv.Status) || "").toUpperCase();
+  const total   = xeroInv ? Number(xeroInv.Total || 0) : Number(linked.total || 0);
+  const due     = xeroInv ? Number(xeroInv.AmountDue || 0) : null;
+  const paidAmt = xeroInv ? Number(xeroInv.AmountPaid || 0) : null;
+
+  let badge;
+  if (!xeroInv)                       badge = { t:"In Xero",    bg:"#eef4fd", c:T.midBlue, b:T.border };
+  else if (status === "PAID")         badge = { t:"Paid",       bg:T.greenBg, c:T.green,   b:"#86efac" };
+  else if (status === "DRAFT")        badge = { t:"Draft",      bg:"#f1f5f9", c:"#64748b", b:"#cbd5e1" };
+  else if (status === "VOIDED")       badge = { t:"Voided",     bg:"#fef2f2", c:"#dc2626", b:"#fecaca" };
+  else if (paidAmt > 0 && due > 0)    badge = { t:"Part paid",  bg:"#fffbeb", c:"#92400e", b:"#fde68a" };
+  else                                badge = { t:"Awaiting payment", bg:"#fffbeb", c:"#92400e", b:"#fde68a" };
+
+  return (
+    <span style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", justifyContent:"flex-end" }}>
+      <span style={{ fontSize:11, fontWeight:700, padding:"3px 9px", borderRadius:10, background:badge.bg, color:badge.c, border:`1px solid ${badge.b}` }}>
+        {badge.t}
+      </span>
+      <span style={{ fontSize:12, color:T.textMid }}>
+        {invMoney(total)}
+        {due > 0 && due !== total ? <span style={{ color:T.textLight }}> · {invMoney(due)} due</span> : null}
+      </span>
+      {linked.xeroInvoiceId && (
+        <a href={xeroInvoiceUrl(linked.xeroInvoiceId)} target="_blank" rel="noreferrer"
+          style={{ background:"#13B5EA", color:"#fff", borderRadius:5, padding:"3px 10px", fontSize:11, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap" }}>
+          {linked.invoiceNumber || "View"} ↗
+        </a>
+      )}
+      <button onClick={onUnlink} title="Unlink this invoice — the stage becomes available to generate again"
+        style={{ background:"none", border:`1px solid ${T.border}`, color:T.textLight, padding:"3px 8px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>Unlink</button>
+    </span>
+  );
+}
+
+function InvoiceStageRow({ ev, stageObj, linked, drifted, blockers, busy, candidates, xeroInv, onPush, onLink, onUnlink, onOpenEvent }) {
+  const canPush = !linked && !blockers.length && stageObj.total > 0 && !busy;
   return (
     <div style={{ borderTop:`1px solid ${T.border}`, padding:"10px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-      <span style={{ fontSize:11, fontWeight:700, padding:"3px 9px", borderRadius:10, background:T.midBlueBg, color:T.midBlue, flexShrink:0, minWidth:110, textAlign:"center" }}>
-        {stageObj.label}
+      <button onClick={onOpenEvent} title="Open this event"
+        style={{ background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700,
+          color:T.accent, textDecoration:"underline", textDecorationStyle:"dotted", textUnderlineOffset:3, textAlign:"left",
+          flex:1, minWidth:150, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+        {ev.couple || "(no name)"}
+      </button>
+      <span style={{ fontSize:12, color:T.accent, fontWeight:600, width:95, flexShrink:0 }}>{fmtDate(ev.date)}</span>
+      <span style={{ fontSize:11, color:T.textLight, width:95, flexShrink:0 }}>
+        {stageObj.invoiceDate ? "inv " + fmtDate(stageObj.invoiceDate) : "at booking"}
       </span>
-      <span style={{ fontSize:12, color:T.textLight, width:110, flexShrink:0 }}>
-        {stageObj.invoiceDate ? fmtDate(stageObj.invoiceDate) : "At booking"}
+      <span style={{ fontSize:14, fontWeight:700, color:T.text, width:95, textAlign:"right", flexShrink:0 }}>
+        {invMoney(stageObj.total)}
       </span>
-      <span style={{ fontSize:14, fontWeight:700, color:T.text, width:100, textAlign:"right", flexShrink:0 }}>
-        £{stageObj.total.toLocaleString("en-GB",{minimumFractionDigits:2, maximumFractionDigits:2})}
-      </span>
-      <span style={{ fontSize:11, color:T.textLight, flex:1, minWidth:140 }}>
-        {stageObj.lines.length} line{stageObj.lines.length!==1?"s":""}
-      </span>
-      {pushed ? (
-        <span style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-          <span style={{ fontSize:11, fontWeight:700, padding:"3px 9px", borderRadius:10, background:T.greenBg, color:T.green }}>
-            Pushed {pushed.invoiceNumber ? pushed.invoiceNumber : ""}
-          </span>
+
+      {linked ? (
+        <span style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", justifyContent:"flex-end", minWidth:280 }}>
           {drifted && (
-            <span title="The event or accommodation figures have changed since this draft was pushed."
+            <span title="The event or accommodation figures have changed since this invoice was raised."
               style={{ fontSize:11, fontWeight:700, padding:"3px 9px", borderRadius:10, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>
-              Figures changed since push
+              Figures changed
             </span>
           )}
+          <XeroInvoiceSummary linked={linked} xeroInv={xeroInv} onUnlink={onUnlink}/>
         </span>
       ) : blockers.length ? (
-        <span style={{ fontSize:11, color:T.red }}>{blockers.join(" · ")}</span>
+        <span style={{ fontSize:11, color:T.red, minWidth:280, textAlign:"right" }}>{blockers.join(" · ")}</span>
       ) : (
-        <button onClick={onPush} disabled={!canPush}
-          style={{ background: canPush ? T.midBlue : "#c7c2b8", color:"#fff", border:"none", padding:"7px 16px", borderRadius:6,
-            cursor: canPush ? "pointer" : "not-allowed", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
-          {busy ? "Pushing…" : "Push draft to Xero"}
-        </button>
+        <span style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", justifyContent:"flex-end", minWidth:280 }}>
+          {candidates && candidates.length > 0 && (
+            <select defaultValue="" onChange={function(e){ if(e.target.value) onLink(e.target.value); }}
+              style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:11, padding:"5px 8px", maxWidth:210 }}>
+              <option value="">Link existing invoice…</option>
+              {candidates.map(function(inv){
+                return <option key={inv.InvoiceID} value={inv.InvoiceID}>
+                  {(inv.InvoiceNumber||"(no number)") + " · " + (xeroDateToIso(inv.DateString||inv.Date)||"") + " · " + invMoney(Number(inv.Total||0))}
+                </option>;
+              })}
+            </select>
+          )}
+          <button onClick={onPush} disabled={!canPush}
+            style={{ background: canPush ? T.midBlue : "#c7c2b8", color:"#fff", border:"none", padding:"7px 16px", borderRadius:6,
+              cursor: canPush ? "pointer" : "not-allowed", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
+            {busy ? "Generating…" : "Generate"}
+          </button>
+        </span>
       )}
-      <button onClick={onOpenEvent} style={{ background:"none", border:`1px solid ${T.border}`, color:T.textMid, padding:"5px 11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>Open</button>
     </div>
   );
 }
 
-function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, onBack, onEdit }) {
+function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, onBack, onEdit, xeroToken }) {
   const today = new Date().toISOString().slice(0,10);
   const [busyKey, setBusyKey] = useState(null);
   const [msg, setMsg] = useState(null);
   const [showAll, setShowAll] = useState(false);
+  const [xeroByContact, setXeroByContact] = useState(null); // null = not loaded yet
+  const [xeroErr, setXeroErr] = useState(null);
+  const [autoLinked, setAutoLinked] = useState(0);
+  const autoRunRef = useRef(false);
 
-  const rows = [];
-  (bookings||[]).forEach(function(ev) {
-    if (!ev.couple && !isValidEventDate(ev.date)) return;
+  // Only events that haven't happened yet are invoiceable.
+  const futureEvents = (bookings||[]).filter(function(ev) {
+    return isFutureEvent(ev, today) && (ev.couple || isValidEventDate(ev.date));
+  });
+
+  // ── Pull existing invoices for every linked Xero contact, in one call ──────
+  useEffect(function() {
+    if (!xeroToken) { setXeroByContact({}); return; }
+    const ids = [];
+    futureEvents.forEach(function(ev) {
+      const cid = (ev.xeroContactId||"").trim();
+      if (cid && ids.indexOf(cid) === -1) ids.push(cid);
+    });
+    if (!ids.length) { setXeroByContact({}); return; }
+    let cancelled = false;
+    (async function() {
+      try {
+        const map = {};
+        // Xero caps URL length, so chunk the contact list.
+        for (let i = 0; i < ids.length; i += 40) {
+          const chunk = ids.slice(i, i + 40);
+          const data = await xeroFetch("Invoices?ContactIDs=" + chunk.join(",") + "&order=Date DESC");
+          ((data && data.Invoices) || []).forEach(function(inv) {
+            const cid = inv.Contact && inv.Contact.ContactID;
+            if (!cid) return;
+            if (!map[cid]) map[cid] = [];
+            map[cid].push(inv);
+          });
+        }
+        if (!cancelled) { setXeroByContact(map); setXeroErr(null); }
+      } catch (e) {
+        if (!cancelled) { setXeroByContact({}); setXeroErr(String(e.message||e)); }
+      }
+    })();
+    return function(){ cancelled = true; };
+  }, [xeroToken, bookings.length]);
+
+  // ── Auto-link exact matches once the Xero data has arrived ────────────────
+  // Only runs once per mount, and only creates links for stages that have no
+  // record yet. Every auto-link is reversible via Unlink.
+  useEffect(function() {
+    if (!xeroByContact || autoRunRef.current) return;
+    autoRunRef.current = true;
+    const claimed = (records||[]).map(function(r){ return r.xeroInvoiceId; }).filter(Boolean);
+    const additions = [];
+    futureEvents.forEach(function(ev) {
+      const cid = (ev.xeroContactId||"").trim();
+      if (!cid || !xeroByContact[cid]) return;
+      const stages = computeEventInvoiceStages(ev, accomBookings);
+      const unmatchedStages = stages.filter(function(st){ return !findPushedInvoice(records, ev.id, st.stage); });
+      if (!unmatchedStages.length) return;
+      const matches = matchStagesToXeroInvoices(unmatchedStages, xeroByContact[cid], claimed);
+      unmatchedStages.forEach(function(st) {
+        const inv = matches[st.stage];
+        if (!inv) return;
+        claimed.push(inv.InvoiceID);
+        additions.push({
+          id: "inv_" + ev.id + "_" + st.stage,
+          eventId: ev.id, stage: st.stage,
+          invoiceDate: st.invoiceDate, total: st.total,
+          lines: st.lines, fingerprint: invoiceLinesFingerprint(st.lines),
+          xeroInvoiceId: inv.InvoiceID, invoiceNumber: inv.InvoiceNumber || "",
+          pushedAt: new Date().toISOString(), source: "auto"
+        });
+      });
+    });
+    if (additions.length) {
+      setAutoLinked(additions.length);
+      onSaveRecords((records||[]).concat(additions));
+    }
+  }, [xeroByContact]);
+
+  const allClaimedIds = (records||[]).map(function(r){ return r.xeroInvoiceId; }).filter(Boolean);
+
+  // ── Build one bucket per stage ────────────────────────────────────────────
+  // Each stage has its own natural window of relevance:
+  //   1  Deposit — anything not yet raised (in practice, recent bookings)
+  //   2  1 Dec   — from mid-November of the year before the event
+  //   3  Final   — events happening within the next 8 weeks
+  // "Show everything" lifts the windows so nothing is ever truly hidden.
+  const STAGE3_WEEKS = 8;
+  const stage3Horizon = addDaysIso(today, STAGE3_WEEKS * 7);
+
+  function inStageWindow(ev, st) {
+    if (showAll) return true;
+    if (st.stage === 3) return !!(ev.date && stage3Horizon && ev.date <= stage3Horizon);
+    return !st.readyFrom || st.readyFrom <= today;
+  }
+
+  const buckets = { 1: [], 2: [], 3: [] };
+  futureEvents.forEach(function(ev) {
     const stages = computeEventInvoiceStages(ev, accomBookings);
     const blockers = invoiceBlockers(ev, accomBookings);
+    const cid = (ev.xeroContactId||"").trim();
+    const contactInvoices = (xeroByContact && cid && xeroByContact[cid]) ? xeroByContact[cid] : [];
     stages.forEach(function(st) {
-      if (st.total <= 0 && !findPushedInvoice(records, ev.id, st.stage)) return;
-      const pushed = findPushedInvoice(records, ev.id, st.stage);
-      const due = !pushed && (!st.readyFrom || st.readyFrom <= today);
-      const drifted = pushed && pushed.fingerprint !== invoiceLinesFingerprint(st.lines);
-      if (!showAll && !due && !drifted) return;
-      rows.push({ ev:ev, st:st, pushed:pushed, drifted:drifted, blockers:blockers, due:due });
+      const linked = findPushedInvoice(records, ev.id, st.stage);
+      if (st.total <= 0 && !linked) return;
+      if (!inStageWindow(ev, st)) return;
+      const drifted = linked && linked.fingerprint !== invoiceLinesFingerprint(st.lines);
+      // The live Xero record for a linked invoice — gives us paid status.
+      const xeroInv = linked
+        ? contactInvoices.find(function(i){ return i.InvoiceID === linked.xeroInvoiceId; }) || null
+        : null;
+      const candidates = contactInvoices.filter(function(inv) {
+        const s = String(inv.Status||"").toUpperCase();
+        return s!=="VOIDED" && s!=="DELETED" && allClaimedIds.indexOf(inv.InvoiceID) === -1;
+      }).slice(0, 25);
+      buckets[st.stage].push({ ev:ev, st:st, linked:linked, drifted:drifted, blockers:blockers, xeroInv:xeroInv, candidates:candidates });
     });
   });
-  rows.sort(function(a,b){
-    const ad = a.st.invoiceDate || "0000", bd = b.st.invoiceDate || "0000";
-    return ad > bd ? 1 : ad < bd ? -1 : (a.ev.date||"") > (b.ev.date||"") ? 1 : -1;
+  // Within a stage, order by when the invoice is due to be raised, then by event.
+  Object.keys(buckets).forEach(function(k) {
+    buckets[k].sort(function(a,b){
+      const ad = a.st.invoiceDate || a.ev.date || "0000";
+      const bd = b.st.invoiceDate || b.ev.date || "0000";
+      if (ad !== bd) return ad > bd ? 1 : -1;
+      return (a.ev.date||"") > (b.ev.date||"") ? 1 : -1;
+    });
   });
 
-  const grouped = {};
-  rows.forEach(function(r){ const k = String(r.ev.id); if(!grouped[k]) grouped[k]={ev:r.ev, items:[]}; grouped[k].items.push(r); });
-  const groups = Object.keys(grouped).map(function(k){ return grouped[k]; });
+  const sections = [
+    { stage:1, title:"Deposit invoices", blurb:"New bookings — deposit not yet raised." },
+    { stage:2, title:"Second invoices (1 Dec)", blurb:"50% venue + 50% accommodation, less the deposit. Raised from mid-November of the year before the event." },
+    { stage:3, title:"Final invoices (4 weeks before)", blurb: showAll ? "50% venue + 50% accommodation." : "50% venue + 50% accommodation — events in the next " + STAGE3_WEEKS + " weeks." }
+  ];
+
+  function linkExisting(ev, st, invoiceId) {
+    const cid = (ev.xeroContactId||"").trim();
+    const list = (xeroByContact && xeroByContact[cid]) || [];
+    const inv = list.find(function(i){ return i.InvoiceID === invoiceId; });
+    if (!inv) return;
+    const rec = {
+      id: "inv_" + ev.id + "_" + st.stage,
+      eventId: ev.id, stage: st.stage,
+      invoiceDate: st.invoiceDate, total: st.total,
+      lines: st.lines, fingerprint: invoiceLinesFingerprint(st.lines),
+      xeroInvoiceId: inv.InvoiceID, invoiceNumber: inv.InvoiceNumber || "",
+      pushedAt: new Date().toISOString(), source: "manual"
+    };
+    const next = (records||[]).filter(function(r){
+      return !(String(r.eventId)===String(ev.id) && Number(r.stage)===Number(st.stage));
+    }).concat([rec]);
+    onSaveRecords(next);
+  }
+
+  function unlink(ev, st) {
+    onSaveRecords((records||[]).filter(function(r){
+      return !(String(r.eventId)===String(ev.id) && Number(r.stage)===Number(st.stage));
+    }));
+  }
 
   async function doPush(ev, st) {
     const key = ev.id + "-" + st.stage;
@@ -4004,7 +4250,7 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
         invoiceDate: st.invoiceDate, total: st.total,
         lines: st.lines, fingerprint: invoiceLinesFingerprint(st.lines),
         xeroInvoiceId: res.invoiceId, invoiceNumber: res.invoiceNumber,
-        pushedAt: new Date().toISOString(),
+        pushedAt: new Date().toISOString(), source: "push",
         totalMismatch: !!res.totalMismatch
       };
       const next = (records||[]).filter(function(r){
@@ -4032,14 +4278,36 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
         <h2 style={{ margin:0, fontSize:20, fontWeight:700, color:T.text }}>Invoice worklist</h2>
         <label style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:7, fontSize:12, color:T.textMid, cursor:"pointer" }}>
           <input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
-          Show all stages (including future and already pushed)
+          Show everything (future stages and already-raised invoices)
         </label>
       </div>
 
       <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:"#1d4ed8", lineHeight:1.6 }}>
         Invoices are created in Xero as <strong>drafts</strong> — nothing is sent to the client until you approve and send it in Xero.
-        All figures are treated as VAT-inclusive.
+        All figures are treated as VAT-inclusive. Only events that haven’t happened yet are shown.
       </div>
+
+      {xeroByContact === null && (
+        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid }}>
+          Checking Xero for invoices that already exist…
+        </div>
+      )}
+      {autoLinked > 0 && (
+        <div style={{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:"#166534", lineHeight:1.6 }}>
+          Matched <strong>{autoLinked}</strong> stage{autoLinked!==1?"s":""} to invoices already in Xero (same total, nearest date) so they aren’t offered again.
+          Tick “Show all stages” to review them — anything matched wrongly can be unlinked.
+        </div>
+      )}
+      {xeroErr && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:"#92400e", lineHeight:1.6 }}>
+          Could not read existing invoices from Xero ({xeroErr}). Stages already invoiced may still be listed below — check in Xero before pushing.
+        </div>
+      )}
+      {!xeroToken && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:"#92400e" }}>
+          Xero isn’t connected, so existing invoices can’t be matched. Connect Xero in the header first.
+        </div>
+      )}
 
       {msg && (
         <div style={{ background: msg.kind==="ok" ? "#f0fdf4" : "#fef2f2", border:`1px solid ${msg.kind==="ok" ? "#bbf7d0" : "#fecaca"}`,
@@ -4048,30 +4316,52 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
         </div>
       )}
 
-      {!groups.length ? (
+      {sections.every(function(s){ return !buckets[s.stage].length; }) ? (
         <div style={{ textAlign:"center", padding:60, color:T.textLight }}>
           <p style={{ fontSize:16 }}>Nothing to invoice right now.</p>
-          <p style={{ fontSize:13 }}>Tick “Show all stages” to see upcoming and already-pushed invoices.</p>
+          <p style={{ fontSize:13 }}>Tick “Show everything” to see future stages and already-raised invoices.</p>
         </div>
-      ) : groups.map(function(g) {
+      ) : sections.map(function(sec) {
+        const items = buckets[sec.stage];
+        const toRaise = items.filter(function(r){ return !r.linked && !r.blockers.length; }).length;
         return (
-          <div key={g.ev.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:12, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-            <div style={{ padding:"12px 16px", background:"#f5f9ff", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-              <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{g.ev.couple || "(no name)"}</span>
-              <span style={{ fontSize:12, color:T.accent, fontWeight:600 }}>{fmtDate(g.ev.date)}</span>
-              <span style={{ fontSize:11, color:T.textLight }}>{eventTypeLabel(g.ev)}</span>
-              <span style={{ marginLeft:"auto", fontSize:11, color:T.textLight }}>
-                {(g.ev.xeroContactId||"").trim() ? "Xero contact linked" : "Contact will be created: " + xeroContactName(g.ev)}
-              </span>
+          <div key={sec.stage} style={{ marginBottom:22 }}>
+            <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8, flexWrap:"wrap" }}>
+              <h3 style={{ margin:0, fontSize:16, fontWeight:700, color:T.text }}>{sec.title}</h3>
+              {toRaise > 0 && (
+                <span style={{ fontSize:11, fontWeight:800, padding:"2px 9px", borderRadius:10, background:T.midBlue, color:"#fff" }}>
+                  {toRaise} to generate
+                </span>
+              )}
+              <span style={{ fontSize:11, color:T.textLight, flex:1, minWidth:180 }}>{sec.blurb}</span>
             </div>
-            {g.items.map(function(r) {
-              return (
-                <InvoiceStageRow key={r.st.stage} ev={r.ev} stageObj={r.st} pushed={r.pushed} drifted={r.drifted}
-                  blockers={r.blockers} busy={busyKey === (r.ev.id + "-" + r.st.stage)}
-                  onPush={function(){ doPush(r.ev, r.st); }}
-                  onOpenEvent={function(){ onEdit(r.ev.id); }}/>
-              );
-            })}
+
+            {!items.length ? (
+              <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 18px", fontSize:12, color:T.textLight }}>
+                Nothing in this stage.
+              </div>
+            ) : (
+              <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+                <div style={{ padding:"8px 16px", background:"#f5f9ff", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
+                  fontSize:10, letterSpacing:1, textTransform:"uppercase", fontWeight:700, color:T.textMid }}>
+                  <span style={{ flex:1, minWidth:150 }}>Event</span>
+                  <span style={{ width:95, flexShrink:0 }}>Event date</span>
+                  <span style={{ width:95, flexShrink:0 }}>Invoice date</span>
+                  <span style={{ width:95, textAlign:"right", flexShrink:0 }}>Amount</span>
+                  <span style={{ minWidth:280, textAlign:"right" }}>Status</span>
+                </div>
+                {items.map(function(r) {
+                  return (
+                    <InvoiceStageRow key={r.ev.id + "-" + r.st.stage} ev={r.ev} stageObj={r.st} linked={r.linked} drifted={r.drifted}
+                      blockers={r.blockers} busy={busyKey === (r.ev.id + "-" + r.st.stage)} candidates={r.candidates} xeroInv={r.xeroInv}
+                      onPush={function(){ doPush(r.ev, r.st); }}
+                      onLink={function(invId){ linkExisting(r.ev, r.st, invId); }}
+                      onUnlink={function(){ unlink(r.ev, r.st); }}
+                      onOpenEvent={function(){ onEdit(r.ev.id); }}/>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })}
@@ -4732,7 +5022,10 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
 
 // Read-only preview of the three computed invoice stages, shown on the
 // Financials tab in place of the old manual 2nd/Final payment inputs.
-function InvoiceSchedulePanel({ formData, accomBookings }) {
+function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveInvoiceRecords }) {
+  const [busyStage, setBusyStage] = useState(null);
+  const [note, setNote] = useState(null);
+
   if (!isValidEventDate(formData.date)) {
     return (
       <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#92400e" }}>
@@ -4741,6 +5034,32 @@ function InvoiceSchedulePanel({ formData, accomBookings }) {
     );
   }
   const stages = computeEventInvoiceStages(formData, accomBookings || []);
+  const blockers = invoiceBlockers(formData, accomBookings || []);
+
+  async function generate(st) {
+    setBusyStage(st.stage); setNote(null);
+    try {
+      const res = await pushInvoiceToXero(formData, st, accomBookings || []);
+      const rec = {
+        id: "inv_" + formData.id + "_" + st.stage,
+        eventId: formData.id, stage: st.stage,
+        invoiceDate: st.invoiceDate, total: st.total,
+        lines: st.lines, fingerprint: invoiceLinesFingerprint(st.lines),
+        xeroInvoiceId: res.invoiceId, invoiceNumber: res.invoiceNumber,
+        pushedAt: new Date().toISOString(), source: "push",
+        totalMismatch: !!res.totalMismatch
+      };
+      const next = (invoiceRecords||[]).filter(function(r){
+        return !(String(r.eventId)===String(formData.id) && Number(r.stage)===Number(st.stage));
+      }).concat([rec]);
+      if (onSaveInvoiceRecords) await onSaveInvoiceRecords(next);
+      setNote({ kind: res.totalMismatch ? "error" : "ok",
+        text: res.totalMismatch ? res.warning : "Draft " + (res.invoiceNumber||"") + " created in Xero." });
+    } catch (e) {
+      setNote({ kind:"error", text: String(e.message||e) });
+    }
+    setBusyStage(null);
+  }
   const venue = round2(parseMoney(formData.venueFee));
   const accom = eventAccomStays(formData, accomBookings || []).reduce(function(a,s){ return a + s.value; }, 0);
   const grand = round2(venue + accom);
@@ -4752,13 +5071,39 @@ function InvoiceSchedulePanel({ formData, accomBookings }) {
       <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>
         Invoice schedule <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:T.textLight }}>— computed, VAT inclusive</span>
       </div>
+      {note && (
+        <div style={{ background: note.kind==="ok" ? "#f0fdf4" : "#fef2f2", border:`1px solid ${note.kind==="ok" ? "#bbf7d0" : "#fecaca"}`,
+          color: note.kind==="ok" ? "#166534" : "#dc2626", borderRadius:7, padding:"8px 12px", marginBottom:10, fontSize:12, lineHeight:1.55 }}>
+          {note.text}
+        </div>
+      )}
       {stages.map(function(st) {
+        const linked = findPushedInvoice(invoiceRecords, formData.id, st.stage);
+        const drifted = linked && linked.fingerprint !== invoiceLinesFingerprint(st.lines);
+        const canGen = !linked && !blockers.length && st.total > 0 && busyStage === null;
         return (
           <div key={st.stage} style={{ marginBottom:10 }}>
-            <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:3 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:3, flexWrap:"wrap" }}>
               <span style={{ fontSize:12, fontWeight:700, color:T.text, minWidth:110 }}>{st.label}</span>
-              <span style={{ fontSize:11, color:T.textLight, flex:1 }}>{st.invoiceDate ? fmtDate(st.invoiceDate) : "At booking"}</span>
+              <span style={{ fontSize:11, color:T.textLight, flex:1, minWidth:70 }}>{st.invoiceDate ? fmtDate(st.invoiceDate) : "At booking"}</span>
               <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>{money(st.total)}</span>
+              {linked ? (
+                <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9,
+                    background: linked.source==="push" ? T.greenBg : "#eef4fd",
+                    color: linked.source==="push" ? T.green : T.midBlue }}>
+                    {linked.source==="push" ? "Invoiced" : "In Xero"} {linked.invoiceNumber||""}
+                  </span>
+                  {drifted && <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>Figures changed</span>}
+                </span>
+              ) : st.total > 0 ? (
+                <button type="button" onClick={function(){ generate(st); }} disabled={!canGen}
+                  title={blockers.length ? blockers.join(" · ") : "Create this invoice in Xero as a draft"}
+                  style={{ background: canGen ? T.midBlue : "#c7c2b8", color:"#fff", border:"none", padding:"5px 12px", borderRadius:6,
+                    cursor: canGen ? "pointer" : "not-allowed", fontFamily:"inherit", fontSize:11, fontWeight:700 }}>
+                  {busyStage === st.stage ? "Generating…" : "Generate"}
+                </button>
+              ) : null}
             </div>
             {st.lines.map(function(l, i) {
               return (
@@ -4808,7 +5153,7 @@ function EventClashWarning({ bookings, formData }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking, allBookings }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -5075,7 +5420,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                     The first address becomes the Xero contact's main email; any others are added as contact people and copied in on invoices.
                   </p>
                 </div>
-                <InvoiceSchedulePanel formData={formData} accomBookings={accomBookings}/>
+                <InvoiceSchedulePanel formData={formData} accomBookings={accomBookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={onSaveInvoiceRecords}/>
                 <div>
                   <FLabel>Xero Contact ID <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>— paste the UUID from the customer URL in Xero</span></FLabel>
                   <div style={{ display:"flex", alignItems:"center", gap:10 }}>
