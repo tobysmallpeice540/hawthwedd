@@ -7621,6 +7621,66 @@ function suggestProductMatch(posName, products) {
   return bestScore >= 0.5 ? { product: best, score: bestScore } : null;
 }
 
+// ── Recipes ───────────────────────────────────────────────────────────────────
+// A till product maps to one or more bar products with a measure each, so a
+// cocktail can draw down several bottles:
+//   "Aperol Spritz" -> [{ Aperol, 100, ml }, { Prosecco, 200, ml }]
+//   "Tequila shot"  -> [{ Tequila, 25, ml }]
+//   "Bottled beer"  -> [{ Peroni, 1, each }]
+// Stored as { components: [...] }; an empty components list means "ignore".
+const DEFAULT_MEASURE_BY_CATEGORY = {
+  Spirits:   { qty: 25,  unit: "ml"   },
+  Wine:      { qty: 175, unit: "ml"   },
+  Cocktails: { qty: 50,  unit: "ml"   },
+  Beer:      { qty: 1,   unit: "each" },
+  Softs:     { qty: 1,   unit: "each" }
+};
+
+function defaultMeasureFor(product) {
+  const d = DEFAULT_MEASURE_BY_CATEGORY[product && product.category];
+  if (d) return { qty: d.qty, unit: d.unit };
+  return { qty: 1, unit: "each" };
+}
+
+// Normalise whatever is stored for a till product into a recipe object.
+// Tolerates the earlier "just a product id string" format.
+function normaliseRecipe(entry) {
+  if (entry === "" || entry === null) return { components: [] };           // explicitly ignored
+  if (typeof entry === "string") return { components: [{ productId: entry, qty: 1, unit: "each" }] };
+  if (entry && Array.isArray(entry.components)) return entry;
+  return null;                                                             // unmapped
+}
+
+// Millilitres (or whole units) of each bar product implied by the till sales.
+function consumptionFromSales(posLines, mapping, products) {
+  const out = {};   // productId -> { ml, each, gross }
+  (posLines || []).forEach(function(line) {
+    const recipe = normaliseRecipe(mapping[line.key]);
+    if (!recipe || !recipe.components.length) return;
+    const totalQty = recipe.components.reduce(function(s, c) { return s + (Number(c.qty) || 0); }, 0) || 1;
+    recipe.components.forEach(function(c) {
+      if (!c.productId) return;
+      if (!out[c.productId]) out[c.productId] = { ml: 0, each: 0, gross: 0 };
+      const amount = (Number(c.qty) || 0) * line.units;
+      if (c.unit === "each") out[c.productId].each += amount;
+      else out[c.productId].ml += amount;
+      // Apportion the till value across components by their share of the recipe,
+      // so a cocktail's revenue isn't counted once per ingredient.
+      out[c.productId].gross += line.gross * ((Number(c.qty) || 0) / totalQty);
+    });
+  });
+  return out;
+}
+
+// Containers implied, given the product's container volume.
+function containersFromConsumption(cons, product) {
+  if (!cons) return null;
+  const vol = Number(product && product.volumeMl) || 0;
+  if (cons.ml > 0 && vol <= 0) return null;      // can't convert without a volume
+  const fromMl = vol > 0 ? cons.ml / vol : 0;
+  return fromMl + cons.each;
+}
+
 function BarReconcileView({ products, events }) {
   const stocktakes = [...events].filter(e => e.type === "stocktake").sort((a,b) => a.date > b.date ? 1 : -1);
   const [fromIdx, setFromIdx] = useState(Math.max(0, stocktakes.length - 2));
@@ -7690,39 +7750,51 @@ function BarReconcileView({ products, events }) {
 
   // ── Pair POS lines with bar products ──────────────────────────────────────
   const posLines = (sales && sales.byProduct) || [];
-  const resolved = posLines.map(function(line) {
-    const explicit = Object.prototype.hasOwnProperty.call(map, line.key) ? map[line.key] : undefined;
-    if (explicit !== undefined) {
-      return { line: line, product: products.find(p => p.id === explicit) || null, auto:false, ignored: explicit === "" };
-    }
+
+  // Effective mapping: stored recipes, plus a suggested single-ingredient
+  // recipe for anything not yet mapped (using a sensible default measure for
+  // the category). Suggestions are shown as such and are not saved until
+  // confirmed, so nothing is silently assumed.
+  const effectiveMap = {};
+  const suggestedKeys = {};
+  posLines.forEach(function(line) {
+    const stored = normaliseRecipe(map[line.key]);
+    if (stored) { effectiveMap[line.key] = stored; return; }
     const s = suggestProductMatch(line.name + " " + (line.variantName||""), products);
-    return { line: line, product: s ? s.product : null, auto: !!s, ignored:false };
+    if (s) {
+      const m = defaultMeasureFor(s.product);
+      effectiveMap[line.key] = { components: [{ productId: s.product.id, qty: m.qty, unit: m.unit }] };
+      suggestedKeys[line.key] = true;
+    }
   });
 
-  // Units sold per bar product, converted to containers via servings-per-container
-  const soldByProduct = {};
-  resolved.forEach(function(r) {
-    if (!r.product || r.ignored) return;
-    if (!soldByProduct[r.product.id]) soldByProduct[r.product.id] = { units:0, gross:0 };
-    soldByProduct[r.product.id].units += r.line.units;
-    soldByProduct[r.product.id].gross += r.line.gross;
-  });
+  const consumption = consumptionFromSales(posLines, effectiveMap, products);
+  const unmapped = posLines.filter(function(l) { return !effectiveMap[l.key]; });
+  const suggestedCount = Object.keys(suggestedKeys).length;
 
-  const unmatched = resolved.filter(r => !r.product && !r.ignored);
   const posGross  = sales ? sales.gross : 0;
   const variance  = posGross - expectedValue;
   const variancePct = expectedValue > 0 ? (variance / expectedValue) * 100 : 0;
 
   const rows = products.map(function(p) {
     const used = usage[p.id] || 0;
-    const sold = soldByProduct[p.id];
-    const servings = Number(p.servings) || 0;
-    // Containers implied by till sales, if we know how many servings a container yields
-    const soldContainers = (sold && servings > 0) ? sold.units / servings : null;
+    const cons = consumption[p.id] || null;
+    const soldContainers = containersFromConsumption(cons, p);
     const diff = (soldContainers !== null) ? (used - soldContainers) : null;
-    return { p:p, used:used, soldUnits: sold ? sold.units : null, soldGross: sold ? sold.gross : null,
-             servings:servings, soldContainers:soldContainers, diff:diff };
-  }).filter(r => r.used !== 0 || r.soldUnits);
+    return { p:p, used:used, cons:cons, soldContainers:soldContainers, diff:diff,
+             soldGross: cons ? cons.gross : null };
+  }).filter(r => r.used !== 0 || r.cons);
+
+  function setRecipe(posKey, components) {
+    const next = Object.assign({}, map);
+    next[posKey] = { components: components };
+    saveMap(next);
+  }
+  function ignoreLine(posKey) {
+    const next = Object.assign({}, map);
+    next[posKey] = { components: [] };
+    saveMap(next);
+  }
 
   const money = n => "£" + Number(n||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2});
 
@@ -7782,36 +7854,83 @@ function BarReconcileView({ products, events }) {
             )}
           </div>
 
-          {/* Unmatched POS products */}
-          {unmatched.length > 0 && (
-            <div style={{ background:"#fff", border:"1px solid #fde68a", borderRadius:10, marginBottom:18, overflow:"hidden" }}>
-              <div style={{ padding:"11px 16px", background:"#fffbeb", borderBottom:"1px solid #fde68a", fontSize:13, fontWeight:700, color:"#92400e" }}>
-                {unmatched.length} till product{unmatched.length!==1?"s":""} not matched to a bar product
-              </div>
-              {unmatched.map(function(r) {
-                return (
-                  <div key={r.line.key} style={{ padding:"9px 16px", borderTop:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-                    <span style={{ fontSize:13, flex:1, minWidth:160 }}>
-                      {r.line.name}{r.line.variantName ? " · " + r.line.variantName : ""}
-                    </span>
-                    <span style={{ fontSize:12, color:T.textLight }}>{r.line.units} sold · {money(r.line.gross)}</span>
-                    <select defaultValue="" onChange={function(e){
-                        const v = e.target.value;
-                        if (v === "") return;
-                        const next = Object.assign({}, map);
-                        next[r.line.key] = (v === "__ignore__") ? "" : v;
-                        saveMap(next);
-                      }}
-                      style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, fontFamily:"inherit", fontSize:12, padding:"5px 8px", maxWidth:230 }}>
-                      <option value="">Map to bar product…</option>
-                      <option value="__ignore__">— Ignore this product —</option>
-                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                  </div>
-                );
-              })}
+          {/* Till product recipes */}
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:18, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ padding:"12px 16px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>Till products &amp; recipes</span>
+              {unmapped.length > 0 && <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:"#fef2f2", color:"#dc2626", border:"1px solid #fecaca" }}>{unmapped.length} unmapped</span>}
+              {suggestedCount > 0 && <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>{suggestedCount} suggested</span>}
+              <span style={{ fontSize:11, color:T.textLight, flex:1, minWidth:200 }}>
+                A till product can draw on several bar products — add a line per ingredient.
+              </span>
             </div>
-          )}
+            {posLines.map(function(line) {
+              const recipe = effectiveMap[line.key];
+              const isSuggested = !!suggestedKeys[line.key];
+              const comps = recipe ? recipe.components : [];
+              const ignored = !!(recipe && comps.length === 0);
+              return (
+                <div key={line.key} style={{ padding:"10px 16px", borderTop:`1px solid ${T.border}`,
+                  background: !recipe ? "#fff8f8" : isSuggested ? "#fffdf5" : "#fff" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom: comps.length ? 7 : 0 }}>
+                    <span style={{ fontSize:13, fontWeight:600, flex:1, minWidth:160 }}>
+                      {line.name}{line.variantName ? " · " + line.variantName : ""}
+                    </span>
+                    <span style={{ fontSize:12, color:T.textLight, whiteSpace:"nowrap" }}>{line.units} sold · {money(line.gross)}</span>
+                    {isSuggested && <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:9, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>suggested</span>}
+                    {ignored && <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:9, background:"#f1f5f9", color:"#64748b" }}>ignored</span>}
+                    <button onClick={function(){ setRecipe(line.key, comps.concat([{ productId:"", qty:25, unit:"ml" }])); }}
+                      style={{ background:"none", border:`1px solid ${T.border}`, color:T.midBlue, padding:"3px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>
+                      + ingredient
+                    </button>
+                    {!ignored && (
+                      <button onClick={function(){ ignoreLine(line.key); }}
+                        style={{ background:"none", border:`1px solid ${T.border}`, color:T.textLight, padding:"3px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                        Ignore
+                      </button>
+                    )}
+                  </div>
+                  {comps.map(function(c, ci) {
+                    return (
+                      <div key={ci} style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", paddingLeft:14, marginBottom:5 }}>
+                        <select value={c.productId||""} onChange={function(e){
+                            const next = comps.slice(); next[ci] = Object.assign({}, c, { productId:e.target.value }); setRecipe(line.key, next);
+                          }}
+                          style={{ background:T.bgInput, border:`1.5px solid ${c.productId?T.border:"#fecaca"}`, borderRadius:6, fontFamily:"inherit", fontSize:12, padding:"5px 8px", minWidth:200 }}>
+                          <option value="">Choose bar product…</option>
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        <input type="number" value={c.qty} min="0" step="any"
+                          onChange={function(e){ const next = comps.slice(); next[ci] = Object.assign({}, c, { qty:Number(e.target.value)||0 }); setRecipe(line.key, next); }}
+                          style={{ width:74, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, fontFamily:"inherit", fontSize:12, padding:"5px 8px" }}/>
+                        <select value={c.unit||"ml"} onChange={function(e){
+                            const next = comps.slice(); next[ci] = Object.assign({}, c, { unit:e.target.value }); setRecipe(line.key, next);
+                          }}
+                          style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, fontFamily:"inherit", fontSize:12, padding:"5px 8px" }}>
+                          <option value="ml">ml</option>
+                          <option value="each">whole units</option>
+                        </select>
+                        {(function(){
+                          const prod = products.find(p=>p.id===c.productId);
+                          if (c.unit === "ml" && prod && !Number(prod.volumeMl)) {
+                            return <span style={{ fontSize:10, color:T.red }}>set container volume on {prod.name}</span>;
+                          }
+                          return null;
+                        })()}
+                        <button onClick={function(){ const next = comps.slice(); next.splice(ci,1); setRecipe(line.key, next); }}
+                          style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontFamily:"inherit", fontSize:14, padding:"0 4px" }}>×</button>
+                      </div>
+                    );
+                  })}
+                  {!recipe && (
+                    <div style={{ fontSize:11, color:"#dc2626", paddingLeft:14 }}>
+                      Not mapped — sales of this product aren’t being compared to stock.
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
 
           {/* Product level table */}
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
@@ -7822,7 +7941,7 @@ function BarReconcileView({ products, events }) {
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr style={{ background:"#f5f9ff" }}>
-                    {["Product","Used (containers)","Sold (units)","Servings / container","Implied containers","Difference","Till value"].map(h=>(
+                    {["Product","Used (containers)","Container ml","Sold (ml)","Sold (units)","Implied containers","Difference","Till value"].map(h=>(
                       <th key={h} style={{ padding:"9px 12px", textAlign:"left", color:T.textMid, fontSize:10, letterSpacing:1, textTransform:"uppercase", fontWeight:700, whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -7830,14 +7949,16 @@ function BarReconcileView({ products, events }) {
                 <tbody>
                   {rows.map(function(r,i) {
                     const bad = r.diff !== null && Math.abs(r.diff) >= 1;
+                    const needsVol = r.cons && r.cons.ml > 0 && !Number(r.p.volumeMl);
                     return (
                       <tr key={r.p.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
                         <td style={{ padding:"8px 12px", fontSize:13 }}>{r.p.name}</td>
                         <td style={{ padding:"8px 12px", fontSize:13, fontWeight:600 }}>{r.used}</td>
-                        <td style={{ padding:"8px 12px", fontSize:13 }}>{r.soldUnits !== null ? r.soldUnits : <span style={{color:T.textLight}}>—</span>}</td>
-                        <td style={{ padding:"8px 12px", fontSize:12, color: r.servings ? T.textMid : T.textLight }}>
-                          {r.servings || <span title="Set servings per container on the Products tab to compare units">not set</span>}
+                        <td style={{ padding:"8px 12px", fontSize:12, color: r.p.volumeMl ? T.textMid : T.red }}>
+                          {r.p.volumeMl || (needsVol ? "not set" : "—")}
                         </td>
+                        <td style={{ padding:"8px 12px", fontSize:13 }}>{r.cons && r.cons.ml ? Math.round(r.cons.ml).toLocaleString() : <span style={{color:T.textLight}}>—</span>}</td>
+                        <td style={{ padding:"8px 12px", fontSize:13 }}>{r.cons && r.cons.each ? r.cons.each : <span style={{color:T.textLight}}>—</span>}</td>
                         <td style={{ padding:"8px 12px", fontSize:13 }}>{r.soldContainers !== null ? r.soldContainers.toFixed(2) : <span style={{color:T.textLight}}>—</span>}</td>
                         <td style={{ padding:"8px 12px", fontSize:13, fontWeight:700, color: r.diff===null ? T.textLight : bad ? T.red : T.green }}>
                           {r.diff === null ? "—" : (r.diff>0?"+":"") + r.diff.toFixed(2)}
@@ -7851,7 +7972,7 @@ function BarReconcileView({ products, events }) {
             </div>
             <div style={{ padding:"10px 18px", borderTop:`1px solid ${T.border}`, fontSize:11, color:T.textLight, lineHeight:1.6 }}>
               “Difference” is containers used less containers implied by till sales — a positive number means more stock went than was sold.
-              Products without a servings figure can’t be compared by unit; set it on the Products tab.
+              Millilitres sold are divided by the container volume, so a product needs its volume set on the Products tab before it can be compared.
             </div>
           </div>
         </>
@@ -8051,10 +8172,11 @@ function ProductsView({ products, onSave }) {
   const [filterCat, setFilterCat] = useState("All");
 
   const updateForm = (k,v) => setForm(f=>({...f,[k]:v}));
-  // `servings` = how many till units one container yields (e.g. 6 glasses per
-  // wine bottle, 28 measures per 70cl spirit). Used only by Till Reconciliation
-  // to convert units sold into containers; blank simply means "don't compare".
-  const emptyProduct = () => ({ id:`p${Date.now()}`, name:"", category:"Wine", supplier:"", multiple:1, costUnit:"", servings:"" });
+  // `volumeMl` = the volume of one container (750 for a 75cl bottle of tequila,
+  // 700 for 70cl, 330 for a bottle of beer). Till Reconciliation divides the
+  // millilitres sold by this to work out how many containers that represents.
+  // Blank means the product is only reconciled by unit, not by volume.
+  const emptyProduct = () => ({ id:`p${Date.now()}`, name:"", category:"Wine", supplier:"", multiple:1, costUnit:"", volumeMl:"" });
 
   const handleEdit = p => { setForm({...p}); setEditId(p.id); };
   const handleNew  = () => { setForm(emptyProduct()); setEditId("new"); };
@@ -8066,7 +8188,7 @@ function ProductsView({ products, onSave }) {
   const handleSubmit = () => {
     if (!form.name) { alert("Product name required."); return; }
     let updated;
-    if (editId==="new") updated = [...products, {...form, multiple:Number(form.multiple), costUnit:form.costUnit?Number(form.costUnit):null, servings:form.servings?Number(form.servings):null}];
+    if (editId==="new") updated = [...products, {...form, multiple:Number(form.multiple), costUnit:form.costUnit?Number(form.costUnit):null, volumeMl:form.volumeMl?Number(form.volumeMl):null}];
     else updated = products.map(p=>p.id===editId?{...form,multiple:Number(form.multiple),costUnit:form.costUnit?Number(form.costUnit):null}:p);
     onSave(updated);
     setEditId(null); setForm(null);
@@ -8102,9 +8224,9 @@ function ProductsView({ products, onSave }) {
             <div><FLabel>Buy Price (£)</FLabel><FInput type="number" value={form.costUnit||""} onChange={v=>updateForm("costUnit",v)}/></div>
             <div><FLabel>Multiple</FLabel><FInput type="number" value={form.multiple||""} onChange={v=>updateForm("multiple",v)}/></div>
             <div>
-              <FLabel>Servings / container</FLabel>
-              <FInput type="number" value={form.servings||""} onChange={v=>updateForm("servings",v)} placeholder="e.g. 6"/>
-              <div style={{ fontSize:10, color:T.textLight, marginTop:3 }}>Glasses or measures per bottle — used by Till Reconciliation. Leave blank to skip.</div>
+              <FLabel>Container volume (ml)</FLabel>
+              <FInput type="number" value={form.volumeMl||""} onChange={v=>updateForm("volumeMl",v)} placeholder="e.g. 750"/>
+              <div style={{ fontSize:10, color:T.textLight, marginTop:3 }}>Volume of one bottle/container. Used by Till Reconciliation. Leave blank for items sold whole.</div>
             </div>
           </div>
           <div style={{ display:"flex", gap:10, marginTop:16 }}>
