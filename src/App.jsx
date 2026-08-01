@@ -462,6 +462,23 @@ function eventAccomStays(ev, accomBookings) {
   return out.sort(function(a, b) { return (a.checkIn || "") > (b.checkIn || "") ? 1 : -1; });
 }
 
+// Chargeable extras on accommodation bookings linked to this event.
+// Breakage deposits are deliberately excluded — they're refundable, not income.
+function eventAccomExtras(ev, accomBookings) {
+  const out = [];
+  (accomBookings || []).forEach(function(ab) {
+    if (ab.status === "cancelled") return;
+    if (ab.bookingType === "Blocked") return;
+    if (!ab.linkedEventId || String(ab.linkedEventId) !== String(ev.id)) return;
+    (ab.extras || []).forEach(function(x) {
+      const amt = round2(Number(x.amount) || 0);
+      if (!amt) return;
+      out.push({ desc: (x.desc || "").trim() || "Extra", amount: amt });
+    });
+  });
+  return out;
+}
+
 function accomLineDescription(s, pct) {
   var range = (s.checkIn && s.checkOut)
     ? fmtDateLong(s.checkIn) + " to " + fmtDateLong(s.checkOut)
@@ -489,6 +506,7 @@ function computeEventInvoiceStages(ev, accomBookings) {
   var venue   = round2(parseMoney(ev.venueFee));
   var deposit = round2(parseMoney(ev.deposit));
   var stays   = eventAccomStays(ev, accomBookings);
+  var extras  = eventAccomExtras(ev, accomBookings);
   var dates   = invoiceStageDates(ev);
   var label   = eventTypeLabel(ev);
   var evDate  = fmtDateLong(ev.date);
@@ -515,6 +533,13 @@ function computeEventInvoiceStages(ev, accomBookings) {
     var rest = round2(s.value - half);
     stage2Lines.push({ desc: accomLineDescription(s, 50), account: XERO_ACCOUNT_ACCOM, amount: half });
     stage3Lines.push({ desc: accomLineDescription(s, 50), account: XERO_ACCOUNT_ACCOM, amount: rest });
+  });
+  // Accommodation extras split 50:50 across stages 2 and 3, same as the stays.
+  extras.forEach(function(x) {
+    var half = round2(x.amount / 2);
+    var rest = round2(x.amount - half);
+    stage2Lines.push({ desc: x.desc + " (50%)", account: XERO_ACCOUNT_ACCOM, amount: half });
+    stage3Lines.push({ desc: x.desc + " (50%)", account: XERO_ACCOUNT_ACCOM, amount: rest });
   });
   // Deposit already invoiced at stage 1 is credited back on stage 2. Negative
   // unit amount (quantity stays 1 — Xero rejects negative quantities).
@@ -822,7 +847,17 @@ function attributeScheduleToStays(schedule, stays) {
 }
 
 // Read-only panel: shows lettings bookings linked to a wedding event by date proximity
-function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking }) {
+function AddAccomButton({ onAddAccom }) {
+  if (!onAddAccom) return null;
+  return (
+    <button type="button" onClick={onAddAccom}
+      style={{ background:T.accent, color:"#fff", border:"none", padding:"8px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, whiteSpace:"nowrap" }}>
+      + Add accommodation
+    </button>
+  );
+}
+
+function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking, onAddAccom }) {
   var [hideUnlinked, setHideUnlinked] = useState(true); // default: show linked only
   var nearby = findLinkedAccom(eventDate, accomBookings, 7, eventEndDate);
   var explicitlyLinked = (accomBookings||[]).filter(function(b) {
@@ -839,6 +874,7 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
     <div style={{ fontSize:12, color:T.textLight, background:T.bgInput, borderRadius:8, padding:"12px 14px", lineHeight:1.6 }}>
       No lettings bookings found within 7 days of this event.
       To link one, go to Lettings, add or edit a booking, and set its check-in near this event date.
+      <div style={{ marginTop:10 }}><AddAccomButton onAddAccom={onAddAccom}/></div>
     </div>
   );
 
@@ -854,7 +890,8 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
+        <AddAccomButton onAddAccom={onAddAccom}/>
         {canLink && !hasAnyLinked && (
           <div style={{ fontSize:11, color:T.textMid, background:T.bgInput, borderRadius:7, padding:"7px 12px" }}>
             Tick a booking to confirm it is attached to this event.
@@ -1512,6 +1549,22 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
     coSet.forEach(function(d) { if (ciSet.has(d)) changeoverSet.add(d + ":" + p.id); });
   });
 
+  // Date-keyed arrivals/departures, so the year grid can draw a diagonal on
+  // check-in and check-out days. A checkout day isn't "occupied" (occupancy is
+  // [checkIn, checkOut) exclusive), so without this those days would look
+  // completely free even though the property is being turned around.
+  const ciByDate = {}, coByDate = {};
+  properties.forEach(function(p) {
+    (ciByProp[p.id] || new Set()).forEach(function(d) {
+      if (!ciByDate[d]) ciByDate[d] = [];
+      ciByDate[d].push(p);
+    });
+    (coByProp[p.id] || new Set()).forEach(function(d) {
+      if (!coByDate[d]) coByDate[d] = [];
+      coByDate[d].push(p);
+    });
+  });
+
   // ── YEAR VIEW ──────────────────────────────────────────────────────────────
   if (mode === "year") {
     return (
@@ -1557,14 +1610,19 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       const isToday  = ds === today;
                       const colInRow = (ci - 7) % 7; // offset by 7 header cells
                       const isSat = colInRow === 5, isSun = colInRow === 6;
-                      const chgProps = propsOn.filter(p => changeoverSet.has(ds + ":" + p.id));
-                      const isChgover = chgProps.length > 0;
-                      const cp0 = isChgover ? chgProps[0] : null;
                       const allBlocked = propsOn.length > 0 && propsOn.every(p => blockedSet.has(ds + ":" + p.id));
+                      // Arrivals and departures on this date. Both are drawn as
+                      // diagonals: departure fills the lower-left triangle,
+                      // arrival the upper-right. When the same day is both (a
+                      // changeover) the departure half is darkened so the two
+                      // read apart at this size.
+                      const ciProps = ciByDate[ds] || [];
+                      const coProps = coByDate[ds] || [];
+                      const isChgDay = ciProps.length > 0 && coProps.length > 0;
+                      const ciCol = ciProps.length ? (ciProps[0].colour || T.accent) : null;
+                      const coCol = coProps.length ? (coProps[0].colour || T.accent) : null;
                       const bg = allBlocked
                         ? "repeating-linear-gradient(135deg, #e2e8f0, #e2e8f0 4px, #eef2f7 4px, #eef2f7 8px)"
-                        : isChgover && cp0
-                        ? "linear-gradient(135deg, " + darkenHex(cp0.colour, 60) + " 50%, " + cp0.colour + "44 50%)"
                         : propsOn.length === 1 ? propsOn[0].colour+"2a"
                         : propsOn.length > 1   ? propsOn[0].colour+"1e"
                         : "transparent";
@@ -1574,17 +1632,28 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                         <div key={day}
                           style={{ textAlign:"center", padding:"3px 0 5px", borderRadius:3, background:bg,
                             outline: isToday ? `1.5px solid ${T.accent}` : "none",
-                            cursor: (dayEntries.length||dateEvts.length) ? "pointer" : "default", position:"relative" }}
+                            cursor: (dayEntries.length||dateEvts.length) ? "pointer" : "default", position:"relative", overflow:"hidden" }}
                           onMouseEnter={function(e) {
                             if (!dayEntries.length && !dateEvts.length) return;
                             var rect = e.currentTarget.getBoundingClientRect();
                             setTooltip({ ds:ds, dayEntries:dayEntries, dateEvts:dateEvts, x:rect.left, y:rect.bottom+4 });
                           }}
                           onMouseLeave={function() { setTooltip(null); }}>
-                          <div style={{ fontSize:12, fontWeight:propsOn.length||hasEvent?700:400,
+                          {coCol && (
+                            <div style={{ position:"absolute", inset:0, pointerEvents:"none",
+                              background: isChgDay ? darkenHex(coCol, 55) : coCol,
+                              opacity: isChgDay ? 0.75 : 0.3,
+                              clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>
+                          )}
+                          {ciCol && (
+                            <div style={{ position:"absolute", inset:0, pointerEvents:"none",
+                              background: ciCol, opacity: isChgDay ? 0.38 : 0.3,
+                              clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
+                          )}
+                          <div style={{ position:"relative", fontSize:12, fontWeight:propsOn.length||hasEvent?700:400,
                             color: isSat||isSun ? T.accent : T.text, lineHeight:"1.3" }}>{day}</div>
                           {(propsOn.length > 0 || hasEvent) && (
-                            <div style={{ display:"flex", justifyContent:"center", gap:2, marginTop:2, flexWrap:"wrap" }}>
+                            <div style={{ position:"relative", display:"flex", justifyContent:"center", gap:2, marginTop:2, flexWrap:"wrap" }}>
                               {propsOn.slice(0,3).map(function(p){
                                 const isPropBlocked = blockedSet.has(ds + ":" + p.id);
                                 return (
@@ -1672,7 +1741,18 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
             Blocked / not available
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ width:12, height:12, borderRadius:2, background:"linear-gradient(135deg, #1040a0 50%, #3b82f633 50%)", display:"inline-block" }}/>
+            <span style={{ display:"inline-block", width:12, height:12, background:"#2563eb", opacity:.3, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>
+            Check-out
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ display:"inline-block", width:12, height:12, background:"#2563eb", opacity:.3, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
+            Check-in
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ position:"relative", display:"inline-block", width:12, height:12 }}>
+              <span style={{ position:"absolute", inset:0, background:"#1040a0", opacity:.75, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>
+              <span style={{ position:"absolute", inset:0, background:"#2563eb", opacity:.38, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
+            </span>
             Changeover
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
@@ -2261,7 +2341,20 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         )}
       </div>
 
-      {/* Payment schedule */}
+      {/* Payment schedule — suppressed when the booking is billed via an event.
+          Event-linked accommodation is invoiced through the event's Xero
+          invoices (50% on the 1 Dec invoice, 50% on the final one), so it must
+          not also have its own deposit/balance requests or payment links. */}
+      {form.linkedEventId ? (
+        <div style={{ border:"1px solid #bfdbfe", background:"#eff6ff", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#1d4ed8", marginBottom:4 }}>Billed through the linked event</div>
+          <div style={{ fontSize:12, color:"#1d4ed8", lineHeight:1.6 }}>
+            This accommodation is invoiced with event #{form.linkedEventId} — split 50% on the 1&nbsp;December invoice and 50% on the final invoice,
+            along with any extras below. No deposit or balance requests are sent for it, and no payment schedule applies.
+            Unlink the event above if this should be billed as a standard let instead.
+          </div>
+        </div>
+      ) : (
       <div style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"14px 16px", marginBottom:16 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
           <span style={{ fontSize:13, fontWeight:700, color:T.text }}>Payment schedule</span>
@@ -2279,6 +2372,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           </div>
         ))}
       </div>
+      )}
 
       <label style={{ display:"flex", flexDirection:"column", gap:5, marginBottom:18 }}>
         <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Notes</span>
@@ -3268,7 +3362,7 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
 }
 
 // ── Main Lettings view ───────────────────────────────────────────────────────
-function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType, focusBookingId, clearFocusBooking }) {
+function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType, focusBookingId, clearFocusBooking, prefillNew, clearPrefillNew }) {
   const [properties, setProperties]         = useState(INITIAL_PROPERTIES);
   const [bookings, setBookings]             = useState([]);
   const [guests, setGuests]                 = useState([]);
@@ -3338,6 +3432,39 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     setForm(Object.assign({}, blankAccom(pIds[0]), b, { propertyIds:pIds, propertyId:pIds[0], stays:editStays, extras:(b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }));
     setEditId(b.id); setTab("form");
   };
+
+  // "Add accommodation" from an event: open a new booking pre-filled with all
+  // properties for the night before and the night of the event, already linked
+  // to that event. Anything not needed can simply be unticked before saving.
+  useEffect(function() {
+    if (!prefillNew || !loaded) return;
+    var props = (properties && properties.length ? properties : INITIAL_PROPERTIES);
+    var ids = props.map(function(p) { return p.id; });
+    var stays = props.map(function(p) {
+      return {
+        propertyId: p.id,
+        propertyName: p.name,
+        checkIn: prefillNew.checkIn,
+        checkOut: prefillNew.checkOut,
+        nights: 2,
+        guestCount: "",
+        value: 0
+      };
+    });
+    setForm(Object.assign({}, blankAccom(ids[0]), {
+      propertyIds: ids,
+      propertyId: ids[0],
+      stays: stays,
+      linkedEventId: prefillNew.eventId,
+      guestName: prefillNew.guestName || "",
+      email: prefillNew.email || "",
+      bookingType: prefillNew.bookingType || "",
+      source: "manual"
+    }));
+    setEditId(null);
+    setTab("form");
+    if (clearPrefillNew) clearPrefillNew();
+  }, [prefillNew, loaded]);
 
   // Deep-link: open a specific accom booking when arriving via the Bookings accommodation column
   useEffect(function() {
@@ -3585,11 +3712,27 @@ export default function App() {
   const [accomBookings, setAccomBookings]     = useState([]);
   const [accomProperties, setAccomProperties] = useState([]);
   const [invoiceRecords, setInvoiceRecords]   = useState([]);
+  const [accomPrefill, setAccomPrefill]       = useState(null);
 
   // Navigate straight to a specific enquiry's detail page (used from Viewings + Year Calendar)
   const goToEnquiry = (id) => { setFocusEnquiryId(id); setView("enquiries"); };
   // Navigate straight to a specific lettings booking (used from the Bookings accommodation column)
   const goToAccomBooking = (id) => { setFocusAccomBookingId(id); setView("lettings"); };
+
+  // Start a new accommodation booking for an event: every property, the night
+  // before and the night of the event, pre-linked so it's billed via the event.
+  const addAccomForEvent = (ev) => {
+    if (!ev || !isValidEventDate(ev.date)) { alert("Set a valid event date first."); return; }
+    setAccomPrefill({
+      eventId: ev.id,
+      checkIn: addDaysIso(ev.date, -1),
+      checkOut: addDaysIso(ev.date, 1),   // 2 nights: day before + event day
+      guestName: ev.couple || "",
+      email: ev.email || "",
+      bookingType: /wedding/i.test(ev.eventType || "") ? "Wedding" : ""
+    });
+    setView("lettings");
+  };
 
   useEffect(()=>{
     (async()=>{
@@ -3770,7 +3913,7 @@ export default function App() {
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -3791,7 +3934,7 @@ export default function App() {
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)}/>}
+        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)}/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
@@ -4414,23 +4557,6 @@ function findOrphanedEventLinks(bookings, accomBookings) {
   return Object.keys(byEvent).map(function(k) { return byEvent[k]; });
 }
 
-// Event ids are allocated as max+1, so a healthy set runs consecutively.
-// A gap means the record was either deliberately deleted or lost. Not proof on
-// its own, but combined with an orphaned link it's conclusive.
-function findEventIdGaps(bookings) {
-  var nums = (bookings || []).map(function(b) { return Number(b && b.id); })
-    .filter(function(n) { return Number.isFinite(n) && n > 0; })
-    .sort(function(a, b) { return a - b; });
-  if (nums.length < 2) return [];
-  var present = {};
-  nums.forEach(function(n) { present[n] = true; });
-  var gaps = [];
-  for (var i = nums[0]; i <= nums[nums.length - 1]; i++) {
-    if (!present[i]) gaps.push(i);
-  }
-  return gaps;
-}
-
 function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom, xeroToken, onOpenInvoices, invoiceDueCount }) {
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b => classifyEventRow(b, today) === "upcoming");
@@ -4439,7 +4565,6 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
   const missingName = bookings.filter(b => isValidEventDate(b.date) && !b.couple);
   const accountedFor = upcoming.length + past.length + problem.length;
   const orphans = findOrphanedEventLinks(bookings, accomBookings);
-  const idGaps  = findEventIdGaps(bookings);
 
   return (
     <div>
@@ -4483,15 +4608,6 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
           <div style={{ fontSize:11, color:"#b91c1c", marginTop:6, lineHeight:1.6 }}>
             These event records are no longer in the database. Recreate the event and re-link the accommodation, or clear the link on the booking.
           </div>
-        </div>
-      )}
-
-      {/* Gaps in the id sequence — suggestive of deleted or lost records */}
-      {idGaps.length > 0 && !search && (
-        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid, lineHeight:1.6 }}>
-          <strong>{idGaps.length}</strong> gap{idGaps.length!==1?"s":""} in the event ID sequence
-          {idGaps.length <= 30 ? <span> (#{idGaps.join(", #")})</span> : <span> (#{idGaps.slice(0,30).join(", #")} …)</span>}.
-          <span style={{ color:T.textLight }}> Expected if you've deleted events; otherwise these may be records that were lost.</span>
         </div>
       )}
 
@@ -4708,7 +4824,19 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                   onClick={()=>onEdit(b.id)}
                   onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                  <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?fmtDate(b.date)+(b.endDate&&b.endDate>b.date?" – "+fmtDate(b.endDate):""):"—"}</td>
+                  {/* Multi-day events stack the end date under the start date,
+                      keeping this column narrow so the file icons stay inside
+                      the table rather than being pushed off the right edge. */}
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600, lineHeight:1.35 }}>
+                    {b.date ? (
+                      <>
+                        <div>{fmtDate(b.date)}</div>
+                        {b.endDate && b.endDate > b.date && (
+                          <div style={{ fontSize:11, color:T.textLight, fontWeight:500 }}>to {fmtDate(b.endDate)}</div>
+                        )}
+                      </>
+                    ) : "—"}
+                  </td>
                   <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date} endDate={b.endDate}/></td>
                   <td style={{ padding:"10px 12px", maxWidth:180 }}>
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
@@ -5121,6 +5249,83 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
   );
 }
 
+// Suggests the bar take for an event from the till, covering the event day and
+// the day before — gift cards are often sold the evening before and spent
+// behind the bar on the day.
+//
+// The figure used is Zettle's revenue excluding gift-card redemptions: a card
+// counts as income when it's sold, not again when it's spent. Drinks poured
+// against a card still draw down stock, which the reconciliation handles
+// separately.
+function BarTakeSuggestion({ eventDate, value, onApply }) {
+  const [state, setState] = useState("idle");   // idle | loading | ok | error
+  const [data, setData]   = useState(null);
+  const [err, setErr]     = useState(null);
+
+  if (!isValidEventDate(eventDate)) return null;
+
+  const dayBefore = addDaysIso(eventDate, -1);
+  const dayAfter  = addDaysIso(eventDate, 1);   // endDate is exclusive in Zettle
+
+  async function load() {
+    setState("loading"); setErr(null);
+    try {
+      const res = await fetch("/.netlify/functions/zettle-sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startDate: dayBefore, endDate: dayAfter })
+      });
+      const d = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || "Could not load till takings");
+      setData(d); setState("ok");
+    } catch (e) {
+      setErr(String(e.message || e)); setState("error");
+    }
+  }
+
+  const money = n => "£" + Number(n||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const suggested = data ? data.revenue : null;
+  const alreadyMatches = suggested !== null && Math.abs(Number(value||0) - suggested) < 0.005;
+
+  return (
+    <div style={{ marginTop:6 }}>
+      {state !== "ok" && (
+        <button type="button" onClick={load} disabled={state==="loading"}
+          style={{ background:"none", border:`1px solid ${T.border}`, color:T.midBlue, padding:"4px 11px", borderRadius:6,
+            cursor: state==="loading"?"wait":"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>
+          {state==="loading" ? "Reading till…" : "Suggest from till"}
+        </button>
+      )}
+      {state === "error" && <div style={{ fontSize:11, color:T.red, marginTop:4 }}>{err}</div>}
+      {state === "ok" && data && (
+        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:7, padding:"8px 11px", fontSize:11, color:T.textMid, lineHeight:1.7 }}>
+          <div>
+            Till take {fmtDate(dayBefore)} – {fmtDate(eventDate)}:{" "}
+            <strong style={{ color:T.text, fontSize:13 }}>{money(data.revenue)}</strong>
+          </div>
+          {data.giftCardsSold > 0 && <div>Includes {money(data.giftCardsSold)} of gift cards sold.</div>}
+          {data.giftCardsRedeemed > 0 && (
+            <div>{money(data.giftCardsRedeemed)} was settled by gift card and is excluded — it was counted when the cards were sold.</div>
+          )}
+          {data.customAmountTotal > 0 && <div>{money(data.customAmountTotal)} rung as custom amounts.</div>}
+          <div style={{ marginTop:5, display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+            {alreadyMatches ? (
+              <span style={{ color:T.green, fontWeight:600 }}>Matches the value entered.</span>
+            ) : (
+              <button type="button" onClick={function(){ onApply(String(data.revenue)); }}
+                style={{ background:T.midBlue, color:"#fff", border:"none", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:700 }}>
+                Use {money(data.revenue)}
+              </button>
+            )}
+            <button type="button" onClick={load}
+              style={{ background:"none", border:`1px solid ${T.border}`, color:T.textLight, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>Refresh</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Read-only preview of the three computed invoice stages, shown on the
 // Financials tab in place of the old manual 2nd/Final payment inputs.
 function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveInvoiceRecords }) {
@@ -5166,7 +5371,8 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
   }
   const venue = round2(parseMoney(formData.venueFee));
   const accom = eventAccomStays(formData, accomBookings || []).reduce(function(a,s){ return a + s.value; }, 0);
-  const grand = round2(venue + accom);
+  const extrasTotal = eventAccomExtras(formData, accomBookings || []).reduce(function(a,x){ return a + x.amount; }, 0);
+  const grand = round2(venue + accom + extrasTotal);
   const staged = round2(stages.reduce(function(a,s){ return a + s.total; }, 0));
   const money = function(n) { return "£" + Number(n).toLocaleString("en-GB",{minimumFractionDigits:2, maximumFractionDigits:2}); };
 
@@ -5224,7 +5430,9 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
         );
       })}
       <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:8, marginTop:4, display:"flex", gap:10, fontSize:12 }}>
-        <span style={{ flex:1, color:T.textMid }}>Venue {money(venue)} + accommodation {money(accom)}</span>
+        <span style={{ flex:1, color:T.textMid }}>
+          Venue {money(venue)} + accommodation {money(accom)}{extrasTotal > 0 ? " + extras " + money(extrasTotal) : ""}
+        </span>
         <span style={{ fontWeight:700, color: Math.abs(staged-grand) < 0.005 ? T.green : T.red }}>
           {money(staged)}{Math.abs(staged-grand) < 0.005 ? " ✓" : " ≠ " + money(grand)}
         </span>
@@ -5259,7 +5467,7 @@ function EventClashWarning({ bookings, formData }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -5509,6 +5717,8 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <div>
                   <FLabel>Bar Take Gross (£)</FLabel>
                   <FInput type="number" value={formData.barTakeGross||""} onChange={v=>update("barTakeGross",v)}/>
+                  <BarTakeSuggestion eventDate={formData.date} value={formData.barTakeGross}
+                    onApply={function(v){ update("barTakeGross", v); }}/>
                 </div>
                 <div>
                   <FLabel>Circa Commission (£)</FLabel>
@@ -5558,7 +5768,8 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>
                   Lettings bookings with check-in within 7 days of this event date
                 </div>
-                <LinkedAccomPanel eventDate={formData.date} eventEndDate={formData.endDate} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking} onOpenAccomBooking={onOpenAccomBooking}/>
+                <LinkedAccomPanel eventDate={formData.date} eventEndDate={formData.endDate} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking} onOpenAccomBooking={onOpenAccomBooking}
+                  onAddAccom={onAddAccom ? function(){ onAddAccom(formData); } : null}/>
               </div>
 
               {/* Payment notes */}
@@ -6936,12 +7147,14 @@ function computeStock(products, events) {
 function DashboardView({ bookings, viewingRequests, setView }) {
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
+  const [invoiceRecs, setInvoiceRecs]     = useState([]);
   const [loaded, setLoaded]               = useState(false);
 
   useEffect(()=>{
     (async()=>{
       try { const b = await sbGet(ACCOM_STORAGE); setAccomBookings((b||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
       try { const l = await sbGet(EMAIL_LOG_STORAGE); setEmailLog(l||[]); } catch { setEmailLog([]); }
+      try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecs(r||[]); } catch { setInvoiceRecs([]); }
       setLoaded(true);
     })();
   }, []);
@@ -6964,6 +7177,44 @@ function DashboardView({ bookings, viewingRequests, setView }) {
     const zCI = (z.stays||[]).map(s=>s.checkIn||"").filter(d=>d>=today).sort()[0] || "9999";
     return aCI > zCI ? 1 : aCI < zCI ? -1 : 0;
   });
+
+  // ── Overdue money ─────────────────────────────────────────────────────────
+  // Two separate flows, deliberately kept apart:
+  //   Event invoices  — stages whose invoice date has passed but which have
+  //                     never been raised in Xero.
+  //   Accommodation   — schedule entries past their due date and unpaid, for
+  //                     standard lets only. Event-linked accommodation is
+  //                     billed through the event, so it is excluded here or it
+  //                     would be chased twice.
+  const overdueInvoices = [];
+  (bookings || []).forEach(function(ev) {
+    if (!isValidEventDate(ev.date)) return;
+    if (!isFutureEvent(ev, today)) return;
+    if (!isInvoiceableYear(ev)) return;
+    computeEventInvoiceStages(ev, accomBookings).forEach(function(st) {
+      if (!(st.total > 0)) return;
+      if (findPushedInvoice(invoiceRecs, ev.id, st.stage)) return;   // already raised
+      if (!st.invoiceDate || st.invoiceDate >= today) return;        // not due yet
+      overdueInvoices.push({ ev: ev, st: st, daysLate: Math.round((new Date(today) - new Date(st.invoiceDate)) / 86400000) });
+    });
+  });
+  overdueInvoices.sort(function(a,b){ return b.daysLate - a.daysLate; });
+
+  const overdueAccom = [];
+  accomBookings.forEach(function(b) {
+    if (b.status === "cancelled" || b.bookingType === "Blocked") return;
+    if (b.linkedEventId) return;   // billed via the event invoices instead
+    (b.schedule || []).forEach(function(s) {
+      if (s.paid) return;
+      if (!s.dueDate || s.dueDate >= today) return;
+      if (!(Number(s.amount) > 0)) return;
+      overdueAccom.push({ b: b, s: s, daysLate: Math.round((new Date(today) - new Date(s.dueDate)) / 86400000) });
+    });
+  });
+  overdueAccom.sort(function(a,b){ return b.daysLate - a.daysLate; });
+
+  const overdueInvoiceTotal = overdueInvoices.reduce(function(a,r){ return a + r.st.total; }, 0);
+  const overdueAccomTotal   = overdueAccom.reduce(function(a,r){ return a + Number(r.s.amount||0); }, 0);
 
   // Guests already checked in and still on site (checked in before today, not
   // yet checked out) — shown at the top of the check-ins list alongside
@@ -7007,6 +7258,68 @@ function DashboardView({ bookings, viewingRequests, setView }) {
     <div style={{ maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" }}>
       <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:"0 0 6px" }}>Home</h2>
       <p style={{ color:T.textMid, fontSize:13, margin:"0 0 24px" }}>Today: {fmtDay(today)}</p>
+
+      {/* Overdue money — event invoices not yet raised, and unpaid accommodation */}
+      {(overdueInvoices.length > 0 || overdueAccom.length > 0) && (
+        <div style={{ background:"#fff", border:"1px solid #fecaca", borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(220,38,38,.08)", marginBottom:18 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
+            <h3 style={{ margin:0, color:"#dc2626", fontWeight:700, fontSize:15 }}>Overdue</h3>
+            <span style={{ fontSize:12, fontWeight:700, color:"#dc2626", background:"#fef2f2", padding:"2px 10px", borderRadius:8 }}>
+              {overdueInvoices.length + overdueAccom.length}
+            </span>
+          </div>
+
+          {overdueInvoices.length > 0 && (
+            <div style={{ marginBottom: overdueAccom.length ? 16 : 0 }}>
+              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
+                Event invoices not raised — £{overdueInvoiceTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+              </div>
+              {overdueInvoices.slice(0,8).map(function(r) {
+                return (
+                  <div key={r.ev.id + "-" + r.st.stage} onClick={()=>setView("invoices")}
+                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>{r.ev.couple || "(no name)"}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>{r.st.label}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.st.invoiceDate)}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
+                      £{r.st.total.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+                    </span>
+                  </div>
+                );
+              })}
+              {overdueInvoices.length > 8 && (
+                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueInvoices.length-8} more — see the invoice worklist.</div>
+              )}
+            </div>
+          )}
+
+          {overdueAccom.length > 0 && (
+            <div>
+              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
+                Accommodation unpaid — £{overdueAccomTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+              </div>
+              {overdueAccom.slice(0,8).map(function(r,i) {
+                return (
+                  <div key={r.b.id + "-" + r.s.label + "-" + i} onClick={()=>setView("lettings")}
+                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>{r.b.guestName || "(no name)"}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>{r.s.label}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.s.dueDate)}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
+                      £{Number(r.s.amount||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+                    </span>
+                  </div>
+                );
+              })}
+              {overdueAccom.length > 8 && (
+                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueAccom.length-8} more — see Lettings.</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:18 }}>
 
@@ -7188,8 +7501,8 @@ function BarView() {
       </div>
 
       {barView === "stock"     && <StockView products={products} stock={stock} events={events}/>}
-      {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
-      {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
+      {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} events={events} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
+      {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} events={events} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
       {barView === "history"   && <EventHistoryView events={events} products={products} onEdit={handleEditEvent} onDelete={handleDeleteEvent}/>}
       {barView === "report"    && <BarReportView  products={products} events={events}/>}
       {barView === "reconcile" && <BarReconcileView products={products} events={events}/>}
@@ -7277,10 +7590,18 @@ function StockView({ products, stock, events }) {
 }
 
 // ─── Order / Stocktake Entry ──────────────────────────────────────────────────
-function ProductEntryCard({ p, lines, stock, setLine, isOrder }) {
+function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUse, ordered }) {
   const val      = lines[p.id];
   const curStock = stock[p.id] || 0;
   const hasVal   = val !== "" && val != null && Number(val) !== 0;
+  // On a stocktake, what the count *should* be: last count + anything delivered
+  // since, less what the till says was sold.
+  const showCols = !isOrder && prevCount !== undefined;
+  const expected = showCols && tillUse !== null && tillUse !== undefined
+    ? (Number(prevCount)||0) + (Number(ordered)||0) - tillUse
+    : null;
+  const entered  = val === "" || val == null ? null : Number(val);
+  const drift    = (expected !== null && entered !== null) ? entered - expected : null;
   const stockOut  = curStock === 0;
   const stockLow  = curStock <= 3;
   const stockColour = stockOut ? T.red : stockLow ? T.amber : T.green;
@@ -7297,31 +7618,125 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder }) {
           <span style={{ fontSize:9, fontWeight:600, color:stockColour, textTransform:"uppercase", letterSpacing:.5 }}>{stockOut?"out":stockLow?"low":"in stock"}</span>
         </div>
       )}
+      {/* Stocktake: last count · till use · new count */}
+      {showCols && (
+        <>
+          <div style={{ flexShrink:0, textAlign:"center", width:64 }}>
+            <div style={{ fontSize:15, fontWeight:700, color:T.textMid, lineHeight:1.1 }}>{prevCount}</div>
+            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>last count</div>
+          </div>
+          {ordered > 0 && (
+            <div style={{ flexShrink:0, textAlign:"center", width:52 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:T.midBlue, lineHeight:1.1 }}>+{ordered}</div>
+              <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>ordered</div>
+            </div>
+          )}
+          <div style={{ flexShrink:0, textAlign:"center", width:64 }}>
+            <div style={{ fontSize:15, fontWeight:700, lineHeight:1.1, color: tillUse === null || tillUse === undefined ? T.textLight : T.accent }}>
+              {tillUse === null || tillUse === undefined ? "—" : "−" + (Math.round(tillUse*100)/100)}
+            </div>
+            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>till use</div>
+          </div>
+        </>
+      )}
+
       <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
         {isOrder && (
           <button onClick={()=>setLine(p.id, Math.max(0,(Number(val)||0)-1))} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
         )}
-        <input
-          type="number" min="0" step={isOrder ? 1 : (p.category === "Softs" ? 1 : 0.5)}
-          value={val ?? (isOrder ? "" : (stock[p.id]||0))}
-          onChange={e => setLine(p.id, e.target.value)}
-          style={{ width:64, textAlign:"center", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
-        />
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+          <input
+            type="number" min="0" step={isOrder ? 1 : (p.category === "Softs" ? 1 : 0.5)}
+            value={val ?? (isOrder ? "" : (stock[p.id]||0))}
+            onChange={e => setLine(p.id, e.target.value)}
+            style={{ width:64, textAlign:"center", background:"#fff", border:`1.5px solid ${drift!==null&&Math.abs(drift)>=1?T.red:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
+          />
+          {showCols && expected !== null && (
+            <span style={{ fontSize:9, color: drift!==null&&Math.abs(drift)>=1 ? T.red : T.textLight, whiteSpace:"nowrap" }}>
+              exp {Math.round(expected*100)/100}{drift!==null&&Math.abs(drift)>=0.01 ? " (" + (drift>0?"+":"") + (Math.round(drift*100)/100) + ")" : ""}
+            </span>
+          )}
+        </div>
         {isOrder && (
           <button onClick={()=>setLine(p.id, (Number(val)||0)+1)} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
         )}
-        <span style={{ fontSize:11, color:T.textLight, width:28 }}>{isOrder?"units":"in stock"}</span>
+        <span style={{ fontSize:11, color:T.textLight, width:28 }}>{isOrder?"units":showCols?"new":"in stock"}</span>
       </div>
     </div>
   );
 }
 
-function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent }) {
+function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent, events }) {
   const today = new Date().toISOString().slice(0,10);
   const [date,  setDate]  = useState(editingEvent?.date  || today);
   const [label, setLabel] = useState(editingEvent?.label || "");
   const [lines, setLines] = useState(editingEvent?.lines || {});
   const [saving, setSaving] = useState(false);
+
+  // ── Stocktake helper columns: last count, deliveries since, till usage ──────
+  const [tillUse, setTillUse]         = useState(null);   // productId -> containers
+  const [tillState, setTillState]     = useState("idle"); // idle | loading | ok | error
+  const [tillErr, setTillErr]         = useState(null);
+  const [posMap, setPosMap]           = useState(null);
+
+  // The stocktake immediately before this one (ignoring the one being edited).
+  const prevStocktake = (function() {
+    const prior = (events || [])
+      .filter(function(e) {
+        return e.type === "stocktake" && e.date <= date &&
+               (!editingEvent || e.id !== editingEvent.id);
+      })
+      .sort(function(a,b){ return a.date > b.date ? 1 : -1; });
+    return prior.length ? prior[prior.length - 1] : null;
+  })();
+
+  // Deliveries booked in between that stocktake and this one.
+  const orderedSince = (function() {
+    const out = {};
+    if (!prevStocktake) return out;
+    (events || []).forEach(function(e) {
+      if (e.type !== "order") return;
+      if (!(e.date >= prevStocktake.date && e.date <= date)) return;
+      Object.entries(e.lines || {}).forEach(function(kv) {
+        out[kv[0]] = (out[kv[0]] || 0) + Number(kv[1] || 0);
+      });
+    });
+    return out;
+  })();
+
+  useEffect(function() {
+    if (type !== "stocktake") return;
+    (async function() {
+      try { const r = await sbGet(BAR_POS_MAP_KEY); setPosMap(r || {}); } catch (e) { setPosMap({}); }
+    })();
+  }, [type]);
+
+  async function loadTillUse() {
+    if (!prevStocktake) { setTillErr("No earlier stocktake to measure from."); setTillState("error"); return; }
+    setTillState("loading"); setTillErr(null);
+    try {
+      const res = await fetch("/.netlify/functions/zettle-sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startDate: prevStocktake.date, endDate: date })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not load till sales");
+      const cons = consumptionFromSales(data.byProduct || [], posMap || {}, products);
+      const perProduct = {};
+      products.forEach(function(p) {
+        const c = cons[p.id];
+        if (!c) return;
+        const containers = containersFromConsumption(c, p);
+        if (containers !== null) perProduct[p.id] = containers;
+      });
+      setTillUse(perProduct);
+      setTillState("ok");
+    } catch (e) {
+      setTillErr(String(e.message || e));
+      setTillState("error");
+    }
+  }
 
   const initStocktake = () => {
     if (editingEvent) return; // editing: lines already pre-filled above
@@ -7391,6 +7806,33 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent 
             </div>
           )}
         </div>
+
+        {/* Till usage since the last count */}
+        {!isOrder && (
+          <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+            {prevStocktake ? (
+              <>
+                <span style={{ fontSize:12, color:T.textMid }}>
+                  Last count <strong>{prevStocktake.date}</strong>{prevStocktake.label ? " — " + prevStocktake.label : ""}
+                </span>
+                <button type="button" onClick={loadTillUse} disabled={tillState==="loading"}
+                  style={{ background: tillState==="ok" ? "#fff" : T.midBlue, color: tillState==="ok" ? T.midBlue : "#fff",
+                    border: tillState==="ok" ? `1.5px solid ${T.midBlue}` : "none",
+                    padding:"7px 16px", borderRadius:6, cursor: tillState==="loading"?"wait":"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
+                  {tillState==="loading" ? "Loading till…" : tillState==="ok" ? "Refresh till usage" : "Load till usage"}
+                </button>
+                {tillState==="ok" && (
+                  <span style={{ fontSize:11, color:T.textLight }}>
+                    Till usage shown per product; “exp” is last count + deliveries − till usage.
+                  </span>
+                )}
+                {tillState==="error" && <span style={{ fontSize:11, color:T.red }}>{tillErr}</span>}
+              </>
+            ) : (
+              <span style={{ fontSize:12, color:T.textLight }}>No earlier stocktake, so there's nothing to compare against yet.</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Product lines — orders: by supplier then category; stocktakes: by category only */}
@@ -7438,7 +7880,10 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent 
                 <CatBadge cat={cat}/>
               </div>
               <div style={{ padding:"14px 18px", display:"grid", gridTemplateColumns:"1fr", gap:"8px" }}>
-                {prods.map(p => <ProductEntryCard key={p.id} p={p} lines={lines} stock={stock} setLine={setLine} isOrder={false}/>)}
+                {prods.map(p => <ProductEntryCard key={p.id} p={p} lines={lines} stock={stock} setLine={setLine} isOrder={false}
+                  prevCount={prevStocktake ? Number(prevStocktake.lines?.[p.id] || 0) : undefined}
+                  ordered={orderedSince[p.id] || 0}
+                  tillUse={tillUse ? (tillUse[p.id] !== undefined ? tillUse[p.id] : null) : null}/>)}
               </div>
             </div>
           );
@@ -7688,8 +8133,12 @@ function BarReconcileView({ products, events }) {
   const [sales, setSales]     = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr]         = useState(null);
-  const [map, setMap]         = useState({});      // posKey -> productId ("" = ignore)
+  const [map, setMap]         = useState({});      // posKey -> recipe ({components:[]} = ignore)
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [catalogue, setCatalogue] = useState(null); // full Zettle product library
+  const [catLoading, setCatLoading] = useState(false);
+  const [unmappedOnly, setUnmappedOnly] = useState(false);
+  const [mapSearch, setMapSearch] = useState("");
 
   useEffect(function() {
     (async function() {
@@ -7748,8 +8197,46 @@ function BarReconcileView({ products, events }) {
     return s + (u > 0 && p.costUnit ? u * p.costUnit * (p.multiple || 0) : 0);
   }, 0);
 
+  async function loadCatalogue() {
+    setCatLoading(true); setErr(null);
+    try {
+      const res = await fetch("/.netlify/functions/zettle-sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "catalogue" })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not load the Zettle catalogue");
+      setCatalogue(data.catalogue || []);
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+    setCatLoading(false);
+  }
+
   // ── Pair POS lines with bar products ──────────────────────────────────────
-  const posLines = (sales && sales.byProduct) || [];
+  // The mapping list is the union of the till catalogue (so everything can be
+  // mapped up front) and whatever actually sold in the period (so nothing that
+  // sold is ever missing, even if it has since been deleted from the library).
+  const salesLines = (sales && sales.byProduct) || [];
+  const posLines = (function() {
+    const byKey = {};
+    (catalogue || []).forEach(function(c) {
+      byKey[c.key] = { key:c.key, name:c.name, variantName:c.variantName, category:c.category,
+                       units:0, gross:0, inCatalogue:true };
+    });
+    salesLines.forEach(function(s) {
+      const existing = byKey[s.key];
+      if (existing) { existing.units = s.units; existing.gross = s.gross; }
+      else byKey[s.key] = { key:s.key, name:s.name, variantName:s.variantName, category:"",
+                            units:s.units, gross:s.gross, inCatalogue:false };
+    });
+    return Object.keys(byKey).map(function(k){ return byKey[k]; })
+      .sort(function(a,b){
+        if (b.gross !== a.gross) return b.gross - a.gross;   // best sellers first
+        return (a.name||"").localeCompare(b.name||"");
+      });
+  })();
 
   // Effective mapping: stored recipes, plus a suggested single-ingredient
   // recipe for anything not yet mapped (using a sensible default measure for
@@ -7772,7 +8259,9 @@ function BarReconcileView({ products, events }) {
   const unmapped = posLines.filter(function(l) { return !effectiveMap[l.key]; });
   const suggestedCount = Object.keys(suggestedKeys).length;
 
-  const posGross  = sales ? sales.gross : 0;
+  // Revenue excludes gift-card redemptions (counted when the card was sold),
+  // so it can be compared with the value of stock that actually moved.
+  const posGross  = sales ? (sales.revenue !== undefined ? sales.revenue : sales.gross) : 0;
   const variance  = posGross - expectedValue;
   const variancePct = expectedValue > 0 ? (variance / expectedValue) * 100 : 0;
 
@@ -7818,6 +8307,10 @@ function BarReconcileView({ products, events }) {
           style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:7, cursor: loading?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
           {loading ? "Loading Zettle…" : "Load till sales"}
         </button>
+        <button onClick={loadCatalogue} disabled={catLoading}
+          style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"9px 18px", borderRadius:7, cursor: catLoading?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+          {catLoading ? "Loading…" : catalogue ? "Reload catalogue (" + catalogue.length + ")" : "Load full till catalogue"}
+        </button>
       </div>
 
       {err && (
@@ -7826,10 +8319,10 @@ function BarReconcileView({ products, events }) {
         </div>
       )}
 
-      {!sales && !loading && !err && (
+      {!sales && !catalogue && !loading && !catLoading && !err && (
         <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:9, padding:"12px 16px", fontSize:13, color:"#1d4ed8", lineHeight:1.6 }}>
-          Choose the two stocktakes either side of the period you want to check, then load the till sales.
-          Stock usage is compared against what Zettle actually rang up.
+          Load the full till catalogue to map your products and recipes up front, or pick two stocktakes
+          and load the sales for that period. Stock usage is compared against what Zettle actually rang up.
         </div>
       )}
 
@@ -7852,19 +8345,47 @@ function BarReconcileView({ products, events }) {
             {sales.customAmountTotal > 0 && (
               <span> {money(sales.customAmountTotal)} was rung up as custom amounts with no product attached, so can’t be matched to stock.</span>
             )}
+            {sales.giftCardsSold > 0 && (
+              <span> {money(sales.giftCardsSold)} of gift cards were sold — counted as takings, but no stock moved.</span>
+            )}
+            {sales.giftCardsRedeemed > 0 && (
+              <span> {money(sales.giftCardsRedeemed)} was spent using gift cards — the drinks drew down stock, but the money was taken when the cards were sold, so it isn’t counted again here.</span>
+            )}
           </div>
+        </>
+      )}
 
-          {/* Till product recipes */}
+      {/* Till product recipes — available as soon as either the catalogue or a
+          period's sales have been loaded, so mapping can be done up front. */}
+      {posLines.length > 0 && (
+        <>
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:18, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
             <div style={{ padding:"12px 16px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
               <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>Till products &amp; recipes</span>
               {unmapped.length > 0 && <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:"#fef2f2", color:"#dc2626", border:"1px solid #fecaca" }}>{unmapped.length} unmapped</span>}
               {suggestedCount > 0 && <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>{suggestedCount} suggested</span>}
-              <span style={{ fontSize:11, color:T.textLight, flex:1, minWidth:200 }}>
+              <span style={{ fontSize:11, color:T.textLight, flex:1, minWidth:140 }}>
                 A till product can draw on several bar products — add a line per ingredient.
               </span>
+              <input value={mapSearch} onChange={e=>setMapSearch(e.target.value)} placeholder="Search till products…"
+                style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, fontFamily:"inherit", fontSize:12, padding:"5px 10px", width:180 }}/>
+              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, color:T.textMid, cursor:"pointer", whiteSpace:"nowrap" }}>
+                <input type="checkbox" checked={unmappedOnly} onChange={e=>setUnmappedOnly(e.target.checked)} style={{ width:13, height:13, accentColor:T.accent, cursor:"pointer" }}/>
+                Needs attention only
+              </label>
             </div>
-            {posLines.map(function(line) {
+            {posLines.filter(function(line) {
+              if (mapSearch) {
+                const q = mapSearch.toLowerCase();
+                const hay = (line.name + " " + (line.variantName||"") + " " + (line.category||"")).toLowerCase();
+                if (hay.indexOf(q) === -1) return false;
+              }
+              if (unmappedOnly) {
+                const stored = normaliseRecipe(map[line.key]);
+                if (stored && stored.components.length >= 0 && !suggestedKeys[line.key]) return false;
+              }
+              return true;
+            }).map(function(line) {
               const recipe = effectiveMap[line.key];
               const isSuggested = !!suggestedKeys[line.key];
               const comps = recipe ? recipe.components : [];
@@ -7932,7 +8453,8 @@ function BarReconcileView({ products, events }) {
             })}
           </div>
 
-          {/* Product level table */}
+          {/* Product level table — only meaningful once sales are loaded */}
+          {sales && (
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
             <div style={{ padding:"12px 18px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, fontSize:13, fontWeight:700, color:T.midBlue }}>
               Product detail
@@ -7975,6 +8497,7 @@ function BarReconcileView({ products, events }) {
               Millilitres sold are divided by the container volume, so a product needs its volume set on the Products tab before it can be compared.
             </div>
           </div>
+          )}
         </>
       )}
     </div>
