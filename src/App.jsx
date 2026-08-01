@@ -198,13 +198,16 @@ const DAY_COLOURS = {
   Sunday:    { bg:"#fee2e2", text:"#991b1b" },
 };
 
-function DayBadge({ dateStr, style={} }) {
+// Pass endDate to have multi-day events read "Multiday" instead of naming the
+// weekday of the first day, which is misleading when an event spans several.
+function DayBadge({ dateStr, endDate, style={} }) {
   const day = dayOfWeek(dateStr);
   if (!day) return null;
-  const c = DAY_COLOURS[day] || { bg: T.midBlueBg, text: T.midBlue };
+  const multi = !!(endDate && dateStr && String(endDate) > String(dateStr));
+  const c = multi ? { bg:"#ede9fe", text:"#5b21b6" } : (DAY_COLOURS[day] || { bg: T.midBlueBg, text: T.midBlue });
   return (
     <span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:10, background:c.bg, color:c.text, whiteSpace:"nowrap", ...style }}>
-      {day}
+      {multi ? "Multiday" : day}
     </span>
   );
 }
@@ -399,6 +402,18 @@ const XERO_ACCOUNT_EVENTS  = "205"; // 205 - Events
 const XERO_ACCOUNT_ACCOM   = "200"; // 200 - Holiday Let Rental
 const XERO_BRANDING_THEME  = "HF with Stripe";
 const INVOICE_STAGE_LABELS = { 1: "Deposit", 2: "Second (1 Dec)", 3: "Final (4 weeks)" };
+
+// Transitional cutoff. Everything up to and including the 2026 season was
+// invoiced by hand in Xero and is confirmed correct, so those events are kept
+// out of the worklist rather than making someone link dozens of historic
+// invoices one by one. 2027 onwards is generated and linked by the app.
+// Raising this year is the only change needed if the cutover ever slips.
+const INVOICE_FIRST_EVENT_YEAR = 2027;
+
+function isInvoiceableYear(ev) {
+  if (!isValidEventDate(ev && ev.date)) return false;
+  return parseInt(ev.date.slice(0, 4), 10) >= INVOICE_FIRST_EVENT_YEAR;
+}
 
 function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
@@ -3730,7 +3745,8 @@ export default function App() {
     let n = 0;
     bookings.forEach(function(ev) {
       if (!isValidEventDate(ev.date)) return;
-      if (!isFutureEvent(ev, todayIso)) return; // past events are never invoiceable
+      if (!isFutureEvent(ev, todayIso)) return;  // past events are never invoiceable
+      if (!isInvoiceableYear(ev)) return;        // pre-cutover seasons were invoiced by hand
       computeEventInvoiceStages(ev, accomBookings).forEach(function(st) {
         const pushed = findPushedInvoice(invoiceRecords, ev.id, st.stage);
         if (pushed) {
@@ -4087,10 +4103,13 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
   const [autoLinked, setAutoLinked] = useState(0);
   const autoRunRef = useRef(false);
 
-  // Only events that haven't happened yet are invoiceable.
-  const futureEvents = (bookings||[]).filter(function(ev) {
+  // Only future events, and only from the cutover year onwards — the 2026
+  // season and earlier were invoiced manually and are already correct.
+  const allFuture = (bookings||[]).filter(function(ev) {
     return isFutureEvent(ev, today) && (ev.couple || isValidEventDate(ev.date));
   });
+  const futureEvents = allFuture.filter(isInvoiceableYear);
+  const preCutoverCount = allFuture.length - futureEvents.length;
 
   // ── Pull existing invoices for every linked Xero contact, in one call ──────
   useEffect(function() {
@@ -4287,6 +4306,13 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
         All figures are treated as VAT-inclusive. Only events that haven’t happened yet are shown.
       </div>
 
+      {preCutoverCount > 0 && (
+        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid, lineHeight:1.6 }}>
+          <strong>{preCutoverCount}</strong> event{preCutoverCount!==1?"s":""} before {INVOICE_FIRST_EVENT_YEAR} {preCutoverCount!==1?"are":"is"} excluded — those were invoiced manually in Xero and are confirmed correct.
+          Everything from {INVOICE_FIRST_EVENT_YEAR} onwards is generated and linked here.
+        </div>
+      )}
+
       {xeroByContact === null && (
         <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid }}>
           Checking Xero for invoices that already exist…
@@ -4369,6 +4395,42 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
   );
 }
 
+// ─── MISSING-EVENT DETECTION ──────────────────────────────────────────────────
+// Accommodation bookings live under a different Supabase key to events, so when
+// an event record is lost the accom booking keeps pointing at it. Those dangling
+// references are the most reliable evidence that an event has disappeared —
+// it's how the missing "event 219" was spotted in the first place.
+function findOrphanedEventLinks(bookings, accomBookings) {
+  var have = {};
+  (bookings || []).forEach(function(b) { if (b && b.id != null) have[String(b.id)] = true; });
+  var byEvent = {};
+  (accomBookings || []).forEach(function(ab) {
+    if (!ab || !ab.linkedEventId) return;
+    var key = String(ab.linkedEventId);
+    if (have[key]) return;
+    if (!byEvent[key]) byEvent[key] = { eventId: ab.linkedEventId, bookings: [] };
+    byEvent[key].bookings.push(ab);
+  });
+  return Object.keys(byEvent).map(function(k) { return byEvent[k]; });
+}
+
+// Event ids are allocated as max+1, so a healthy set runs consecutively.
+// A gap means the record was either deliberately deleted or lost. Not proof on
+// its own, but combined with an orphaned link it's conclusive.
+function findEventIdGaps(bookings) {
+  var nums = (bookings || []).map(function(b) { return Number(b && b.id); })
+    .filter(function(n) { return Number.isFinite(n) && n > 0; })
+    .sort(function(a, b) { return a - b; });
+  if (nums.length < 2) return [];
+  var present = {};
+  nums.forEach(function(n) { present[n] = true; });
+  var gaps = [];
+  for (var i = nums[0]; i <= nums[nums.length - 1]; i++) {
+    if (!present[i]) gaps.push(i);
+  }
+  return gaps;
+}
+
 function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom, xeroToken, onOpenInvoices, invoiceDueCount }) {
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b => classifyEventRow(b, today) === "upcoming");
@@ -4376,6 +4438,8 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
   const problem  = bookings.filter(b => classifyEventRow(b, today) === "problem");
   const missingName = bookings.filter(b => isValidEventDate(b.date) && !b.couple);
   const accountedFor = upcoming.length + past.length + problem.length;
+  const orphans = findOrphanedEventLinks(bookings, accomBookings);
+  const idGaps  = findEventIdGaps(bookings);
 
   return (
     <div>
@@ -4393,6 +4457,43 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
         )}
         <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} event{bookings.length!==1?"s":""}</span>
       </div>
+
+      {/* Missing events: accommodation still pointing at an event that's gone */}
+      {orphans.length > 0 && !search && (
+        <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#dc2626", marginBottom:5 }}>
+            {orphans.length} event{orphans.length!==1?"s":""} referenced by accommodation but missing from this list
+          </div>
+          <div style={{ fontSize:12, color:"#dc2626", lineHeight:1.7 }}>
+            {orphans.map(function(o) {
+              const names = o.bookings.map(function(ab){ return ab.guestName || "(no name)"; }).join(", ");
+              return (
+                <div key={String(o.eventId)}>
+                  Event #{String(o.eventId)} — linked from {o.bookings.length} accommodation booking{o.bookings.length!==1?"s":""} ({names})
+                  {o.bookings[0] && o.bookings[0].id && (
+                    <button onClick={function(){ if (onOpenAccom) onOpenAccom(o.bookings[0].id); }}
+                      style={{ marginLeft:8, background:"none", border:"1px solid #fecaca", color:"#dc2626", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                      Open booking
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:"#b91c1c", marginTop:6, lineHeight:1.6 }}>
+            These event records are no longer in the database. Recreate the event and re-link the accommodation, or clear the link on the booking.
+          </div>
+        </div>
+      )}
+
+      {/* Gaps in the id sequence — suggestive of deleted or lost records */}
+      {idGaps.length > 0 && !search && (
+        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid, lineHeight:1.6 }}>
+          <strong>{idGaps.length}</strong> gap{idGaps.length!==1?"s":""} in the event ID sequence
+          {idGaps.length <= 30 ? <span> (#{idGaps.join(", #")})</span> : <span> (#{idGaps.slice(0,30).join(", #")} …)</span>}.
+          <span style={{ color:T.textLight }}> Expected if you've deleted events; otherwise these may be records that were lost.</span>
+        </div>
+      )}
 
       {/* Data-integrity notice: events that can't be placed on the calendar */}
       {(problem.length > 0 || missingName.length > 0) && !search && (
@@ -4563,7 +4664,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                     <div style={{ fontWeight:700, color:T.text, fontSize:15 }}>{b.couple||"—"}</div>
                     <div style={{ fontSize:12, color:T.accent, fontWeight:600, marginTop:2 }}>
                       {b.date?fmtDate(b.date)+(b.endDate&&b.endDate>b.date?" – "+fmtDate(b.endDate):""):"—"}
-                      {" · "}<DayBadge dateStr={b.date}/>
+                      {" · "}<DayBadge dateStr={b.date} endDate={b.endDate}/>
                     </div>
                   </div>
                   <BookingStatusBadge b={b}/>
@@ -4608,7 +4709,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                   onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{b.date?fmtDate(b.date)+(b.endDate&&b.endDate>b.date?" – "+fmtDate(b.endDate):""):"—"}</td>
-                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date}/></td>
+                  <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><DayBadge dateStr={b.date} endDate={b.endDate}/></td>
                   <td style={{ padding:"10px 12px", maxWidth:180 }}>
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
                   </td>
@@ -5035,6 +5136,9 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
   }
   const stages = computeEventInvoiceStages(formData, accomBookings || []);
   const blockers = invoiceBlockers(formData, accomBookings || []);
+  // Pre-cutover seasons were invoiced by hand — show the figures, but don't
+  // offer to generate anything that already exists in Xero unlinked.
+  const preCutover = !isInvoiceableYear(formData);
 
   async function generate(st) {
     setBusyStage(st.stage); setNote(null);
@@ -5080,7 +5184,7 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
       {stages.map(function(st) {
         const linked = findPushedInvoice(invoiceRecords, formData.id, st.stage);
         const drifted = linked && linked.fingerprint !== invoiceLinesFingerprint(st.lines);
-        const canGen = !linked && !blockers.length && st.total > 0 && busyStage === null;
+        const canGen = !linked && !preCutover && !blockers.length && st.total > 0 && busyStage === null;
         return (
           <div key={st.stage} style={{ marginBottom:10 }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:3, flexWrap:"wrap" }}>
@@ -5096,6 +5200,8 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
                   </span>
                   {drifted && <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>Figures changed</span>}
                 </span>
+              ) : preCutover ? (
+                <span style={{ fontSize:10, color:T.textLight, fontStyle:"italic" }}>invoiced manually</span>
               ) : st.total > 0 ? (
                 <button type="button" onClick={function(){ generate(st); }} disabled={!canGen}
                   title={blockers.length ? blockers.join(" · ") : "Create this invoice in Xero as a draft"}
@@ -7061,6 +7167,7 @@ function BarView() {
     { id:"stocktake",  label:"+ New Stocktake" },
     { id:"history",    label:"History" },
     { id:"report",     label:"Usage Report" },
+    { id:"reconcile",  label:"Till Reconciliation" },
     { id:"products",   label:"Products" },
   ];
 
@@ -7085,6 +7192,7 @@ function BarView() {
       {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
       {barView === "history"   && <EventHistoryView events={events} products={products} onEdit={handleEditEvent} onDelete={handleDeleteEvent}/>}
       {barView === "report"    && <BarReportView  products={products} events={events}/>}
+      {barView === "reconcile" && <BarReconcileView products={products} events={events}/>}
       {barView === "products"  && <ProductsView   products={products} onSave={saveProducts}/>}
     </div>
   );
@@ -7475,6 +7583,283 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
 }
 
 // ─── Bar Usage Report ─────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// POS RECONCILIATION (Zettle / PayPal)
+// ═══════════════════════════════════════════════════════════════════════════════
+const BAR_POS_MAP_KEY = "hbf_bar_pos_map_v1";
+
+// Loose name matching so most till products pair themselves with bar products
+// without anyone having to map them by hand.
+function normaliseProductName(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(bottle|btl|glass|gls|pint|half|single|double|shot|small|large|sml|lrg|ml|cl|ltr|l)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function nameSimilarity(a, b) {
+  const A = normaliseProductName(a), B = normaliseProductName(b);
+  if (!A || !B) return 0;
+  if (A === B) return 1;
+  const aw = A.split(" ").filter(Boolean), bw = B.split(" ").filter(Boolean);
+  if (!aw.length || !bw.length) return 0;
+  let hits = 0;
+  aw.forEach(function(w) { if (w.length > 2 && bw.indexOf(w) !== -1) hits++; });
+  return hits / Math.max(aw.length, bw.length);
+}
+
+// Suggest a bar product for a POS line. Only reasonably confident pairings are
+// auto-applied; the rest are left for manual mapping so nothing is quietly wrong.
+function suggestProductMatch(posName, products) {
+  let best = null, bestScore = 0;
+  (products || []).forEach(function(p) {
+    const s = nameSimilarity(posName, p.name);
+    if (s > bestScore) { bestScore = s; best = p; }
+  });
+  return bestScore >= 0.5 ? { product: best, score: bestScore } : null;
+}
+
+function BarReconcileView({ products, events }) {
+  const stocktakes = [...events].filter(e => e.type === "stocktake").sort((a,b) => a.date > b.date ? 1 : -1);
+  const [fromIdx, setFromIdx] = useState(Math.max(0, stocktakes.length - 2));
+  const [toIdx,   setToIdx]   = useState(Math.max(0, stocktakes.length - 1));
+  const [sales, setSales]     = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr]         = useState(null);
+  const [map, setMap]         = useState({});      // posKey -> productId ("" = ignore)
+  const [mapLoaded, setMapLoaded] = useState(false);
+
+  useEffect(function() {
+    (async function() {
+      try { const r = await sbGet(BAR_POS_MAP_KEY); setMap(r || {}); } catch (e) { setMap({}); }
+      setMapLoaded(true);
+    })();
+  }, []);
+
+  async function saveMap(next) {
+    setMap(next);
+    try { await sbSet(BAR_POS_MAP_KEY, next); } catch (e) { console.error(e); }
+  }
+
+  if (stocktakes.length < 2) {
+    return (
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:48, textAlign:"center", color:T.textLight }}>
+        <p style={{ fontSize:16, fontWeight:600, color:T.textMid, marginBottom:8 }}>At least two stocktakes needed</p>
+        <p style={{ fontSize:13 }}>Record two stocktakes to reconcile stock usage against till sales.</p>
+      </div>
+    );
+  }
+
+  const fromST = stocktakes[fromIdx];
+  const toST   = stocktakes[toIdx];
+
+  async function loadSales() {
+    if (!fromST || !toST || fromST.date >= toST.date) { setErr("Pick an earlier 'from' stocktake."); return; }
+    setLoading(true); setErr(null); setSales(null);
+    try {
+      const res = await fetch("/.netlify/functions/zettle-sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startDate: fromST.date, endDate: toST.date })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not load Zettle sales");
+      setSales(data);
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+    setLoading(false);
+  }
+
+  // ── Stock usage between the two stocktakes (same maths as the usage report) ─
+  const ordersInRange = events.filter(e => e.type === "order" && e.date >= fromST.date && e.date < toST.date);
+  const usage = {};
+  products.forEach(function(p) {
+    const opening = Number(fromST.lines?.[p.id] || 0);
+    const ordered = ordersInRange.reduce((s,o) => s + Number(o.lines?.[p.id]||0), 0);
+    const closing = Number(toST.lines?.[p.id] || 0);
+    usage[p.id] = opening + ordered - closing;
+  });
+
+  const expectedValue = products.reduce(function(s, p) {
+    const u = usage[p.id] || 0;
+    return s + (u > 0 && p.costUnit ? u * p.costUnit * (p.multiple || 0) : 0);
+  }, 0);
+
+  // ── Pair POS lines with bar products ──────────────────────────────────────
+  const posLines = (sales && sales.byProduct) || [];
+  const resolved = posLines.map(function(line) {
+    const explicit = Object.prototype.hasOwnProperty.call(map, line.key) ? map[line.key] : undefined;
+    if (explicit !== undefined) {
+      return { line: line, product: products.find(p => p.id === explicit) || null, auto:false, ignored: explicit === "" };
+    }
+    const s = suggestProductMatch(line.name + " " + (line.variantName||""), products);
+    return { line: line, product: s ? s.product : null, auto: !!s, ignored:false };
+  });
+
+  // Units sold per bar product, converted to containers via servings-per-container
+  const soldByProduct = {};
+  resolved.forEach(function(r) {
+    if (!r.product || r.ignored) return;
+    if (!soldByProduct[r.product.id]) soldByProduct[r.product.id] = { units:0, gross:0 };
+    soldByProduct[r.product.id].units += r.line.units;
+    soldByProduct[r.product.id].gross += r.line.gross;
+  });
+
+  const unmatched = resolved.filter(r => !r.product && !r.ignored);
+  const posGross  = sales ? sales.gross : 0;
+  const variance  = posGross - expectedValue;
+  const variancePct = expectedValue > 0 ? (variance / expectedValue) * 100 : 0;
+
+  const rows = products.map(function(p) {
+    const used = usage[p.id] || 0;
+    const sold = soldByProduct[p.id];
+    const servings = Number(p.servings) || 0;
+    // Containers implied by till sales, if we know how many servings a container yields
+    const soldContainers = (sold && servings > 0) ? sold.units / servings : null;
+    const diff = (soldContainers !== null) ? (used - soldContainers) : null;
+    return { p:p, used:used, soldUnits: sold ? sold.units : null, soldGross: sold ? sold.gross : null,
+             servings:servings, soldContainers:soldContainers, diff:diff };
+  }).filter(r => r.used !== 0 || r.soldUnits);
+
+  const money = n => "£" + Number(n||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  return (
+    <div>
+      {/* Period picker */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:18, display:"flex", alignItems:"flex-end", gap:16, flexWrap:"wrap", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div>
+          <FLabel>From stocktake</FLabel>
+          <select value={fromIdx} onChange={e=>setFromIdx(Number(e.target.value))} style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px" }}>
+            {stocktakes.map((s,i) => <option key={s.id} value={i}>{s.date} — {s.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <FLabel>To stocktake</FLabel>
+          <select value={toIdx} onChange={e=>setToIdx(Number(e.target.value))} style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px" }}>
+            {stocktakes.map((s,i) => <option key={s.id} value={i}>{s.date} — {s.label}</option>)}
+          </select>
+        </div>
+        <button onClick={loadSales} disabled={loading}
+          style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:7, cursor: loading?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {loading ? "Loading Zettle…" : "Load till sales"}
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", borderRadius:9, padding:"11px 15px", marginBottom:16, fontSize:13, lineHeight:1.6 }}>
+          {err}
+        </div>
+      )}
+
+      {!sales && !loading && !err && (
+        <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:9, padding:"12px 16px", fontSize:13, color:"#1d4ed8", lineHeight:1.6 }}>
+          Choose the two stocktakes either side of the period you want to check, then load the till sales.
+          Stock usage is compared against what Zettle actually rang up.
+        </div>
+      )}
+
+      {sales && (
+        <>
+          {/* Headline value comparison */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))", gap:14, marginBottom:18 }}>
+            <StatCard label="Expected from stock" value={money(expectedValue)} sub={`${fromST.date} → ${toST.date}`}/>
+            <StatCard label="Zettle takings" value={money(posGross)} sub={`${sales.purchaseCount} sales${sales.refundCount ? ", " + sales.refundCount + " refunds" : ""}`}/>
+            <StatCard label="Variance" value={(variance>=0?"+":"") + money(variance)} sub={expectedValue>0 ? variancePct.toFixed(1) + "% of expected" : "—"}/>
+          </div>
+
+          <div style={{ background: Math.abs(variancePct) > 10 ? "#fffbeb" : "#f0fdf4",
+            border:`1px solid ${Math.abs(variancePct) > 10 ? "#fde68a" : "#bbf7d0"}`,
+            color: Math.abs(variancePct) > 10 ? "#92400e" : "#166534",
+            borderRadius:9, padding:"11px 15px", marginBottom:18, fontSize:13, lineHeight:1.6 }}>
+            {Math.abs(variancePct) > 10
+              ? "Takings are " + Math.abs(variancePct).toFixed(1) + "% " + (variance < 0 ? "below" : "above") + " the value of stock used — worth investigating."
+              : "Takings are within 10% of the value of stock used."}
+            {sales.customAmountTotal > 0 && (
+              <span> {money(sales.customAmountTotal)} was rung up as custom amounts with no product attached, so can’t be matched to stock.</span>
+            )}
+          </div>
+
+          {/* Unmatched POS products */}
+          {unmatched.length > 0 && (
+            <div style={{ background:"#fff", border:"1px solid #fde68a", borderRadius:10, marginBottom:18, overflow:"hidden" }}>
+              <div style={{ padding:"11px 16px", background:"#fffbeb", borderBottom:"1px solid #fde68a", fontSize:13, fontWeight:700, color:"#92400e" }}>
+                {unmatched.length} till product{unmatched.length!==1?"s":""} not matched to a bar product
+              </div>
+              {unmatched.map(function(r) {
+                return (
+                  <div key={r.line.key} style={{ padding:"9px 16px", borderTop:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, flex:1, minWidth:160 }}>
+                      {r.line.name}{r.line.variantName ? " · " + r.line.variantName : ""}
+                    </span>
+                    <span style={{ fontSize:12, color:T.textLight }}>{r.line.units} sold · {money(r.line.gross)}</span>
+                    <select defaultValue="" onChange={function(e){
+                        const v = e.target.value;
+                        if (v === "") return;
+                        const next = Object.assign({}, map);
+                        next[r.line.key] = (v === "__ignore__") ? "" : v;
+                        saveMap(next);
+                      }}
+                      style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, fontFamily:"inherit", fontSize:12, padding:"5px 8px", maxWidth:230 }}>
+                      <option value="">Map to bar product…</option>
+                      <option value="__ignore__">— Ignore this product —</option>
+                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Product level table */}
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ padding:"12px 18px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, fontSize:13, fontWeight:700, color:T.midBlue }}>
+              Product detail
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr style={{ background:"#f5f9ff" }}>
+                    {["Product","Used (containers)","Sold (units)","Servings / container","Implied containers","Difference","Till value"].map(h=>(
+                      <th key={h} style={{ padding:"9px 12px", textAlign:"left", color:T.textMid, fontSize:10, letterSpacing:1, textTransform:"uppercase", fontWeight:700, whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(function(r,i) {
+                    const bad = r.diff !== null && Math.abs(r.diff) >= 1;
+                    return (
+                      <tr key={r.p.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
+                        <td style={{ padding:"8px 12px", fontSize:13 }}>{r.p.name}</td>
+                        <td style={{ padding:"8px 12px", fontSize:13, fontWeight:600 }}>{r.used}</td>
+                        <td style={{ padding:"8px 12px", fontSize:13 }}>{r.soldUnits !== null ? r.soldUnits : <span style={{color:T.textLight}}>—</span>}</td>
+                        <td style={{ padding:"8px 12px", fontSize:12, color: r.servings ? T.textMid : T.textLight }}>
+                          {r.servings || <span title="Set servings per container on the Products tab to compare units">not set</span>}
+                        </td>
+                        <td style={{ padding:"8px 12px", fontSize:13 }}>{r.soldContainers !== null ? r.soldContainers.toFixed(2) : <span style={{color:T.textLight}}>—</span>}</td>
+                        <td style={{ padding:"8px 12px", fontSize:13, fontWeight:700, color: r.diff===null ? T.textLight : bad ? T.red : T.green }}>
+                          {r.diff === null ? "—" : (r.diff>0?"+":"") + r.diff.toFixed(2)}
+                        </td>
+                        <td style={{ padding:"8px 12px", fontSize:13 }}>{r.soldGross !== null ? money(r.soldGross) : <span style={{color:T.textLight}}>—</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding:"10px 18px", borderTop:`1px solid ${T.border}`, fontSize:11, color:T.textLight, lineHeight:1.6 }}>
+              “Difference” is containers used less containers implied by till sales — a positive number means more stock went than was sold.
+              Products without a servings figure can’t be compared by unit; set it on the Products tab.
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function BarReportView({ products, events }) {
   const stocktakes = [...events].filter(e=>e.type==="stocktake").sort((a,b)=>a.date>b.date?1:-1);
   const [fromIdx, setFromIdx] = useState(0);
@@ -7666,7 +8051,10 @@ function ProductsView({ products, onSave }) {
   const [filterCat, setFilterCat] = useState("All");
 
   const updateForm = (k,v) => setForm(f=>({...f,[k]:v}));
-  const emptyProduct = () => ({ id:`p${Date.now()}`, name:"", category:"Wine", supplier:"", multiple:1, costUnit:"" });
+  // `servings` = how many till units one container yields (e.g. 6 glasses per
+  // wine bottle, 28 measures per 70cl spirit). Used only by Till Reconciliation
+  // to convert units sold into containers; blank simply means "don't compare".
+  const emptyProduct = () => ({ id:`p${Date.now()}`, name:"", category:"Wine", supplier:"", multiple:1, costUnit:"", servings:"" });
 
   const handleEdit = p => { setForm({...p}); setEditId(p.id); };
   const handleNew  = () => { setForm(emptyProduct()); setEditId("new"); };
@@ -7678,7 +8066,7 @@ function ProductsView({ products, onSave }) {
   const handleSubmit = () => {
     if (!form.name) { alert("Product name required."); return; }
     let updated;
-    if (editId==="new") updated = [...products, {...form, multiple:Number(form.multiple), costUnit:form.costUnit?Number(form.costUnit):null}];
+    if (editId==="new") updated = [...products, {...form, multiple:Number(form.multiple), costUnit:form.costUnit?Number(form.costUnit):null, servings:form.servings?Number(form.servings):null}];
     else updated = products.map(p=>p.id===editId?{...form,multiple:Number(form.multiple),costUnit:form.costUnit?Number(form.costUnit):null}:p);
     onSave(updated);
     setEditId(null); setForm(null);
@@ -7713,6 +8101,11 @@ function ProductsView({ products, onSave }) {
             <div><FLabel>Supplier</FLabel><FInput value={form.supplier||""} onChange={v=>updateForm("supplier",v)}/></div>
             <div><FLabel>Buy Price (£)</FLabel><FInput type="number" value={form.costUnit||""} onChange={v=>updateForm("costUnit",v)}/></div>
             <div><FLabel>Multiple</FLabel><FInput type="number" value={form.multiple||""} onChange={v=>updateForm("multiple",v)}/></div>
+            <div>
+              <FLabel>Servings / container</FLabel>
+              <FInput type="number" value={form.servings||""} onChange={v=>updateForm("servings",v)} placeholder="e.g. 6"/>
+              <div style={{ fontSize:10, color:T.textLight, marginTop:3 }}>Glasses or measures per bottle — used by Till Reconciliation. Leave blank to skip.</div>
+            </div>
           </div>
           <div style={{ display:"flex", gap:10, marginTop:16 }}>
             <button onClick={handleSubmit} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save</button>
