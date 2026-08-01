@@ -1390,6 +1390,24 @@ function darkenHex(hex, amount) {
   return "#" + [r,g,b].map(function(x){ return x.toString(16).padStart(2,"0"); }).join("");
 }
 
+// Append an alpha channel to a colour, normalising 3-digit hex first —
+// "#abc" + "66" would otherwise produce the invalid "#abc66".
+// Year-calendar diagonals. A single pair of blues rather than per-property
+// colours: the letter badges already identify the property, so colouring the
+// diagonals as well just competed with them.
+const CAL_LIGHT = "#bfdbfe";   // arrival / departure
+const CAL_DARK  = "#1e40af";   // outgoing half of a changeover
+
+// Grace period before an unpaid invoice is called overdue on the dashboard.
+const OVERDUE_AFTER_DAYS = 3;
+
+function hexWithAlpha(hex, alphaHex) {
+  var h = String(hex || "#000000").replace("#", "");
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  if (h.length !== 6) h = "000000";
+  return "#" + h + alphaHex;
+}
+
 const DEFAULT_EMAIL_TEMPLATES = [
   {
     id: "booking_confirmed",
@@ -1466,6 +1484,8 @@ const EMAIL_TOKENS = [
 function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen, onViewEventsCalendar }) {
   const [mode, setMode] = useState("year");
   const [tooltip, setTooltip] = useState(null);
+  // Year-calendar filter: "all", "events", or a property id.
+  const [calFilter, setCalFilter] = useState("all");
 
   const year  = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -1567,6 +1587,26 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
 
   // ── YEAR VIEW ──────────────────────────────────────────────────────────────
   if (mode === "year") {
+    // Filter state resolved once: which property (if any), and whether
+    // accommodation / farm events are shown at all.
+    const propFilter  = (calFilter !== "all" && calFilter !== "events") ? calFilter : null;
+    const showAccom   = calFilter !== "events";
+    const showEvents  = calFilter === "all" || calFilter === "events";
+    const keepProp    = function(p) { return !propFilter || p.id === propFilter; };
+    const filterBtn   = function(id, label, colour) {
+      const on = calFilter === id;
+      return (
+        <button key={id} onClick={function(){ setCalFilter(id); }}
+          style={{ padding:"6px 13px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight: on?700:500,
+            background: on ? (colour || T.midBlue) : "#fff",
+            color: on ? "#fff" : T.textMid,
+            border: `1.5px solid ${on ? (colour || T.midBlue) : T.border}`,
+            display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}>
+          {colour && !on && <span style={{ width:9, height:9, borderRadius:2, background:colour, display:"inline-block" }}/>}
+          {label}
+        </button>
+      );
+    };
     return (
       <div>
         <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18 }}>
@@ -1577,6 +1617,13 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           {onViewEventsCalendar && (
             <button onClick={onViewEventsCalendar} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600, marginLeft:"auto", background:T.accentLight, color:T.accent, border:`1.5px solid ${T.accent}` }}>Events calendar</button>
           )}
+        </div>
+
+        {/* Filter the year grid to one property, to farm events, or show all */}
+        <div style={{ display:"flex", gap:7, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+          {properties.map(function(p) { return filterBtn(p.id, shortPropLabel(p), p.colour); })}
+          {filterBtn("events", "Events", "#ef4444")}
+          {filterBtn("all", "All", null)}
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:16 }}>
@@ -1605,29 +1652,29 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       // day cell
                       const day = cell.day;
                       const ds = `${year}-${String(mIdx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-                      const propsOn = occMap[ds] || [];
-                      const hasEvent = eventDates.has(ds);
+                      const propsOn = showAccom ? (occMap[ds] || []).filter(keepProp) : [];
+                      const hasEvent = showEvents && eventDates.has(ds);
                       const isToday  = ds === today;
                       const colInRow = (ci - 7) % 7; // offset by 7 header cells
                       const isSat = colInRow === 5, isSun = colInRow === 6;
                       const allBlocked = propsOn.length > 0 && propsOn.every(p => blockedSet.has(ds + ":" + p.id));
-                      // Arrivals and departures on this date. Both are drawn as
-                      // diagonals: departure fills the lower-left triangle,
-                      // arrival the upper-right. When the same day is both (a
-                      // changeover) the departure half is darkened so the two
-                      // read apart at this size.
-                      const ciProps = ciByDate[ds] || [];
-                      const coProps = coByDate[ds] || [];
+                      // Arrivals and departures, drawn as directional gradients.
+                      // Left of the cell reads as the start of the day and right
+                      // as the end, so occupancy visibly flows across the day:
+                      //   check-in    clear (bottom-left) → colour (top-right)
+                      //   check-out   colour (top-left)   → clear (bottom-right)
+                      //   changeover  dark (left)         → light (right)
+                      const ciProps = showAccom ? (ciByDate[ds] || []).filter(keepProp) : [];
+                      const coProps = showAccom ? (coByDate[ds] || []).filter(keepProp) : [];
                       const isChgDay = ciProps.length > 0 && coProps.length > 0;
-                      const ciCol = ciProps.length ? (ciProps[0].colour || T.accent) : null;
-                      const coCol = coProps.length ? (coProps[0].colour || T.accent) : null;
+                      const hasCI = ciProps.length > 0, hasCO = coProps.length > 0;
                       const bg = allBlocked
                         ? "repeating-linear-gradient(135deg, #e2e8f0, #e2e8f0 4px, #eef2f7 4px, #eef2f7 8px)"
                         : propsOn.length === 1 ? propsOn[0].colour+"2a"
                         : propsOn.length > 1   ? propsOn[0].colour+"1e"
                         : "transparent";
-                      const dayEntries = bookingMap[ds] || [];
-                      const dateEvts = eventByDate[ds] || [];
+                      const dayEntries = showAccom ? (bookingMap[ds] || []).filter(function(e){ return keepProp(e.prop); }) : [];
+                      const dateEvts = showEvents ? (eventByDate[ds] || []) : [];
                       return (
                         <div key={day}
                           style={{ textAlign:"center", padding:"3px 0 5px", borderRadius:3, background:bg,
@@ -1639,17 +1686,24 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                             setTooltip({ ds:ds, dayEntries:dayEntries, dateEvts:dateEvts, x:rect.left, y:rect.bottom+4 });
                           }}
                           onMouseLeave={function() { setTooltip(null); }}>
-                          {coCol && (
-                            <div style={{ position:"absolute", inset:0, pointerEvents:"none",
-                              background: isChgDay ? darkenHex(coCol, 55) : coCol,
-                              opacity: isChgDay ? 0.75 : 0.3,
-                              clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>
-                          )}
-                          {ciCol && (
-                            <div style={{ position:"absolute", inset:0, pointerEvents:"none",
-                              background: ciCol, opacity: isChgDay ? 0.38 : 0.3,
-                              clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
-                          )}
+                          {/* Hard-edged diagonals. One colour throughout — the
+                              letter badges already say which property it is, so
+                              per-property hues here only added noise. Dark blue
+                              is reserved for the outgoing half of a changeover. */}
+                          {isChgDay ? (
+                            <>
+                              <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_DARK,
+                                clipPath:"polygon(0 0, 0 100%, 100% 100%)" }}/>
+                              <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
+                                clipPath:"polygon(0 0, 100% 0, 100% 100%)" }}/>
+                            </>
+                          ) : hasCI ? (
+                            <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
+                              clipPath:"polygon(0 100%, 100% 0, 100% 100%)" }}/>
+                          ) : hasCO ? (
+                            <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
+                              clipPath:"polygon(0 0, 0 100%, 100% 100%)" }}/>
+                          ) : null}
                           <div style={{ position:"relative", fontSize:12, fontWeight:propsOn.length||hasEvent?700:400,
                             color: isSat||isSun ? T.accent : T.text, lineHeight:"1.3" }}>{day}</div>
                           {(propsOn.length > 0 || hasEvent) && (
@@ -1723,7 +1777,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
         {/* Legend */}
         <div style={{ display:"flex", gap:18, flexWrap:"wrap", alignItems:"center", padding:"10px 14px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, fontSize:12, color:T.textMid }}>
           <span style={{ fontWeight:700, color:T.text, fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>Key:</span>
-          {properties.map(function(p){
+          {properties.filter(function(p){ return showAccom && keepProp(p); }).map(function(p){
             return (
               <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5 }}>
                 <span style={{ width:12, height:12, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
@@ -1732,26 +1786,32 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
               </span>
             );
           })}
-          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#ef4444", color:"#fff", fontSize:8, fontWeight:800 }}>E</span>
-            Farm event
-          </span>
+          {showEvents && (
+            <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+              <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#ef4444", color:"#fff", fontSize:8, fontWeight:800 }}>E</span>
+              Farm event
+            </span>
+          )}
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#94a3b8", color:"#fff", fontSize:8, fontWeight:800 }}>×</span>
             Blocked / not available
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ display:"inline-block", width:12, height:12, background:"#2563eb", opacity:.3, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>
-            Check-out
-          </span>
-          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ display:"inline-block", width:12, height:12, background:"#2563eb", opacity:.3, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
+            <span style={{ position:"relative", display:"inline-block", width:14, height:14, borderRadius:2, border:`1px solid ${T.border}`, overflow:"hidden" }}>
+              <span style={{ position:"absolute", inset:0, background:CAL_LIGHT, clipPath:"polygon(0 100%, 100% 0, 100% 100%)" }}/>
+            </span>
             Check-in
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <span style={{ position:"relative", display:"inline-block", width:12, height:12 }}>
-              <span style={{ position:"absolute", inset:0, background:"#1040a0", opacity:.75, clipPath:"polygon(0 0, 0% 100%, 100% 100%)" }}/>
-              <span style={{ position:"absolute", inset:0, background:"#2563eb", opacity:.38, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
+            <span style={{ position:"relative", display:"inline-block", width:14, height:14, borderRadius:2, border:`1px solid ${T.border}`, overflow:"hidden" }}>
+              <span style={{ position:"absolute", inset:0, background:CAL_LIGHT, clipPath:"polygon(0 0, 0 100%, 100% 100%)" }}/>
+            </span>
+            Check-out
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ position:"relative", display:"inline-block", width:14, height:14, borderRadius:2, border:`1px solid ${T.border}`, overflow:"hidden" }}>
+              <span style={{ position:"absolute", inset:0, background:CAL_DARK, clipPath:"polygon(0 0, 0 100%, 100% 100%)" }}/>
+              <span style={{ position:"absolute", inset:0, background:CAL_LIGHT, clipPath:"polygon(0 0, 100% 0, 100% 100%)" }}/>
             </span>
             Changeover
           </span>
@@ -3910,7 +3970,7 @@ export default function App() {
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
       <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
-        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView}/>}
+        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
@@ -7144,10 +7204,12 @@ function computeStock(products, events) {
 }
 
 // ─── Dashboard (Slice 2) ──────────────────────────────────────────────────────
-function DashboardView({ bookings, viewingRequests, setView }) {
+function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
   const [invoiceRecs, setInvoiceRecs]     = useState([]);
+  const [xeroInvoiceById, setXeroInvoiceById] = useState({});
+  const [xeroInvErr, setXeroInvErr]       = useState(null);
   const [loaded, setLoaded]               = useState(false);
 
   useEffect(()=>{
@@ -7158,6 +7220,28 @@ function DashboardView({ bookings, viewingRequests, setView }) {
       setLoaded(true);
     })();
   }, []);
+
+  // Payment status for invoices we've raised. Fetched by invoice ID so it
+  // reflects Xero, not what the app assumed at push time.
+  useEffect(function() {
+    if (!loaded || !xeroToken) return;
+    const ids = (invoiceRecs || []).map(function(r){ return r.xeroInvoiceId; }).filter(Boolean);
+    if (!ids.length) return;
+    let cancelled = false;
+    (async function() {
+      try {
+        const map = {};
+        for (let i = 0; i < ids.length; i += 50) {
+          const data = await xeroFetch("Invoices?IDs=" + ids.slice(i, i + 50).join(","));
+          ((data && data.Invoices) || []).forEach(function(inv) { map[inv.InvoiceID] = inv; });
+        }
+        if (!cancelled) { setXeroInvoiceById(map); setXeroInvErr(null); }
+      } catch (e) {
+        if (!cancelled) setXeroInvErr(String(e.message || e));
+      }
+    })();
+    return function(){ cancelled = true; };
+  }, [loaded, xeroToken, invoiceRecs.length]);
 
   const today = new Date().toISOString().slice(0,10);
   const in7   = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
@@ -7186,16 +7270,25 @@ function DashboardView({ bookings, viewingRequests, setView }) {
   //                     standard lets only. Event-linked accommodation is
   //                     billed through the event, so it is excluded here or it
   //                     would be chased twice.
+  // Raised invoices still unpaid more than OVERDUE_AFTER_DAYS past their due
+  // date. Payment status has to come from Xero — the app only knows an invoice
+  // was pushed, not whether it has since been settled. Drafts are excluded:
+  // they haven't been sent, so they can't be late.
   const overdueInvoices = [];
-  (bookings || []).forEach(function(ev) {
-    if (!isValidEventDate(ev.date)) return;
-    if (!isFutureEvent(ev, today)) return;
-    if (!isInvoiceableYear(ev)) return;
-    computeEventInvoiceStages(ev, accomBookings).forEach(function(st) {
-      if (!(st.total > 0)) return;
-      if (findPushedInvoice(invoiceRecs, ev.id, st.stage)) return;   // already raised
-      if (!st.invoiceDate || st.invoiceDate >= today) return;        // not due yet
-      overdueInvoices.push({ ev: ev, st: st, daysLate: Math.round((new Date(today) - new Date(st.invoiceDate)) / 86400000) });
+  (invoiceRecs || []).forEach(function(rec) {
+    const inv = xeroInvoiceById[rec.xeroInvoiceId];
+    if (!inv) return;
+    const status = String(inv.Status || "").toUpperCase();
+    if (status === "PAID" || status === "VOIDED" || status === "DELETED" || status === "DRAFT") return;
+    if (!(Number(inv.AmountDue || 0) > 0)) return;
+    const due = xeroDateToIso(inv.DueDateString || inv.DueDate) || rec.invoiceDate;
+    if (!due) return;
+    const daysLate = Math.round((new Date(today) - new Date(due)) / 86400000);
+    if (daysLate <= OVERDUE_AFTER_DAYS) return;
+    const ev = (bookings || []).find(function(b){ return String(b.id) === String(rec.eventId); });
+    overdueInvoices.push({
+      ev: ev, rec: rec, inv: inv, due: due, daysLate: daysLate,
+      amountDue: Number(inv.AmountDue || 0)
     });
   });
   overdueInvoices.sort(function(a,b){ return b.daysLate - a.daysLate; });
@@ -7213,7 +7306,7 @@ function DashboardView({ bookings, viewingRequests, setView }) {
   });
   overdueAccom.sort(function(a,b){ return b.daysLate - a.daysLate; });
 
-  const overdueInvoiceTotal = overdueInvoices.reduce(function(a,r){ return a + r.st.total; }, 0);
+  const overdueInvoiceTotal = overdueInvoices.reduce(function(a,r){ return a + r.amountDue; }, 0);
   const overdueAccomTotal   = overdueAccom.reduce(function(a,r){ return a + Number(r.s.amount||0); }, 0);
 
   // Guests already checked in and still on site (checked in before today, not
@@ -7259,7 +7352,17 @@ function DashboardView({ bookings, viewingRequests, setView }) {
       <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:"0 0 6px" }}>Home</h2>
       <p style={{ color:T.textMid, fontSize:13, margin:"0 0 24px" }}>Today: {fmtDay(today)}</p>
 
-      {/* Overdue money — event invoices not yet raised, and unpaid accommodation */}
+      {/* Payment status can only come from Xero — say so rather than letting an
+          empty list read as "nothing outstanding". */}
+      {invoiceRecs.length > 0 && (!xeroToken || xeroInvErr) && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:"#92400e", lineHeight:1.6 }}>
+          {!xeroToken
+            ? "Connect Xero to see which raised invoices are still unpaid."
+            : "Couldn’t read invoice payment status from Xero (" + xeroInvErr + ")."}
+        </div>
+      )}
+
+      {/* Overdue money — unpaid raised invoices, and unpaid accommodation */}
       {(overdueInvoices.length > 0 || overdueAccom.length > 0) && (
         <div style={{ background:"#fff", border:"1px solid #fecaca", borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(220,38,38,.08)", marginBottom:18 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
@@ -7272,24 +7375,27 @@ function DashboardView({ bookings, viewingRequests, setView }) {
           {overdueInvoices.length > 0 && (
             <div style={{ marginBottom: overdueAccom.length ? 16 : 0 }}>
               <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
-                Event invoices not raised — £{overdueInvoiceTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+                Event invoices unpaid — £{overdueInvoiceTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
               </div>
               {overdueInvoices.slice(0,8).map(function(r) {
                 return (
-                  <div key={r.ev.id + "-" + r.st.stage} onClick={()=>setView("invoices")}
-                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
-                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>{r.ev.couple || "(no name)"}</span>
-                    <span style={{ fontSize:11, color:T.textLight }}>{r.st.label}</span>
-                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.st.invoiceDate)}</span>
+                  <a key={r.rec.id} href={xeroInvoiceUrl(r.rec.xeroInvoiceId)} target="_blank" rel="noreferrer"
+                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap", textDecoration:"none", color:"inherit" }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>
+                      {r.ev ? (r.ev.couple || "(no name)") : (r.inv.Contact && r.inv.Contact.Name) || "(unknown)"}
+                    </span>
+                    <span style={{ fontSize:11, color:T.textLight }}>{INVOICE_STAGE_LABELS[r.rec.stage] || ("Stage " + r.rec.stage)}</span>
+                    <span style={{ fontSize:11, color:"#13B5EA", fontWeight:600 }}>{r.inv.InvoiceNumber || "—"}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.due)}</span>
                     <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
                     <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
-                      £{r.st.total.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+                      £{r.amountDue.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
                     </span>
-                  </div>
+                  </a>
                 );
               })}
               {overdueInvoices.length > 8 && (
-                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueInvoices.length-8} more — see the invoice worklist.</div>
+                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueInvoices.length-8} more.</div>
               )}
             </div>
           )}
