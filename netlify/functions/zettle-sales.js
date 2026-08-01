@@ -20,6 +20,7 @@
 
 const OAUTH_URL    = "https://oauth.zettle.com/token";
 const PURCHASE_URL = "https://purchase.izettle.com/purchases/v2";
+const PRODUCTS_URL = "https://products.izettle.com/organizations/self/products";
 
 function jsonResponse(statusCode, body) {
   return {
@@ -102,6 +103,46 @@ async function fetchPurchases(token, startDate, endDate) {
   return all;
 }
 
+// Full product library, flattened to one row per variant. The key format
+// matches the sales aggregation (productUuid|variantUuid) so a mapping made
+// against the catalogue lines up with sales when they appear.
+async function fetchCatalogue(token) {
+  const res = await fetch(PRODUCTS_URL, {
+    headers: { "Authorization": "Bearer " + token, "Accept": "application/json" }
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error("Zettle products failed (" + res.status + "): " + text.slice(0, 200) +
+      (res.status === 403 ? " — the API key may be missing the READ:PRODUCT scope." : ""));
+  }
+  const data = JSON.parse(text);
+  const products = Array.isArray(data) ? data : (data.products || []);
+
+  const rows = [];
+  products.forEach(function(p) {
+    const variants = (p.variants && p.variants.length) ? p.variants : [{ uuid: null, name: "" }];
+    variants.forEach(function(v) {
+      const price = v.price && typeof v.price.amount === "number" ? v.price.amount / 100 : null;
+      rows.push({
+        key: (p.uuid || "") + "|" + (v.uuid || ""),
+        productUuid: p.uuid || null,
+        variantUuid: v.uuid || null,
+        name: p.name || "(unnamed)",
+        variantName: v.name || "",
+        category: (p.category && p.category.name) || "",
+        sku: v.sku || "",
+        price: price
+      });
+    });
+  });
+  rows.sort(function(a, b) {
+    const an = (a.category + " " + a.name + " " + a.variantName).toLowerCase();
+    const bn = (b.category + " " + b.name + " " + b.variantName).toLowerCase();
+    return an < bn ? -1 : an > bn ? 1 : 0;
+  });
+  return rows;
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") {
     return jsonResponse(405, { error: "Method not allowed" });
@@ -110,6 +151,18 @@ exports.handler = async function(event) {
   let body;
   try { body = JSON.parse(event.body); }
   catch (e) { return jsonResponse(400, { error: "Invalid JSON" }); }
+
+  // ── Catalogue only — no date range needed ──────────────────────────────────
+  if (body.action === "catalogue") {
+    try {
+      const token = await getAccessToken();
+      const catalogue = await fetchCatalogue(token);
+      return jsonResponse(200, { ok: true, catalogue: catalogue, count: catalogue.length });
+    } catch (err) {
+      console.error("zettle-sales catalogue error:", err);
+      return jsonResponse(500, { error: String(err.message || err) });
+    }
+  }
 
   const startDate = body.startDate;
   const endDate   = body.endDate;
@@ -122,19 +175,39 @@ exports.handler = async function(event) {
     const purchases = await fetchPurchases(token, startDate, endDate);
 
     // ── Aggregate ────────────────────────────────────────────────────────────
+    //
+    // Gift cards need care or the numbers double-count:
+    //
+    //   Selling a gift card    — real money in (paid by card/cash), but no
+    //                            stock moves. It IS revenue, at the moment of
+    //                            sale.
+    //   Redeeming a gift card  — drinks leave the shelf, but no new money
+    //                            arrives; the purchase is settled by a payment
+    //                            of type GIFTCARD.
+    //
+    // So: revenue is the sum of every payment EXCEPT gift-card redemptions,
+    // while stock consumption counts every product line EXCEPT gift-card sales.
+    // Summing purchase totals instead would count a gift card twice — once when
+    // sold and again when spent.
     const byKey = {};          // productUuid|variantUuid -> line
     const byPaymentType = {};
-    let grossMinor = 0;
+    let purchaseTotalMinor = 0;   // raw sum of purchase amounts (reference only)
+    let revenueMinor = 0;         // money actually taken
+    let giftCardSoldMinor = 0;    // value of gift cards sold
+    let giftCardRedeemedMinor = 0;// value settled by gift card
     let refundCount = 0;
-    let customAmountMinor = 0; // "custom amount" rings — no product attached
+    let customAmountMinor = 0;    // "custom amount" rings — no product attached
 
     purchases.forEach(function(p) {
-      grossMinor += Number(p.amount || 0);
+      purchaseTotalMinor += Number(p.amount || 0);
       if (p.refund) refundCount++;
 
       (p.payments || []).forEach(function(pay) {
         const t = pay.type || "UNKNOWN";
-        byPaymentType[t] = (byPaymentType[t] || 0) + Number(pay.amount || 0);
+        const amt = Number(pay.amount || 0);
+        byPaymentType[t] = (byPaymentType[t] || 0) + amt;
+        if (t === "GIFTCARD") giftCardRedeemedMinor += amt;
+        else revenueMinor += amt;   // real money in
       });
 
       (p.products || []).forEach(function(line) {
@@ -142,6 +215,9 @@ exports.handler = async function(event) {
         const unit = Number(line.unitPrice || 0);
         const disc = Number(line.discountValue || 0);
         const rowMinor = (qty * unit) - (qty >= 0 ? disc : -disc);
+
+        // A gift card sale is revenue, not a drink — never counts toward stock.
+        if (line.type === "GIFTCARD") { giftCardSoldMinor += rowMinor; return; }
 
         if (line.type === "CUSTOM_AMOUNT" || !line.name) {
           customAmountMinor += rowMinor;
@@ -161,6 +237,8 @@ exports.handler = async function(event) {
             isLibraryProduct: !!line.libraryProduct
           };
         }
+        // Units always count — a drink poured against a gift card still leaves
+        // the shelf, even though the line may be priced at zero.
         byKey[key].units += qty;
         byKey[key].grossMinor += rowMinor;
       });
@@ -190,7 +268,15 @@ exports.handler = async function(event) {
       to: endDate,
       purchaseCount: purchases.length,
       refundCount: refundCount,
-      gross: Math.round(grossMinor) / 100,
+      // `revenue` is the figure to use as the bar take — every payment except
+      // gift-card redemptions, so gift cards are counted once, when sold.
+      revenue: Math.round(revenueMinor) / 100,
+      giftCardsSold: Math.round(giftCardSoldMinor) / 100,
+      giftCardsRedeemed: Math.round(giftCardRedeemedMinor) / 100,
+      // Raw sum of purchase totals — double-counts gift cards, kept only so the
+      // difference can be explained on screen.
+      purchaseTotal: Math.round(purchaseTotalMinor) / 100,
+      gross: Math.round(revenueMinor) / 100,   // back-compat alias
       customAmountTotal: Math.round(customAmountMinor) / 100,
       byProduct: byProduct,
       payments: payments

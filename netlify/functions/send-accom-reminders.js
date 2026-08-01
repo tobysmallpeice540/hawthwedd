@@ -193,6 +193,13 @@ exports.handler = async function() {
       var booking = bookings[i];
 
       if (booking.status === "cancelled" || booking.bookingType === "Blocked") continue;
+
+      // Accommodation attached to a farm event is billed through that event's
+      // Xero invoices, so it must never get its own deposit/balance chasing —
+      // the guest would be asked for money they are already being invoiced for.
+      // Arrival information is still sent; only the payment flow is suppressed.
+      var billedViaEvent = !!booking.linkedEventId;
+
       if (!booking.email) continue;
 
       var flags = Object.assign({}, booking.emailFlags || {});
@@ -203,7 +210,7 @@ exports.handler = async function() {
 
       // ── Deposit request ──────────────────────────────────────────────────
       var depositEntry = (booking.schedule || []).find(function(s) { return s.label === "Deposit"; });
-      if (depositEntry && !depositEntry.paid && depositEntry.dueDate && !flags.depositRequestSent) {
+      if (!billedViaEvent && depositEntry && !depositEntry.paid && depositEntry.dueDate && !flags.depositRequestSent) {
         var depTmpl = getTmpl(templates, "deposit_request");
         var depDays = (depTmpl.triggerDays !== undefined && depTmpl.triggerDays !== null) ? depTmpl.triggerDays : 3;
         if (depDays > 0 && daysBetween(today, depositEntry.dueDate) <= depDays) {
@@ -227,7 +234,7 @@ exports.handler = async function() {
 
       // ── Balance request ──────────────────────────────────────────────────
       var balanceEntry = (booking.schedule || []).find(function(s) { return s.label === "Balance"; });
-      if (balanceEntry && !balanceEntry.paid && balanceEntry.dueDate && !flags.balanceRequestSent) {
+      if (!billedViaEvent && balanceEntry && !balanceEntry.paid && balanceEntry.dueDate && !flags.balanceRequestSent) {
         var balTmpl = getTmpl(templates, "balance_request");
         var balDays = (balTmpl.triggerDays !== undefined && balTmpl.triggerDays !== null) ? balTmpl.triggerDays : 28;
         if (balDays > 0 && daysBetween(today, balanceEntry.dueDate) <= balDays) {
