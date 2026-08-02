@@ -14,6 +14,10 @@
 [functions."send-accom-reminders"]
   schedule = "0 7 * * *"
 
+# Daily data snapshot - runs at 3am, keeps the last 30 days
+[functions."backup-data"]
+  schedule = "0 3 * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"
