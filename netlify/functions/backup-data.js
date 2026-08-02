@@ -105,6 +105,7 @@ exports.handler = async function(event) {
       data: data
     };
 
+    const bytes = JSON.stringify(snapshot).length;
     await sbSet(snapshotKey, snapshot);
 
     // ── Index + prune ────────────────────────────────────────────────────────
@@ -113,7 +114,7 @@ exports.handler = async function(event) {
     if (!Array.isArray(index)) index = [];
 
     index = index.filter(function(e) { return e && e.key !== snapshotKey; });
-    index.push({ key: snapshotKey, date: today, takenAt: snapshot.takenAt, counts: counts });
+    index.push({ key: snapshotKey, date: today, takenAt: snapshot.takenAt, counts: counts, bytes: bytes });
     index.sort(function(a, b) { return (a.date || "") > (b.date || "") ? -1 : 1; }); // newest first
 
     const keep = index.slice(0, KEEP_SNAPSHOTS);
