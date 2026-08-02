@@ -1430,7 +1430,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-02f";
+const APP_BUILD = "2026-08-02g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -1704,8 +1704,6 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       // that are mid-stay (already in, not leaving) fill the
                       // cell. Departure days are excluded automatically because
                       // occupancy runs [check-in, check-out).
-                      const arrivingIds = ciProps.map(function(p){ return p.id; });
-                      const midStayProps = propsOn.filter(function(p) { return arrivingIds.indexOf(p.id) === -1; });
                       // Arrivals and departures, drawn as directional gradients.
                       // Left of the cell reads as the start of the day and right
                       // as the end, so occupancy visibly flows across the day:
@@ -1714,6 +1712,10 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       //   changeover  dark (left)         → light (right)
                       const ciProps = showAccom ? (ciByDate[ds] || []).filter(keepProp) : [];
                       const coProps = showAccom ? (coByDate[ds] || []).filter(keepProp) : [];
+                      // Declared AFTER ciProps — referencing it earlier is a
+                      // temporal-dead-zone ReferenceError that blanks the page.
+                      const arrivingIds = ciProps.map(function(p){ return p.id; });
+                      const midStayProps = propsOn.filter(function(p) { return arrivingIds.indexOf(p.id) === -1; });
                       // A changeover is the SAME property leaving and arriving on
                       // one day. Treating "any check-in plus any check-out" as a
                       // changeover wrongly darkened ordinary arrival days whenever
@@ -3883,31 +3885,60 @@ export default function App() {
     })();
   },[]);
 
-  const saveBookings = useCallback(async data=>{ setBookings(data); try{await sbSet(BOOKING_STORAGE, data);}catch(e){console.error(e);} },[]);
+  // NOTE: there is deliberately no whole-array "saveBookings" at this level.
+  // Writing the entire events array from a component's snapshot is what
+  // destroyed records before. Use mutateBookings / saveBookingRecord /
+  // patchBooking below, which all re-read from the server first.
 
-  // Save a SINGLE booking without rewriting the whole array from a stale
-  // snapshot. The autosave path used to do `bookings.map(...)` against the
-  // `bookings` captured in its closure and then persist that entire array — so
-  // any write built from a slightly out-of-date snapshot silently reverted
-  // edits made to *other* bookings in the meantime. Using the functional
-  // updater guarantees we always merge into the freshest state, and the promise
-  // resolves only once the write has actually gone to Supabase so the caller
-  // can surface a real success/failure.
-  const saveBookingRecord = useCallback((id, data) => {
-    return new Promise(function(resolve, reject) {
-      setBookings(function(prev) {
-        var found = false;
-        var next = (prev || []).map(function(b) {
-          if (String(b.id) === String(id)) { found = true; return Object.assign({}, data, { id: b.id }); }
-          return b;
-        });
-        if (!found) next = (next || []).concat([Object.assign({}, data, { id: id })]);
-        next = next.slice().sort(function(a, b) { return (a.date || "") > (b.date || "") ? 1 : -1; });
-        sbSet(BOOKING_STORAGE, next).then(resolve).catch(function(e) { console.error(e); reject(e); });
-        return next;
-      });
-    });
+  // ── Safe mutation of the events array ─────────────────────────────────────
+  // Everything that changes events goes through here.
+  //
+  // The whole array lives under one Supabase key, so ANY save rewrites all of
+  // it. Merging against React state is not enough: that state is a snapshot
+  // taken when this tab loaded, so a save from a tab (or phone, or yesterday's
+  // still-open window) that hasn't seen a newly-added event will write the
+  // array back WITHOUT it — destroying records it never knew existed. That is
+  // how whole events and a batch of Xero contact IDs disappeared.
+  //
+  // So: re-read the current array from Supabase, apply the change to THAT, and
+  // write it straight back. If the read fails we abort rather than write, since
+  // writing from an unknown base is exactly what causes the damage.
+  const mutateBookings = useCallback(async (mutator) => {
+    let server;
+    try {
+      server = await sbGet(BOOKING_STORAGE);
+    } catch (e) {
+      console.error("Aborting save — could not read current bookings:", e);
+      throw new Error("Could not reach the database, so nothing was saved. Please try again.");
+    }
+    const base = Array.isArray(server) ? server : [];
+    const next = mutator(base);
+    if (!Array.isArray(next)) throw new Error("Internal error: bookings mutation produced no array");
+    await sbSet(BOOKING_STORAGE, next);
+    setBookings(next);
+    return next;
   }, []);
+
+  // Insert or update one event, leaving every other record exactly as the
+  // server has it.
+  const saveBookingRecord = useCallback((id, data) => {
+    return mutateBookings(function(base) {
+      let found = false;
+      let next = base.map(function(b) {
+        if (String(b.id) === String(id)) { found = true; return Object.assign({}, data, { id: b.id }); }
+        return b;
+      });
+      if (!found) next = next.concat([Object.assign({}, data, { id: id })]);
+      return next.sort(function(a, b) { return (a.date || "") > (b.date || "") ? 1 : -1; });
+    });
+  }, [mutateBookings]);
+
+  // Apply a change to a single event without touching the rest.
+  const patchBooking = useCallback((id, patchFn) => {
+    return mutateBookings(function(base) {
+      return base.map(function(b) { return String(b.id) === String(id) ? patchFn(b) : b; });
+    });
+  }, [mutateBookings]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
 
   const saveAccomBooking = useCallback(async (bookingId, patch) => {
@@ -3929,7 +3960,15 @@ export default function App() {
   const handleDelete = id => {
     const b = bookings.find(x=>x.id===id);
     askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
-      async () => { setConfirmDlg(null); await saveBookings(bookings.filter(x=>x.id!==id)); });
+      async () => {
+        setConfirmDlg(null);
+        // Delete against the server's current array, not this tab's snapshot —
+        // otherwise deleting one event also silently removes any events added
+        // elsewhere since this tab loaded.
+        await mutateBookings(function(base) {
+          return base.filter(function(x) { return String(x.id) !== String(id); });
+        });
+      });
   };
   const handleSubmit = async ()=>{
     if(!formData.couple||!formData.date){ alert("Event name and date are required."); return; }
@@ -3971,8 +4010,7 @@ export default function App() {
 
     const newId = nextBookingId(bookings);
     const withId = { ...newBooking, id:newId };
-    const updated = [...bookings, withId].sort((a,b)=>(a.date||"")>(b.date||"")?1:-1);
-    saveBookings(updated);
+    saveBookingRecord(newId, withId);
 
     setFormData(withId);
     setEditId(newId);
@@ -4063,7 +4101,7 @@ export default function App() {
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
           enquiries={enquiries} setEnquiries={setEnquiries}
           saveEnquiries={async(e)=>{ setEnquiries(e); await sbSet(ENQUIRIES_STORAGE,e); }}
-          saveBookings={saveBookings}
+          patchBooking={patchBooking}
           onSelectEnquiry={goToEnquiry}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties}/>}
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
@@ -10836,7 +10874,7 @@ function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
 // ─── VIEWING REQUESTS INBOX ───────────────────────────────────────────────────
 const VIEWING_SLOTS = ["10:00","12:00","14:00","16:00","18:00"];
 
-function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, saveBookings, mode="requests", confirmedSlot=null }) {
+function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, patchBooking, mode="requests", confirmedSlot=null }) {
   const [acting, setActing]         = useState(null);
   const [blockDate,   setBlockDate]   = useState("");
   const [blockDateTo, setBlockDateTo] = useState("");
@@ -10920,12 +10958,12 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
         if (mode === "booking" && existingEnqId) {
           // Attach viewing to existing booking
           const bkgId = Number(existingEnqId) || existingEnqId;
-          const updatedBookings = (bookings||[]).map(b =>
-            (b.id === bkgId || b.id === Number(bkgId))
-              ? { ...b, viewings: [...(b.viewings||[]), newViewing] }
-              : b
-          );
-          if (saveBookings) await saveBookings(updatedBookings);
+          // Patch just this booking against the server's current array —
+          // rewriting the whole array from this component's stale `bookings`
+          // prop would delete any events added elsewhere in the meantime.
+          if (patchBooking) await patchBooking(bkgId, function(b) {
+            return Object.assign({}, b, { viewings: (b.viewings||[]).concat([newViewing]) });
+          });
           const bkg = (bookings||[]).find(b=>b.id===bkgId||b.id===Number(bkgId));
           showFlash("Confirmed - viewing added to booking: " + (bkg?.couple||""));
         } else if (mode === "existing" && existingEnqId) {
@@ -11301,7 +11339,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   );
 }
 
-function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, saveBookings }) {
+function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, patchBooking }) {
   const [filter,    setFilter]    = useState("upcoming");
   const [viewTab,   setViewTab]   = useState("viewings");
   const [refreshing, setRefreshing] = useState(false);
@@ -11355,10 +11393,11 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
   // Update / delete a viewing back onto its source booking or enquiry
   const saveViewingEdit = async (v) => {
     if (v.sourceType==="booking") {
-      const updated = bookings.map(b => b.id===v.sourceId
-        ? { ...b, viewings:(b.viewings||[]).map((vv,idx)=> idx===v.vIndex ? { ...vv, date:editV.date, time:editV.time, notes:editV.notes } : vv) }
-        : b);
-      if (saveBookings) await saveBookings(updated);
+      if (patchBooking) await patchBooking(v.sourceId, function(b) {
+        return Object.assign({}, b, { viewings:(b.viewings||[]).map(function(vv,idx){
+          return idx===v.vIndex ? Object.assign({}, vv, { date:editV.date, time:editV.time, notes:editV.notes }) : vv;
+        }) });
+      });
     } else {
       const updated = enquiries.map(e => e.id===v.sourceId
         ? { ...e, viewings:(e.viewings||[]).map((vv,idx)=> idx===v.vIndex ? { ...vv, date:editV.date, time:editV.time, notes:editV.notes } : vv) }
@@ -11370,10 +11409,9 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
 
   const deleteViewing = async (v) => {
     if (v.sourceType==="booking") {
-      const updated = bookings.map(b => b.id===v.sourceId
-        ? { ...b, viewings:(b.viewings||[]).filter((_,idx)=> idx!==v.vIndex) }
-        : b);
-      if (saveBookings) await saveBookings(updated);
+      if (patchBooking) await patchBooking(v.sourceId, function(b) {
+        return Object.assign({}, b, { viewings:(b.viewings||[]).filter(function(_,idx){ return idx!==v.vIndex; }) });
+      });
     } else {
       const updated = enquiries.map(e => e.id===v.sourceId
         ? { ...e, viewings:(e.viewings||[]).filter((_,idx)=> idx!==v.vIndex) }
@@ -11422,7 +11460,7 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
         <ViewingRequestsInbox mode="blocks"
           requests={[]} setRequests={()=>{}}
           blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
-          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} patchBooking={patchBooking}
         />
       )}
 
@@ -11430,7 +11468,7 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
         <ViewingRequestsInbox mode="requests"
           requests={viewingRequests||[]} setRequests={setViewingRequests}
           blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
-          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} saveBookings={saveBookings}
+          bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} patchBooking={patchBooking}
           confirmedSlot={(<>
       <div style={{ display:"flex", gap:6, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
         {[["upcoming","Upcoming"],["all","All"],["past","Past"]].map(([v,l])=>(
