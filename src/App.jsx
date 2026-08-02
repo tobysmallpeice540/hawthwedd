@@ -67,6 +67,13 @@ const sbSet = async (key, value) => {
   });
 };
 
+const sbDelete = async (key) => {
+  await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}`, {
+    method: "DELETE",
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  });
+};
+
 // ─── SUPABASE STORAGE HELPERS ──────────────────────────────────────────────
 const STORAGE_BUCKET = "booking-files";
 
@@ -295,12 +302,11 @@ const gmailGetValidToken = () => {
 };
 
 // ─── XERO OAUTH2 PKCE ────────────────────────────────────────────────────────
-// NOTE: "invalid_scope" on accounting.transactions is usually a Xero USER
-// permission problem, not an app or scope-string problem — Xero refuses to
-// grant write scopes to a user without an admin role in the organisation, and
-// reports it as an invalid scope rather than a permissions error. If Connect
-// fails with invalid_scope, check the role of the Xero user doing the
-// connecting before touching anything here.
+// NOTE on "invalid_scope": it means the requested scope is not in THIS app's
+// registered scope list — check developer.xero.com → My Apps → Configuration
+// and use exactly the names listed there. It is not a user-permission error,
+// and the two scope vocabularies are not interchangeable
+// (accounting.transactions vs accounting.invoices).
 // Override the client id without redeploying via:
 //   localStorage.setItem("xero_client_id_override", "NEW_CLIENT_ID")
 const XERO_CLIENT_ID_DEFAULT = "13532E98AD5A449A86B5B6607F547531";
@@ -312,24 +318,24 @@ function xeroClientId() {
   } catch (e) { /* private browsing etc. */ }
   return XERO_CLIENT_ID_DEFAULT;
 }
-// NOTE: write scopes are required to push invoices and create contacts.
-// `accounting.transactions` and `accounting.contacts` each imply their .read
-// equivalent; `accounting.settings.read` is needed to look up branding themes.
-// Changing this list means the existing Xero connection must be disconnected
-// and reconnected — an old token carries the old (read-only) scopes.
-// Kept to the minimum needed: read/write invoices and read/write contacts.
-// A single unrecognised name makes the whole authorize request fail with
-// "invalid_scope", so nothing speculative belongs here. Notably
-// `accounting.settings.read` is NOT valid. `accounting.settings` is only
-// needed to look up the branding theme by name — the invoice push degrades to
-// Xero's default theme without it, so it is deliberately left out.
-const XERO_SCOPES_DEFAULT = "openid profile email accounting.transactions accounting.contacts offline_access";
+// This Xero app is registered with GRANULAR scopes, so invoice access is
+// `accounting.invoices` — NOT the broader `accounting.transactions`, which the
+// app does not expose and which therefore fails with "invalid_scope".
+// (That is also why the original read-only setup used accounting.invoices.read.)
+// Everything below is confirmed present in the app's scope list:
+//   accounting.invoices   create/read invoices
+//   accounting.contacts   find/create the customer contact
+//   accounting.settings   look up the "HF with Stripe" branding theme
+const XERO_SCOPES_DEFAULT = "openid profile email accounting.invoices accounting.contacts accounting.settings offline_access";
 
+// Changing this list means the existing Xero connection must be disconnected
+// and reconnected — an old token still carries the scopes it was granted with.
+//
 // An override can be set from the browser console without a redeploy:
-//   localStorage.setItem("xero_scopes_override", "openid profile email accounting.transactions offline_access")
+//   localStorage.setItem("xero_scopes_override", "openid profile email accounting.invoices offline_access")
 //   localStorage.removeItem("xero_scopes_override")
 // Useful because "invalid_scope" doesn't say WHICH scope Xero rejected, so the
-// only way to find it is to try combinations.
+// only way to find it is to try them one at a time.
 function xeroScopes() {
   try {
     const o = localStorage.getItem("xero_scopes_override");
@@ -1430,7 +1436,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-02h";
+const APP_BUILD = "2026-08-02k";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3462,7 +3468,7 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
 // ── Setup wrapper (sub-tabs: Pricing | Discount Codes | Airbnb Sync) ──────────
 function LettingsSetup({ properties, setProperties, onSaveProperties, discountCodes, setDiscountCodes, onSaveDiscountCodes, emailTemplates, setEmailTemplates, onSaveEmailTemplates }) {
   const [setupTab, setSetupTab] = useState("pricing");
-  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"],["backup","Backup"]];
+  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"]];
   return (
     <div>
       <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}` }}>
@@ -3481,7 +3487,6 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
       {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
       {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "emails"  && <EmailTemplatesEditor templates={emailTemplates} setTemplates={setEmailTemplates} onSave={onSaveEmailTemplates}/>}
-      {setupTab === "backup"  && <BackupPanel/>}
     </div>
   );
 }
@@ -3516,13 +3521,44 @@ function BackupPanel() {
   }
   useEffect(function(){ loadIndex(); }, []);
 
+  // Runs entirely in the browser rather than calling the Netlify function.
+  // Once a function is given a `schedule` in netlify.toml, Netlify treats it as
+  // a scheduled function and answers manual HTTP calls with an empty body —
+  // which is why "take a snapshot now" failed with "Unexpected end of JSON
+  // input". The nightly run still uses the function; this is the manual path.
+  async function takeSnapshot() {
+    const today = new Date().toISOString().slice(0, 10);
+    const snapshotKey = "hbf_backup_" + today;
+    const data = {}, counts = {};
+    for (let i = 0; i < BACKUP_DATA_KEYS.length; i++) {
+      const k = BACKUP_DATA_KEYS[i];
+      const v = await sbGet(k);
+      if (v === null || v === undefined) continue;
+      data[k] = v;
+      counts[k] = Array.isArray(v) ? v.length : 1;
+    }
+    if (!Object.keys(data).length) throw new Error("Nothing readable to back up — snapshot skipped.");
+
+    const snapshot = { takenAt: new Date().toISOString(), date: today, keys: Object.keys(data), counts: counts, data: data };
+    await sbSet(snapshotKey, snapshot);
+
+    let idx = [];
+    try { idx = (await sbGet(BACKUP_INDEX_KEY)) || []; } catch (e) { idx = []; }
+    if (!Array.isArray(idx)) idx = [];
+    idx = idx.filter(function(e) { return e && e.key !== snapshotKey; });
+    idx.push({ key: snapshotKey, date: today, takenAt: snapshot.takenAt, counts: counts });
+    idx.sort(function(a, b) { return (a.date || "") > (b.date || "") ? -1 : 1; });
+    const keep = idx.slice(0, 30), drop = idx.slice(30);
+    for (let i = 0; i < drop.length; i++) { try { await sbDelete(drop[i].key); } catch (e) { /* pruning is best-effort */ } }
+    await sbSet(BACKUP_INDEX_KEY, keep);
+    return Object.keys(data).length;
+  }
+
   async function runBackup() {
     setBusy("run"); setMsg(null);
     try {
-      const res = await fetch("/.netlify/functions/backup-data", { method:"POST" });
-      const d = await res.json();
-      if (!res.ok || d.error) throw new Error(d.error || "Backup failed");
-      setMsg({ kind:"ok", text:"Snapshot saved (" + d.keysBackedUp + " data sets)." });
+      const n = await takeSnapshot();
+      setMsg({ kind:"ok", text:"Snapshot saved (" + n + " data sets)." });
       await loadIndex();
     } catch (e) { setMsg({ kind:"error", text:String(e.message||e) }); }
     setBusy(null);
@@ -3587,7 +3623,9 @@ function BackupPanel() {
     if (!pending) return;
     setBusy("restore"); setMsg(null);
     try {
-      await fetch("/.netlify/functions/backup-data", { method:"POST" }).catch(function(){});
+      // Safety snapshot of the CURRENT data before overwriting anything, so an
+      // unwanted restore can itself be undone.
+      try { await takeSnapshot(); } catch (e) { console.warn("pre-restore snapshot failed", e); }
       const keys = Object.keys(pending.data).filter(function(k){ return BACKUP_DATA_KEYS.indexOf(k) !== -1; });
       for (let i = 0; i < keys.length; i++) await sbSet(keys[i], pending.data[keys[i]]);
       setPending(null);
@@ -11737,6 +11775,13 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
   return (
     <div style={{ paddingTop:28, maxWidth:820 }}>
       <h2 style={{ margin:"0 0 20px", color:T.midBlue, fontWeight:700, fontSize:22 }}>Settings</h2>
+
+      {/* Backup & restore — belongs on the main Settings page, not buried in
+          the Lettings sub-settings where it was easy to miss. */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Backup &amp; restore</div>
+        <BackupPanel/>
+      </div>
 
       {/* Staff */}
       {setView && (
