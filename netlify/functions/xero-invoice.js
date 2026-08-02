@@ -65,17 +65,27 @@ async function xeroCall(accessToken, tenantId, path, method, payload) {
 }
 
 // Look up the branding theme by name so we never hardcode a GUID.
+// Deliberately non-fatal: reading branding themes needs the accounting.settings
+// scope, which the app no longer requests (it caused authorize failures). If
+// the call is refused we simply let Xero apply its default theme rather than
+// failing the whole invoice push over cosmetics.
 async function resolveBrandingTheme(accessToken, tenantId, themeName) {
-  const data = await xeroCall(accessToken, tenantId, "BrandingThemes", "GET", null);
-  const themes = (data && data.BrandingThemes) || [];
-  const wanted = String(themeName || "").trim().toLowerCase();
-  const match = themes.find(function(t) {
-    return String(t.Name || "").trim().toLowerCase() === wanted;
-  });
-  return {
-    brandingThemeId: match ? match.BrandingThemeID : null,
-    available: themes.map(function(t) { return t.Name; })
-  };
+  try {
+    const data = await xeroCall(accessToken, tenantId, "BrandingThemes", "GET", null);
+    const themes = (data && data.BrandingThemes) || [];
+    const wanted = String(themeName || "").trim().toLowerCase();
+    const match = themes.find(function(t) {
+      return String(t.Name || "").trim().toLowerCase() === wanted;
+    });
+    return {
+      brandingThemeId: match ? match.BrandingThemeID : null,
+      available: themes.map(function(t) { return t.Name; }),
+      unavailable: false
+    };
+  } catch (e) {
+    console.warn("Branding theme lookup skipped:", e.message);
+    return { brandingThemeId: null, available: [], unavailable: true };
+  }
 }
 
 // Find an existing contact by any of the candidate names, else create one.
@@ -242,7 +252,10 @@ exports.handler = async function(event) {
         ? "Xero's total (" + xeroTotal.toFixed(2) + ") does not match the expected total (" +
           expectedTotal.toFixed(2) + "). Check the draft in Xero before sending — this usually " +
           "means VAT is being applied on top rather than treated as included."
-        : (theme.brandingThemeId ? null : "Branding theme not found; Xero's default theme was used.")
+        : theme.brandingThemeId ? null
+        : theme.unavailable
+          ? "Xero's default branding theme was used — set the theme on the draft in Xero if it matters."
+          : "Branding theme not found; Xero's default theme was used."
     });
 
   } catch (err) {
