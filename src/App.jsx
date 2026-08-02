@@ -301,7 +301,10 @@ const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
 // equivalent; `accounting.settings.read` is needed to look up branding themes.
 // Changing this list means the existing Xero connection must be disconnected
 // and reconnected — an old token carries the old (read-only) scopes.
-const XERO_SCOPES       = "openid profile email accounting.transactions accounting.contacts accounting.settings.read offline_access";
+// Exactly the scope names Xero documents — a single wrong name makes the whole
+// authorize request fail with "invalid_scope" (accounting.settings.read is NOT
+// accepted here; it must be accounting.settings).
+const XERO_SCOPES       = "openid profile email accounting.transactions accounting.contacts accounting.settings offline_access";
 const XERO_REDIRECT_URI = APP_ORIGIN + "/";
 
 const xeroGenerateCodeVerifier = () => {
@@ -1666,7 +1669,11 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       //   changeover  dark (left)         → light (right)
                       const ciProps = showAccom ? (ciByDate[ds] || []).filter(keepProp) : [];
                       const coProps = showAccom ? (coByDate[ds] || []).filter(keepProp) : [];
-                      const isChgDay = ciProps.length > 0 && coProps.length > 0;
+                      // A changeover is the SAME property leaving and arriving on
+                      // one day. Treating "any check-in plus any check-out" as a
+                      // changeover wrongly darkened ordinary arrival days whenever
+                      // an unrelated property happened to depart that day.
+                      const isChgDay = ciProps.some(function(p) { return changeoverSet.has(ds + ":" + p.id); });
                       const hasCI = ciProps.length > 0, hasCO = coProps.length > 0;
                       const bg = allBlocked
                         ? "repeating-linear-gradient(135deg, #e2e8f0, #e2e8f0 4px, #eef2f7 4px, #eef2f7 8px)"
@@ -1697,13 +1704,18 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                               <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
                                 clipPath:"polygon(0 0, 100% 0, 100% 100%)" }}/>
                             </>
-                          ) : hasCI ? (
-                            <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
-                              clipPath:"polygon(0 100%, 100% 0, 100% 100%)" }}/>
-                          ) : hasCO ? (
-                            <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
-                              clipPath:"polygon(0 0, 0 100%, 100% 100%)" }}/>
-                          ) : null}
+                          ) : (
+                            <>
+                              {hasCO && (
+                                <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
+                                  clipPath:"polygon(0 0, 0 100%, 100% 100%)" }}/>
+                              )}
+                              {hasCI && (
+                                <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:CAL_LIGHT,
+                                  clipPath:"polygon(0 100%, 100% 0, 100% 100%)" }}/>
+                              )}
+                            </>
+                          )}
                           <div style={{ position:"relative", fontSize:12, fontWeight:propsOn.length||hasEvent?700:400,
                             color: isSat||isSun ? T.accent : T.text, lineHeight:"1.3" }}>{day}</div>
                           {(propsOn.length > 0 || hasEvent) && (
@@ -7208,7 +7220,8 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
   const [invoiceRecs, setInvoiceRecs]     = useState([]);
-  const [xeroInvoiceById, setXeroInvoiceById] = useState({});
+  const [xeroUnpaid, setXeroUnpaid]       = useState([]);
+  const [xeroContactEvent, setXeroContactEvent] = useState({});
   const [xeroInvErr, setXeroInvErr]       = useState(null);
   const [loaded, setLoaded]               = useState(false);
 
@@ -7221,27 +7234,47 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
     })();
   }, []);
 
-  // Payment status for invoices we've raised. Fetched by invoice ID so it
-  // reflects Xero, not what the app assumed at push time.
+  // Unpaid invoices for every event that has a Xero contact — not just the ones
+  // this app raised. Invoices entered directly in Xero (everything before the
+  // app started invoicing) count just as much when chasing money, and keying
+  // off app-raised records alone left this permanently empty.
   useEffect(function() {
     if (!loaded || !xeroToken) return;
-    const ids = (invoiceRecs || []).map(function(r){ return r.xeroInvoiceId; }).filter(Boolean);
-    if (!ids.length) return;
+    const contactIds = [];
+    const eventByContact = {};
+    (bookings || []).forEach(function(ev) {
+      const cid = (ev.xeroContactId || "").trim();
+      if (!cid) return;
+      if (contactIds.indexOf(cid) === -1) contactIds.push(cid);
+      if (!eventByContact[cid]) eventByContact[cid] = ev;   // first/earliest match
+    });
+    if (!contactIds.length) { setXeroUnpaid([]); return; }
+
     let cancelled = false;
     (async function() {
       try {
-        const map = {};
-        for (let i = 0; i < ids.length; i += 50) {
-          const data = await xeroFetch("Invoices?IDs=" + ids.slice(i, i + 50).join(","));
-          ((data && data.Invoices) || []).forEach(function(inv) { map[inv.InvoiceID] = inv; });
+        const found = [];
+        for (let i = 0; i < contactIds.length; i += 40) {
+          const chunk = contactIds.slice(i, i + 40);
+          // Statuses that can still be owed. DRAFT is excluded server-side —
+          // an unapproved draft hasn't been sent, so it can't be late.
+          const data = await xeroFetch(
+            "Invoices?ContactIDs=" + chunk.join(",") +
+            "&Statuses=AUTHORISED,SUBMITTED&order=DueDate ASC"
+          );
+          ((data && data.Invoices) || []).forEach(function(inv) { found.push(inv); });
         }
-        if (!cancelled) { setXeroInvoiceById(map); setXeroInvErr(null); }
+        if (!cancelled) {
+          setXeroUnpaid(found);
+          setXeroContactEvent(eventByContact);
+          setXeroInvErr(null);
+        }
       } catch (e) {
         if (!cancelled) setXeroInvErr(String(e.message || e));
       }
     })();
     return function(){ cancelled = true; };
-  }, [loaded, xeroToken, invoiceRecs.length]);
+  }, [loaded, xeroToken, bookings.length]);
 
   const today = new Date().toISOString().slice(0,10);
   const in7   = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
@@ -7274,20 +7307,31 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
   // date. Payment status has to come from Xero — the app only knows an invoice
   // was pushed, not whether it has since been settled. Drafts are excluded:
   // they haven't been sent, so they can't be late.
+  // Which invoice belongs to which stage, where the app raised it. Invoices
+  // entered straight into Xero simply have no stage label.
+  const stageByInvoiceId = {};
+  (invoiceRecs || []).forEach(function(r) {
+    if (r.xeroInvoiceId) stageByInvoiceId[r.xeroInvoiceId] = r.stage;
+  });
+
   const overdueInvoices = [];
-  (invoiceRecs || []).forEach(function(rec) {
-    const inv = xeroInvoiceById[rec.xeroInvoiceId];
-    if (!inv) return;
+  (xeroUnpaid || []).forEach(function(inv) {
     const status = String(inv.Status || "").toUpperCase();
     if (status === "PAID" || status === "VOIDED" || status === "DELETED" || status === "DRAFT") return;
     if (!(Number(inv.AmountDue || 0) > 0)) return;
-    const due = xeroDateToIso(inv.DueDateString || inv.DueDate) || rec.invoiceDate;
+    const due = xeroDateToIso(inv.DueDateString || inv.DueDate) ||
+                xeroDateToIso(inv.DateString || inv.Date);
     if (!due) return;
     const daysLate = Math.round((new Date(today) - new Date(due)) / 86400000);
     if (daysLate <= OVERDUE_AFTER_DAYS) return;
-    const ev = (bookings || []).find(function(b){ return String(b.id) === String(rec.eventId); });
+    const cid = inv.Contact && inv.Contact.ContactID;
     overdueInvoices.push({
-      ev: ev, rec: rec, inv: inv, due: due, daysLate: daysLate,
+      inv: inv,
+      ev: cid ? xeroContactEvent[cid] : null,
+      contactName: (inv.Contact && inv.Contact.Name) || "",
+      stage: stageByInvoiceId[inv.InvoiceID] || null,
+      due: due,
+      daysLate: daysLate,
       amountDue: Number(inv.AmountDue || 0)
     });
   });
@@ -7354,11 +7398,11 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
 
       {/* Payment status can only come from Xero — say so rather than letting an
           empty list read as "nothing outstanding". */}
-      {invoiceRecs.length > 0 && (!xeroToken || xeroInvErr) && (
+      {(!xeroToken || xeroInvErr) && (
         <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:"#92400e", lineHeight:1.6 }}>
           {!xeroToken
-            ? "Connect Xero to see which raised invoices are still unpaid."
-            : "Couldn’t read invoice payment status from Xero (" + xeroInvErr + ")."}
+            ? "Connect Xero to see unpaid event invoices."
+            : "Couldn’t read unpaid invoices from Xero (" + xeroInvErr + ")."}
         </div>
       )}
 
@@ -7379,12 +7423,12 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
               </div>
               {overdueInvoices.slice(0,8).map(function(r) {
                 return (
-                  <a key={r.rec.id} href={xeroInvoiceUrl(r.rec.xeroInvoiceId)} target="_blank" rel="noreferrer"
+                  <a key={r.inv.InvoiceID} href={xeroInvoiceUrl(r.inv.InvoiceID)} target="_blank" rel="noreferrer"
                     style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap", textDecoration:"none", color:"inherit" }}>
                     <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>
-                      {r.ev ? (r.ev.couple || "(no name)") : (r.inv.Contact && r.inv.Contact.Name) || "(unknown)"}
+                      {r.ev ? (r.ev.couple || "(no name)") : (r.contactName || "(unknown)")}
                     </span>
-                    <span style={{ fontSize:11, color:T.textLight }}>{INVOICE_STAGE_LABELS[r.rec.stage] || ("Stage " + r.rec.stage)}</span>
+                    {r.stage && <span style={{ fontSize:11, color:T.textLight }}>{INVOICE_STAGE_LABELS[r.stage]}</span>}
                     <span style={{ fontSize:11, color:"#13B5EA", fontWeight:600 }}>{r.inv.InvoiceNumber || "—"}</span>
                     <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.due)}</span>
                     <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
