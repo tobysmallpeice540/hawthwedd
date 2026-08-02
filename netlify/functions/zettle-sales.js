@@ -46,7 +46,20 @@ function clientIdFromAssertion(assertion) {
   }
 }
 
-async function getAccessToken() {
+// Cached across warm invocations of this function. The assertion grant issues
+// no refresh token, so the naive approach is to mint a fresh access token on
+// every request — but Zettle throttles the token endpoint hard and that alone
+// is enough to trigger "usage_exceeded". Tokens last 7200s, so reusing one
+// across calls cuts token requests by orders of magnitude.
+let cachedToken = null;
+let cachedTokenExpiry = 0;
+let cachedCatalogue = null;
+let cachedCatalogueExpiry = 0;
+
+async function getAccessToken(forceRefresh) {
+  const now = Date.now();
+  if (!forceRefresh && cachedToken && now < cachedTokenExpiry) return cachedToken;
+
   const assertion = process.env.ZETTLE_API_KEY;
   if (!assertion) throw new Error("ZETTLE_API_KEY is not set in Netlify environment variables.");
 
@@ -66,12 +79,21 @@ async function getAccessToken() {
   });
   const text = await res.text();
   if (!res.ok) {
+    if (res.status === 429 || /usage_exceeded|too many/i.test(text)) {
+      const err = new Error(
+        "Zettle is rate limiting this API key (usage_exceeded). Wait a few minutes and try again — " +
+        "repeated report loads in quick succession will trigger it."
+      );
+      err.rateLimited = true;
+      throw err;
+    }
     throw new Error("Zettle auth failed (" + res.status + "): " + text.slice(0, 200));
   }
   const data = JSON.parse(text);
-  // The assertion grant returns no refresh token — a new one is simply
-  // requested each time, which is fine for an occasional report.
-  return data.access_token;
+  cachedToken = data.access_token;
+  // Expire a minute early so we never present a token that dies mid-request.
+  cachedTokenExpiry = now + (Number(data.expires_in || 7200) - 60) * 1000;
+  return cachedToken;
 }
 
 // Page through every purchase in the window.
@@ -89,8 +111,14 @@ async function fetchPurchases(token, startDate, endDate) {
     const res = await fetch(url, {
       headers: { "Authorization": "Bearer " + token, "Accept": "application/json" }
     });
-    if (res.status === 429) throw new Error("Zettle rate limit hit — try again in a minute.");
     const text = await res.text();
+    if (res.status === 429 || /usage_exceeded/i.test(text)) {
+      const err = new Error(
+        "Zettle is rate limiting this API key (usage_exceeded). Wait a few minutes before loading again."
+      );
+      err.rateLimited = true;
+      throw err;
+    }
     if (!res.ok) throw new Error("Zettle purchases failed (" + res.status + "): " + text.slice(0, 200));
 
     const data = JSON.parse(text);
@@ -111,6 +139,11 @@ async function fetchCatalogue(token) {
     headers: { "Authorization": "Bearer " + token, "Accept": "application/json" }
   });
   const text = await res.text();
+  if (res.status === 429 || /usage_exceeded/i.test(text)) {
+    const err = new Error("Zettle is rate limiting this API key (usage_exceeded). Wait a few minutes and try again.");
+    err.rateLimited = true;
+    throw err;
+  }
   if (!res.ok) {
     throw new Error("Zettle products failed (" + res.status + "): " + text.slice(0, 200) +
       (res.status === 403 ? " — the API key may be missing the READ:PRODUCT scope." : ""));
@@ -155,12 +188,21 @@ exports.handler = async function(event) {
   // ── Catalogue only — no date range needed ──────────────────────────────────
   if (body.action === "catalogue") {
     try {
+      // The product library barely changes; serving a warm copy for a few
+      // minutes avoids re-pulling it every time the reconciliation page opens.
+      if (cachedCatalogue && Date.now() < cachedCatalogueExpiry) {
+        return jsonResponse(200, { ok: true, catalogue: cachedCatalogue, count: cachedCatalogue.length, cached: true });
+      }
       const token = await getAccessToken();
       const catalogue = await fetchCatalogue(token);
+      cachedCatalogue = catalogue;
+      cachedCatalogueExpiry = Date.now() + 5 * 60 * 1000;
       return jsonResponse(200, { ok: true, catalogue: catalogue, count: catalogue.length });
     } catch (err) {
       console.error("zettle-sales catalogue error:", err);
-      return jsonResponse(500, { error: String(err.message || err) });
+      return jsonResponse(err.rateLimited ? 429 : 500, {
+        error: String(err.message || err), rateLimited: !!err.rateLimited
+      });
     }
   }
 
