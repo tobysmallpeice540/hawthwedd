@@ -1430,7 +1430,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-02g";
+const APP_BUILD = "2026-08-02h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3462,7 +3462,7 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
 // ── Setup wrapper (sub-tabs: Pricing | Discount Codes | Airbnb Sync) ──────────
 function LettingsSetup({ properties, setProperties, onSaveProperties, discountCodes, setDiscountCodes, onSaveDiscountCodes, emailTemplates, setEmailTemplates, onSaveEmailTemplates }) {
   const [setupTab, setSetupTab] = useState("pricing");
-  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"]];
+  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"],["backup","Backup"]];
   return (
     <div>
       <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}` }}>
@@ -3481,6 +3481,199 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
       {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
       {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "emails"  && <EmailTemplatesEditor templates={emailTemplates} setTemplates={setEmailTemplates} onSave={onSaveEmailTemplates}/>}
+      {setupTab === "backup"  && <BackupPanel/>}
+    </div>
+  );
+}
+
+// ── Backup & restore ─────────────────────────────────────────────────────────
+const BACKUP_INDEX_KEY = "hbf_backup_index_v1";
+const BACKUP_DATA_KEYS = [
+  "hawthbush_bookings_v6", "hawthbush_staff_v5", "hbf_accom_v1", "hbf_accom_guests_v1",
+  "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
+  "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
+  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1"
+];
+const KEY_LABELS = {
+  "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
+  "hbf_accom_guests_v1":"Lettings guests", "hbf_properties_v1":"Properties", "hbf_enquiries_v1":"Enquiries",
+  "hbf_viewings_v1":"Viewings", "hbf_viewing_requests_v1":"Viewing requests", "hbf_viewing_blocks_v1":"Viewing blocks",
+  "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
+  "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
+  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records"
+};
+
+function BackupPanel() {
+  const [index, setIndex]       = useState(null);
+  const [busy, setBusy]         = useState(null);   // "run" | "download" | "restore"
+  const [msg, setMsg]           = useState(null);
+  const [pending, setPending]   = useState(null);   // restore awaiting confirmation
+  const fileRef = useRef(null);
+
+  async function loadIndex() {
+    try { setIndex((await sbGet(BACKUP_INDEX_KEY)) || []); }
+    catch (e) { setIndex([]); setMsg({ kind:"error", text:"Could not read the backup list: " + e.message }); }
+  }
+  useEffect(function(){ loadIndex(); }, []);
+
+  async function runBackup() {
+    setBusy("run"); setMsg(null);
+    try {
+      const res = await fetch("/.netlify/functions/backup-data", { method:"POST" });
+      const d = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || "Backup failed");
+      setMsg({ kind:"ok", text:"Snapshot saved (" + d.keysBackedUp + " data sets)." });
+      await loadIndex();
+    } catch (e) { setMsg({ kind:"error", text:String(e.message||e) }); }
+    setBusy(null);
+  }
+
+  // Reads live data straight from Supabase so the file is a true copy, not
+  // whatever this tab happens to be holding.
+  async function downloadNow() {
+    setBusy("download"); setMsg(null);
+    try {
+      const data = {};
+      for (let i = 0; i < BACKUP_DATA_KEYS.length; i++) {
+        const k = BACKUP_DATA_KEYS[i];
+        const v = await sbGet(k);
+        if (v !== null && v !== undefined) data[k] = v;
+      }
+      const payload = { takenAt: new Date().toISOString(), source:"manual-download", data: data };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "hawthbush-backup-" + new Date().toISOString().slice(0,10) + ".json";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMsg({ kind:"ok", text:"Downloaded. Keep a copy in Google Drive or wherever suits." });
+    } catch (e) { setMsg({ kind:"error", text:String(e.message||e) }); }
+    setBusy(null);
+  }
+
+  function pickFile(e) {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = function() {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        const data = parsed && parsed.data ? parsed.data : parsed;
+        if (!data || typeof data !== "object") throw new Error("Not a backup file");
+        setPending({ label: f.name, takenAt: parsed.takenAt || "unknown", data: data });
+        setMsg(null);
+      } catch (err) {
+        setMsg({ kind:"error", text:"That file isn't a valid backup: " + err.message });
+      }
+    };
+    reader.readAsText(f);
+    e.target.value = "";
+  }
+
+  async function loadSnapshot(key) {
+    setBusy("restore"); setMsg(null);
+    try {
+      const snap = await sbGet(key);
+      if (!snap || !snap.data) throw new Error("Snapshot is empty or unreadable");
+      setPending({ label: key, takenAt: snap.takenAt || snap.date || "unknown", data: snap.data });
+    } catch (e) { setMsg({ kind:"error", text:String(e.message||e) }); }
+    setBusy(null);
+  }
+
+  // Restore takes a safety snapshot of the CURRENT data first, so an unwanted
+  // restore is itself reversible.
+  async function doRestore() {
+    if (!pending) return;
+    setBusy("restore"); setMsg(null);
+    try {
+      await fetch("/.netlify/functions/backup-data", { method:"POST" }).catch(function(){});
+      const keys = Object.keys(pending.data).filter(function(k){ return BACKUP_DATA_KEYS.indexOf(k) !== -1; });
+      for (let i = 0; i < keys.length; i++) await sbSet(keys[i], pending.data[keys[i]]);
+      setPending(null);
+      setMsg({ kind:"ok", text:"Restored " + keys.length + " data sets. Reload the page to see it." });
+      await loadIndex();
+    } catch (e) { setMsg({ kind:"error", text:"Restore failed: " + String(e.message||e) }); }
+    setBusy(null);
+  }
+
+  const cnt = function(o){ return o ? Object.keys(o).reduce(function(a,k){ return a + (Number(o[k])||0); }, 0) : 0; };
+
+  return (
+    <div>
+      <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:9, padding:"12px 16px", marginBottom:18, fontSize:13, color:"#1d4ed8", lineHeight:1.6 }}>
+        A snapshot of everything is taken automatically each night and the last 30 are kept.
+        Download a copy to keep in Google Drive, and restore from either a file or a snapshot if something goes wrong.
+      </div>
+
+      {msg && (
+        <div style={{ background: msg.kind==="ok" ? "#f0fdf4" : "#fef2f2", border:`1px solid ${msg.kind==="ok" ? "#bbf7d0" : "#fecaca"}`,
+          color: msg.kind==="ok" ? "#166534" : "#dc2626", borderRadius:9, padding:"11px 15px", marginBottom:16, fontSize:13 }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:10, marginBottom:20, flexWrap:"wrap" }}>
+        <button onClick={downloadNow} disabled={!!busy}
+          style={{ background:T.accent, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>
+          {busy==="download" ? "Preparing…" : "Download backup file"}
+        </button>
+        <button onClick={function(){ fileRef.current && fileRef.current.click(); }} disabled={!!busy}
+          style={{ background:"#fff", color:T.text, border:`1.5px solid ${T.border}`, padding:"10px 18px", borderRadius:8, cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>
+          Restore from file…
+        </button>
+        <input ref={fileRef} type="file" accept="application/json,.json" onChange={pickFile} style={{ display:"none" }}/>
+        <button onClick={runBackup} disabled={!!busy}
+          style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"10px 18px", borderRadius:8, cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:14 }}>
+          {busy==="run" ? "Snapshotting…" : "Take a snapshot now"}
+        </button>
+      </div>
+
+      {pending && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"14px 16px", marginBottom:20 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#92400e", marginBottom:6 }}>Restore “{pending.label}”?</div>
+          <div style={{ fontSize:12, color:"#92400e", lineHeight:1.7, marginBottom:10 }}>
+            Taken {pending.takenAt}. This replaces {Object.keys(pending.data).length} data sets with the contents of this backup —
+            anything changed since then will be lost. A snapshot of the current data is taken first, so this can itself be undone.
+          </div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            <button onClick={doRestore} disabled={busy==="restore"}
+              style={{ background:T.red, color:"#fff", border:"none", padding:"8px 18px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+              {busy==="restore" ? "Restoring…" : "Yes, restore"}
+            </button>
+            <button onClick={function(){ setPending(null); }}
+              style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"8px 18px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
+        <div style={{ padding:"11px 16px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, fontSize:13, fontWeight:700, color:T.midBlue }}>
+          Snapshots {index ? "(" + index.length + ")" : ""}
+        </div>
+        {index === null ? (
+          <div style={{ padding:"16px", fontSize:13, color:T.textLight }}>Loading…</div>
+        ) : !index.length ? (
+          <div style={{ padding:"16px", fontSize:13, color:T.textLight }}>
+            No snapshots yet. Press “Take a snapshot now” to create the first one.
+          </div>
+        ) : index.map(function(s, i) {
+          return (
+            <div key={s.key} style={{ padding:"10px 16px", borderTop: i ? `1px solid ${T.border}` : "none", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+              <span style={{ fontSize:13, fontWeight:600, color:T.text, width:110 }}>{s.date}</span>
+              <span style={{ fontSize:11, color:T.textLight, flex:1, minWidth:180 }}>
+                {s.counts ? Object.keys(s.counts).slice(0,4).map(function(k){ return (KEY_LABELS[k]||k) + " " + s.counts[k]; }).join(" · ") : ""}
+                {s.counts && Object.keys(s.counts).length > 4 ? " · …" : ""}
+              </span>
+              <span style={{ fontSize:11, color:T.textLight }}>{cnt(s.counts)} records</span>
+              <button onClick={function(){ loadSnapshot(s.key); }} disabled={!!busy}
+                style={{ background:"none", border:`1px solid ${T.border}`, color:T.midBlue, padding:"4px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>
+                Restore…
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
