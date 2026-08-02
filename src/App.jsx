@@ -295,7 +295,23 @@ const gmailGetValidToken = () => {
 };
 
 // ─── XERO OAUTH2 PKCE ────────────────────────────────────────────────────────
-const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
+// NOTE: "invalid_scope" on accounting.transactions is usually a Xero USER
+// permission problem, not an app or scope-string problem — Xero refuses to
+// grant write scopes to a user without an admin role in the organisation, and
+// reports it as an invalid scope rather than a permissions error. If Connect
+// fails with invalid_scope, check the role of the Xero user doing the
+// connecting before touching anything here.
+// Override the client id without redeploying via:
+//   localStorage.setItem("xero_client_id_override", "NEW_CLIENT_ID")
+const XERO_CLIENT_ID_DEFAULT = "13532E98AD5A449A86B5B6607F547531";
+
+function xeroClientId() {
+  try {
+    const o = localStorage.getItem("xero_client_id_override");
+    if (o && o.trim()) return o.trim();
+  } catch (e) { /* private browsing etc. */ }
+  return XERO_CLIENT_ID_DEFAULT;
+}
 // NOTE: write scopes are required to push invoices and create contacts.
 // `accounting.transactions` and `accounting.contacts` each imply their .read
 // equivalent; `accounting.settings.read` is needed to look up branding themes.
@@ -307,7 +323,20 @@ const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
 // `accounting.settings.read` is NOT valid. `accounting.settings` is only
 // needed to look up the branding theme by name — the invoice push degrades to
 // Xero's default theme without it, so it is deliberately left out.
-const XERO_SCOPES       = "openid profile email accounting.transactions accounting.contacts offline_access";
+const XERO_SCOPES_DEFAULT = "openid profile email accounting.transactions accounting.contacts offline_access";
+
+// An override can be set from the browser console without a redeploy:
+//   localStorage.setItem("xero_scopes_override", "openid profile email accounting.transactions offline_access")
+//   localStorage.removeItem("xero_scopes_override")
+// Useful because "invalid_scope" doesn't say WHICH scope Xero rejected, so the
+// only way to find it is to try combinations.
+function xeroScopes() {
+  try {
+    const o = localStorage.getItem("xero_scopes_override");
+    if (o && o.trim()) return o.trim();
+  } catch (e) { /* private browsing etc. */ }
+  return XERO_SCOPES_DEFAULT;
+}
 const XERO_REDIRECT_URI = APP_ORIGIN + "/";
 
 const xeroGenerateCodeVerifier = () => {
@@ -335,7 +364,7 @@ const xeroRefreshToken = async (refreshToken) => {
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshToken,
-      client_id: XERO_CLIENT_ID,
+      client_id: xeroClientId(),
     }),
   });
   if (!res.ok) throw new Error("Token refresh failed");
@@ -1401,7 +1430,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-02c";
+const APP_BUILD = "2026-08-02f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -1669,6 +1698,14 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       const colInRow = (ci - 7) % 7; // offset by 7 header cells
                       const isSat = colInRow === 5, isSun = colInRow === 6;
                       const allBlocked = propsOn.length > 0 && propsOn.every(p => blockedSet.has(ds + ":" + p.id));
+                      // A property arriving today shouldn't also tint the whole
+                      // cell — the tint would swallow the arrival diagonal and
+                      // the day would read as fully occupied. Only properties
+                      // that are mid-stay (already in, not leaving) fill the
+                      // cell. Departure days are excluded automatically because
+                      // occupancy runs [check-in, check-out).
+                      const arrivingIds = ciProps.map(function(p){ return p.id; });
+                      const midStayProps = propsOn.filter(function(p) { return arrivingIds.indexOf(p.id) === -1; });
                       // Arrivals and departures, drawn as directional gradients.
                       // Left of the cell reads as the start of the day and right
                       // as the end, so occupancy visibly flows across the day:
@@ -1683,10 +1720,12 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                       // an unrelated property happened to depart that day.
                       const isChgDay = ciProps.some(function(p) { return changeoverSet.has(ds + ":" + p.id); });
                       const hasCI = ciProps.length > 0, hasCO = coProps.length > 0;
+                      // One colour for occupancy shading regardless of property —
+                      // the letter badges already say which property it is, so
+                      // green/purple cells only made the grid harder to read.
                       const bg = allBlocked
                         ? "repeating-linear-gradient(135deg, #e2e8f0, #e2e8f0 4px, #eef2f7 4px, #eef2f7 8px)"
-                        : propsOn.length === 1 ? propsOn[0].colour+"2a"
-                        : propsOn.length > 1   ? propsOn[0].colour+"1e"
+                        : midStayProps.length ? CAL_LIGHT
                         : "transparent";
                       const dayEntries = showAccom ? (bookingMap[ds] || []).filter(function(e){ return keepProp(e.prop); }) : [];
                       const dateEvts = showEvents ? (eventByDate[ds] || []) : [];
@@ -1800,7 +1839,6 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           {properties.filter(function(p){ return showAccom && keepProp(p); }).map(function(p){
             return (
               <span key={p.id} style={{ display:"flex", alignItems:"center", gap:5 }}>
-                <span style={{ width:12, height:12, borderRadius:2, background:p.colour+"2a", border:`1.5px solid ${p.colour}`, display:"inline-block" }}/>
                 <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:p.colour, color:"#fff", fontSize:8, fontWeight:800 }}>{(p.id||p.name||"?")[0].toUpperCase()}</span>
                 {p.name}
               </span>
@@ -1815,6 +1853,10 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:11, height:11, borderRadius:2, background:"#94a3b8", color:"#fff", fontSize:8, fontWeight:800 }}>×</span>
             Blocked / not available
+          </span>
+          <span style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ display:"inline-block", width:14, height:14, borderRadius:2, border:`1px solid ${T.border}`, background:CAL_LIGHT }}/>
+            Occupied
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{ position:"relative", display:"inline-block", width:14, height:14, borderRadius:2, border:`1px solid ${T.border}`, overflow:"hidden" }}>
@@ -3743,7 +3785,7 @@ export default function App() {
             grant_type: "authorization_code",
             code,
             redirect_uri: XERO_REDIRECT_URI,
-            client_id: XERO_CLIENT_ID,
+            client_id: xeroClientId(),
             code_verifier: codeVerifier,
           }),
         });
@@ -3766,9 +3808,9 @@ export default function App() {
     sessionStorage.setItem("xero_state", state);
     const url = "https://login.xero.com/identity/connect/authorize?" + new URLSearchParams({
       response_type: "code",
-      client_id: XERO_CLIENT_ID,
+      client_id: xeroClientId(),
       redirect_uri: XERO_REDIRECT_URI,
-      scope: XERO_SCOPES,
+      scope: xeroScopes(),
       state,
       code_challenge: challenge,
       code_challenge_method: "S256",
