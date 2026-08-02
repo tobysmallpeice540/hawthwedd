@@ -1436,7 +1436,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-02k";
+const APP_BUILD = "2026-08-02l";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3540,13 +3540,14 @@ function BackupPanel() {
     if (!Object.keys(data).length) throw new Error("Nothing readable to back up — snapshot skipped.");
 
     const snapshot = { takenAt: new Date().toISOString(), date: today, keys: Object.keys(data), counts: counts, data: data };
+    const bytes = JSON.stringify(snapshot).length;
     await sbSet(snapshotKey, snapshot);
 
     let idx = [];
     try { idx = (await sbGet(BACKUP_INDEX_KEY)) || []; } catch (e) { idx = []; }
     if (!Array.isArray(idx)) idx = [];
     idx = idx.filter(function(e) { return e && e.key !== snapshotKey; });
-    idx.push({ key: snapshotKey, date: today, takenAt: snapshot.takenAt, counts: counts });
+    idx.push({ key: snapshotKey, date: today, takenAt: snapshot.takenAt, counts: counts, bytes: bytes });
     idx.sort(function(a, b) { return (a.date || "") > (b.date || "") ? -1 : 1; });
     const keep = idx.slice(0, 30), drop = idx.slice(30);
     for (let i = 0; i < drop.length; i++) { try { await sbDelete(drop[i].key); } catch (e) { /* pruning is best-effort */ } }
@@ -3686,8 +3687,23 @@ function BackupPanel() {
       )}
 
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
-        <div style={{ padding:"11px 16px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, fontSize:13, fontWeight:700, color:T.midBlue }}>
-          Snapshots {index ? "(" + index.length + ")" : ""}
+        <div style={{ padding:"11px 16px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>Snapshots {index ? "(" + index.length + ")" : ""}</span>
+          {(function() {
+            if (!index || !index.length) return null;
+            const known = index.filter(function(s){ return Number(s.bytes) > 0; });
+            if (!known.length) return <span style={{ fontSize:11, color:T.textLight }}>sizes recorded from the next snapshot onwards</span>;
+            const total = known.reduce(function(a,s){ return a + Number(s.bytes||0); }, 0);
+            const avg = total / known.length;
+            const projected = avg * 30;   // what a full 30-day set will occupy
+            const pct = (projected / (500 * 1024 * 1024)) * 100;
+            const mb = function(b){ return (b/1024/1024).toFixed(1) + " MB"; };
+            return (
+              <span style={{ fontSize:11, color:T.textLight, marginLeft:"auto" }}>
+                {mb(total)} stored · 30 days ≈ {mb(projected)} ({pct < 0.1 ? "<0.1" : pct.toFixed(1)}% of the 500 MB free tier)
+              </span>
+            );
+          })()}
         </div>
         {index === null ? (
           <div style={{ padding:"16px", fontSize:13, color:T.textLight }}>Loading…</div>
@@ -3704,6 +3720,9 @@ function BackupPanel() {
                 {s.counts && Object.keys(s.counts).length > 4 ? " · …" : ""}
               </span>
               <span style={{ fontSize:11, color:T.textLight }}>{cnt(s.counts)} records</span>
+              <span style={{ fontSize:11, color:T.textLight, width:64, textAlign:"right" }}>
+                {Number(s.bytes) > 0 ? (s.bytes/1024).toFixed(0) + " KB" : "—"}
+              </span>
               <button onClick={function(){ loadSnapshot(s.key); }} disabled={!!busy}
                 style={{ background:"none", border:`1px solid ${T.border}`, color:T.midBlue, padding:"4px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>
                 Restore…
