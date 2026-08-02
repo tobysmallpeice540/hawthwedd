@@ -301,10 +301,13 @@ const XERO_CLIENT_ID    = "13532E98AD5A449A86B5B6607F547531";
 // equivalent; `accounting.settings.read` is needed to look up branding themes.
 // Changing this list means the existing Xero connection must be disconnected
 // and reconnected — an old token carries the old (read-only) scopes.
-// Exactly the scope names Xero documents — a single wrong name makes the whole
-// authorize request fail with "invalid_scope" (accounting.settings.read is NOT
-// accepted here; it must be accounting.settings).
-const XERO_SCOPES       = "openid profile email accounting.transactions accounting.contacts accounting.settings offline_access";
+// Kept to the minimum needed: read/write invoices and read/write contacts.
+// A single unrecognised name makes the whole authorize request fail with
+// "invalid_scope", so nothing speculative belongs here. Notably
+// `accounting.settings.read` is NOT valid. `accounting.settings` is only
+// needed to look up the branding theme by name — the invoice push degrades to
+// Xero's default theme without it, so it is deliberately left out.
+const XERO_SCOPES       = "openid profile email accounting.transactions accounting.contacts offline_access";
 const XERO_REDIRECT_URI = APP_ORIGIN + "/";
 
 const xeroGenerateCodeVerifier = () => {
@@ -1395,6 +1398,11 @@ function darkenHex(hex, amount) {
 
 // Append an alpha channel to a colour, normalising 3-digit hex first —
 // "#abc" + "66" would otherwise produce the invalid "#abc66".
+// Bumped whenever this file changes meaningfully, and shown on the Home page.
+// Lets you tell at a glance whether the browser is running the build you just
+// deployed, instead of guessing why a change "hasn't worked".
+const APP_BUILD = "2026-08-02c";
+
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
 // diagonals as well just competed with them.
@@ -7394,7 +7402,10 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
   return (
     <div style={{ maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" }}>
       <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:"0 0 6px" }}>Home</h2>
-      <p style={{ color:T.textMid, fontSize:13, margin:"0 0 24px" }}>Today: {fmtDay(today)}</p>
+      <p style={{ color:T.textMid, fontSize:13, margin:"0 0 24px" }}>
+        Today: {fmtDay(today)}
+        <span style={{ color:T.textLight, marginLeft:10, fontSize:11 }}>build {APP_BUILD}</span>
+      </p>
 
       {/* Payment status can only come from Xero — say so rather than letting an
           empty list read as "nothing outstanding". */}
