@@ -67,6 +67,38 @@ const sbSet = async (key, value) => {
   });
 };
 
+// ─── BUILD VERSION GUARD ─────────────────────────────────────────────────────
+// A browser tab keeps running whatever JavaScript it loaded, so deploying a fix
+// does nothing for a tab that's already open — it carries on writing with the
+// old code. That is how data was destroyed after the fix was already live.
+//
+// The newest build to load publishes its version here. Older tabs poll it, warn
+// the user, and — critically — refuse to write once they know they're stale.
+const APP_BUILD_KEY = "hbf_app_build_v1";
+
+// Build strings are "YYYY-MM-DD" + a letter, so plain string comparison orders
+// them correctly.
+function buildIsNewer(a, b) { return String(a || "") > String(b || ""); }
+
+async function publishBuild() {
+  try {
+    const cur = await sbGet(APP_BUILD_KEY);
+    const latest = cur && cur.build;
+    if (!latest || buildIsNewer(APP_BUILD, latest)) {
+      await sbSet(APP_BUILD_KEY, { build: APP_BUILD, at: new Date().toISOString() });
+      return APP_BUILD;
+    }
+    return latest;
+  } catch (e) { return null; }
+}
+
+async function fetchLatestBuild() {
+  try {
+    const cur = await sbGet(APP_BUILD_KEY);
+    return (cur && cur.build) || null;
+  } catch (e) { return null; }
+}
+
 const sbDelete = async (key) => {
   await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}`, {
     method: "DELETE",
@@ -1436,7 +1468,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-02l";
+const APP_BUILD = "2026-08-04b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3508,11 +3540,49 @@ const KEY_LABELS = {
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records"
 };
 
+// Compare a snapshot against what's live and report only what has been LOST:
+// whole records that have vanished, and scalar fields that had a value then and
+// are empty now. Deliberately one-directional — anything added or changed since
+// the snapshot is never touched, so a merge can't undo recent work.
+function diffSnapshot(snapData, liveData, keys) {
+  const out = [];
+  keys.forEach(function(k) {
+    const snapArr = snapData[k];
+    const liveArr = liveData[k];
+    if (!Array.isArray(snapArr) || !Array.isArray(liveArr)) return;
+    if (!snapArr.length || typeof snapArr[0] !== "object" || snapArr[0] === null) return;
+    if (snapArr[0].id === undefined) return;
+
+    const liveById = {};
+    liveArr.forEach(function(r) { if (r && r.id !== undefined) liveById[String(r.id)] = r; });
+
+    const missing = [];
+    const blanks = [];
+    snapArr.forEach(function(rec) {
+      if (!rec || rec.id === undefined) return;
+      const live = liveById[String(rec.id)];
+      if (!live) { missing.push(rec); return; }
+      Object.keys(rec).forEach(function(f) {
+        const was = rec[f];
+        const now = live[f];
+        const isScalar = (typeof was === "string" || typeof was === "number");
+        if (!isScalar) return;                       // arrays/objects left alone
+        if (was === "" || was === null || was === undefined) return;
+        const nowEmpty = (now === "" || now === null || now === undefined);
+        if (nowEmpty) blanks.push({ id: rec.id, field: f, was: was, label: rec.couple || rec.guestName || rec.name || String(rec.id) });
+      });
+    });
+    if (missing.length || blanks.length) out.push({ key: k, missing: missing, blanks: blanks });
+  });
+  return out;
+}
+
 function BackupPanel() {
   const [index, setIndex]       = useState(null);
   const [busy, setBusy]         = useState(null);   // "run" | "download" | "restore"
   const [msg, setMsg]           = useState(null);
-  const [pending, setPending]   = useState(null);   // restore awaiting confirmation
+  const [pending, setPending]   = useState(null);   // full restore awaiting confirmation
+  const [diff, setDiff]         = useState(null);   // selective merge preview
   const fileRef = useRef(null);
 
   async function loadIndex() {
@@ -3636,6 +3706,56 @@ function BackupPanel() {
     setBusy(null);
   }
 
+  // ── Selective merge: put back only what's been lost ────────────────────────
+  async function analyse(snapKey) {
+    setBusy("diff"); setMsg(null); setDiff(null);
+    try {
+      const snap = await sbGet(snapKey);
+      if (!snap || !snap.data) throw new Error("Snapshot is empty or unreadable");
+      const live = {};
+      for (let i = 0; i < BACKUP_DATA_KEYS.length; i++) {
+        const k = BACKUP_DATA_KEYS[i];
+        const v = await sbGet(k);
+        live[k] = Array.isArray(v) ? v : [];
+      }
+      const d = diffSnapshot(snap.data, live, BACKUP_DATA_KEYS);
+      if (!d.length) setMsg({ kind:"ok", text:"Nothing has been lost since that snapshot." });
+      setDiff({ snapKey: snapKey, takenAt: snap.takenAt || snap.date, sets: d, snapData: snap.data, live: live });
+    } catch (e) { setMsg({ kind:"error", text:String(e.message||e) }); }
+    setBusy(null);
+  }
+
+  async function applyMerge() {
+    if (!diff) return;
+    setBusy("merge"); setMsg(null);
+    try {
+      try { await takeSnapshot(); } catch (e) { console.warn("pre-merge snapshot failed", e); }
+      let restoredRecords = 0, restoredFields = 0;
+      for (let i = 0; i < diff.sets.length; i++) {
+        const set = diff.sets[i];
+        // Re-read immediately before writing so we merge into the very latest.
+        const current = (await sbGet(set.key)) || [];
+        const byId = {};
+        current.forEach(function(r) { if (r && r.id !== undefined) byId[String(r.id)] = r; });
+
+        set.blanks.forEach(function(b) {
+          const rec = byId[String(b.id)];
+          if (!rec) return;
+          const now = rec[b.field];
+          if (now === "" || now === null || now === undefined) { rec[b.field] = b.was; restoredFields++; }
+        });
+        const toAdd = set.missing.filter(function(m) { return !byId[String(m.id)]; });
+        const next = current.concat(toAdd);
+        restoredRecords += toAdd.length;
+
+        await sbSet(set.key, next);
+      }
+      setDiff(null);
+      setMsg({ kind:"ok", text:"Restored " + restoredRecords + " missing record(s) and " + restoredFields + " blanked field(s). Reload the page to see them." });
+    } catch (e) { setMsg({ kind:"error", text:"Merge failed: " + String(e.message||e) }); }
+    setBusy(null);
+  }
+
   const cnt = function(o){ return o ? Object.keys(o).reduce(function(a,k){ return a + (Number(o[k])||0); }, 0) : 0; };
 
   return (
@@ -3667,6 +3787,38 @@ function BackupPanel() {
           {busy==="run" ? "Snapshotting…" : "Take a snapshot now"}
         </button>
       </div>
+
+      {diff && diff.sets.length > 0 && (
+        <div style={{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:9, padding:"14px 16px", marginBottom:20 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#166534", marginBottom:6 }}>
+            Lost since {diff.takenAt}
+          </div>
+          <div style={{ fontSize:12, color:"#166534", lineHeight:1.8, marginBottom:10 }}>
+            {diff.sets.map(function(set) {
+              return (
+                <div key={set.key}>
+                  <strong>{KEY_LABELS[set.key] || set.key}</strong>
+                  {set.missing.length ? " — " + set.missing.length + " missing record" + (set.missing.length!==1?"s":"") : ""}
+                  {set.missing.length ? " (" + set.missing.slice(0,4).map(function(m){ return m.couple || m.guestName || m.name || ("#"+m.id); }).join(", ") + (set.missing.length>4?", …":"") + ")" : ""}
+                  {set.blanks.length ? (set.missing.length ? "; " : " — ") + set.blanks.length + " blanked field" + (set.blanks.length!==1?"s":"") : ""}
+                  {set.blanks.length ? " (" + [...new Set(set.blanks.map(function(b){ return b.field; }))].slice(0,4).join(", ") + ")" : ""}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:"#166534", marginBottom:10, fontStyle:"italic" }}>
+            This only puts back what has gone. Records added since, and any field that currently has a value, are left exactly as they are — rotas and other recent work are safe.
+          </div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            <button onClick={applyMerge} disabled={busy==="merge"}
+              style={{ background:T.green, color:"#fff", border:"none", padding:"8px 18px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+              {busy==="merge" ? "Restoring…" : "Restore just these"}
+            </button>
+            <button onClick={function(){ setDiff(null); }}
+              style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"8px 18px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {pending && (
         <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"14px 16px", marginBottom:20 }}>
@@ -3723,9 +3875,13 @@ function BackupPanel() {
               <span style={{ fontSize:11, color:T.textLight, width:64, textAlign:"right" }}>
                 {Number(s.bytes) > 0 ? (s.bytes/1024).toFixed(0) + " KB" : "—"}
               </span>
+              <button onClick={function(){ analyse(s.key); }} disabled={!!busy}
+                style={{ background:T.midBlue, border:"none", color:"#fff", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:700 }}>
+                {busy==="diff" ? "Checking…" : "Recover lost items"}
+              </button>
               <button onClick={function(){ loadSnapshot(s.key); }} disabled={!!busy}
-                style={{ background:"none", border:`1px solid ${T.border}`, color:T.midBlue, padding:"4px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>
-                Restore…
+                style={{ background:"none", border:`1px solid ${T.border}`, color:T.textLight, padding:"4px 12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                Full restore…
               </button>
             </div>
           );
@@ -4087,6 +4243,30 @@ export default function App() {
   const [accomProperties, setAccomProperties] = useState([]);
   const [invoiceRecords, setInvoiceRecords]   = useState([]);
   const [accomPrefill, setAccomPrefill]       = useState(null);
+  const [staleBuild, setStaleBuild]           = useState(null);   // newer build seen
+
+  // Publish this build on load, then watch for a newer one. Any tab left open
+  // across a deploy finds out within a minute instead of silently running old
+  // code — and is blocked from saving in the meantime.
+  useEffect(function() {
+    let stopped = false;
+    (async function() {
+      const latest = await publishBuild();
+      if (!stopped && latest && buildIsNewer(latest, APP_BUILD)) setStaleBuild(latest);
+    })();
+    const t = setInterval(async function() {
+      const latest = await fetchLatestBuild();
+      if (!stopped && latest && buildIsNewer(latest, APP_BUILD)) setStaleBuild(latest);
+    }, 60000);
+    // Also check the moment the tab is brought back to the front.
+    function onFocus() {
+      fetchLatestBuild().then(function(latest) {
+        if (!stopped && latest && buildIsNewer(latest, APP_BUILD)) setStaleBuild(latest);
+      });
+    }
+    window.addEventListener("focus", onFocus);
+    return function() { stopped = true; clearInterval(t); window.removeEventListener("focus", onFocus); };
+  }, []);
 
   // Navigate straight to a specific enquiry's detail page (used from Viewings + Year Calendar)
   const goToEnquiry = (id) => { setFocusEnquiryId(id); setView("enquiries"); };
@@ -4154,6 +4334,18 @@ export default function App() {
   // write it straight back. If the read fails we abort rather than write, since
   // writing from an unknown base is exactly what causes the damage.
   const mutateBookings = useCallback(async (mutator) => {
+    // Refuse to write from a tab running an out-of-date build. An old tab holds
+    // old code AND an old snapshot of the data, so letting it save is exactly
+    // how events and Xero ids were wiped after a fix had already gone live.
+    const latest = await fetchLatestBuild();
+    if (latest && buildIsNewer(latest, APP_BUILD)) {
+      setStaleBuild(latest);
+      throw new Error(
+        "This page is running an old version (" + APP_BUILD + "; " + latest + " is live). " +
+        "Nothing was saved — reload the page and try again."
+      );
+    }
+
     let server;
     try {
       server = await sbGet(BOOKING_STORAGE);
@@ -4164,6 +4356,17 @@ export default function App() {
     const base = Array.isArray(server) ? server : [];
     const next = mutator(base);
     if (!Array.isArray(next)) throw new Error("Internal error: bookings mutation produced no array");
+    // Tripwire: a single edit should never remove more than the one record a
+    // delete targets. Anything larger means we're about to write a truncated
+    // array — refuse rather than destroy records, and say so loudly.
+    if (next.length < base.length - 1) {
+      const lost = base.length - next.length;
+      console.error("Refusing to save: would drop " + lost + " events", { base: base.length, next: next.length });
+      throw new Error(
+        "Save cancelled — this would have deleted " + lost + " events. Nothing was changed. " +
+        "Please reload the page and try again."
+      );
+    }
     await sbSet(BOOKING_STORAGE, next);
     setBookings(next);
     return next;
@@ -4317,6 +4520,25 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
       <MobileGlobalStyles/>
+
+      {/* An out-of-date tab is dangerous, not just inconvenient — saving from
+          it can destroy records. Make it impossible to miss. */}
+      {staleBuild && (
+        <div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9999, background:"#dc2626", color:"#fff",
+          padding:"12px 20px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap",
+          boxShadow:"0 2px 12px rgba(0,0,0,.25)" }}>
+          <span style={{ fontSize:14, fontWeight:700 }}>A newer version of this app is available</span>
+          <span style={{ fontSize:12, opacity:.9, flex:1, minWidth:220 }}>
+            This page is running {APP_BUILD} and {staleBuild} is live. Saving is disabled until you reload,
+            because an out-of-date page can overwrite newer data.
+          </span>
+          <button onClick={function(){ window.location.reload(true); }}
+            style={{ background:"#fff", color:"#dc2626", border:"none", padding:"9px 20px", borderRadius:7,
+              cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:800, whiteSpace:"nowrap" }}>
+            Reload now
+          </button>
+        </div>
+      )}
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
       <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
@@ -4329,6 +4551,7 @@ export default function App() {
             // required a date and returned silently otherwise, which meant edits
             // to any event with a missing date (e.g. a Xero contact ID typed
             // into one) were quietly thrown away with no indication at all.
+            if(staleBuild) { const e=new Error("stale-build"); e.code="stale-build"; throw e; }
             if(!fd.couple) { const e=new Error("no-name"); e.code="no-name"; throw e; }
             if(editId) {
               await saveBookingRecord(editId, fd);
@@ -5902,7 +6125,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
       setAutoSaveState("saved");
       setTimeout(function() { setAutoSaveState(function(s){ return s==="saved" ? "idle" : s; }); }, 2500);
     }).catch(function(err) {
-      setAutoSaveState(err && err.code === "no-name" ? "blocked" : "error");
+      setAutoSaveState(err && (err.code === "no-name" || err.code === "stale-build") ? "blocked" : "error");
     });
   };
 
