@@ -33,9 +33,19 @@ if (typeof window.storage === 'undefined') {
 }
 
 // ─── Credentials ─────────────────────────────────────────────────────────────
-const CORRECT_USER = 'admin'
-const CORRECT_PASS = 'Hawth8u$h'
+// NOTE: these live in the browser bundle, so anyone who views source can read
+// them. This is a doorstep lock that keeps the wrong people out of the wrong
+// screens — it is not real security. Proper protection would need server-side
+// authentication (Supabase Auth), which would also record who changed what.
+//
+// `admin` sees the whole app. `bar` only ever sees Bar Management, including
+// the two rota reports.
+const USERS = [
+  { user: 'admin', pass: 'Hawth8u$h',   role: 'admin' },
+  { user: 'bar',   pass: 'BarStaff26!', role: 'bar'   },
+]
 const SESSION_KEY  = 'hbf_auth_v1'
+const SESSION_ROLE = 'hbf_auth_role_v1'
 const SESSION_VAL  = 'granted'
 
 function LoginScreen({ onAuth }) {
@@ -45,9 +55,11 @@ function LoginScreen({ onAuth }) {
   const [showPass, setShow] = useState(false)
 
   const attempt = () => {
-    if (user.trim() === CORRECT_USER && pass === CORRECT_PASS) {
+    const match = USERS.find(u => u.user === user.trim().toLowerCase() && u.pass === pass)
+    if (match) {
       sessionStorage.setItem(SESSION_KEY, SESSION_VAL)
-      onAuth()
+      sessionStorage.setItem(SESSION_ROLE, match.role)
+      onAuth(match.role)
     } else {
       setError('Incorrect username or password.')
       setPass('')
@@ -82,7 +94,7 @@ function LoginScreen({ onAuth }) {
             </svg>
           </div>
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1a2d4a' }}>Hawthbush Farm</div>
-          <div style={{ fontSize: 13, color: '#7a9bbf', marginTop: 4 }}>Wedding Management</div>
+          <div style={{ fontSize: 13, color: '#7a9bbf', marginTop: 4 }}>Management</div>
         </div>
 
         {/* Fields */}
@@ -125,14 +137,24 @@ function LoginScreen({ onAuth }) {
 
 function Root() {
   const [authed, setAuthed] = useState(false)
+  const [role, setRole]     = useState('admin')
 
   useEffect(() => {
     const token = sessionStorage.getItem(SESSION_KEY)
-    if (token === SESSION_VAL) setAuthed(true)
+    if (token === SESSION_VAL) {
+      setRole(sessionStorage.getItem(SESSION_ROLE) || 'admin')
+      setAuthed(true)
+    }
   }, [])
 
-  if (!authed) return <LoginScreen onAuth={() => setAuthed(true)} />
-  return <App />
+  const signOut = () => {
+    sessionStorage.removeItem(SESSION_KEY)
+    sessionStorage.removeItem(SESSION_ROLE)
+    window.location.reload()
+  }
+
+  if (!authed) return <LoginScreen onAuth={r => { setRole(r); setAuthed(true) }} />
+  return <App role={role} onSignOut={signOut} />
 }
 
 createRoot(document.getElementById('root')).render(

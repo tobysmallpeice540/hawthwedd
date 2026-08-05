@@ -74,6 +74,8 @@ const sbSet = async (key, value) => {
 //
 // The newest build to load publishes its version here. Older tabs poll it, warn
 // the user, and — critically — refuse to write once they know they're stale.
+// Bar-only mode is decided by which account signed in (see main.jsx), not by a
+// URL flag — a flag could simply be removed by whoever it was meant to limit.
 const APP_BUILD_KEY = "hbf_app_build_v1";
 
 // Build strings are "YYYY-MM-DD" + a letter, so plain string comparison orders
@@ -1468,7 +1470,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04b";
+const APP_BUILD = "2026-08-04e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4130,7 +4132,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function App() {
+export default function App({ role = "admin", onSignOut } = {}) {
   const [bookings, setBookings] = useState([]);
   const [staff, setStaff]       = useState([]);
   const [view, setView]         = useState("home");
@@ -4244,6 +4246,7 @@ export default function App() {
   const [invoiceRecords, setInvoiceRecords]   = useState([]);
   const [accomPrefill, setAccomPrefill]       = useState(null);
   const [staleBuild, setStaleBuild]           = useState(null);   // newer build seen
+  const barOnly = role === "bar";
 
   // Publish this build on load, then watch for a newer one. Any tab left open
   // across a deploy finds out within a minute instead of silently running old
@@ -4516,6 +4519,39 @@ export default function App() {
   })();
 
   if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:"system-ui,sans-serif",fontSize:20 }}>Loading…</div>;
+
+  // Bar-only: just the Bar section, no navigation to anything else.
+  if (barOnly) {
+    return (
+      <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
+        <MobileGlobalStyles/>
+        {staleBuild && (
+          <div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9999, background:"#dc2626", color:"#fff",
+            padding:"12px 20px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
+            <span style={{ fontSize:14, fontWeight:700 }}>A newer version is available</span>
+            <button onClick={function(){ window.location.reload(true); }}
+              style={{ background:"#fff", color:"#dc2626", border:"none", padding:"9px 20px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:800 }}>
+              Reload now
+            </button>
+          </div>
+        )}
+        <header style={{ background:"#fff", borderBottom:`2px solid ${T.border}`, padding:"14px 24px", display:"flex", alignItems:"center", gap:14 }}>
+          <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:40, width:"auto" }} />
+          <span style={{ fontSize:16, fontWeight:700, color:T.midBlue }}>Bar Management</span>
+          <span style={{ marginLeft:"auto", fontSize:11, color:T.textLight }}>build {APP_BUILD}</span>
+          {onSignOut && (
+            <button onClick={onSignOut}
+              style={{ background:"none", border:`1.5px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
+              Sign out
+            </button>
+          )}
+        </header>
+        <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
+          <BarView/>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
@@ -8140,6 +8176,8 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
 function BarView() {
   const [products, setProducts] = useState([]);
   const [events, setEvents]     = useState([]);
+  const [farmEvents, setFarmEvents] = useState([]);
+  const [staff, setStaff]       = useState([]);
   const [loaded, setLoaded]     = useState(false);
   const [barView, setBarView]   = useState("stock");
   const [editProduct, setEditProduct] = useState(null);
@@ -8151,6 +8189,10 @@ function BarView() {
     (async () => {
       try { const r = await sbGet(BAR_PRODUCTS_KEY); setProducts(r || INITIAL_PRODUCTS); } catch { setProducts(INITIAL_PRODUCTS); }
       try { const r = await sbGet(BAR_EVENTS_KEY);   setEvents(r || INITIAL_BAR_EVENTS); }   catch { setEvents(INITIAL_BAR_EVENTS); }
+      // Farm events + staff, so the rota reports can live here too — bar staff
+      // need their rota without being given the run of the whole app.
+      try { const r = await sbGet(BOOKING_STORAGE); setFarmEvents(r || []); } catch { setFarmEvents([]); }
+      try { const r = await sbGet(STAFF_STORAGE);   setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
       setLoaded(true);
     })();
   }, []);
@@ -8196,6 +8238,8 @@ function BarView() {
     { id:"report",     label:"Usage Report" },
     { id:"reconcile",  label:"Till Reconciliation" },
     { id:"products",   label:"Products" },
+    { id:"rota",       label:"Rota Overview" },
+    { id:"eventrota",  label:"Event Rota" },
   ];
 
   return (
@@ -8215,11 +8259,13 @@ function BarView() {
       </div>
 
       {barView === "stock"     && <StockView products={products} stock={stock} events={events}/>}
-      {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} events={events} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
-      {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} events={events} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
+      {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} events={events} staff={staff} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
+      {barView === "stocktake" && <EventEntryView type="stocktake" products={products} stock={stock} events={events} staff={staff} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
       {barView === "history"   && <EventHistoryView events={events} products={products} onEdit={handleEditEvent} onDelete={handleDeleteEvent}/>}
       {barView === "report"    && <BarReportView  products={products} events={events}/>}
       {barView === "reconcile" && <BarReconcileView products={products} events={events}/>}
+      {barView === "rota"      && <StaffingRota bookings={farmEvents} staff={staff}/>}
+      {barView === "eventrota" && <StaffTimelineReport bookings={farmEvents} staff={staff}/>}
       {barView === "products"  && <ProductsView   products={products} onSave={saveProducts}/>}
     </div>
   );
@@ -8332,24 +8378,30 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUs
           <span style={{ fontSize:9, fontWeight:600, color:stockColour, textTransform:"uppercase", letterSpacing:.5 }}>{stockOut?"out":stockLow?"low":"in stock"}</span>
         </div>
       )}
-      {/* Stocktake: last count · till use · new count */}
+      {/* Stocktake: last stocktake · added · till use · expected · actual */}
       {showCols && (
         <>
-          <div style={{ flexShrink:0, textAlign:"center", width:64 }}>
+          <div style={{ flexShrink:0, textAlign:"center", width:62 }}>
             <div style={{ fontSize:15, fontWeight:700, color:T.textMid, lineHeight:1.1 }}>{prevCount}</div>
-            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>last count</div>
+            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>last</div>
           </div>
-          {ordered > 0 && (
-            <div style={{ flexShrink:0, textAlign:"center", width:52 }}>
-              <div style={{ fontSize:15, fontWeight:700, color:T.midBlue, lineHeight:1.1 }}>+{ordered}</div>
-              <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>ordered</div>
+          <div style={{ flexShrink:0, textAlign:"center", width:52 }}>
+            <div style={{ fontSize:15, fontWeight:700, color: ordered > 0 ? T.midBlue : T.textLight, lineHeight:1.1 }}>
+              {ordered > 0 ? "+" + ordered : "—"}
             </div>
-          )}
-          <div style={{ flexShrink:0, textAlign:"center", width:64 }}>
+            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>added</div>
+          </div>
+          <div style={{ flexShrink:0, textAlign:"center", width:62 }}>
             <div style={{ fontSize:15, fontWeight:700, lineHeight:1.1, color: tillUse === null || tillUse === undefined ? T.textLight : T.accent }}>
               {tillUse === null || tillUse === undefined ? "—" : "−" + (Math.round(tillUse*100)/100)}
             </div>
             <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>till use</div>
+          </div>
+          <div style={{ flexShrink:0, textAlign:"center", width:62 }}>
+            <div style={{ fontSize:15, fontWeight:700, lineHeight:1.1, color: expected === null ? T.textLight : T.text }}>
+              {expected === null ? "—" : Math.round(expected*100)/100}
+            </div>
+            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>expected</div>
           </div>
         </>
       )}
@@ -8359,15 +8411,18 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUs
           <button onClick={()=>setLine(p.id, Math.max(0,(Number(val)||0)-1))} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
         )}
         <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+          {/* Counted figure — left blank so it's a genuine count, not a nudge
+              towards whatever the system already thinks is on the shelf. */}
           <input
             type="number" min="0" step={isOrder ? 1 : (p.category === "Softs" ? 1 : 0.5)}
-            value={val ?? (isOrder ? "" : (stock[p.id]||0))}
+            value={val ?? ""}
+            placeholder={isOrder ? "" : "count"}
             onChange={e => setLine(p.id, e.target.value)}
-            style={{ width:64, textAlign:"center", background:"#fff", border:`1.5px solid ${drift!==null&&Math.abs(drift)>=1?T.red:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
+            style={{ width:70, textAlign:"center", background:"#fff", border:`1.5px solid ${drift!==null&&Math.abs(drift)>=1?T.red:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 6px", outline:"none" }}
           />
-          {showCols && expected !== null && (
-            <span style={{ fontSize:9, color: drift!==null&&Math.abs(drift)>=1 ? T.red : T.textLight, whiteSpace:"nowrap" }}>
-              exp {Math.round(expected*100)/100}{drift!==null&&Math.abs(drift)>=0.01 ? " (" + (drift>0?"+":"") + (Math.round(drift*100)/100) + ")" : ""}
+          {showCols && drift !== null && Math.abs(drift) >= 0.01 && (
+            <span style={{ fontSize:9, fontWeight:700, color: Math.abs(drift)>=1 ? T.red : T.amber, whiteSpace:"nowrap" }}>
+              {(drift>0?"+":"") + (Math.round(drift*100)/100)}
             </span>
           )}
         </div>
@@ -8380,11 +8435,12 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUs
   );
 }
 
-function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent, events }) {
+function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent, events, staff }) {
   const today = new Date().toISOString().slice(0,10);
   const [date,  setDate]  = useState(editingEvent?.date  || today);
   const [label, setLabel] = useState(editingEvent?.label || "");
   const [lines, setLines] = useState(editingEvent?.lines || {});
+  const [countedBy, setCountedBy] = useState(editingEvent?.countedBy || "");
   const [saving, setSaving] = useState(false);
 
   // ── Stocktake helper columns: last count, deliveries since, till usage ──────
@@ -8452,11 +8508,11 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
     }
   }
 
+  // A stocktake starts EMPTY. Pre-filling with the system's current figure
+  // invites confirming it rather than counting, which defeats the point.
   const initStocktake = () => {
-    if (editingEvent) return; // editing: lines already pre-filled above
-    const init = {};
-    products.forEach(p => { init[p.id] = stock[p.id] || 0; });
-    setLines(init);
+    if (editingEvent) return; // editing: keep whatever was recorded
+    setLines({});
   };
 
   useEffect(() => {
@@ -8473,6 +8529,7 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
       type,
       date,
       label: label || (type === "order" ? "Order" : "Stocktake"),
+      countedBy: type === "order" ? undefined : (countedBy || "").trim(),
       // Orders: 0/blank means "don't order this", so those lines are dropped.
       // Stocktakes: 0 is a genuine, meaningful count (out of stock) and must
       // be kept — computeStock() sets stock absolutely from the latest
@@ -8493,7 +8550,9 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
     ? "Enter quantities ordered for each product. Leave blank or 0 to skip."
     : "Enter actual counted stock for each product.";
 
-  const totalLines = Object.entries(lines).filter(([,v]) => v !== "" && Number(v) > 0).length;
+  // On a stocktake a counted zero is a real answer, so count anything entered.
+  const totalLines = Object.entries(lines).filter(([,v]) => v !== "" && v != null && (isOrder ? Number(v) > 0 : true)).length;
+  const uncounted  = isOrder ? 0 : Math.max(0, products.length - totalLines);
   const totalCost  = isOrder
     ? products.reduce((s,p) => s + (Number(lines[p.id]||0)) * (p.costUnit||0), 0)
     : null;
@@ -8509,13 +8568,31 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
             <FLabel>Date</FLabel>
             <FInput type="date" value={date} onChange={setDate}/>
           </div>
-          <div style={{ flex:1, minWidth:200 }}>
+          <div style={{ flex:1, minWidth:180 }}>
             <FLabel>Label (optional)</FLabel>
             <FInput value={label} onChange={setLabel} placeholder={isOrder ? "e.g. Order before 14 June wedding" : "e.g. After 14 June wedding"}/>
           </div>
-          {totalLines > 0 && (
-            <div style={{ background:T.accentLight, borderRadius:8, padding:"10px 16px", display:"flex", gap:20 }}>
-              <span style={{ fontSize:13, color:T.midBlue }}><strong>{totalLines}</strong> lines</span>
+          {!isOrder && (
+            <div style={{ minWidth:170 }}>
+              <FLabel>Counted by</FLabel>
+              <input list="hbf-staff-names" value={countedBy} onChange={function(e){ setCountedBy(e.target.value); }}
+                placeholder="Who did the count?"
+                style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}/>
+              <datalist id="hbf-staff-names">
+                {(staff || []).map(function(s){ return <option key={s.id} value={s.name}/>; })}
+              </datalist>
+            </div>
+          )}
+          {(totalLines > 0 || !isOrder) && (
+            <div style={{ background:T.accentLight, borderRadius:8, padding:"10px 16px", display:"flex", gap:20, flexWrap:"wrap" }}>
+              <span style={{ fontSize:13, color:T.midBlue }}>
+                <strong>{totalLines}</strong>{isOrder ? " lines" : " of " + products.length + " counted"}
+              </span>
+              {!isOrder && uncounted > 0 && (
+                <span style={{ fontSize:13, color:T.amber, fontWeight:600 }} title="Products left blank keep their previous stock figure">
+                  {uncounted} not counted
+                </span>
+              )}
               {totalCost > 0 && <span style={{ fontSize:13, color:T.midBlue }}>Est. cost: <strong>{fmt2(totalCost)}</strong></span>}
             </div>
           )}
@@ -8630,7 +8707,8 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
       const prod = products.find(p=>p.id===pid);
       return `  ${prod ? prod.name : pid}: ${qty}`;
     });
-    return [`${ev.date} — ${isOrder?"ORDER":"STOCKTAKE"}: ${ev.label||""}`, ...lines].join("\n");
+    const head = `${ev.date} — ${isOrder?"ORDER":"STOCKTAKE"}: ${ev.label||""}` + (ev.countedBy ? `  (counted by ${ev.countedBy})` : "");
+    return [head, ...lines].join("\n");
   }).join("\n\n");
 
   if(printMode) return (
@@ -8703,6 +8781,7 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
                   {ev.label}
                 </span>
                 {/* Meta */}
+                {ev.countedBy && <span style={{ fontSize:11, color:T.textMid, flexShrink:0 }}>counted by {ev.countedBy}</span>}
                 <span style={{ fontSize:12, color:T.textLight, flexShrink:0 }}>{lineCount} product{lineCount!==1?"s":""}</span>
                 {orderCost > 0 && <span style={{ fontSize:13, fontWeight:600, color:T.midBlue, flexShrink:0 }}>{fmt2(orderCost)}</span>}
                 {/* Actions */}
@@ -12023,6 +12102,19 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Backup &amp; restore</div>
         <BackupPanel/>
+      </div>
+
+      {/* Logins */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Bar staff login</div>
+          <p style={{ fontSize:13, color:T.textMid, margin:"0 0 8px", lineHeight:1.6 }}>
+            Bar staff can sign in as <strong>bar</strong> to get Bar Management and the rota reports only — no events,
+            lettings, enquiries or financials. Change either password in <code>src/main.jsx</code>.
+          </p>
+        <p style={{ fontSize:12, color:T.textLight, margin:0, lineHeight:1.6 }}>
+          Passwords are stored in the app's code, so treat this as keeping people to the right screens rather than as
+          security. Anyone determined can read them by viewing the page source.
+        </p>
       </div>
 
       {/* Staff */}
