@@ -1470,7 +1470,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04e";
+const APP_BUILD = "2026-08-04f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8357,9 +8357,11 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUs
   // On a stocktake, what the count *should* be: last count + anything delivered
   // since, less what the till says was sold.
   const showCols = !isOrder && prevCount !== undefined;
-  const expected = showCols && tillUse !== null && tillUse !== undefined
-    ? (Number(prevCount)||0) + (Number(ordered)||0) - tillUse
-    : null;
+  // Expected always resolves to a number so the three columns visibly add up,
+  // even when nothing was delivered or nothing sold. A missing till figure is
+  // treated as zero rather than blanking the whole calculation.
+  const tillNum  = Number(tillUse) || 0;
+  const expected = showCols ? (Number(prevCount)||0) + (Number(ordered)||0) - tillNum : null;
   const entered  = val === "" || val == null ? null : Number(val);
   const drift    = (expected !== null && entered !== null) ? entered - expected : null;
   const stockOut  = curStock === 0;
@@ -8387,19 +8389,19 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUs
           </div>
           <div style={{ flexShrink:0, textAlign:"center", width:52 }}>
             <div style={{ fontSize:15, fontWeight:700, color: ordered > 0 ? T.midBlue : T.textLight, lineHeight:1.1 }}>
-              {ordered > 0 ? "+" + ordered : "—"}
+              {ordered > 0 ? "+" + ordered : "0"}
             </div>
             <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>added</div>
           </div>
           <div style={{ flexShrink:0, textAlign:"center", width:62 }}>
-            <div style={{ fontSize:15, fontWeight:700, lineHeight:1.1, color: tillUse === null || tillUse === undefined ? T.textLight : T.accent }}>
-              {tillUse === null || tillUse === undefined ? "—" : "−" + (Math.round(tillUse*100)/100)}
+            <div style={{ fontSize:15, fontWeight:700, lineHeight:1.1, color: tillNum > 0 ? T.accent : T.textLight }}>
+              {tillNum > 0 ? "−" + (Math.round(tillNum*100)/100) : "0"}
             </div>
             <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>till use</div>
           </div>
-          <div style={{ flexShrink:0, textAlign:"center", width:62 }}>
-            <div style={{ fontSize:15, fontWeight:700, lineHeight:1.1, color: expected === null ? T.textLight : T.text }}>
-              {expected === null ? "—" : Math.round(expected*100)/100}
+          <div style={{ flexShrink:0, textAlign:"center", width:62, background:T.bgInput, borderRadius:6, padding:"2px 0" }}>
+            <div style={{ fontSize:15, fontWeight:800, lineHeight:1.1, color:T.text }}>
+              {Math.round(expected*100)/100}
             </div>
             <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>expected</div>
           </div>
@@ -8480,6 +8482,20 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
       try { const r = await sbGet(BAR_POS_MAP_KEY); setPosMap(r || {}); } catch (e) { setPosMap({}); }
     })();
   }, [type]);
+
+  // Pull till usage automatically once the recipe mapping is available, so the
+  // expected figures are there before anyone starts counting. The button stays
+  // for a manual refresh. Guarded by a ref so it fires once per stocktake
+  // rather than on every render — Zettle rate-limits repeated calls.
+  const autoTillRef = useRef(false);
+  useEffect(function() {
+    if (type !== "stocktake") return;
+    if (posMap === null) return;          // mapping still loading
+    if (!prevStocktake) return;           // nothing to measure from
+    if (autoTillRef.current) return;
+    autoTillRef.current = true;
+    loadTillUse();
+  }, [type, posMap, prevStocktake && prevStocktake.date]);
 
   async function loadTillUse() {
     if (!prevStocktake) { setTillErr("No earlier stocktake to measure from."); setTillState("error"); return; }
@@ -8606,15 +8622,23 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
                 <span style={{ fontSize:12, color:T.textMid }}>
                   Last count <strong>{prevStocktake.date}</strong>{prevStocktake.label ? " — " + prevStocktake.label : ""}
                 </span>
-                <button type="button" onClick={loadTillUse} disabled={tillState==="loading"}
+                <button type="button" onClick={function(){ autoTillRef.current = true; loadTillUse(); }} disabled={tillState==="loading"}
                   style={{ background: tillState==="ok" ? "#fff" : T.midBlue, color: tillState==="ok" ? T.midBlue : "#fff",
                     border: tillState==="ok" ? `1.5px solid ${T.midBlue}` : "none",
                     padding:"7px 16px", borderRadius:6, cursor: tillState==="loading"?"wait":"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
                   {tillState==="loading" ? "Loading till…" : tillState==="ok" ? "Refresh till usage" : "Load till usage"}
                 </button>
+                {tillState==="loading" && (
+                  <span style={{ fontSize:11, color:T.textLight }}>Reading the till…</span>
+                )}
                 {tillState==="ok" && (
                   <span style={{ fontSize:11, color:T.textLight }}>
-                    Till usage shown per product; “exp” is last count + deliveries − till usage.
+                    Expected = last count + added − till use.
+                  </span>
+                )}
+                {tillState==="idle" && (
+                  <span style={{ fontSize:11, color:T.amber }}>
+                    Till usage not loaded — expected figures assume nothing was sold.
                   </span>
                 )}
                 {tillState==="error" && <span style={{ fontSize:11, color:T.red }}>{tillErr}</span>}
