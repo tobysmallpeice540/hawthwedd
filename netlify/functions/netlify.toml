@@ -1,0 +1,45 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,RESEND_API_KEY,ZETTLE_API_KEY,ZETTLE_CLIENT_ID,TODOIST_ICS_URL"
+
+# Hourly Airbnb iCal sync - runs at the top of every hour
+[functions."sync-all-icals"]
+  schedule = "0 * * * *"
+
+# Daily lettings email reminders (deposit/balance due, arrival info) - runs at 7am
+[functions."send-accom-reminders"]
+  schedule = "0 7 * * *"
+
+# Daily data snapshot - runs at 3am, keeps the last 30 days
+[functions."backup-data"]
+  schedule = "0 3 * * *"
+
+# Proxy Xero connections endpoint
+[[redirects]]
+  from = "/api/xero-connections"
+  to = "https://api.xero.com/connections"
+  status = 200
+  force = true
+
+# Proxy Xero accounting API
+[[redirects]]
+  from = "/api/xero-api/*"
+  to = "https://api.xero.com/api.xro/2.0/:splat"
+  status = 200
+  force = true
+
+# Clean URL for the hosted iCalendar feed (events + viewings)
+[[redirects]]
+  from = "/calendar.ics"
+  to = "/.netlify/functions/calendar-feed"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
