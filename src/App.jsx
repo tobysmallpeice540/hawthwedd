@@ -1470,7 +1470,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04f";
+const APP_BUILD = "2026-08-04g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8383,32 +8383,20 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUs
       {/* Stocktake: last stocktake · added · till use · expected · actual */}
       {showCols && (
         <>
-          <div style={{ flexShrink:0, textAlign:"center", width:62 }}>
-            <div style={{ fontSize:15, fontWeight:700, color:T.textMid, lineHeight:1.1 }}>{prevCount}</div>
-            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>last</div>
+          <div style={{ flexShrink:0, textAlign:"center", width:62, fontSize:15, fontWeight:700, color:T.textMid }}>{prevCount}</div>
+          <div style={{ flexShrink:0, textAlign:"center", width:52, fontSize:15, fontWeight:700, color: ordered > 0 ? T.midBlue : T.textLight }}>
+            {ordered > 0 ? "+" + ordered : "0"}
           </div>
-          <div style={{ flexShrink:0, textAlign:"center", width:52 }}>
-            <div style={{ fontSize:15, fontWeight:700, color: ordered > 0 ? T.midBlue : T.textLight, lineHeight:1.1 }}>
-              {ordered > 0 ? "+" + ordered : "0"}
-            </div>
-            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>added</div>
+          <div style={{ flexShrink:0, textAlign:"center", width:62, fontSize:15, fontWeight:700, color: tillNum > 0 ? T.accent : T.textLight }}>
+            {tillNum > 0 ? "−" + (Math.round(tillNum*100)/100) : "0"}
           </div>
-          <div style={{ flexShrink:0, textAlign:"center", width:62 }}>
-            <div style={{ fontSize:15, fontWeight:700, lineHeight:1.1, color: tillNum > 0 ? T.accent : T.textLight }}>
-              {tillNum > 0 ? "−" + (Math.round(tillNum*100)/100) : "0"}
-            </div>
-            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>till use</div>
-          </div>
-          <div style={{ flexShrink:0, textAlign:"center", width:62, background:T.bgInput, borderRadius:6, padding:"2px 0" }}>
-            <div style={{ fontSize:15, fontWeight:800, lineHeight:1.1, color:T.text }}>
-              {Math.round(expected*100)/100}
-            </div>
-            <div style={{ fontSize:9, color:T.textLight, textTransform:"uppercase", letterSpacing:.4 }}>expected</div>
+          <div style={{ flexShrink:0, textAlign:"center", width:62, fontSize:15, fontWeight:800, color:T.text, background:T.bgInput, borderRadius:6, padding:"3px 0" }}>
+            {Math.round(expected*100)/100}
           </div>
         </>
       )}
 
-      <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, flexShrink:0, width: showCols ? 104 : undefined }}>
         {isOrder && (
           <button onClick={()=>setLine(p.id, Math.max(0,(Number(val)||0)-1))} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
         )}
@@ -8431,7 +8419,8 @@ function ProductEntryCard({ p, lines, stock, setLine, isOrder, prevCount, tillUs
         {isOrder && (
           <button onClick={()=>setLine(p.id, (Number(val)||0)+1)} style={{ width:26, height:26, border:`1px solid ${T.border}`, borderRadius:4, background:"#fff", cursor:"pointer", fontSize:16, color:T.textMid, display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
         )}
-        <span style={{ fontSize:11, color:T.textLight, width:28 }}>{isOrder?"units":showCols?"new":"in stock"}</span>
+        {isOrder && <span style={{ fontSize:11, color:T.textLight, width:28 }}>units</span>}
+        {!isOrder && !showCols && <span style={{ fontSize:11, color:T.textLight, width:28 }}>in stock</span>}
       </div>
     </div>
   );
@@ -8694,11 +8683,22 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
               <div style={{ padding:"10px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}` }}>
                 <CatBadge cat={cat}/>
               </div>
+              {/* Column headings, so the four figures either side of the count
+                  box are labelled once rather than only under each number. */}
+              <div style={{ padding:"6px 18px", display:"flex", alignItems:"center", gap:10, background:"#f8fafd", borderBottom:`1px solid ${T.border}`,
+                fontSize:9, letterSpacing:.6, textTransform:"uppercase", fontWeight:700, color:T.textLight }}>
+                <span style={{ flex:1, minWidth:0 }}>Product</span>
+                <span style={{ width:62, textAlign:"center", flexShrink:0 }}>Last check</span>
+                <span style={{ width:52, textAlign:"center", flexShrink:0 }}>Ordered</span>
+                <span style={{ width:62, textAlign:"center", flexShrink:0 }}>Till use</span>
+                <span style={{ width:62, textAlign:"center", flexShrink:0 }}>Expected</span>
+                <span style={{ width:104, textAlign:"center", flexShrink:0 }}>Stock check</span>
+              </div>
               <div style={{ padding:"14px 18px", display:"grid", gridTemplateColumns:"1fr", gap:"8px" }}>
                 {prods.map(p => <ProductEntryCard key={p.id} p={p} lines={lines} stock={stock} setLine={setLine} isOrder={false}
-                  prevCount={prevStocktake ? Number(prevStocktake.lines?.[p.id] || 0) : undefined}
+                  prevCount={prevStocktake ? Number(prevStocktake.lines?.[p.id] || 0) : 0}
                   ordered={orderedSince[p.id] || 0}
-                  tillUse={tillUse ? (tillUse[p.id] !== undefined ? tillUse[p.id] : null) : null}/>)}
+                  tillUse={tillUse ? (tillUse[p.id] !== undefined ? tillUse[p.id] : 0) : 0}/>)}
               </div>
             </div>
           );
