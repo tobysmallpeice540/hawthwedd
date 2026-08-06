@@ -1470,7 +1470,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04g";
+const APP_BUILD = "2026-08-04i";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3521,6 +3521,151 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
       {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
       {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "emails"  && <EmailTemplatesEditor templates={emailTemplates} setTemplates={setEmailTemplates} onSave={onSaveEmailTemplates}/>}
+    </div>
+  );
+}
+
+// ── Todoist ──────────────────────────────────────────────────────────────────
+const TODOIST_ICS_KEY = "hbf_todoist_ics_v1";
+
+function TodoistSettings() {
+  const [url, setUrl]     = useState("");
+  const [saved, setSaved] = useState(false);
+  const [test, setTest]   = useState(null);
+  const [busy, setBusy]   = useState(false);
+
+  useEffect(function() {
+    (async function() {
+      try { setUrl((await sbGet(TODOIST_ICS_KEY)) || ""); } catch (e) { setUrl(""); }
+    })();
+  }, []);
+
+  async function save() {
+    setBusy(true); setTest(null);
+    try {
+      await sbSet(TODOIST_ICS_KEY, url.trim());
+      setSaved(true); setTimeout(function(){ setSaved(false); }, 2000);
+      if (url.trim()) {
+        const res = await fetch("/.netlify/functions/todoist-feed", {
+          method:"POST", headers:{ "Content-Type":"application/json" },
+          body: JSON.stringify({ url: url.trim(), force: true })
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) setTest({ ok:false, text:d.error || "Could not read the feed" });
+        else setTest({ ok:true, text:"Found " + d.tasks.length + " task" + (d.tasks.length!==1?"s":"") + "." });
+      }
+    } catch (e) { setTest({ ok:false, text:String(e.message||e) }); }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
+        Shows outstanding Todoist tasks on the Home page. Get the URL from Todoist: Settings &rarr; Integrations &rarr; Calendar feed.
+        Better still, set it as <code>TODOIST_ICS_URL</code> in Netlify instead of here &mdash; the URL contains a token granting read
+        access to your tasks, and anything saved on this page is readable by anyone who can load the app.
+      </p>
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
+        <input value={url} onChange={function(e){ setUrl(e.target.value); }}
+          placeholder="https://ics.todoist.com/..."
+          style={{ flex:1, minWidth:240, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"9px 12px", outline:"none" }}/>
+        <button onClick={save} disabled={busy}
+          style={{ background:saved?T.green:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:7, cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+          {busy ? "Checking..." : saved ? "Saved" : "Save & test"}
+        </button>
+      </div>
+      {test && (
+        <div style={{ marginTop:10, fontSize:12, color: test.ok ? T.green : T.red, lineHeight:1.6 }}>{test.text}</div>
+      )}
+      <p style={{ fontSize:11, color:T.textLight, margin:"10px 0 0", lineHeight:1.6 }}>
+        The feed URL acts like a password &mdash; anyone holding it can read your task list. Regenerate it in Todoist if it is ever shared by mistake.
+      </p>
+    </div>
+  );
+}
+
+function TodoBox() {
+  const [tasks, setTasks] = useState(null);
+  const [err, setErr]     = useState(null);
+  const [configured, setConfigured] = useState(null);
+
+  async function load() {
+    try {
+      // The URL may live only in Netlify (TODOIST_ICS_URL), in which case
+      // there is nothing stored here — ask the function anyway and hide the
+      // box only if it reports nothing is configured at either end.
+      let url = "";
+      try { url = (await sbGet(TODOIST_ICS_KEY)) || ""; } catch (e) { url = ""; }
+      const res = await fetch("/.netlify/functions/todoist-feed", {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ url: url })
+      });
+      const d = await res.json();
+      if (d && d.error === "No feed URL set") { setConfigured(false); return; }
+      setConfigured(true);
+      if (!res.ok || d.error) throw new Error(d.error || "Could not read Todoist");
+      setTasks(d.tasks || []); setErr(null);
+    } catch (e) { setErr(String(e.message||e)); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  if (configured === false) return null;
+
+  const todayIso = new Date().toISOString().slice(0,10);
+  const horizon  = addDaysIso(todayIso, 7);
+  const overdue  = (tasks||[]).filter(function(t){ return t.date && t.date < todayIso; });
+  const dueToday = (tasks||[]).filter(function(t){ return t.date === todayIso; });
+  const soon     = (tasks||[]).filter(function(t){ return t.date && t.date > todayIso && horizon && t.date <= horizon; });
+
+  function row(t, tone) {
+    return (
+      <div key={t.uid} style={{ display:"flex", alignItems:"baseline", gap:10, padding:"5px 0", borderTop:`1px solid ${T.border}` }}>
+        <span style={{ fontSize:13, color:T.text, flex:1, minWidth:0 }}>{t.summary}</span>
+        <span style={{ fontSize:11, color:tone, whiteSpace:"nowrap", fontWeight:600 }}>
+          {t.date === todayIso ? "today" : fmtDate(t.date)}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 }}>
+      <div style={{ display:"flex", alignItems:"center", marginBottom:12, gap:10, flexWrap:"wrap" }}>
+        <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>To do</h3>
+        {overdue.length > 0 && (
+          <span style={{ fontSize:11, fontWeight:700, color:"#dc2626", background:"#fef2f2", padding:"2px 10px", borderRadius:8 }}>
+            {overdue.length} overdue
+          </span>
+        )}
+        <button onClick={load} style={{ marginLeft:"auto", background:"none", border:`1px solid ${T.border}`, color:T.textLight, padding:"3px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>Refresh</button>
+      </div>
+
+      {err && <div style={{ fontSize:12, color:T.red, lineHeight:1.6 }}>{err}</div>}
+      {!err && tasks === null && <div style={{ fontSize:12, color:T.textLight }}>Loading...</div>}
+      {!err && tasks && !overdue.length && !dueToday.length && !soon.length && (
+        <div style={{ fontSize:13, color:T.textLight }}>Nothing due in the next week.</div>
+      )}
+
+      {overdue.length > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <div style={{ fontSize:10, letterSpacing:1, textTransform:"uppercase", color:"#dc2626", fontWeight:700, marginBottom:2 }}>Overdue</div>
+          {overdue.slice(0,6).map(function(t){ return row(t, "#dc2626"); })}
+          {overdue.length > 6 && <div style={{ fontSize:11, color:T.textLight, paddingTop:4 }}>...and {overdue.length-6} more</div>}
+        </div>
+      )}
+      {dueToday.length > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <div style={{ fontSize:10, letterSpacing:1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:2 }}>Today</div>
+          {dueToday.slice(0,6).map(function(t){ return row(t, T.midBlue); })}
+        </div>
+      )}
+      {soon.length > 0 && (
+        <div>
+          <div style={{ fontSize:10, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:2 }}>Next 7 days</div>
+          {soon.slice(0,8).map(function(t){ return row(t, T.textLight); })}
+          {soon.length > 8 && <div style={{ fontSize:11, color:T.textLight, paddingTop:4 }}>...and {soon.length-8} more</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -7996,6 +8141,8 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
         <span style={{ color:T.textLight, marginLeft:10, fontSize:11 }}>build {APP_BUILD}</span>
       </p>
 
+      <TodoBox/>
+
       {/* Payment status can only come from Xero — say so rather than letting an
           empty list read as "nothing outstanding". */}
       {(!xeroToken || xeroInvErr) && (
@@ -12126,6 +12273,12 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Backup &amp; restore</div>
         <BackupPanel/>
+      </div>
+
+      {/* Todoist */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Todoist</div>
+        <TodoistSettings/>
       </div>
 
       {/* Logins */}
