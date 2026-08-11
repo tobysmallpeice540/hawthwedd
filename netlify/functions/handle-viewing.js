@@ -174,7 +174,10 @@ exports.handler = async (event) => {
         }),
       });
       if (sendRes.ok) {
-        await logEmail({ subject: subject, to: req.email, type: "viewing_" + action, requestId: id });
+        await logEmail({ subject: subject, to: req.email, type: "viewing_" + action, requestId: id,
+          // Viewing emails are composed as HTML rather than from a text
+          // template, so the markup is stored and rendered back as-is.
+          bodyHtml: String(emailBody || "").slice(0, 8000) });
       } else {
         console.log("Email send failed:", await sendRes.text());
       }

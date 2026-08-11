@@ -121,10 +121,12 @@ function buildTokens(booking, property, extra) {
   return Object.assign(tokens, extra || {});
 }
 
-async function logEmail(subject, to, type, bookingId) {
+// The body is stored alongside the subject so the sent email can be read back
+// in full from the app. Capped so a runaway template can't bloat the log row.
+async function logEmail(subject, to, type, bookingId, bodyText) {
   try {
     var log = (await sbGet(EMAIL_LOG_KEY)) || [];
-    log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(), subject: subject, to: to, template: type, bookingId: bookingId });
+    log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(), subject: subject, to: to, template: type, bookingId: bookingId, body: String(bodyText || "").slice(0, 8000) });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
   } catch (e) { console.error("logEmail failed:", e.message); }
 }
@@ -153,7 +155,7 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
     var bcBody = fillTemplate(bcTmpl.body, bcTokens);
     var bcRes = await sendViaResend(booking.email, bcSubject, bcBody);
     if (bcRes.ok) {
-      await logEmail(bcSubject, booking.email, "booking_confirmed", booking.id);
+      await logEmail(bcSubject, booking.email, "booking_confirmed", booking.id, bcBody);
       booking.emailFlags = Object.assign({}, booking.emailFlags || {}, { bookingConfirmedSent: true });
     } else {
       console.error("booking_confirmed send failed:", bcRes.error);
@@ -168,7 +170,7 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
     var pcBody = fillTemplate(pcTmpl.body, pcTokens);
     var pcRes = await sendViaResend(booking.email, pcSubject, pcBody);
     if (pcRes.ok) {
-      await logEmail(pcSubject, booking.email, "payment_confirmation", booking.id);
+      await logEmail(pcSubject, booking.email, "payment_confirmation", booking.id, pcBody);
     } else {
       console.error("payment_confirmation send failed:", pcRes.error);
     }

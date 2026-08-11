@@ -126,10 +126,12 @@ function buildTokens(booking, property, extra) {
   return Object.assign(tokens, extra || {});
 }
 
-async function logEmail(subject, to, type, bookingId) {
+// The body is stored alongside the subject so the sent email can be read back
+// in full from the app. Capped so a runaway template can't bloat the log row.
+async function logEmail(subject, to, type, bookingId, bodyText) {
   try {
     var log = (await sbGet(EMAIL_LOG_KEY)) || [];
-    log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(), subject: subject, to: to, template: type, bookingId: bookingId });
+    log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(), subject: subject, to: to, template: type, bookingId: bookingId, body: String(bodyText || "").slice(0, 8000) });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
   } catch (e) { console.error("logEmail failed:", e.message); }
 }
@@ -221,7 +223,7 @@ exports.handler = async function() {
             var depBody = fillTemplate(depTmpl.body, depTokens);
             var depRes = await sendViaResend(booking.email, depSubject, depBody);
             if (depRes.ok) {
-              await logEmail(depSubject, booking.email, "deposit_request", booking.id);
+              await logEmail(depSubject, booking.email, "deposit_request", booking.id, depBody);
               flags.depositRequestSent = true;
               didSend = true;
               sentCount++;
@@ -245,7 +247,7 @@ exports.handler = async function() {
             var balBody = fillTemplate(balTmpl.body, balTokens);
             var balRes = await sendViaResend(booking.email, balSubject, balBody);
             if (balRes.ok) {
-              await logEmail(balSubject, booking.email, "balance_request", booking.id);
+              await logEmail(balSubject, booking.email, "balance_request", booking.id, balBody);
               flags.balanceRequestSent = true;
               didSend = true;
               sentCount++;
@@ -270,7 +272,7 @@ exports.handler = async function() {
           try {
             var arr1Res = await sendViaResend(booking.email, arrSubject, arrBody);
             if (arr1Res.ok) {
-              await logEmail(arrSubject, booking.email, arrivalId, booking.id);
+              await logEmail(arrSubject, booking.email, arrivalId, booking.id, arrBody);
               flags.arrivalInfo1Sent = true;
               didSend = true;
               sentCount++;
@@ -285,7 +287,7 @@ exports.handler = async function() {
           try {
             var arr2Res = await sendViaResend(booking.email, arrSubject, arrBody);
             if (arr2Res.ok) {
-              await logEmail(arrSubject, booking.email, arrivalId, booking.id);
+              await logEmail(arrSubject, booking.email, arrivalId, booking.id, arrBody);
               flags.arrivalInfo2Sent = true;
               didSend = true;
               sentCount++;
