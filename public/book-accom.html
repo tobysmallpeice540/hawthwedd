@@ -297,15 +297,15 @@ function propLetter(p) {
 }
 
 // ── Pricing ───────────────────────────────────────────────────────────────────
+// Seasons are stored in priority order, highest first (set with the ▲▼ buttons
+// in Settings → Properties). Where ranges overlap the one nearer the top of the
+// list wins, which is what scanning top-down and stopping at the first match
+// gives. Must stay identical to getPriceForNight/seasonForDate in App.jsx or
+// the price quoted here won't match the price shown in the office.
 function getPriceForNight(prop, dateStr) {
   if (!prop) return 0;
-  if (prop.seasons && prop.seasons.length) {
-    for (var i = 0; i < prop.seasons.length; i++) {
-      var s = prop.seasons[i];
-      if (s.startDate && s.endDate && dateStr >= s.startDate && dateStr < s.endDate)
-        return Number(s.ratePerNight) || 0;
-    }
-  }
+  var s = seasonForDate(prop, dateStr);
+  if (s) return Number(s.ratePerNight) || 0;
   return Number(prop.baseRate) || 0;
 }
 

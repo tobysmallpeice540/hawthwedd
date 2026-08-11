@@ -165,17 +165,42 @@ function takenSlots(ds) {
   return scheduledViewings().filter(v=>v.date===ds).map(v=>v.time);
 }
 
+// Entries in hbf_viewing_blocks_v1 are either kind:"block" (hide a slot) or
+// kind:"open" (make a normally-unavailable one bookable). Older records have no
+// kind and are treated as blocks.
+function blockEntries(ds) {
+  return data.blocks.filter(b => b.date === ds && (b.kind || "block") === "block");
+}
+function openEntries(ds) {
+  return data.blocks.filter(b => b.date === ds && b.kind === "open");
+}
+// An explicit opening overrides the usual weekday rule and a farm event on the
+// day. It never overrides a block or an already-taken slot — those would mean
+// double-booking.
+function dayOpened(ds) { return openEntries(ds).length > 0; }
+
 function dayBlocked(ds) {
-  if (data.blocks.some(b=>b.date===ds&&!b.slot)) return true;
-  if (data.bookings.some(b=>b.date===ds&&b.couple)) return true;
-  const taken = takenSlots(ds);
-  const bSlots = data.blocks.filter(b=>b.date===ds&&b.slot).map(b=>b.slot);
-  return SLOTS.every(s=>taken.includes(s)||bSlots.includes(s));
+  if (blockEntries(ds).some(b => !b.slot)) return true;
+  if (!dayOpened(ds) && data.bookings.some(b => b.date === ds && b.couple)) return true;
+  return SLOTS.every(s => !slotAvailable(ds, s));
 }
-function slotBlocked(ds, s) {
-  return data.blocks.some(b=>b.date===ds&&b.slot===s) ||
-         takenSlots(ds).includes(s);
+
+function slotAvailable(ds, s) {
+  if (takenSlots(ds).includes(s)) return false;
+  if (blockEntries(ds).some(b => !b.slot || b.slot === s)) return false;
+  const opens = openEntries(ds);
+  if (opens.length) {
+    // A whole-day opening offers every slot; a slot-specific one offers only that slot.
+    const allDayOpen = opens.some(o => !o.slot);
+    if (!allDayOpen && !opens.some(o => o.slot === s)) return false;
+    return true;
+  }
+  // No opening: fall back to the normal rules, which the caller has applied
+  // for the weekday and the farm-event check.
+  return !data.bookings.some(b => b.date === ds && b.couple);
 }
+
+function slotBlocked(ds, s) { return !slotAvailable(ds, s); }
 
 function renderCal() {
   const y=cur.getFullYear(), m=cur.getMonth();
@@ -193,7 +218,8 @@ function renderCal() {
     const dt=new Date(y,m,d);
     const ds=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
     const dow=dt.getDay();
-    const past=dt<minD, ok=OK_DAYS.includes(dow), blk=!past&&ok&&dayBlocked(ds);
+    const opened=dayOpened(ds);
+    const past=dt<minD, ok=OK_DAYS.includes(dow)||opened, blk=!past&&ok&&dayBlocked(ds);
     const b=document.createElement("button");
     b.textContent=d; b.className="day-btn"+(ds===selDate?" selected":"")+(blk?" blocked":"");
     b.disabled=past||!ok||blk;
