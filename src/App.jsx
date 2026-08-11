@@ -1121,6 +1121,62 @@ const DISCOUNT_CODES_STORAGE  = "hbf_discount_codes_v1";
 const EMAIL_TEMPLATES_STORAGE = "hbf_email_templates_v1";
 const SITE_URL = "https://hawthbushfarm.netlify.app";
 
+// Read back a sent email in full.
+//
+// The body is only recorded for emails sent from build 2026-08-04s onward —
+// earlier log rows hold the subject and recipient but no text, so say so
+// plainly rather than reconstructing it from the current template (which may
+// since have been edited, and whose tokens can no longer be filled).
+function EmailViewerModal({ email, onClose }) {
+  if (!email) return null;
+  const when = email.sentAt
+    ? new Date(email.sentAt).toLocaleString("en-GB", { weekday:"short", day:"numeric", month:"long", year:"numeric", hour:"2-digit", minute:"2-digit" })
+    : "—";
+  const text = email.body || "";
+  const html = email.bodyHtml || "";
+
+  return (
+    <div onClick={onClose}
+      style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{ background:"#fff", borderRadius:12, width:"min(720px, 100%)", maxHeight:"85vh", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(0,0,0,.3)" }}>
+        <div style={{ padding:"16px 22px", borderBottom:`1px solid ${T.border}` }}>
+          <div style={{ display:"flex", alignItems:"flex-start", gap:12 }}>
+            <h3 style={{ margin:0, fontSize:16, fontWeight:700, color:T.text, flex:1, lineHeight:1.4 }}>{email.subject || "(no subject)"}</h3>
+            <button onClick={onClose}
+              style={{ background:"none", border:"none", fontSize:22, lineHeight:1, color:T.textLight, cursor:"pointer", padding:0, fontFamily:"inherit" }}>×</button>
+          </div>
+          <div style={{ fontSize:12, color:T.textLight, marginTop:6, lineHeight:1.7 }}>
+            <div><strong style={{ color:T.textMid, fontWeight:600 }}>To</strong> {email.to || "—"}</div>
+            <div><strong style={{ color:T.textMid, fontWeight:600 }}>Sent</strong> {when}</div>
+            {(email.template || email.type) && (
+              <div><strong style={{ color:T.textMid, fontWeight:600 }}>Template</strong> {email.template || email.type}</div>
+            )}
+          </div>
+        </div>
+        <div style={{ padding:"18px 22px", overflowY:"auto", flex:1 }}>
+          {html ? (
+            <div style={{ fontSize:13.5, color:T.text, lineHeight:1.7 }} dangerouslySetInnerHTML={{ __html: html }}/>
+          ) : text ? (
+            <div style={{ fontFamily:"Georgia, serif", fontSize:14, color:T.text, lineHeight:1.75, whiteSpace:"pre-wrap" }}>{text}</div>
+          ) : (
+            <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"11px 14px", fontSize:12.5, color:"#92400e", lineHeight:1.65 }}>
+              The text of this one wasn't recorded — only emails sent from 11 August 2026 onward store their full body.
+              The subject, recipient and template above are everything that was kept.
+            </div>
+          )}
+        </div>
+        <div style={{ padding:"12px 22px", borderTop:`1px solid ${T.border}`, display:"flex", justifyContent:"flex-end" }}>
+          <button onClick={onClose}
+            style={{ padding:"8px 20px", border:`1px solid ${T.border}`, borderRadius:6, background:"#fff", color:T.textMid, fontFamily:"inherit", fontSize:13, cursor:"pointer" }}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Shows automated emails logged in hbf_email_log_v1 that relate to a specific
 // lettings booking (matched by bookingId) or a specific person (matched by
 // recipient email address — used for viewing confirm/decline emails, which
@@ -1128,6 +1184,7 @@ const SITE_URL = "https://hawthbushfarm.netlify.app";
 // Used on the accom booking page, and in the Contact sections of bookings/enquiries.
 function EmailHistoryPanel({ title, emptyLabel, bookingId, emails, typeFilter }) {
   const [log, setLog] = useState(null);
+  const [viewing, setViewing] = useState(null);
 
   useEffect(function() {
     let cancelled = false;
@@ -1159,20 +1216,27 @@ function EmailHistoryPanel({ title, emptyLabel, bookingId, emails, typeFilter })
         : (
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {matches.map(function(e) {
+              const hasBody = !!(e.body || e.bodyHtml);
               return (
-                <div key={e.id || (e.sentAt + e.subject)} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"9px 12px" }}>
+                <div key={e.id || (e.sentAt + e.subject)} onClick={function(){ setViewing(e); }}
+                  title="Click to read the full email"
+                  style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"9px 12px", cursor:"pointer" }}>
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
                     <span style={{ fontSize:13, fontWeight:600, color:T.text }}>{e.subject || "(no subject)"}</span>
                     <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap", flexShrink:0 }}>
                       {e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" }) : ""}
                     </span>
                   </div>
-                  <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>To {e.to || "—"}</div>
+                  <div style={{ fontSize:11, color:T.textLight, marginTop:2, display:"flex", justifyContent:"space-between", gap:8 }}>
+                    <span>To {e.to || "—"}</span>
+                    <span style={{ color:T.accent, fontWeight:600, flexShrink:0 }}>{hasBody ? "Read →" : "Details →"}</span>
+                  </div>
                 </div>
               );
             })}
           </div>
         )}
+      <EmailViewerModal email={viewing} onClose={function(){ setViewing(null); }}/>
     </div>
   );
 }
@@ -1534,7 +1598,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04q";
+const APP_BUILD = "2026-08-04s";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8428,6 +8492,7 @@ function computeStock(products, events) {
 function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
+  const [viewEmail, setViewEmail]         = useState(null);
   const [invoiceRecs, setInvoiceRecs]     = useState([]);
   const [xeroUnpaid, setXeroUnpaid]       = useState([]);
   const [xeroContactEvent, setXeroContactEvent] = useState({});
@@ -8772,13 +8837,15 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
           <div style={{ color:T.textLight, fontSize:13 }}>No emails logged yet. When the system sends automated emails (phase 2), they will appear here.</div>
         )}
         {emailLog.slice().reverse().slice(0,10).map(e=>(
-          <div key={e.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:`1px solid #f0f6ff`, fontSize:13 }}>
+          <div key={e.id} onClick={()=>setViewEmail(e)} title="Click to read the full email"
+            style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:`1px solid #f0f6ff`, fontSize:13, cursor:"pointer" }}>
             <span style={{ color:T.textLight, fontSize:11, flexShrink:0 }}>{e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : "—"}</span>
             <span style={{ fontWeight:600, color:T.text, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.subject||"(no subject)"}</span>
             <span style={{ color:T.textLight, fontSize:11 }}>{e.to||""}</span>
             {e.opened && <span style={{ fontSize:10, fontWeight:700, color:T.green, background:T.greenBg, padding:"1px 6px", borderRadius:6 }}>Opened</span>}
           </div>
         ))}
+        <EmailViewerModal email={viewEmail} onClose={()=>setViewEmail(null)}/>
       </div>
 
       <TodoBox/>
@@ -12064,6 +12131,80 @@ function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
 // ─── VIEWING REQUESTS INBOX ───────────────────────────────────────────────────
 const VIEWING_SLOTS = ["10:00","12:00","14:00","16:00","18:00"];
 
+// A viewing takes roughly an hour and a half door to door, so anything landing
+// within this many minutes of another one is worth flagging.
+const VIEWING_CLASH_MINS = 90;
+
+function minsOfDay(t) {
+  const m = String(t || "").match(/^(\d{1,2}):(\d{2})/);
+  return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
+}
+function minsApart(a, b) {
+  const x = minsOfDay(a), y = minsOfDay(b);
+  return (x === null || y === null) ? null : Math.abs(x - y);
+}
+
+// Everything already in the diary that a proposed slot bumps into.
+//
+// Deliberately advisory: when we ring a couple and agree 11:45 we need to be
+// able to write that down, even if it sits inside a block or on top of another
+// viewing. So this reports, and the caller decides — nothing here disables the
+// confirm button.
+function viewingConflicts(date, time, opts) {
+  if (!date || !time) return [];
+  const o = opts || {};
+  const out = [];
+  const near = function(other) {
+    const d = minsApart(time, other);
+    return d !== null && d < VIEWING_CLASH_MINS ? d : null;
+  };
+  const note = function(severity, text, mins) {
+    out.push({ severity: severity, text: text, mins: mins });
+  };
+
+  // Other confirmed website requests
+  (o.requests || []).forEach(function(r) {
+    if (!r || r.status !== "confirmed" || r.date !== date) return;
+    if (o.ignoreRequestId && r.id === o.ignoreRequestId) return;
+    const d = near(r.time);
+    if (d === null) return;
+    note(d === 0 ? "clash" : "near",
+      (d === 0 ? "Same slot as " : "Within " + d + " min of ") + (r.name || "another request") + " at " + r.time, d);
+  });
+
+  // Viewings written against bookings and enquiries
+  const fromRecords = function(list, labelKey, kindLabel) {
+    (list || []).forEach(function(rec) {
+      ((rec && rec.viewings) || []).forEach(function(v) {
+        if (!v || v.date !== date) return;
+        const d = near(v.time);
+        if (d === null) return;
+        note(d === 0 ? "clash" : "near",
+          (d === 0 ? "Same slot as " : "Within " + d + " min of ") +
+          (rec[labelKey] || kindLabel) + "'s viewing at " + (v.time || "?"), d);
+      });
+    });
+  };
+  fromRecords(o.bookings, "couple", "a booking");
+  fromRecords(o.enquiries, "name", "an enquiry");
+
+  // Blocked periods. "open" blocks do the opposite job, so they never conflict.
+  (o.blocks || []).forEach(function(b) {
+    if (!b || b.date !== date || (b.kind || "block") !== "block") return;
+    if (!b.slot) {
+      note("block", "That whole day is blocked" + (b.note ? " (" + b.note + ")" : ""), null);
+      return;
+    }
+    const d = near(b.slot);
+    if (d === null) return;
+    note("block", (d === 0 ? "That slot is blocked" : "Within " + d + " min of a blocked " + b.slot + " slot") +
+      (b.note ? " (" + b.note + ")" : ""), d);
+  });
+
+  out.sort(function(a, z) { return (a.mins === null ? -1 : a.mins) - (z.mins === null ? -1 : z.mins); });
+  return out;
+}
+
 function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, patchBooking, mode="requests", confirmedSlot=null }) {
   const [acting, setActing]         = useState(null);
   const [blockDate,   setBlockDate]   = useState("");
@@ -12464,23 +12605,50 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                     style={{ width:15, height:15, accentColor:T.amber, cursor:"pointer" }}/>
                   Suggest a different date or time
                 </label>
-                {amendOn && (
+                {amendOn && (() => {
+                  // Any date and any time is allowed here — this is the slot
+                  // we've agreed on the phone, not one the website offered.
+                  // Clashes are reported below but never block confirming.
+                  const conflicts = viewingConflicts(amendDate, amendTime, {
+                    requests: requests, bookings: bookings, enquiries: enquiries,
+                    blocks: blocks, ignoreRequestId: req.id
+                  });
+                  return (
                   <>
                     <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginTop:10 }}>
                       <input type="date" value={amendDate} onChange={e=>setAmendDate(e.target.value)}
                         style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
-                      <select value={amendTime} onChange={e=>setAmendTime(e.target.value)}
-                        style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}>
-                        <option value="">Time…</option>
-                        {VIEWING_SLOTS.map(sl=><option key={sl}>{sl}</option>)}
-                      </select>
+                      <input type="time" value={amendTime} onChange={e=>setAmendTime(e.target.value)} step="300"
+                        style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
+                      <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                        {VIEWING_SLOTS.map(sl=>(
+                          <button key={sl} type="button" onClick={()=>setAmendTime(sl)}
+                            style={{ background: amendTime===sl ? T.amber : "#fff", color: amendTime===sl ? "#fff" : T.textMid,
+                              border:`1px solid ${amendTime===sl ? T.amber : T.border}`, borderRadius:5, padding:"5px 8px",
+                              fontFamily:"inherit", fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                            {sl}
+                          </button>
+                        ))}
+                      </div>
                     </div>
+                    {conflicts.length > 0 && (
+                      <div style={{ background:"#fff7ed", border:"1px solid #fdba74", borderRadius:7, padding:"9px 12px", marginTop:10 }}>
+                        <div style={{ fontSize:12, fontWeight:700, color:"#9a3412", marginBottom:3 }}>
+                          Heads up — you can still confirm this
+                        </div>
+                        {conflicts.map((c,i)=>(
+                          <div key={i} style={{ fontSize:11.5, color:"#9a3412", lineHeight:1.6 }}>• {c.text}</div>
+                        ))}
+                      </div>
+                    )}
                     <div style={{ fontSize:11, color:T.textMid, marginTop:8, lineHeight:1.6 }}>
-                      They asked for {fmtDate(req.date)} at {req.time}. The email will explain that slot wasn't available
-                      and confirm the new one, and the diary will use the new time.
+                      They asked for {fmtDate(req.date)} at {req.time}. Any time can be set here, including one outside the
+                      usual slots. The email will explain that slot wasn't available and confirm the new one, and the diary
+                      will use the new time.
                     </div>
                   </>
-                )}
+                  );
+                })()}
               </div>
 
               <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
