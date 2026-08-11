@@ -161,6 +161,27 @@ exports.handler = async function(event) {
       });
     }
 
+    // ── Create (or adopt) the customer record on its own ─────────────────────
+    // Used by the "Create in Xero" button beside the Contact ID field, so the
+    // contact can be set up before any invoice exists. Searches first, so
+    // pressing it on an event whose customer is already in Xero links to the
+    // existing record rather than erroring on the unique-name rule.
+    if (body.action === "contact") {
+      const names = (body.contactNames || []).filter(Boolean);
+      if (!names.length) return jsonResponse(400, { error: "No contact name supplied" });
+      const r = await findOrCreateContact(accessToken, tenantId, {
+        names: names,
+        emails: body.emails || [],
+        createIfMissing: true
+      });
+      if (!r.contact) return jsonResponse(502, { error: "Xero did not return a contact" });
+      return jsonResponse(200, {
+        contactId: r.contact.ContactID,
+        contactName: r.contact.Name,
+        created: r.created
+      });
+    }
+
     if (body.action !== "push") {
       return jsonResponse(400, { error: "Unknown action" });
     }

@@ -56,8 +56,15 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body); }
   catch { return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "Invalid JSON" }) }; }
 
-  const { id, action } = body;
+  // action: "confirm" | "decline" | "amend"
+  //   amend = confirm the viewing, but at a date/time we've proposed instead of
+  //   the one requested. The stored request is updated so the diary and the
+  //   confirmation email both reflect what was actually agreed.
+  const { id, action, newDate, newTime } = body;
   if (!id || !action) return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "Missing id or action" }) };
+  if (action === "amend" && (!newDate || !newTime)) {
+    return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "amend needs newDate and newTime" }) };
+  }
 
   // Read existing requests
   const getRes = await fetch(
@@ -76,11 +83,20 @@ exports.handler = async (event) => {
   const req = requests.find(function(r) { return r.id === id; });
   if (!req) return { statusCode: 404, headers: cors, body: JSON.stringify({ error: "Request not found" }) };
 
-  // Update status
-  const newStatus = action === "confirm" ? "confirmed" : "declined";
+  // Update status (and the slot itself when amending)
+  const newStatus = (action === "confirm" || action === "amend") ? "confirmed" : "declined";
+  const origDate = req.date, origTime = req.time;
+  const patch = { status: newStatus };
+  if (action === "amend") {
+    patch.date = newDate;
+    patch.time = newTime;
+    patch.amendedFrom = { date: origDate, time: origTime };
+  }
   const updated = requests.map(function(r) {
-    return r.id === id ? Object.assign({}, r, { status: newStatus }) : r;
+    return r.id === id ? Object.assign({}, r, patch) : r;
   });
+  // Everything below should describe the AGREED slot, not the requested one.
+  if (action === "amend") { req.date = newDate; req.time = newTime; }
 
   const setRes = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
     method: "POST",
@@ -104,7 +120,22 @@ exports.handler = async (event) => {
 
   // Send email
   if (RESEND_KEY) {
-    const emailBody = action === "confirm"
+    const origDateObj  = new Date(origDate + "T00:00:00");
+    const origNiceDate = origDateObj.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+    const emailBody = action === "amend"
+      ? "<div style='font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#333'>" +
+        "<h2 style='color:#1e3a2f'>Viewing Confirmed &mdash; New Time</h2>" +
+        "<p>Dear " + req.name + ",</p>" +
+        "<p>Thank you for your interest in <strong>Hawthbush Farm</strong>. We weren't able to do " +
+        origNiceDate + " at " + origTime + ", so we've booked you in at the time below instead.</p>" +
+        "<div style='background:#f0f7f3;border-left:4px solid #1e3a2f;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0'>" +
+        "<p style='margin:0;font-size:18px;font-weight:600;color:#1e3a2f'>" + niceDate + "</p>" +
+        "<p style='margin:4px 0 0;font-size:16px;color:#2d5441'>" + req.time + "</p></div>" +
+        "<p>If that doesn't suit, just reply to this email and we'll find another time.</p>" +
+        "<p>Warm regards,<br><strong>The Hawthbush Farm Team</strong><br>" +
+        "<a href='mailto:" + FROM_EMAIL + "'>" + FROM_EMAIL + "</a></p></div>"
+      : action === "confirm"
       ? "<div style='font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#333'>" +
         "<h2 style='color:#1e3a2f'>Viewing Confirmed</h2>" +
         "<p>Dear " + req.name + ",</p>" +
@@ -122,7 +153,9 @@ exports.handler = async (event) => {
         "<p>Please get in touch at <a href='mailto:" + FROM_EMAIL + "'>" + FROM_EMAIL + "</a> to find an alternative.</p>" +
         "<p>Warm regards,<br><strong>The Hawthbush Farm Team</strong></p></div>";
 
-    const subject = action === "confirm"
+    const subject = action === "amend"
+      ? "Your Viewing at Hawthbush Farm - new time, " + niceDate + " at " + req.time
+      : action === "confirm"
       ? "Your Viewing at Hawthbush Farm - " + niceDate + " at " + req.time
       : "Your Viewing Request - Hawthbush Farm";
 
