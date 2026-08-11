@@ -311,6 +311,44 @@ const INITIAL_BOOKINGS = [
 ];
 
 const STAFFING_FIELDS = ["dayManager","dayStaff","barSupervisor","sunday","bar","dayHandy","eveHandy"];
+
+// ─── MINIMUM WAGE ────────────────────────────────────────────────────────────
+// Rates include rolled-up holiday pay, so they're compared directly against the
+// hourly rate recorded on each staff member. Editable on the Staff page because
+// they change every April.
+const MIN_WAGE_KEY = "hbf_min_wage_v1";
+const MIN_WAGE_DEFAULTS = { under18: 8.46, under21: 11.21, adult: 14.26 };
+
+// Age on a given date. Returns null when no date of birth is recorded, so the
+// caller can say "unknown" rather than silently assuming an adult rate.
+function ageOn(dob, onIso) {
+  if (!isValidEventDate(dob) || !isValidEventDate(onIso)) return null;
+  const b = dob.split("-").map(Number), d = onIso.split("-").map(Number);
+  let age = d[0] - b[0];
+  if (d[1] < b[1] || (d[1] === b[1] && d[2] < b[2])) age--;
+  return age;
+}
+
+function minWageFor(age, rates) {
+  const r = rates || MIN_WAGE_DEFAULTS;
+  if (age === null || age === undefined) return null;
+  if (age < 18) return Number(r.under18) || 0;
+  if (age < 21) return Number(r.under21) || 0;
+  return Number(r.adult) || 0;
+}
+
+function minWageBandLabel(age) {
+  if (age === null || age === undefined) return "unknown age";
+  if (age < 18) return "under 18";
+  if (age < 21) return "18-20";
+  return "21+";
+}
+
+// Hourly rate as a number, from free text like "£15 incl Roll Up".
+function staffHourlyRate(st) {
+  const n = parseFloat(String((st && st.rate) || "").replace(/[^0-9.]/g, ""));
+  return isNaN(n) ? null : n;
+}
 const STAFFING_LABELS = { dayManager:"Day Manager", dayStaff:"Day Staff", barSupervisor:"Bar Supervisor", sunday:"Sunday", bar:"Bar", dayHandy:"Day Handy", eveHandy:"Eve Handy" };
 
 const BOOKING_STORAGE = "hawthbush_bookings_v6";
@@ -618,8 +656,17 @@ function computeEventInvoiceStages(ev, accomBookings) {
   });
   // Deposit already invoiced at stage 1 is credited back on stage 2. Negative
   // unit amount (quantity stays 1 — Xero rejects negative quantities).
+  // The deposit is credited across BOTH remaining invoices rather than all
+  // against the second, so stages 2 and 3 each come to half of the balance
+  // owing: (venue + accom + extras − deposit) / 2. Taking it all off the second
+  // invoice made that one noticeably smaller than the final one.
+  // Any odd penny goes on stage 3 so the three stages still sum exactly to the
+  // full amount.
   if (deposit > 0) {
-    stage2Lines.push({ desc: "Less deposit paid — " + suffix, account: XERO_ACCOUNT_EVENTS, amount: -deposit });
+    var depHalf = round2(deposit / 2);
+    var depRest = round2(deposit - depHalf);
+    stage2Lines.push({ desc: "Less deposit paid (50%) — " + suffix, account: XERO_ACCOUNT_EVENTS, amount: -depHalf });
+    stage3Lines.push({ desc: "Less deposit paid (50%) — " + suffix, account: XERO_ACCOUNT_EVENTS, amount: -depRest });
   }
 
   function stage(n, lines) {
@@ -1311,18 +1358,35 @@ function calcAirbnbEstimate(b, prop) {
   return Math.round(rate * nights * 0.9 * 100) / 100;
 }
 
+// The season that applies on a given date.
+//
+// PRIORITY: seasons are held in priority order, highest first. Where two
+// overlap, the one nearer the top of the list wins — so a narrow exception
+// (bank holiday weekend, wedding weekend) sits above the broad season it
+// carves out of. Scanning top-down and stopping at the first match gives
+// exactly that. The ▲▼ buttons in Settings → Properties set the order, and
+// book-accom.html applies the same rule so quotes match.
+function seasonForDate(prop, dateStr) {
+  if (!prop || !prop.seasons) return null;
+  for (let i = 0; i < prop.seasons.length; i++) {
+    const s = prop.seasons[i];
+    if (s.startDate && s.endDate && dateStr >= s.startDate && dateStr < s.endDate) return s;
+  }
+  return null;
+}
+
 // Return nightly rate for a property on a given ISO date, checking seasons first.
 function getPriceForNight(prop, dateStr) {
   if (!prop) return 0;
-  if (prop.seasons && prop.seasons.length) {
-    for (let i = 0; i < prop.seasons.length; i++) {
-      const s = prop.seasons[i];
-      if (s.startDate && s.endDate && dateStr >= s.startDate && dateStr < s.endDate) {
-        return Number(s.ratePerNight) || 0;
-      }
-    }
-  }
+  const s = seasonForDate(prop, dateStr);
+  if (s) return Number(s.ratePerNight) || 0;
   return Number(prop.baseRate) || 0;
+}
+
+// Do two seasons cover any of the same nights? End dates are exclusive.
+function seasonsOverlap(a, b) {
+  if (!a || !b || !a.startDate || !a.endDate || !b.startDate || !b.endDate) return false;
+  return a.startDate < b.endDate && b.startDate < a.endDate;
 }
 
 // Quote a stay: walk each night, sum rates, apply long-stay discount.
@@ -1470,7 +1534,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04j";
+const APP_BUILD = "2026-08-04q";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2905,6 +2969,19 @@ function PropertyEditor({ properties, setProperties, onSave }) {
       })
     ));
 
+  // Reorder: index 0 is the highest priority, so "up" means "wins over more".
+  const moveSeason = (pid, si, dir) =>
+    setProperties(ps => ps.map(p => {
+      if (p.id !== pid) return p;
+      const list = (p.seasons || []).slice();
+      const to = si + dir;
+      if (to < 0 || to >= list.length) return p;
+      const moved = list[si];
+      list[si] = list[to];
+      list[to] = moved;
+      return Object.assign({}, p, { seasons: list });
+    }));
+
   const rmSeason = (pid, si) =>
     setProperties(ps => ps.map(p =>
       p.id !== pid ? p : Object.assign({}, p, {
@@ -2967,10 +3044,36 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                 </div>
 
                 {/* ── Seasons ── */}
-                <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:8 }}>Seasons (override base rate for date ranges)</div>
-                {p.seasons && p.seasons.map((s, si) => (
+                <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:4 }}>Seasons (override base rate for date ranges)</div>
+                {p.seasons && p.seasons.length > 1 && (
+                  <div style={{ fontSize:11, color:T.textMid, background:"#f4f8fd", border:`1px solid ${T.border}`,
+                    borderRadius:6, padding:"6px 10px", marginBottom:10, lineHeight:1.6 }}>
+                    Listed in priority order. Where two seasons cover the same night, <strong>the one nearer the top wins</strong> —
+                    so put narrow exceptions (a bank holiday, a wedding weekend) above the broad season they sit inside.
+                    Use ▲▼ to reorder.
+                  </div>
+                )}
+                {p.seasons && p.seasons.map((s, si) => {
+                  const clashes = (p.seasons || []).filter((o, oi) => oi !== si && seasonsOverlap(s, o));
+                  const beaten  = (p.seasons || []).filter((o, oi) => oi < si && seasonsOverlap(s, o));
+                  return (
                   <div key={si} style={{ marginBottom:12, paddingBottom:12, borderBottom: si < p.seasons.length-1 ? `1px dashed ${T.border}` : "none" }}>
-                    <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr auto", gap:8, alignItems:"end" }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"auto 2fr 1fr 1fr 1fr auto", gap:8, alignItems:"end" }}>
+                      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+                        {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>Order</span>}
+                        <div style={{ display:"flex", alignItems:"center", gap:3, height:36 }}>
+                          <span title="Priority — 1 is applied first and beats the rest"
+                            style={{ fontSize:11, fontWeight:700, color:T.textLight, width:12, textAlign:"right" }}>{si+1}</span>
+                          <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+                            <button onClick={() => moveSeason(p.id, si, -1)} disabled={si === 0} title="Move up — wins over more seasons"
+                              style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:4, width:20, height:16, lineHeight:1,
+                                fontSize:9, color: si === 0 ? "#cfcabf" : T.textMid, cursor: si === 0 ? "default" : "pointer", padding:0, fontFamily:"inherit" }}>▲</button>
+                            <button onClick={() => moveSeason(p.id, si, 1)} disabled={si === p.seasons.length-1} title="Move down — beaten by more seasons"
+                              style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:4, width:20, height:16, lineHeight:1,
+                                fontSize:9, color: si === p.seasons.length-1 ? "#cfcabf" : T.textMid, cursor: si === p.seasons.length-1 ? "default" : "pointer", padding:0, fontFamily:"inherit" }}>▼</button>
+                          </div>
+                        </div>
+                      </div>
                       <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
                         {si === 0 && <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>Label</span>}
                         <input value={s.label || ""} onChange={e => updSeason(p.id, si, "label", e.target.value)} style={inpStyle} placeholder="e.g. Peak summer" />
@@ -2992,6 +3095,14 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                         Remove
                       </button>
                     </div>
+                    {clashes.length > 0 && (
+                      <div style={{ fontSize:11, marginTop:6, paddingLeft:2, lineHeight:1.6,
+                        color: beaten.length ? "#92400e" : T.textLight }}>
+                        {beaten.length
+                          ? "Overlaps " + beaten.map(o => "“" + (o.label || "unnamed") + "”").join(", ") + " above it — those rates win on the shared nights."
+                          : "Overlaps " + clashes.map(o => "“" + (o.label || "unnamed") + "”").join(", ") + " below it — this rate wins on the shared nights."}
+                      </div>
+                    )}
                     <div style={{ display:"flex", gap:24, marginTop:8, paddingLeft:2 }}>
                       <DayToggles compact label="Check-in days override" value={s.checkInDays}
                         onChange={(v)=>updSeason(p.id, si, "checkInDays", v)} />
@@ -2999,7 +3110,8 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                         onChange={(v)=>updSeason(p.id, si, "checkOutDays", v)} />
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 <button onClick={() => addSeason(p.id)}
                   style={{ background:"none", border:`1.5px dashed ${T.border}`, color:T.accent, borderRadius:7, padding:"6px 16px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, marginBottom:20 }}>
                   + Add season
@@ -4618,7 +4730,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
     setView("form");
   };
 
-  const emptyStaff = ()=>({ id:"", name:"", email:"", phone:"", rate:"", role:"Bar Staff", active:true, notes:"" });
+  const emptyStaff = ()=>({ id:"", name:"", email:"", phone:"", rate:"", dob:"", role:"Bar Staff", active:true, notes:"" });
   const handleNewStaff    = ()=>{ setStaffForm(emptyStaff()); setEditStaffId(null); };
   const handleEditStaff   = id=>{ const s=staff.find(x=>x.id===id); setStaffForm({...s}); setEditStaffId(id); };
   // Strip a person out of every rota they're assigned to — but leave them on
@@ -4947,7 +5059,8 @@ function classifyEventRow(b, today) {
 // ─── INVOICE WORKLIST ─────────────────────────────────────────────────────────
 // Pushes one stage of one event to Xero. Kept at module scope; takes the token
 // getter so it can reuse the existing sessionStorage/refresh flow.
-async function pushInvoiceToXero(ev, stageObj, accomBookings) {
+// A valid token that is guaranteed to carry a tenant_id.
+async function xeroTokenWithTenant() {
   const token = await xeroGetValidToken();
   if (!token) throw new Error("Not connected to Xero — connect it in the header first.");
 
@@ -4961,6 +5074,36 @@ async function pushInvoiceToXero(ev, stageObj, accomBookings) {
     token.tenant_id = tenants[0].tenantId;
     xeroSetToken(token);
   }
+  return token;
+}
+
+// Look the customer up in Xero by the "YY-MM Couple Name" convention and
+// create it if it isn't there. Returns the ContactID either way, so pressing
+// the button on an event whose customer already exists simply adopts it.
+async function xeroFindOrCreateContact(ev) {
+  const token = await xeroTokenWithTenant();
+  const emails = parseInvoiceEmails(ev);
+  if (!emails.length && (ev.email || "").trim()) emails.push(ev.email.trim());
+
+  const res = await fetch("/.netlify/functions/xero-invoice", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "contact",
+      accessToken: token.access_token,
+      tenantId: token.tenant_id,
+      themeName: XERO_BRANDING_THEME,
+      contactNames: [xeroContactName(ev), xeroContactNameLegacy(ev)],
+      emails: emails
+    })
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || "Could not create the contact");
+  return data;
+}
+
+async function pushInvoiceToXero(ev, stageObj, accomBookings) {
+  const token = await xeroTokenWithTenant();
 
   const emails = parseInvoiceEmails(ev);
   if (!emails.length && (ev.email || "").trim()) emails.push(ev.email.trim());
@@ -6237,6 +6380,18 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
           {note.text}
         </div>
       )}
+      {/* Say plainly why Generate is unavailable — a greyed button with the
+          reason hidden in a tooltip left it looking broken. */}
+      {preCutover ? (
+        <div style={{ background:"#f4f6f9", border:`1px solid ${T.border}`, borderRadius:7, padding:"8px 12px", marginBottom:10, fontSize:12, color:T.textMid, lineHeight:1.55 }}>
+          {(formData.date||"").slice(0,4)} events were invoiced by hand, so nothing is generated here.
+          Invoicing from the app starts with {INVOICE_FIRST_EVENT_YEAR} events.
+        </div>
+      ) : blockers.length ? (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"8px 12px", marginBottom:10, fontSize:12, color:"#92400e", lineHeight:1.6 }}>
+          <strong>Can't generate invoices yet</strong> — {blockers.join(", ").toLowerCase()}.
+        </div>
+      ) : null}
       {stages.map(function(st) {
         const linked = findPushedInvoice(invoiceRecords, formData.id, st.stage);
         const drifted = linked && linked.fingerprint !== invoiceLinesFingerprint(st.lines);
@@ -6293,6 +6448,80 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
 
 // Warns — never blocks — when an event's dates overlap another event.
 // Module scope so it isn't redefined on every FormView render.
+// ─── XERO CONTACT ID + CREATE BUTTON ──────────────────────────────────────────
+// The ID can still be pasted by hand, but "Create in Xero" is the normal route:
+// it searches for "YY-MM Couple Name", creates the customer if it isn't found,
+// and writes the returned ID straight into the field (which autosaves).
+function XeroContactField({ formData, update }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+
+  const id = (formData.xeroContactId || "").trim();
+  const wanted = xeroContactName(formData);
+  const emails = parseInvoiceEmails(formData).concat((formData.email || "").trim() ? [formData.email.trim()] : []);
+  const stop =
+    !(formData.couple || "").trim() ? "Add the event name first" :
+    !isValidEventDate(formData.date) ? "Set a valid event date first" :
+    !emails.length ? "Add an invoice email first" : null;
+  const canCreate = !id && !stop && !busy;
+
+  async function create() {
+    setBusy(true); setNote(null);
+    try {
+      const r = await xeroFindOrCreateContact(formData);
+      update("xeroContactId", r.contactId);
+      setNote({ kind:"ok", text: (r.created ? "Created " : "Linked to existing customer ") + '"' + r.contactName + '" in Xero.' });
+    } catch (e) {
+      setNote({ kind:"error", text: String(e.message || e) });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <FLabel>Xero Contact ID <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>— created automatically, or paste the UUID from the customer URL in Xero</span></FLabel>
+      <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        <div style={{ flex:1, minWidth:220 }}>
+          <FInput type="text" value={formData.xeroContactId||""} onChange={v=>update("xeroContactId",v)} placeholder="e.g. 959587a8-1369-474b-a13e-1eb3a819fd02"/>
+        </div>
+        {id ? (
+          <>
+            <a href={`https://go.xero.com/app/!qhzr2/contacts/contact/${id}/activity/invoices?pageNumber=1&pageSize=25&searchTerm=&sortByDirection=DESC&sortByField=AmountDue&startDate=&endDate=&status=&searchDateBy=any&includeDeletedAndVoid=false`}
+              target="_blank" rel="noreferrer"
+              style={{ background:"#13B5EA", color:"#fff", borderRadius:6, padding:"8px 14px", fontSize:13, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
+              Open in Xero ↗
+            </a>
+            <button type="button" onClick={function(){ update("xeroContactId",""); setNote(null); }}
+              title="Clear the ID so a different customer can be linked or created"
+              style={{ background:"none", border:`1px solid ${T.border}`, color:T.textLight, borderRadius:6, padding:"7px 12px", fontFamily:"inherit", fontSize:12, cursor:"pointer", flexShrink:0 }}>
+              Unlink
+            </button>
+          </>
+        ) : (
+          <button type="button" onClick={create} disabled={!canCreate}
+            title={stop || ("Find or create “" + wanted + "” in Xero")}
+            style={{ background: canCreate ? "#13B5EA" : "#c7c2b8", color:"#fff", border:"none", borderRadius:6,
+              padding:"8px 14px", fontSize:13, fontWeight:700, fontFamily:"inherit", whiteSpace:"nowrap", flexShrink:0,
+              cursor: canCreate ? "pointer" : "not-allowed" }}>
+            {busy ? "Creating…" : "Create in Xero"}
+          </button>
+        )}
+      </div>
+      {note && (
+        <p style={{ fontSize:12, margin:"7px 0 0", lineHeight:1.5,
+          color: note.kind==="ok" ? T.green : T.red }}>{note.text}</p>
+      )}
+      {!id && !note && (
+        <p style={{ fontSize:11, color:T.textLight, margin:"6px 0 0", lineHeight:1.6 }}>
+          {stop
+            ? stop + " — then the customer can be created here."
+            : <>Will be created as <strong style={{ color:T.textMid }}>{wanted}</strong>, billed to {emails.join(", ")}. If a customer of that name already exists it will be linked instead.</>}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function EventClashWarning({ bookings, formData }) {
   if (!formData || !isValidEventDate(formData.date)) return null;
   var clashes = overlappingEvents(bookings, formData.date, formData.endDate, formData.id);
@@ -6587,26 +6816,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   </p>
                 </div>
                 <InvoiceSchedulePanel formData={formData} accomBookings={accomBookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={onSaveInvoiceRecords}/>
-                <div>
-                  <FLabel>Xero Contact ID <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>— paste the UUID from the customer URL in Xero</span></FLabel>
-                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                    <div style={{ flex:1 }}>
-                      <FInput type="text" value={formData.xeroContactId||""} onChange={v=>update("xeroContactId",v)} placeholder="e.g. 959587a8-1369-474b-a13e-1eb3a819fd02"/>
-                    </div>
-                    {formData.xeroContactId && formData.xeroContactId.trim() && (
-                      <a href={`https://go.xero.com/app/!qhzr2/contacts/contact/${formData.xeroContactId.trim()}/activity/invoices?pageNumber=1&pageSize=25&searchTerm=&sortByDirection=DESC&sortByField=AmountDue&startDate=&endDate=&status=&searchDateBy=any&includeDeletedAndVoid=false`}
-                        target="_blank" rel="noreferrer"
-                        style={{ background:"#13B5EA", color:"#fff", borderRadius:6, padding:"8px 14px", fontSize:13, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
-                        Open in Xero ↗
-                      </a>
-                    )}
-                  </div>
-                  {!formData.xeroContactId && (
-                    <p style={{ fontSize:11, color:T.textLight, margin:"6px 0 0" }}>
-                      To find the ID: open the customer in Xero → copy the UUID from the URL (the part after /contact/)
-                    </p>
-                  )}
-                </div>
+                <XeroContactField formData={formData} update={update}/>
                 {formData.xeroContactId && formData.xeroContactId.trim() && (
                   <XeroInvoicesPanel contactId={formData.xeroContactId.trim()} xeroToken={xeroToken}/>
                 )}
@@ -6720,6 +6930,21 @@ const ROLES = ["Day Manager","Bar Supervisor","Bar Staff","Handy","Other"];
 function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNew, onEdit, onDelete, onSubmit, onCancel, onPurgeOrphan }) {
   const updateForm = (k,v) => setStaffForm(f=>({...f,[k]:v}));
   const [purging, setPurging] = useState(null);
+  const [wages, setWages]     = useState(MIN_WAGE_DEFAULTS);
+  const [wageSaved, setWageSaved] = useState(false);
+
+  useEffect(function() {
+    (async function() {
+      try { setWages(Object.assign({}, MIN_WAGE_DEFAULTS, (await sbGet(MIN_WAGE_KEY)) || {})); }
+      catch (e) { setWages(MIN_WAGE_DEFAULTS); }
+    })();
+  }, []);
+
+  async function saveWages(next) {
+    setWages(next);
+    try { await sbSet(MIN_WAGE_KEY, next); setWageSaved(true); setTimeout(function(){ setWageSaved(false); }, 1500); }
+    catch (e) { console.error(e); }
+  }
 
   // Initials still sitting on rotas for people who are no longer in the staff
   // list. These can't be removed through the normal UI because there is no
@@ -6748,6 +6973,31 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:22 }}>
         <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Staff Database</h2>
         <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>+ Add Staff Member</button>
+      </div>
+
+      {/* Minimum wage bands — include rolled-up holiday pay, and change each April */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Minimum wage (incl. holiday)</span>
+          {wageSaved && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>Saved</span>}
+          <span style={{ fontSize:11, color:T.textLight, marginLeft:"auto" }}>Used to flag underpaid staff on the Hours Worked report.</span>
+        </div>
+        <div style={{ display:"flex", gap:18, flexWrap:"wrap" }}>
+          {[["under18","Under 18"],["under21","18 to 20"],["adult","21 and over"]].map(function(pair) {
+            return (
+              <div key={pair[0]}>
+                <FLabel>{pair[1]}</FLabel>
+                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={{ fontSize:14, color:T.textMid }}>£</span>
+                  <input type="number" step="0.01" min="0" value={wages[pair[0]]}
+                    onChange={function(e){ saveWages(Object.assign({}, wages, { [pair[0]]: e.target.value === "" ? "" : Number(e.target.value) })); }}
+                    style={{ width:90, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 10px", outline:"none" }}/>
+                  <span style={{ fontSize:12, color:T.textLight }}>/hr</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* People deleted before rota cleanup existed — still stuck on rotas */}
@@ -6794,6 +7044,12 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
                 <FInput value={staffForm[k]} onChange={v=>updateForm(k,v)} placeholder={hint||""}/>
               </div>
             ))}
+            <div>
+              <FLabel>Date of Birth</FLabel>
+              <input type="date" value={staffForm.dob||""} onChange={e=>updateForm("dob",e.target.value)}
+                style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}/>
+              <div style={{ fontSize:10, color:T.textLight, marginTop:3 }}>Used to check pay against minimum wage.</div>
+            </div>
             <div>
               <FLabel>Role</FLabel>
               <select value={staffForm.role||"Bar Staff"} onChange={e=>updateForm("role",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
@@ -7737,7 +7993,27 @@ function HoursReport({ bookings, staff }) {
   const monthLabel = m => new Date(m+"-01").toLocaleDateString("en-GB",{month:"short",year:"numeric"});
 
   const [textMode, setTextMode] = useState(false);
+  const [payrollMode, setPayrollMode] = useState(false);
   const [copied, setCopied]     = useState(false);
+  const [wages, setWages]       = useState(MIN_WAGE_DEFAULTS);
+
+  useEffect(function() {
+    (async function() {
+      try { setWages(Object.assign({}, MIN_WAGE_DEFAULTS, (await sbGet(MIN_WAGE_KEY)) || {})); }
+      catch (e) { setWages(MIN_WAGE_DEFAULTS); }
+    })();
+  }, []);
+
+  // Anyone paid below the minimum for their age. Age is taken at the END of the
+  // period, which is the stricter test — someone who turns 21 mid-period must be
+  // on the higher rate from their birthday.
+  const underpaid = sortedStaff.map(function(st) {
+    const rate = staffHourlyRate(st);
+    const age  = ageOn(st.dob, to);
+    const min  = minWageFor(age, wages);
+    return { st: st, rate: rate, age: age, min: min,
+             short: (rate !== null && min !== null && rate < min - 0.001) };
+  }).filter(function(r) { return r.short || (r.rate !== null && r.age === null); });
 
   const reportText = buildHoursReportText({
     from: from, to: to, filtered: filtered, sortedStaff: sortedStaff,
@@ -7756,6 +8032,80 @@ function HoursReport({ bookings, staff }) {
       if (el) { el.select(); }
     }
   };
+
+  // ── Payroll: period, then one line per person. Deliberately no totals and no
+  // event breakdown — this is the list that gets handed to payroll, nothing more.
+  const payrollRows = sortedStaff.map(function(st) {
+    return { name: st.name, rate: staffHourlyRate(st), rateText: st.rate || "", hours: totals[st.id] || 0 };
+  }).filter(function(r) { return r.hours > 0; });
+
+  const payrollText = (function() {
+    function pad(x, n) { x = String(x); return x.length >= n ? x : x + " ".repeat(n - x.length); }
+    function padL(x, n) { x = String(x); return x.length >= n ? x : " ".repeat(n - x.length) + x; }
+    var L = ["PAYROLL", fmtDate(from) + "  to  " + fmtDate(to), "",
+             pad("Name", 26) + pad("Rate", 12) + padL("Hours", 8), "-".repeat(46)];
+    payrollRows.forEach(function(r) {
+      L.push(pad(r.name, 26) + pad(r.rate !== null ? "£" + r.rate.toFixed(2) : (r.rateText || "—"), 12) + padL(r.hours + "h", 8));
+    });
+    return L.join("\n");
+  })();
+
+  if (payrollMode) {
+    return (
+      <div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14, gap:10, flexWrap:"wrap" }}>
+          <button onClick={()=>setPayrollMode(false)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>&#8592; Back to report</button>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={function(){
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(payrollText).then(function(){ setCopied(true); setTimeout(function(){ setCopied(false); }, 2000); });
+                } else { const el=document.getElementById("payroll-text"); if(el) el.select(); }
+              }}
+              style={{ background:copied?T.greenBg:T.midBlueBg, border:`1px solid ${copied?"#86efac":T.border}`, color:copied?T.green:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button onClick={()=>window.print()} style={{ background:T.midBlue, border:"none", color:"#fff", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Print</button>
+          </div>
+        </div>
+
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ padding:"16px 20px", borderBottom:`1px solid ${T.border}`, background:"#eef4fd" }}>
+            <div style={{ fontSize:16, fontWeight:800, color:T.midBlue }}>Payroll</div>
+            <div style={{ fontSize:13, color:T.textMid, marginTop:2 }}>{fmtDate(from)} to {fmtDate(to)}</div>
+          </div>
+          {payrollRows.length === 0 ? (
+            <div style={{ padding:"20px", fontSize:13, color:T.textLight }}>No hours logged in this period.</div>
+          ) : (
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead>
+                <tr style={{ background:"#f5f9ff" }}>
+                  {["Name","Pay rate","Hours worked"].map(function(h,i){
+                    return <th key={h} style={{ padding:"10px 20px", textAlign: i===2?"right":"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>;
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {payrollRows.map(function(r,i){
+                  return (
+                    <tr key={r.name+i} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
+                      <td style={{ padding:"10px 20px", fontSize:14, fontWeight:600, color:T.text }}>{r.name}</td>
+                      <td style={{ padding:"10px 20px", fontSize:14, color:T.textMid }}>{r.rate !== null ? "£" + r.rate.toFixed(2) : (r.rateText || "—")}</td>
+                      <td style={{ padding:"10px 20px", fontSize:14, fontWeight:700, color:T.text, textAlign:"right" }}>{r.hours}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <textarea id="payroll-text" readOnly value={payrollText} onFocus={e=>e.target.select()}
+          style={{ width:"100%", minHeight:170, marginTop:14, background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8,
+            padding:"14px 18px", fontSize:13, fontFamily:"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+            lineHeight:1.6, color:T.text, resize:"vertical", outline:"none", whiteSpace:"pre" }}/>
+      </div>
+    );
+  }
 
   if (textMode) {
     return (
@@ -7780,6 +8130,7 @@ function HoursReport({ bookings, staff }) {
     <div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
         <button onClick={()=>setTextMode(true)} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Plain text version</button>
+        <button onClick={()=>setPayrollMode(true)} style={{ marginLeft:8, background:T.midBlue, border:"none", color:"#fff", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Payroll</button>
       </div>
       {/* Date range controls */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
@@ -7811,6 +8162,33 @@ function HoursReport({ bookings, staff }) {
         </div>
       ) : (
         <>
+          {/* Minimum wage check — sits above the summary so it can't be missed */}
+          {underpaid.length > 0 && (
+            <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:10, padding:"14px 18px", marginBottom:20 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:"#dc2626", marginBottom:6 }}>
+                Minimum wage check
+              </div>
+              {underpaid.map(function(r) {
+                if (r.age === null) {
+                  return (
+                    <div key={r.st.id} style={{ fontSize:12, color:"#92400e", lineHeight:1.8 }}>
+                      <strong>{r.st.name}</strong> — no date of birth recorded, so their pay can't be checked.
+                    </div>
+                  );
+                }
+                return (
+                  <div key={r.st.id} style={{ fontSize:12, color:"#dc2626", lineHeight:1.8 }}>
+                    <strong>{r.st.name}</strong> is on £{r.rate.toFixed(2)}/hr but the minimum for {minWageBandLabel(r.age)} is
+                    £{r.min.toFixed(2)} — short by £{(r.min - r.rate).toFixed(2)}/hr.
+                  </div>
+                );
+              })}
+              <div style={{ fontSize:11, color:"#b45309", marginTop:6, lineHeight:1.6 }}>
+                Age taken at {fmtDate(to)}. Rates include rolled-up holiday pay and are set on the Staff page.
+              </div>
+            </div>
+          )}
+
           {/* Summary stat cards */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:24 }}>
             <StatCard label="Total Hours" value={`${grandTotal.toLocaleString()}h`} sub={`Across ${filtered.length} events`}/>
@@ -11692,9 +12070,15 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   const [blockDateTo, setBlockDateTo] = useState("");
   const [blockSlot,   setBlockSlot]   = useState("");
   const [blockNote,   setBlockNote]   = useState("");
+  // "block" hides a slot; "open" makes a normally-unavailable one bookable.
+  const [blockKind,   setBlockKind]   = useState("block");
   const [flash, setFlash]           = useState(null);
   // Confirm modal state
   const [confirmModal, setConfirmModal]   = useState(null); // { req } or null
+  // A proposed alternative slot, when confirming at a different time to the one asked for.
+  const [amendOn,   setAmendOn]   = useState(false);
+  const [amendDate, setAmendDate] = useState("");
+  const [amendTime, setAmendTime] = useState("");
   const [enqMode, setEnqMode]             = useState("new");  // "new" | "existing" | "booking"
   const [enqSearch, setEnqSearch]         = useState("");
   const [selectedEnqId, setSelectedEnqId] = useState("");
@@ -11743,27 +12127,43 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
     showFlash("Request deleted", T.textMid);
   };
 
-  const handleAction = async (req, action, mode, existingEnqId, declineMsg) => {
+  // `amend` = confirm, but at a time we propose rather than the one requested.
+  // The agreed slot replaces the requested one everywhere: the stored request,
+  // the diary entry and the confirmation email.
+  const handleAction = async (req, action, mode, existingEnqId, declineMsg, amended) => {
     setActing(req.id);
+    const isAmend = action === "amend";
+    const agreed = isAmend && amended
+      ? { date: amended.date, time: amended.time }
+      : { date: req.date, time: req.time };
     try {
       // Send email via Netlify function
       const res = await fetch("/.netlify/functions/handle-viewing", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ id: req.id, action, declineReason: declineMsg||"" }),
+        body: JSON.stringify({ id: req.id, action, declineReason: declineMsg||"",
+          newDate: isAmend ? agreed.date : undefined, newTime: isAmend ? agreed.time : undefined }),
       });
       if (!res.ok) throw new Error("Function failed");
 
       // Update request status
-      const updatedRequests = requests.map(r => r.id===req.id ? {...r, status: action==="confirm"?"confirmed":"declined"} : r);
+      const updatedRequests = requests.map(r => r.id===req.id
+        ? Object.assign({}, r, {
+            status: (action==="confirm"||isAmend) ? "confirmed" : "declined",
+            date: agreed.date, time: agreed.time,
+            amendedFrom: isAmend ? { date: req.date, time: req.time } : r.amendedFrom
+          })
+        : r);
       await saveRequests(updatedRequests);
 
-      if (action === "confirm") {
+      if (action === "confirm" || isAmend) {
         const newViewing = {
           id: `v_${Date.now()}`,
-          date: req.date,
-          time: req.time,
-          notes: ("Confirmed from website request. " + (req.notes||"")).trim(),
+          date: agreed.date,
+          time: agreed.time,
+          notes: ((isAmend
+            ? "Confirmed from website request at a new time (requested " + req.date + " " + req.time + "). "
+            : "Confirmed from website request. ") + (req.notes||"")).trim(),
           outcome: "pending",
         };
 
@@ -11828,16 +12228,18 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
       const end = new Date(blockDateTo + "T00:00:00");
       while (cur <= end) {
         const ds = cur.toISOString().slice(0,10);
-        newBlocks.push({ id:`blk_${Date.now()}_${ds}`, date:ds, slot:blockSlot||null, note:blockNote||"", addedAt:new Date().toISOString() });
+        newBlocks.push({ id:`blk_${Date.now()}_${ds}`, date:ds, slot:blockSlot||null, note:blockNote||"", kind:blockKind, addedAt:new Date().toISOString() });
         cur.setDate(cur.getDate()+1);
       }
     } else {
-      newBlocks.push({ id:`blk_${Date.now()}`, date:blockDate, slot:blockSlot||null, note:blockNote||"", addedAt:new Date().toISOString() });
+      newBlocks.push({ id:`blk_${Date.now()}`, date:blockDate, slot:blockSlot||null, note:blockNote||"", kind:blockKind, addedAt:new Date().toISOString() });
     }
     const updated = [...blocks, ...newBlocks];
     await saveBlocks(updated);
     setBlockDate(""); setBlockDateTo(""); setBlockSlot(""); setBlockNote("");
-    showFlash(newBlocks.length > 1 ? "Blocked " + newBlocks.length + " days" : "Block added");
+    showFlash(newBlocks.length > 1
+      ? (blockKind === "open" ? "Opened " : "Blocked ") + newBlocks.length + " days"
+      : (blockKind === "open" ? "Opening added" : "Block added"));
   };
 
   const removeBlock = async (id) => {
@@ -12051,16 +12453,52 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                   A new enquiry will be created for <strong>{req.name}</strong> with this viewing attached.
                 </div>
               )}
+              {/* Confirm at a different time to the one requested */}
+              <div style={{ border:`1px solid ${amendOn?T.amber:T.border}`, background: amendOn?T.amberBg:"#fff", borderRadius:8, padding:"11px 14px", marginBottom:16 }}>
+                <label style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer", fontSize:13, fontWeight:600, color:T.text }}>
+                  <input type="checkbox" checked={amendOn}
+                    onChange={e=>{
+                      setAmendOn(e.target.checked);
+                      if (e.target.checked) { setAmendDate(req.date||""); setAmendTime(req.time||""); }
+                    }}
+                    style={{ width:15, height:15, accentColor:T.amber, cursor:"pointer" }}/>
+                  Suggest a different date or time
+                </label>
+                {amendOn && (
+                  <>
+                    <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginTop:10 }}>
+                      <input type="date" value={amendDate} onChange={e=>setAmendDate(e.target.value)}
+                        style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
+                      <select value={amendTime} onChange={e=>setAmendTime(e.target.value)}
+                        style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}>
+                        <option value="">Time…</option>
+                        {VIEWING_SLOTS.map(sl=><option key={sl}>{sl}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ fontSize:11, color:T.textMid, marginTop:8, lineHeight:1.6 }}>
+                      They asked for {fmtDate(req.date)} at {req.time}. The email will explain that slot wasn't available
+                      and confirm the new one, and the diary will use the new time.
+                    </div>
+                  </>
+                )}
+              </div>
+
               <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
-                <button onClick={()=>setConfirmModal(null)}
+                <button onClick={()=>{ setConfirmModal(null); setAmendOn(false); }}
                   style={{ padding:"9px 20px", border:`1px solid ${T.border}`, borderRadius:6, background:"#fff", color:T.textMid, fontFamily:"inherit", fontSize:13, cursor:"pointer" }}>
                   Cancel
                 </button>
                 <button
-                  onClick={()=>handleAction(req,"confirm",enqMode, enqMode==="booking"?selectedBkgId:selectedEnqId, "")}
-                  disabled={(enqMode==="existing"&&!selectedEnqId)||(enqMode==="booking"&&!selectedBkgId)||acting===req.id}
+                  onClick={()=>{
+                    const amending = amendOn && amendDate && amendTime && (amendDate!==req.date || amendTime!==req.time);
+                    handleAction(req, amending?"amend":"confirm", enqMode,
+                      enqMode==="booking"?selectedBkgId:selectedEnqId, "",
+                      amending?{ date:amendDate, time:amendTime }:null);
+                    setAmendOn(false);
+                  }}
+                  disabled={(enqMode==="existing"&&!selectedEnqId)||(enqMode==="booking"&&!selectedBkgId)||acting===req.id||(amendOn&&(!amendDate||!amendTime))}
                   style={{ padding:"9px 20px", background:T.green, border:"none", borderRadius:6, color:"#fff", fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:((enqMode==="existing"&&!selectedEnqId)||(enqMode==="booking"&&!selectedBkgId))||acting===req.id?"not-allowed":"pointer", opacity:((enqMode==="existing"&&!selectedEnqId)||(enqMode==="booking"&&!selectedBkgId))||acting===req.id?0.6:1 }}>
-                  {acting===req.id?"Confirming...":"Confirm & Send Email"}
+                  {acting===req.id ? "Confirming..." : (amendOn && amendDate && amendTime && (amendDate!==req.date||amendTime!==req.time)) ? "Confirm New Time & Send Email" : "Confirm & Send Email"}
                 </button>
               </div>
             </div>
@@ -12102,6 +12540,12 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             <input type="date" value={blockDateTo} onChange={e=>setBlockDateTo(e.target.value)} min={blockDate||undefined}
               style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
           </div>
+          <select value={blockKind} onChange={e=>setBlockKind(e.target.value)}
+            style={{ background: blockKind==="open" ? T.greenBg : "#fff", border:`1.5px solid ${blockKind==="open" ? T.green : T.border}`,
+              borderRadius:6, color: blockKind==="open" ? T.green : T.text, fontFamily:"inherit", fontSize:13, fontWeight:600, padding:"7px 10px", outline:"none" }}>
+            <option value="block">Block</option>
+            <option value="open">Open</option>
+          </select>
           <select value={blockSlot} onChange={e=>setBlockSlot(e.target.value)}
             style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}>
             <option value="">All day</option>
@@ -12111,7 +12555,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             style={{ flex:1, minWidth:120, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none" }}/>
           <button onClick={addBlock} disabled={!blockDate}
             style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:6, cursor:blockDate?"pointer":"not-allowed", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-            + Add Block
+            {blockKind === "open" ? "+ Open period" : "+ Add Block"}
           </button>
         </div>
         {blocks.length>0 && (
@@ -12124,14 +12568,19 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                 const last = groups[groups.length-1];
                 const prevDate = last ? new Date(last.dateTo+"T00:00:00") : null;
                 const thisDate = new Date(b.date+"T00:00:00");
-                if (last && last.note===b.note && last.slot===b.slot && prevDate) {
+                if (last && last.note===b.note && last.slot===b.slot && (last.kind||"block")===(b.kind||"block") && prevDate) {
                   const diff = (thisDate - prevDate) / 86400000;
                   if (diff === 1) { last.dateTo = b.date; last.ids.push(b.id); return; }
                 }
-                groups.push({ dateFrom:b.date, dateTo:b.date, note:b.note, slot:b.slot, ids:[b.id] });
+                groups.push({ dateFrom:b.date, dateTo:b.date, note:b.note, slot:b.slot, kind:b.kind||"block", ids:[b.id] });
               });
               return groups.map((g,i) => (
-                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:7, fontSize:13 }}>
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"#fff",
+                  border:`1px solid ${g.kind==="open" ? T.green : T.border}`, borderRadius:7, fontSize:13 }}>
+                  <span style={{ fontSize:10, fontWeight:800, letterSpacing:.5, textTransform:"uppercase", padding:"2px 8px", borderRadius:9,
+                    background: g.kind==="open" ? T.greenBg : T.redBg, color: g.kind==="open" ? T.green : T.red }}>
+                    {g.kind==="open" ? "Open" : "Block"}
+                  </span>
                   <span style={{ fontWeight:600, color:T.text }}>
                     {g.dateFrom === g.dateTo ? fmtDate(g.dateFrom) : `${fmtDate(g.dateFrom)} → ${fmtDate(g.dateTo)}`}
                   </span>
