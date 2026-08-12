@@ -1686,7 +1686,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12q";
+const APP_BUILD = "2026-08-12r";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4325,7 +4325,7 @@ const BACKUP_DATA_KEYS = [
   "hawthbush_bookings_v6", "hawthbush_staff_v5", "hbf_accom_v1", "hbf_accom_guests_v1",
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
-  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1"
+  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_checkout_attempts_v1"
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -4333,7 +4333,7 @@ const KEY_LABELS = {
   "hbf_viewings_v1":"Viewings", "hbf_viewing_requests_v1":"Viewing requests", "hbf_viewing_blocks_v1":"Viewing blocks",
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
-  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings"
+  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_checkout_attempts_v1":"Checkout attempts"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -9398,6 +9398,110 @@ function computeStock(products, events) {
 }
 
 // ─── Dashboard (Slice 2) ──────────────────────────────────────────────────────
+// ─── ABANDONED CHECKOUTS ──────────────────────────────────────────────────────
+// Someone filled in the booking form, reached Stripe and never paid. No
+// booking exists — deliberately, since an unpaid booking isn't one — but the
+// enquiry is worth chasing, so it surfaces here with everything needed to get
+// in touch, and can be dismissed once dealt with.
+const CHECKOUT_ATTEMPTS_KEY = "hbf_checkout_attempts_v1";
+const ATTEMPT_GRACE_MINUTES = 30;   // still at the card screen; don't nag yet
+
+function AbandonedCheckouts() {
+  const [attempts, setAttempts] = useState(null);
+  const [busy, setBusy] = useState(null);
+
+  useEffect(function() {
+    let cancelled = false;
+    (async function() {
+      try {
+        const a = await sbGet(CHECKOUT_ATTEMPTS_KEY);
+        if (!cancelled) setAttempts(Array.isArray(a) ? a : []);
+      } catch (e) { if (!cancelled) setAttempts([]); }
+    })();
+    return function() { cancelled = true; };
+  }, []);
+
+  if (attempts === null) return null;
+
+  const now = Date.now();
+  const open = attempts.filter(function(a) {
+    if (!a || a.promotedAt || a.dismissed) return false;
+    const age = a.createdAt ? (now - new Date(a.createdAt).getTime()) : 0;
+    return age > ATTEMPT_GRACE_MINUTES * 60 * 1000;
+  }).sort(function(x, z) { return (z.createdAt || "") > (x.createdAt || "") ? 1 : -1; });
+
+  if (!open.length) return null;
+
+  const dismiss = async function(id) {
+    setBusy(id);
+    try {
+      // Re-read before writing: the list is also written by the checkout
+      // function, and overwriting a stale copy would lose a live attempt.
+      const server = await sbGet(CHECKOUT_ATTEMPTS_KEY);
+      const list = Array.isArray(server) ? server : [];
+      const next = list.map(function(a) {
+        return (a && a.id === id) ? Object.assign({}, a, { dismissed: true, dismissedAt: new Date().toISOString() }) : a;
+      });
+      await sbSet(CHECKOUT_ATTEMPTS_KEY, next);
+      setAttempts(next);
+    } catch (e) { /* leave it showing rather than pretend it went */ }
+    setBusy(null);
+  };
+
+  return (
+    <div style={{ background:"#fff", border:"1px solid #fdba74", borderRadius:12, padding:"18px 22px", marginBottom:20 }}>
+      <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:4, flexWrap:"wrap" }}>
+        <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:"#9a3412" }}>
+          Started a booking but didn't pay
+        </h3>
+        <span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:9, background:"#fff7ed", color:"#9a3412", border:"1px solid #fdba74" }}>
+          {open.length}
+        </span>
+      </div>
+      <div style={{ fontSize:12, color:T.textMid, marginBottom:12, lineHeight:1.6 }}>
+        No booking was made and the dates are free. Worth a quick email in case they hit a problem.
+      </div>
+
+      {open.map(function(a) {
+        const stays = a.stays || [];
+        return (
+          <div key={a.id} style={{ borderTop:`1px solid ${T.border}`, padding:"11px 0", display:"flex",
+            gap:12, alignItems:"flex-start", flexWrap:"wrap" }}>
+            <div style={{ flex:1, minWidth:240 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                {a.guestName || "No name given"}
+                {a.guestCount ? <span style={{ fontWeight:400, color:T.textLight }}> · {a.guestCount} guest{Number(a.guestCount) === 1 ? "" : "s"}</span> : null}
+              </div>
+              {stays.map(function(st, i) {
+                return (
+                  <div key={i} style={{ fontSize:12, color:T.textMid, marginTop:2 }}>
+                    {st.propertyName || st.propertyId} · {fmtDate(st.checkIn)} → {fmtDate(st.checkOut)}
+                    {Number(st.value) > 0 ? " · " + String(fmtMoney(st.value)) : ""}
+                  </div>
+                );
+              })}
+              <div style={{ fontSize:12, color:T.textMid, marginTop:3 }}>
+                {a.email ? <a href={"mailto:" + a.email} style={{ color:T.accent }}>{a.email}</a> : <span style={{ color:T.textLight }}>no email</span>}
+                {a.phone ? " · " + a.phone : ""}
+              </div>
+              <div style={{ fontSize:11, color:T.textLight, marginTop:3 }}>
+                Tried {a.createdAt ? new Date(a.createdAt).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "—"}
+                {Number(a.depositAmount) > 0 ? " · deposit would have been " + String(fmtMoney(a.depositAmount)) : ""}
+              </div>
+            </div>
+            <button onClick={function(){ dismiss(a.id); }} disabled={busy === a.id}
+              style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, borderRadius:7,
+                padding:"7px 14px", fontFamily:"inherit", fontSize:12, fontWeight:600,
+                cursor: busy === a.id ? "default" : "pointer", flexShrink:0 }}>
+              {busy === a.id ? "…" : "Dismiss"}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
@@ -9593,6 +9697,8 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
       )}
 
       {/* Overdue money — unpaid raised invoices, and unpaid accommodation */}
+      <AbandonedCheckouts/>
+
       {(overdueInvoices.length > 0 || overdueAccom.length > 0) && (
         <div style={{ background:"#fff", border:"1px solid #fecaca", borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(220,38,38,.08)", marginBottom:18 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
