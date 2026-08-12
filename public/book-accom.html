@@ -344,6 +344,19 @@ function getPriceForNight(prop, dateStr) {
   return Number(prop.baseRate) || 0;
 }
 
+// Long-stay discount off the subtotal. The setting is a percentage; a property
+// configured before that change still holds a £-per-night figure in the old
+// longStayDiscount field, which keeps applying until a percentage is set.
+// Must stay identical to longStayDiscountAmount in App.jsx.
+function longStayDiscountAmount(prop, nights, subtotal) {
+  if (!prop || !(prop.longStayThreshold > 0) || !(nights >= prop.longStayThreshold)) return 0;
+  var r2 = function(n) { return Math.round(n * 100) / 100; };
+  var pct = Number(prop.longStayDiscountPct) || 0;
+  if (pct > 0) return Math.min(r2(subtotal), r2(subtotal * pct / 100));
+  var legacyPerNight = Number(prop.longStayDiscount) || 0;
+  return legacyPerNight > 0 ? Math.min(r2(subtotal), r2(legacyPerNight * nights)) : 0;
+}
+
 function quoteStay(prop, ci, co) {
   if (!prop || !ci || !co) return null;
   var nights = Math.round((parseISO(co) - parseISO(ci)) / 86400000);
@@ -354,10 +367,8 @@ function quoteStay(prop, ci, co) {
     sub += getPriceForNight(prop, toISO(d));
     d.setUTCDate(d.getUTCDate() + 1);
   }
-  var disc = 0;
-  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0)
-    disc = prop.longStayDiscount * nights;
-  return { nights: nights, subtotal: sub, discount: disc, total: Math.max(0, sub - disc) };
+  var disc = longStayDiscountAmount(prop, nights, sub);
+  return { nights: nights, subtotal: sub, discount: disc, total: Math.max(0, Math.round((sub - disc) * 100) / 100) };
 }
 
 // ── Booking rules: allowed check-in/out weekdays + booking window (per property) ─
