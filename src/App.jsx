@@ -1532,6 +1532,36 @@ function checkAvailability(bookings, propertyId, checkIn, checkOut, excludeId) {
   });
 }
 
+// Every clash between a booking and what's already in the diary.
+//
+// Returns one entry per colliding stay: { other, otherStay, stay }. Dates are
+// half-open — a stay ending on the 4th and another starting on the 4th is a
+// changeover, not a clash, which is why the comparison is strictly < and >.
+//
+// Cancelled bookings don't count, and neither does the booking being edited
+// (matched on id) — otherwise saving an unchanged booking would report it
+// clashing with itself.
+function findAccomClashes(bookings, rec) {
+  const out = [];
+  const mine = (rec.stays && rec.stays.length) ? rec.stays : [rec];
+
+  mine.forEach(function(s) {
+    if (!s || !s.propertyId || !s.checkIn || !s.checkOut) return;
+    (bookings || []).forEach(function(b) {
+      if (!b || String(b.id) === String(rec.id) || b.status === "cancelled") return;
+      const theirs = (b.stays && b.stays.length) ? b.stays : [b];
+      theirs.forEach(function(o) {
+        if (!o || o.propertyId !== s.propertyId) return;
+        if (!o.checkIn || !o.checkOut) return;
+        if (s.checkIn < o.checkOut && s.checkOut > o.checkIn) {
+          out.push({ other: b, otherStay: o, stay: s });
+        }
+      });
+    });
+  });
+  return out;
+}
+
 // Log an automated email to Supabase. Called from send handlers (phase 2).
 async function logEmail(entry) {
   try {
@@ -1656,7 +1686,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12p";
+const APP_BUILD = "2026-08-12q";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -5015,6 +5045,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   const [askSendConfirm, setAskSendConfirm] = useState(null); // holds the just-created booking record, or null
   const [sendingConfirm, setSendingConfirm] = useState(false);
   const [askDeleteBooking, setAskDeleteBooking] = useState(false);
+  const [clashWarning, setClashWarning] = useState(null);   // { rec, stayOpen, clashes } or null
 
   useEffect(() => {
     (async () => {
@@ -5110,7 +5141,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
 
   // stayOpen: keep the form on screen after saving, so several changes can be
   // made and saved without losing your place. Exit is a separate button.
-  const handleSave = async (stayOpen) => {
+  const handleSave = async (stayOpen, force) => {
     var rawStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
     var stays = rawStays.map(function(s) {
       var p = properties.find(function(pp){ return pp.id===s.propertyId; });
@@ -5129,6 +5160,19 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       value: totalValue,
       stays: stays
     });
+    // Nothing prevented a double booking before this — checkAvailability
+    // existed but was never called from anywhere. A clash is now surfaced
+    // before the write, listing exactly what it collides with. Overriding is
+    // still possible, because otherwise an existing double booking could
+    // never be edited or corrected, but it takes a deliberate second press.
+    if (!force) {
+      var clashes = findAccomClashes(bookings, rec);
+      if (clashes.length) {
+        setClashWarning({ rec: rec, stayOpen: !!stayOpen, clashes: clashes });
+        return;
+      }
+    }
+
     var isNew = !editId;
     var next = editId ? bookings.map(function(b){ return b.id===editId ? rec : b; }) : bookings.concat([rec]);
     await saveBookings(next);
@@ -5197,6 +5241,69 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
           onCancel={()=>setAskSendConfirm(null)}
         />
       )}
+      {clashWarning && (() => {
+        const propNameOf = function(id) {
+          const p = properties.find(function(x){ return x.id === id; });
+          return p ? p.name : id;
+        };
+        return (
+          <div style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000,
+            display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+            <div style={{ background:"#fff", borderRadius:12, width:"min(620px,100%)", maxHeight:"85vh",
+              display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(0,0,0,.3)" }}>
+              <div style={{ padding:"18px 24px", borderBottom:`1px solid ${T.border}` }}>
+                <h3 style={{ margin:0, fontSize:17, fontWeight:800, color:T.red }}>
+                  These dates are already booked
+                </h3>
+                <div style={{ fontSize:13, color:T.textMid, marginTop:5, lineHeight:1.6 }}>
+                  Saving this would double book {clashWarning.clashes.length === 1 ? "a property" : "properties"}.
+                  Change the dates, or save anyway if you know it's right.
+                </div>
+              </div>
+              <div style={{ padding:"14px 24px", overflowY:"auto", flex:1 }}>
+                {clashWarning.clashes.map(function(c, i) {
+                  return (
+                    <div key={i} style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8,
+                      padding:"10px 13px", marginBottom:9 }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                        {propNameOf(c.stay.propertyId)}
+                      </div>
+                      <div style={{ fontSize:12, color:T.textMid, marginTop:3, lineHeight:1.6 }}>
+                        You are entering <strong>{fmtDate(c.stay.checkIn)} → {fmtDate(c.stay.checkOut)}</strong>
+                      </div>
+                      <div style={{ fontSize:12, color:"#dc2626", marginTop:2, lineHeight:1.6 }}>
+                        Clashes with <strong>{c.other.guestName || "another booking"}</strong>{" "}
+                        ({c.other.id}) — {fmtDate(c.otherStay.checkIn)} → {fmtDate(c.otherStay.checkOut)}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div style={{ fontSize:11, color:T.textLight, lineHeight:1.6, marginTop:4 }}>
+                  A stay ending on the same day another begins is a changeover, not a clash, and isn't reported here.
+                </div>
+              </div>
+              <div style={{ padding:"14px 24px", borderTop:`1px solid ${T.border}`, display:"flex",
+                justifyContent:"flex-end", gap:10, flexWrap:"wrap" }}>
+                <button onClick={function(){ setClashWarning(null); }}
+                  style={{ padding:"10px 22px", background:T.accent, color:"#fff", border:"none", borderRadius:7,
+                    fontFamily:"inherit", fontSize:13, fontWeight:700, cursor:"pointer" }}>
+                  Go back and change the dates
+                </button>
+                <button onClick={function(){
+                    const w = clashWarning;
+                    setClashWarning(null);
+                    handleSave(w.stayOpen, true);
+                  }}
+                  style={{ padding:"10px 18px", background:"#fff", color:T.red, border:"1.5px solid #fca5a5",
+                    borderRadius:7, fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                  Save anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {askDeleteBooking && (
         <ConfirmDialog
           message="Delete this booking?"
