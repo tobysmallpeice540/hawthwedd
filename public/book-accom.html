@@ -168,6 +168,15 @@
     .view-toggle button { padding: 5px 12px; background: none; border: 1.5px solid #e0d9ce; border-radius: 20px; font-family: 'Jost', sans-serif; font-size: 12px; color: #7a7060; cursor: pointer; }
     .view-toggle button.on { background: #2d2a25; border-color: #2d2a25; color: #fff; font-weight: 600; }
 
+    /* Embedded: the host page supplies its own spacing above and below the
+       block, so this page adds none of its own. Without this the two stack up
+       and leave a conspicuous band of empty cream between the site nav and the
+       first control. The class is set by the script under the header. */
+    body.embedded { background: transparent; min-height: 0; }
+    body.embedded .main { padding-top: 0; padding-bottom: 16px; }
+    body.embedded.compact-mode .main { padding-top: 0; padding-bottom: 12px; }
+    body.embedded .view-toggle { margin-bottom: 6px; }
+
     /* ══ COMPACT MODE ══════════════════════════════════════════════════════════
        Purely additive overrides, all scoped under body.compact-mode. Removing
        the class (or the ?compact=1 param) restores the standard layout exactly,
@@ -261,7 +270,7 @@
   if (framed || asked) {
     var h = document.getElementById("page-header");
     if (h) h.parentNode.removeChild(h);
-    document.body.style.background = "transparent";
+    document.body.classList.add("embedded");
     document.documentElement.style.background = "transparent";
   }
 })();
@@ -837,7 +846,10 @@ function renderPendingNightsSelect(prop) {
 //    this section waits for a check-in date before showing the nights picker.
 function renderPropertyAndNightsSection() {
   var usedIds = S.cart.map(function(s) { return s.propertyId; });
-  var html = '<h3 class="section-heading"><em>Either</em> choose your property</h3>';
+  var sole = onlyProperty();
+  var html = sole
+    ? '<h3 class="section-heading">' + escHtml(sole.name) + '</h3>'
+    : '<h3 class="section-heading"><em>Either</em> choose your property</h3>';
   html += '<div class="panel">';
 
   if (S.pendingCheckIn) {
@@ -863,6 +875,18 @@ function renderPropertyAndNightsSection() {
     return html;
   }
 
+  // Sole property: it's already selected, so a clickable card offering the
+  // choice of it is just noise. One line of detail instead.
+  if (sole) {
+    var soleMeta = [];
+    if (sole.sleeps) soleMeta.push("Sleeps " + sole.sleeps);
+    var soleMin = minNightsForProp(sole, S.pendingCheckIn);
+    if (soleMin) soleMeta.push(soleMin + " night minimum");
+    if (sole.baseRate > 0) soleMeta.push("from " + fmt(sole.baseRate) + " / night");
+    if (soleMeta.length) {
+      html += '<div class="prop-meta" style="margin-bottom:2px">' + soleMeta.join(" &middot; ") + '</div>';
+    }
+  } else {
   html += '<div class="prop-grid">';
   candidates.forEach(function(p) {
     var sel = S.pendingPropertyId === p.id;
@@ -881,6 +905,7 @@ function renderPropertyAndNightsSection() {
     html += '</div>';
   });
   html += '</div>';
+  }
 
   if (S.pendingPropertyId && usedIds.indexOf(S.pendingPropertyId) === -1) {
     var prop = S.properties.filter(function(x) { return x.id === S.pendingPropertyId; })[0];
@@ -898,8 +923,24 @@ function renderPropertyAndNightsSection() {
 }
 
 // ── View 1: calendar + build-your-booking ────────────────────────────────────
+// With a single bookable property there is no choice to make, so making the
+// guest click it is a pointless step — and the "Either property / Or date"
+// framing stops making sense. Selecting it also filters the calendar to that
+// property straight away, which is what the guest wants to see.
+function onlyProperty() {
+  var usedIds = S.cart.map(function(s) { return s.propertyId; });
+  var remaining = S.properties.filter(function(p) { return usedIds.indexOf(p.id) === -1; });
+  return remaining.length === 1 ? remaining[0] : null;
+}
+
+function autoSelectSoleProperty() {
+  var only = onlyProperty();
+  if (only && S.pendingPropertyId !== only.id) S.pendingPropertyId = only.id;
+}
+
 function renderCalendarView() {
   S.view = "calendar";
+  autoSelectSoleProperty();
 
   // Nothing ticked as publicly bookable — show a note rather than an empty
   // calendar the guest can't do anything with.
@@ -913,13 +954,17 @@ function renderCalendarView() {
     return;
   }
 
+  var sole = onlyProperty();
+
   var html = renderViewToggle();
   html += stepsHtml(1);
   html += '<h2 class="page-title">Book Your Stay</h2>';
-  html += '<p class="page-sub">Choose your check-in date below, or pick a property first to see just its availability. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.</p>';
+  html += '<p class="page-sub">' + (sole
+    ? 'Choose your check-in date below, then how many nights you\'d like to stay.'
+    : 'Choose your check-in date below, or pick a property first to see just its availability. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.') + '</p>';
   html += renderCartSummary();
   html += renderPropertyAndNightsSection();
-  html += '<h3 class="section-heading"><em>Or</em> choose your date</h3>';
+  html += '<h3 class="section-heading">' + (sole ? 'Choose your date' : '<em>Or</em> choose your date') + '</h3>';
   html += renderCalNav();
   var calProps = calendarFilterProperties();
   html += '<div class="cal-months-grid">';
