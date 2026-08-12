@@ -534,7 +534,32 @@ function stepsHtml(active) {
   return html;
 }
 
-function mount(html) { document.getElementById("app").innerHTML = html; }
+function mount(html) {
+  document.getElementById("app").innerHTML = html;
+  reportHeight();
+}
+
+// ── Embedding support ────────────────────────────────────────────────────────
+// The page is several screens tall and changes height as the guest moves
+// through it, so a fixed iframe height either clips the calendar or leaves a
+// gap. The height is posted to the parent after every render; the snippet on
+// the host page listens and resizes. Harmless when not embedded.
+var lastReportedHeight = 0;
+function reportHeight() {
+  if (window.parent === window.self) return;
+  var h = Math.max(
+    document.body.scrollHeight, document.documentElement.scrollHeight,
+    document.body.offsetHeight, document.documentElement.offsetHeight
+  );
+  if (Math.abs(h - lastReportedHeight) < 12) return;   // ignore sub-pixel churn
+  lastReportedHeight = h;
+  // "*" because the host page is on a different domain (Squarespace) and the
+  // only thing being sent is a number — no booking or guest data.
+  window.parent.postMessage({ hawthbushHeight: h }, "*");
+}
+window.addEventListener("load", reportHeight);
+window.addEventListener("resize", reportHeight);
+setInterval(reportHeight, 800);   // catches images loading and font swaps
 
 // Compact mode shows 3 months at a time (nicer on a phone); standard shows 6.
 // The nav arrows always step by exactly one screenful.
@@ -1038,7 +1063,17 @@ function submitBooking() {
     })
   }).then(function(r) { return r.json(); })
     .then(function(data) {
-      if (data.url) { window.location.href = data.url; return; }
+      if (data.url) {
+        // Stripe Checkout refuses to be framed (it sends frame-ancestors), so
+        // when this page is embedded the payment has to take over the whole
+        // window rather than the iframe. Falls back to a normal navigation if
+        // the parent is on another origin and blocks the assignment.
+        try {
+          if (window.top && window.top !== window.self) { window.top.location.href = data.url; return; }
+        } catch (e) { /* cross-origin parent — fall through */ }
+        window.location.href = data.url;
+        return;
+      }
       S.submitting = false; S.error = data.error || "Something went wrong. Please try again.";
       renderSummaryView();
     })
