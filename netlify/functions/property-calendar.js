@@ -131,11 +131,17 @@ exports.handler = async function(event) {
       if (!paid && isFinite(age) && age > PENDING_HOLD_MINUTES * 60 * 1000) return;
     }
     var stays = (b.stays && b.stays.length) ? b.stays : [b];
-    stays.forEach(function(s) {
+    stays.forEach(function(s, stayIdx) {
       if (s.propertyId !== propertyId) return;
       if (!s.checkIn || !s.checkOut) return;
 
-      var uid = String(b.id) + "-" + String(s.propertyId) + "@hawthbushfarm.co.uk";
+      // The UID must be unique across the whole feed. Keying it on booking id
+      // plus property alone collided whenever one booking held two stays in
+      // the same property — two VEVENTs sharing a UID, which importers treat
+      // as one event being redefined, and which Airbnb rejects outright. The
+      // stay's index and dates make it unambiguous.
+      var uid = String(b.id) + "-" + String(s.propertyId) + "-" + stayIdx + "-" +
+                toIcalDate(s.checkIn) + "@hawthbushfarm.co.uk";
       // Deliberately says only that the dates are taken.
       var summary = b.bookingType === "Blocked" ? "Not available"
                   : b.source === "airbnb"        ? "Airbnb block"
