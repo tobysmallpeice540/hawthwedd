@@ -481,6 +481,21 @@ function pendingHoldExpired(b) {
   return isFinite(age) && age > PENDING_HOLD_MINUTES * 60 * 1000;
 }
 
+// Someone at the Stripe card screen right now holds their dates, even though
+// no booking exists yet — otherwise a second guest could be shown the same
+// nights as free and pay for them. The hold lapses after an hour, matching
+// the server-side check, so an abandoned attempt frees the dates by itself.
+function liveAttempts(attemptData) {
+  var cutoff = Date.now() - PENDING_HOLD_MINUTES * 60 * 1000;
+  return (attemptData || []).filter(function(a) {
+    if (!a || a.promotedAt || a.dismissed) return false;
+    var t = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    return isFinite(t) && t > cutoff;
+  }).map(function(a) {
+    return { id: "attempt-" + a.id, status: "confirmed", stays: a.stays || [] };
+  });
+}
+
 function buildAvailability() {
   S.occupied = {};
   S.bookings.forEach(function(b) {
@@ -1095,11 +1110,11 @@ function renderSummaryView() {
 // the calendar the guest returns to shows the nights that have actually gone
 // rather than the snapshot they arrived with.
 function refreshAvailability() {
-  return sbGet("hbf_accom_v1").then(function(accomData) {
-    S.bookings = (accomData || []).map(function(b) {
+  return Promise.all([sbGet("hbf_accom_v1"), sbGet("hbf_checkout_attempts_v1")]).then(function(r) {
+    S.bookings = (r[0] || []).map(function(b) {
       if (b.stays && b.stays.length) return b;
       return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
-    });
+    }).concat(liveAttempts(r[1]));
     buildAvailability();
   }).catch(function() { /* keep what we have; the error message still shows */ });
 }
@@ -1226,7 +1241,7 @@ function showSuccess(prop, ci, co) {
   }
 
   function loadAndRender() {
-    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1"), sbGet("hbf_terms_v1")]).then(function(results) {
+    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1"), sbGet("hbf_terms_v1"), sbGet("hbf_checkout_attempts_v1")]).then(function(results) {
       var propsData = results[0];
       var accomData = results[1];
       // No terms written yet means no tickbox and no link — better than sending
@@ -1250,7 +1265,7 @@ function showSuccess(prop, ci, co) {
       S.bookings = (accomData || []).map(function(b) {
         if (b.stays && b.stays.length) return b;
         return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
-      });
+      }).concat(liveAttempts(results[3]));
       S.calMonths = calMonthsList();
       buildAvailability();
       if (params.get("cancelled") === "1") {
