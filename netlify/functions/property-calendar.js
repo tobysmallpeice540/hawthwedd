@@ -24,9 +24,22 @@ async function sbGet(key) {
   return (rows && rows[0]) ? rows[0].value : null;
 }
 
+// "2024-06-15" → "20240615". Returns "" for anything that isn't a plain date,
+// so a malformed booking is dropped rather than poisoning the whole feed —
+// Airbnb rejects an entire calendar over one bad line.
 function toIcalDate(iso) {
-  // "2024-06-15" → "20240615"
-  return (iso || "").replace(/-/g, "");
+  var m = String(iso || "").slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? m[1] + m[2] + m[3] : "";
+}
+
+// DTSTAMP must be a full UTC date-time — "20231024T000000Z", never a bare
+// date. createdAt is stored as a full ISO string in some places and as a
+// plain "YYYY-MM-DD" in others, and the old code turned the latter into
+// "20231024Z", which is invalid and made Airbnb reject the feed outright.
+function toIcalStamp(value) {
+  var d = value ? new Date(value) : null;
+  if (!d || isNaN(d.getTime())) d = new Date();
+  return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 }
 
 function escapeIcal(s) {
@@ -45,8 +58,8 @@ function foldLine(line) {
 
 exports.handler = async function(event) {
   var propertyId = event.queryStringParameters && event.queryStringParameters.id;
-  if (!propertyId) {
-    return { statusCode: 400, body: "Missing ?id= parameter. Use ?id=hamlet, ?id=amly, or ?id=glamping." };
+  if (!propertyId || !/^[a-z0-9_-]{1,40}$/i.test(propertyId)) {
+    return { statusCode: 400, body: "Missing or invalid ?id= parameter. Use ?id=hamlet, ?id=amly, or ?id=glamping." };
   }
 
   var bookings;
@@ -71,16 +84,16 @@ exports.handler = async function(event) {
                   : b.source === "airbnb"        ? "Airbnb block"
                   : b.guestName                  ? b.guestName
                   : "Booked";
-      var created = b.createdAt
-        ? b.createdAt.replace(/[-:]/g, "").replace(/\.\d+/, "").slice(0, 15) + "Z"
-        : new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "").slice(0, 15) + "Z";
+      var start = toIcalDate(s.checkIn);
+      var end   = toIcalDate(s.checkOut);
+      if (!start || !end || end <= start) return;   // unusable dates: skip the event, keep the feed
 
       lines.push(foldLine("BEGIN:VEVENT"));
       lines.push(foldLine("UID:" + uid));
-      lines.push(foldLine("DTSTART;VALUE=DATE:" + toIcalDate(s.checkIn)));
-      lines.push(foldLine("DTEND;VALUE=DATE:" + toIcalDate(s.checkOut)));
+      lines.push(foldLine("DTSTAMP:" + toIcalStamp(b.createdAt)));
+      lines.push(foldLine("DTSTART;VALUE=DATE:" + start));
+      lines.push(foldLine("DTEND;VALUE=DATE:" + end));
       lines.push(foldLine("SUMMARY:" + escapeIcal(summary)));
-      lines.push(foldLine("DTSTAMP:" + created));
       lines.push(foldLine("END:VEVENT"));
     });
   });
