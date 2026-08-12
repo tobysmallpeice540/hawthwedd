@@ -1628,7 +1628,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12e";
+const APP_BUILD = "2026-08-12f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2846,7 +2846,15 @@ function ManualEmailSenders({ booking, onBuildSchedule }) {
       });
       const data = await res.json().catch(function(){ return {}; });
       if (!res.ok || data.error) throw new Error(data.error || ("Send failed (" + res.status + ")"));
-      setNote({ kind:"ok", text: "Sent to " + to + "." });
+      // data.fn is the version of the Netlify function that answered. If it's
+      // missing, an older copy is still deployed — which is the usual reason a
+      // payment link fails to appear even though everything looks right here.
+      setNote({
+        kind: data.fn ? "ok" : "warn",
+        text: data.fn
+          ? "Sent to " + to + "." + (data.paymentLink ? " Payment link included." : "")
+          : "Sent to " + to + ", but the server is running an older version of the email function — payment links won't be included until the Netlify functions are redeployed."
+      });
     } catch (e) {
       setNote({ kind:"error", text: String(e.message || e) });
     }
@@ -2909,7 +2917,7 @@ function ManualEmailSenders({ booking, onBuildSchedule }) {
       </div>
       {note && (
         <div style={{ marginTop:9, fontSize:12, lineHeight:1.55,
-          color: note.kind==="ok" ? T.green : T.red }}>{note.text}</div>
+          color: note.kind==="ok" ? T.green : note.kind==="warn" ? "#92400e" : T.red }}>{note.text}</div>
       )}
     </div>
   );
