@@ -243,13 +243,29 @@
 </head>
 <body>
 
-<div class="header">
+<!-- Suppressed when the page is embedded: the host page already carries the
+     branding and its own navigation, so repeating them looks like two headers
+     stacked. Kept for the standalone page, which has neither. -->
+<div class="header" id="page-header">
   <div>
     <h1>Hawthbush Farm</h1>
     <div class="sub">East Sussex &mdash; Holiday cottages &amp; glamping</div>
   </div>
-  <a href="/" style="font-size:13px; color:#7a7060; text-decoration:none;">&#8592; Back to website</a>
+  <a href="https://www.hawthbushfarm.co.uk" style="font-size:13px; color:#7a7060; text-decoration:none;">&#8592; Back to website</a>
 </div>
+<script>
+(function () {
+  var framed = false;
+  try { framed = window.top !== window.self; } catch (e) { framed = true; }
+  var asked = window.location.search.indexOf("embed=1") !== -1;
+  if (framed || asked) {
+    var h = document.getElementById("page-header");
+    if (h) h.parentNode.removeChild(h);
+    document.body.style.background = "transparent";
+    document.documentElement.style.background = "transparent";
+  }
+})();
+</script>
 
 <div class="main" id="app">
   <div style="text-align:center; padding:60px; color:#9a9080;">Loading availability&hellip;</div>
@@ -1064,10 +1080,10 @@ function submitBooking() {
   }).then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.url) {
-        // Stripe Checkout refuses to be framed (it sends frame-ancestors), so
-        // when this page is embedded the payment has to take over the whole
-        // window rather than the iframe. Falls back to a normal navigation if
-        // the parent is on another origin and blocks the assignment.
+        // Same-window hand-off. Stripe refuses to be framed, so when this page
+        // is embedded the payment must take over the top window rather than
+        // the iframe. Both Stripe exits return to the website, so the guest
+        // ends up back where they started either way.
         try {
           if (window.top && window.top !== window.self) { window.top.location.href = data.url; return; }
         } catch (e) { /* cross-origin parent — fall through */ }
@@ -1081,6 +1097,19 @@ function submitBooking() {
       S.submitting = false; S.error = "Connection error. Please check your internet and try again.";
       renderSummaryView();
     });
+}
+
+// Shown after paying a deposit or balance from a link in an email — the guest
+// never touched the booking flow, so there is nothing to summarise beyond the
+// fact that it went through. Stripe emails the receipt; so do we.
+function showPaymentReceived() {
+  var html = '<div class="panel" style="text-align:center;padding:50px 28px">';
+  html += '<div style="font-size:52px;margin-bottom:18px">&#10003;</div>';
+  html += '<h2 style="font-family:\'Cormorant Garamond\',serif;font-size:26px;font-weight:600;margin-bottom:10px">Thank you &mdash; payment received</h2>';
+  html += '<p style="color:#7a7060;line-height:1.6;margin-bottom:22px">Your payment has gone through and a receipt is on its way to you by email.<br>There is nothing else you need to do.</p>';
+  html += '<a class="btn-ghost" href="https://www.hawthbushfarm.co.uk">Back to the website</a>';
+  html += '</div>';
+  mount(html);
 }
 
 // ── Success page ──────────────────────────────────────────────────────────────
@@ -1110,11 +1139,16 @@ function showSuccess(prop, ci, co) {
   S.compact = params.get("compact") !== "0";
   applyCompactClass();
 
-  // Skip sync on the post-booking success/cancel return pages
+  // Returning from Stripe. "booked" is a new booking; "paid" is a deposit or
+  // balance settled from a link in an email, where there is no cart to show.
   if (params.get("booked") === "1") {
     Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function() {
       showSuccess(params.get("prop"), params.get("ci"), params.get("co"));
     });
+    return;
+  }
+  if (params.get("paid") === "1") {
+    showPaymentReceived();
     return;
   }
 

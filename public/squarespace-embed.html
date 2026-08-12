@@ -1,0 +1,73 @@
+<!--
+  Hawthbush Farm — booking page embed for Squarespace
+  ---------------------------------------------------
+  Paste the whole of this into a Code Block on hawthbushfarm.co.uk/book.
+  (Add block → Code. Needs a Core plan or above — on Personal or a trial the
+  block saves but shows nothing on the live site.)
+
+  Nothing below needs editing.
+
+  Three things it handles:
+   · The iframe resizes itself as the guest moves through the calendar, so
+     there is no fixed height to get wrong.
+   · Paying takes over the whole window, because Stripe refuses to run inside
+     a frame. Both Stripe exits — paid, or the back arrow — return here.
+   · On return, the booking details Stripe passes back in the URL are handed
+     to the iframe, so the confirmation shows the reference and dates instead
+     of a bare thank-you.
+-->
+
+<div id="hawthbush-booking" style="max-width:1080px;margin:0 auto;">
+  <iframe
+    id="hawthbush-booking-frame"
+    title="Book your stay at Hawthbush Farm"
+    scrolling="no"
+    loading="lazy"
+    allow="payment"
+    style="width:100%;height:1400px;border:0;display:block;overflow:hidden;"
+  ></iframe>
+  <noscript>
+    <p style="text-align:center">
+      <a href="https://hawthbushfarm.netlify.app/book-accom.html">Open the booking page</a>
+    </p>
+  </noscript>
+</div>
+
+<script>
+(function () {
+  var ORIGIN = "https://hawthbushfarm.netlify.app";
+  var frame  = document.getElementById("hawthbush-booking-frame");
+  if (!frame) return;
+
+  // Forward only the parameters the booking page understands. Anything else on
+  // this page's URL — Squarespace's own tracking, a stray utm_ tag — is left
+  // behind rather than passed into the frame.
+  var here  = new URLSearchParams(window.location.search);
+  var pass  = ["booked", "paid", "cancelled", "prop", "ci", "co"];
+  var out   = new URLSearchParams();
+  out.set("compact", "0");
+  out.set("embed", "1");
+  pass.forEach(function (k) {
+    var v = here.get(k);
+    if (v !== null && v !== "") out.set(k, v);
+  });
+  frame.src = ORIGIN + "/book-accom.html?" + out.toString();
+
+  window.addEventListener("message", function (e) {
+    // Only accept height messages from the booking page itself — any page in
+    // any tab can post messages here, so the origin is checked first.
+    if (e.origin !== ORIGIN) return;
+    var h = e.data && e.data.hawthbushHeight;
+    if (typeof h !== "number" || !isFinite(h) || h < 200 || h > 20000) return;
+    frame.style.height = Math.ceil(h) + "px";
+  });
+
+  // Coming back from Stripe, put the confirmation in view rather than leaving
+  // the guest at the top of the page wondering whether it worked.
+  if (here.get("booked") === "1" || here.get("paid") === "1") {
+    setTimeout(function () {
+      frame.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 400);
+  }
+})();
+</script>
