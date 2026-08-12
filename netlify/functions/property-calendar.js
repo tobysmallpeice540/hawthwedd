@@ -67,12 +67,32 @@ function foldLine(line) {
 }
 
 exports.handler = async function(event) {
-  // Reached either directly (?id=hamlet) or through the /ical/hamlet.ics
-  // rewrite, which hands the whole filename over as the id. Airbnb insists on
-  // a URL that ends in .ics, so the extension is stripped here rather than
-  // being special-cased in the redirect.
-  var propertyId = (event.queryStringParameters && event.queryStringParameters.id) || "";
-  propertyId = String(propertyId).replace(/\.ics$/i, "");
+  // The id can arrive two ways, and the function must not depend on which:
+  //
+  //   ?id=hamlet                    — the direct function URL
+  //   /ical/hamlet.ics              — the tidy URL Airbnb requires
+  //
+  // The rewrite for the second is written as "?id=:splat", but Netlify does
+  // not reliably substitute a splat inside the query string of the target, so
+  // the id is also recovered from the request path. Belt and braces: whichever
+  // route works, the feed is served.
+  var qs = (event.queryStringParameters && event.queryStringParameters.id) || "";
+  var propertyId = String(qs);
+
+  if (!propertyId || propertyId.indexOf(":") !== -1) {
+    // rawUrl is the original address, unaffected by the rewrite; event.path
+    // is the fallback for older runtimes.
+    var raw = event.rawUrl || event.path || "";
+    try { raw = new URL(raw, "https://x").pathname; } catch (e) { raw = String(raw).split("?")[0]; }
+    var last = String(raw).split("/").filter(Boolean).pop() || "";
+    // Guard against picking up the function's own name when called directly
+    // with no id at all.
+    propertyId = (last === "property-calendar") ? "" : last;
+  }
+
+  // Airbnb insists on a URL ending in .ics, so the extension is stripped here
+  // rather than being special-cased in the redirect.
+  propertyId = propertyId.replace(/\.ics$/i, "");
   if (!propertyId || !/^[a-z0-9_-]{1,40}$/i.test(propertyId)) {
     return { statusCode: 400, body: "Missing or invalid ?id= parameter. Use ?id=hamlet, ?id=amly, or ?id=glamping." };
   }
