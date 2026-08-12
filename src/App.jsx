@@ -1447,6 +1447,21 @@ function getPriceForNight(prop, dateStr) {
   return Number(prop.baseRate) || 0;
 }
 
+// Stay-length limits for a check-in date. A season can override either, and
+// the winning season is the one priority already picked — so where periods
+// overlap, the higher of the two supplies the limits, same as the rate.
+// A blank or zero override means "inherit the property's own figure".
+function minNightsForDate(prop, dateStr) {
+  const s = seasonForDate(prop, dateStr);
+  const v = s && Number(s.minNights);
+  return (v && v > 0) ? v : (Number(prop && prop.minNights) || 2);
+}
+function maxNightsForDate(prop, dateStr) {
+  const s = seasonForDate(prop, dateStr);
+  const v = s && Number(s.maxNights);
+  return (v && v > 0) ? v : (Number(prop && prop.maxNights) || 28);
+}
+
 // Do two seasons cover any of the same nights? End dates are exclusive.
 function seasonsOverlap(a, b) {
   if (!a || !b || !a.startDate || !a.endDate || !b.startDate || !b.endDate) return false;
@@ -1598,7 +1613,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04s";
+const APP_BUILD = "2026-08-04t";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3167,11 +3182,29 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                           : "Overlaps " + clashes.map(o => "“" + (o.label || "unnamed") + "”").join(", ") + " below it — this rate wins on the shared nights."}
                       </div>
                     )}
-                    <div style={{ display:"flex", gap:24, marginTop:8, paddingLeft:2 }}>
+                    <div style={{ display:"flex", gap:24, marginTop:8, paddingLeft:2, flexWrap:"wrap", alignItems:"flex-start" }}>
                       <DayToggles compact label="Check-in days override" value={s.checkInDays}
                         onChange={(v)=>updSeason(p.id, si, "checkInDays", v)} />
                       <DayToggles compact label="Check-out days override" value={s.checkOutDays}
                         onChange={(v)=>updSeason(p.id, si, "checkOutDays", v)} />
+                      {/* Blank means "use the property's own rule" — 0 is not a
+                          valid stay length, so an empty box can safely mean
+                          inherit rather than needing a separate flag. */}
+                      <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        <span style={{ fontSize:10, color:T.textLight, fontWeight:600 }}>Nights override</span>
+                        <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                          <input type="number" min="1" value={s.minNights || ""}
+                            onChange={e => updSeason(p.id, si, "minNights", e.target.value === "" ? "" : Number(e.target.value))}
+                            placeholder={"min " + (p.minNights || 2)}
+                            style={Object.assign({}, inpStyle, { width:78, padding:"5px 7px", fontSize:12 })} />
+                          <span style={{ fontSize:11, color:T.textLight }}>to</span>
+                          <input type="number" min="1" value={s.maxNights || ""}
+                            onChange={e => updSeason(p.id, si, "maxNights", e.target.value === "" ? "" : Number(e.target.value))}
+                            placeholder={"max " + (p.maxNights || 28)}
+                            style={Object.assign({}, inpStyle, { width:78, padding:"5px 7px", fontSize:12 })} />
+                        </div>
+                        <span style={{ fontSize:10, color:T.textLight }}>Blank = use the property default</span>
+                      </div>
                     </div>
                   </div>
                   );
