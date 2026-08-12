@@ -1,7 +1,13 @@
 // netlify/functions/property-calendar.js
-// Returns an iCal feed for a single property so Airbnb can subscribe to availability.
+// Returns an iCal feed for a single property so Airbnb can subscribe to
+// availability.
 //
-// URL: /.netlify/functions/property-calendar?id=hamlet
+//   /ical/hamlet.ics   (or /.netlify/functions/property-calendar?id=hamlet)
+//
+// Airbnb needs only the dates and ignores SUMMARY, and this URL is public and
+// guessable, so every booking reads "Booked" or "Not available" — no guest
+// names leave the building through here. The full picture, names included, is
+// the calendar.ics feed subscribed to from Settings.
 // Add a redirect in netlify.toml if you want a cleaner URL:
 //   from = "/property-calendar/:id.ics"
 //   to   = "/.netlify/functions/property-calendar?id=:id"
@@ -11,6 +17,10 @@
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const ACCOM_KEY    = "hbf_accom_v1";
+
+// Must match PENDING_HOLD_MINUTES in book-accom.html, or the two disagree
+// about whether an abandoned checkout still holds its dates.
+const PENDING_HOLD_MINUTES = 60;
 
 async function sbGet(key) {
   const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
@@ -57,10 +67,16 @@ function foldLine(line) {
 }
 
 exports.handler = async function(event) {
-  var propertyId = event.queryStringParameters && event.queryStringParameters.id;
+  // Reached either directly (?id=hamlet) or through the /ical/hamlet.ics
+  // rewrite, which hands the whole filename over as the id. Airbnb insists on
+  // a URL that ends in .ics, so the extension is stripped here rather than
+  // being special-cased in the redirect.
+  var propertyId = (event.queryStringParameters && event.queryStringParameters.id) || "";
+  propertyId = String(propertyId).replace(/\.ics$/i, "");
   if (!propertyId || !/^[a-z0-9_-]{1,40}$/i.test(propertyId)) {
     return { statusCode: 400, body: "Missing or invalid ?id= parameter. Use ?id=hamlet, ?id=amly, or ?id=glamping." };
   }
+
 
   var bookings;
   try {
@@ -74,15 +90,28 @@ exports.handler = async function(event) {
   var lines = [];
   bookings.forEach(function(b) {
     if (b.status === "cancelled") return;
+
+    // An online booking is written to the database before the guest reaches
+    // Stripe, so an abandoned checkout leaves an unpaid "pending" row. The
+    // public booking page releases those after an hour; without the same rule
+    // here they would block the dates on Airbnb permanently. A pending row
+    // whose deposit is paid keeps its block — that is a real booking whose
+    // status simply hasn't caught up.
+    if (b.status === "pending") {
+      var dep = (b.schedule || []).find(function(x) { return x.label === "Deposit"; });
+      var paid = dep && dep.paid;
+      var age = b.createdAt ? (Date.now() - new Date(b.createdAt).getTime()) : 0;
+      if (!paid && isFinite(age) && age > PENDING_HOLD_MINUTES * 60 * 1000) return;
+    }
     var stays = (b.stays && b.stays.length) ? b.stays : [b];
     stays.forEach(function(s) {
       if (s.propertyId !== propertyId) return;
       if (!s.checkIn || !s.checkOut) return;
 
       var uid = String(b.id) + "-" + String(s.propertyId) + "@hawthbushfarm.co.uk";
+      // Deliberately says only that the dates are taken.
       var summary = b.bookingType === "Blocked" ? "Not available"
                   : b.source === "airbnb"        ? "Airbnb block"
-                  : b.guestName                  ? b.guestName
                   : "Booked";
       var start = toIcalDate(s.checkIn);
       var end   = toIcalDate(s.checkOut);
