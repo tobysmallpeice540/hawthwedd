@@ -89,7 +89,9 @@ function bodyToHtml(bodyText) {
   return paras.map(function (p) {
     var safe = escapeHtml(p.trim());
     safe = safe.replace(/(https?:\/\/[^\s<]+)/g, function (url) {
-      return '<a href="' + url + '" style="color:#2d2a25;text-decoration:underline">' + url + '</a>';
+      // Show something readable rather than a 200-character query string.
+      var label = url.length > 60 ? url.replace(/^https?:\/\//, "").split("/")[0] + "/…" : url;
+      return '<a href="' + url + '" style="color:#2d2a25;text-decoration:underline">' + label + '</a>';
     });
     return '<p style="margin:0 0 15px;font-size:15px;line-height:1.65;color:' + BRAND.text + '">' + safe + '</p>';
   }).join("");
@@ -98,14 +100,34 @@ function bodyToHtml(bodyText) {
 // opts: { termsUrl, buttonLabel, buttonUrl }
 function buildEmailHtml(bodyText, opts) {
   var o = opts || {};
-  var inner = bodyToHtml(bodyText);
 
+  var payButton = "";
   if (o.buttonUrl) {
-    inner += '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 6px">' +
+    payButton = '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0">' +
       '<tr><td align="center" bgcolor="' + BRAND.text + '" style="border-radius:8px">' +
-      '<a href="' + o.buttonUrl + '" style="display:inline-block;padding:13px 30px;font-family:Helvetica,Arial,sans-serif;' +
+      '<a href="' + o.buttonUrl + '" style="display:inline-block;padding:14px 34px;font-family:Helvetica,Arial,sans-serif;' +
       'font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px">' +
-      escapeHtml(o.buttonLabel || "Pay now") + '</a></td></tr></table>';
+      escapeHtml(o.buttonLabel || "Pay now") + '</a></td></tr>' +
+      // The Stripe cue reassures the guest about where their card details go —
+      // it replaces the reassurance the visible checkout.stripe.com URL used
+      // to give before the raw link was taken out.
+      '<tr><td align="center" style="padding-top:8px;font-family:Helvetica,Arial,sans-serif;font-size:11px;color:' + BRAND.muted + '">' +
+      'Secure card payment powered by Stripe</td></tr></table>';
+  }
+
+  // Checkout URLs run past a hundred characters and wrap over several lines,
+  // which looks broken. The button carries the link instead — and it goes
+  // exactly where the URL sat, so the sentence introducing it still leads into
+  // it and the sign-off stays at the bottom. With no URL in the wording (an
+  // older template), the button is appended after the text.
+  var inner;
+  if (o.buttonUrl && String(bodyText || "").indexOf(o.buttonUrl) !== -1) {
+    var halves = String(bodyText).split(o.buttonUrl);
+    var before = halves[0].replace(/[ \t]+$/, "").replace(/\n+$/, "");
+    var after  = halves.slice(1).join(o.buttonUrl).replace(/^\n+/, "");
+    inner = bodyToHtml(before) + payButton + bodyToHtml(after);
+  } else {
+    inner = bodyToHtml(bodyText) + payButton;
   }
 
   var terms = "";
