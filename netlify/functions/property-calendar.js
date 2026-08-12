@@ -119,6 +119,13 @@ exports.handler = async function(event) {
   bookings.forEach(function(b) {
     if (b.status === "cancelled") return;
 
+    // Never send Airbnb its own reservations back. These rows were imported
+    // from Airbnb's feed in the first place, so returning them creates a sync
+    // loop — the channel sees its own bookings arriving from an outside
+    // source. Channels routinely refuse a feed that does this, and it is
+    // wrong even when tolerated: Airbnb already knows about its own bookings.
+    if (b.source === "airbnb") return;
+
     // An online booking is written to the database before the guest reaches
     // Stripe, so an abandoned checkout leaves an unpaid "pending" row. The
     // public booking page releases those after an hour; without the same rule
@@ -150,9 +157,7 @@ exports.handler = async function(event) {
       var uid = "hbf-" + eventSeq + "-" + String(b.id) + "-" + String(s.propertyId) +
                 "@hawthbushfarm.co.uk";
       // Deliberately says only that the dates are taken.
-      var summary = b.bookingType === "Blocked" ? "Not available"
-                  : b.source === "airbnb"        ? "Airbnb block"
-                  : "Booked";
+      var summary = b.bookingType === "Blocked" ? "Not available" : "Booked";
       var start = toIcalDate(s.checkIn);
       var end   = toIcalDate(s.checkOut);
       if (!start || !end || end <= start) return;   // unusable dates: skip the event, keep the feed
@@ -170,16 +175,16 @@ exports.handler = async function(event) {
     });
   });
 
-  // Kept deliberately close to the Bookalet feed Airbnb already accepts:
-  // properties in alphabetical order within each VEVENT, SEQUENCE and STATUS
-  // present, and no METHOD or X-WR-* extensions. Those extras are valid iCal
-  // but there is no reason to hand a fussy importer anything it doesn't need.
+  // Deliberately identical in shape to the Bookalet feed Airbnb already
+  // accepts: properties alphabetically ordered within each VEVENT, SEQUENCE
+  // and STATUS present, and no METHOD or X-WR-* extensions. All of those are
+  // valid iCal, but there is no reason to hand a fussy importer anything it
+  // doesn't need.
   var ical = [
     "BEGIN:VCALENDAR",
     "CALSCALE:GREGORIAN",
     "PRODID:-//Hawthbush Farm//Lettings//EN",
-    "VERSION:2.0",
-    "X-WR-CALNAME:Hawthbush Farm - " + propertyId
+    "VERSION:2.0"
   ].concat(lines).concat(["END:VCALENDAR"]).join("\r\n") + "\r\n";
 
   return {
