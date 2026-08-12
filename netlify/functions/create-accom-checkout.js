@@ -115,6 +115,23 @@ exports.handler = async function(event) {
       }];
     }
 
+    // Last line of defence against a double booking: re-check against current
+    // data immediately before taking any money.
+    const bookedAlready = await sbGet(ACCOM_KEY) || [];
+    const clashes = findClashes(bookedAlready, stays);
+    if (clashes.length) {
+      var names = clashes.map(function(c) { return c.propertyName; })
+        .filter(function(v, i, a) { return a.indexOf(v) === i; }).join(" and ");
+      return {
+        statusCode: 409,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          error: "Sorry — " + names + " has just been booked for those dates. Please choose different dates.",
+          clashes: clashes
+        })
+      };
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
@@ -146,8 +163,7 @@ exports.handler = async function(event) {
     // digits, e.g. W10432. The existing list is loaded first so the number is
     // checked for collisions rather than assumed unique — it is the primary
     // key for this booking everywhere, including the Stripe webhook.
-    const existing     = await sbGet(ACCOM_KEY) || [];
-    const bookingId    = newBookingRef(existing, "W");
+    const bookingId    = newBookingRef(bookedAlready, "W");
     const todayISO     = new Date().toISOString().slice(0,10);
     // Balance timing should follow the booking's earliest check-in (not
     // necessarily the first stay added), and respect whatever balanceWeeks
@@ -247,6 +263,38 @@ exports.handler = async function(event) {
 // stored so a clash is impossible rather than merely unlikely. Falls back to
 // a longer number in the vanishingly unlikely event the space is exhausted.
 // Mirrored in App.jsx — both must agree or the two could collide.
+// Whether any stay in this request collides with something already booked.
+// The booking page checks availability from a snapshot loaded when the guest
+// arrived, which can be minutes old — two people can reach checkout for the
+// same nights. This is the check that actually prevents a double booking,
+// because it runs against the current data at the moment of payment.
+// Half-open dates: a stay ending as another begins is a changeover.
+function findClashes(existing, stays) {
+  var out = [];
+  (stays || []).forEach(function(s) {
+    if (!s || !s.propertyId || !s.checkIn || !s.checkOut) return;
+    (existing || []).forEach(function(b) {
+      if (!b || b.status === "cancelled") return;
+      // An abandoned checkout stops holding its dates after an hour, matching
+      // the booking page and the Airbnb feed.
+      if (b.status === "pending") {
+        var dep = (b.schedule || []).find(function(x) { return x.label === "Deposit"; });
+        var age = b.createdAt ? (Date.now() - new Date(b.createdAt).getTime()) : 0;
+        if (!(dep && dep.paid) && isFinite(age) && age > 60 * 60 * 1000) return;
+      }
+      var theirs = (b.stays && b.stays.length) ? b.stays : [b];
+      theirs.forEach(function(o) {
+        if (!o || o.propertyId !== s.propertyId || !o.checkIn || !o.checkOut) return;
+        if (s.checkIn < o.checkOut && s.checkOut > o.checkIn) {
+          out.push({ propertyId: s.propertyId, propertyName: s.propertyName || s.propertyId,
+                     checkIn: s.checkIn, checkOut: s.checkOut });
+        }
+      });
+    });
+  });
+  return out;
+}
+
 function newBookingRef(existing, prefix) {
   var taken = {};
   (existing || []).forEach(function(b) { if (b && b.id) taken[String(b.id).toUpperCase()] = true; });

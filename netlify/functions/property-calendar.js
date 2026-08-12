@@ -115,6 +115,7 @@ exports.handler = async function(event) {
 
   // Build VEVENT list for this property
   var lines = [];
+  var eventSeq = 0;
   bookings.forEach(function(b) {
     if (b.status === "cancelled") return;
 
@@ -135,13 +136,19 @@ exports.handler = async function(event) {
       if (s.propertyId !== propertyId) return;
       if (!s.checkIn || !s.checkOut) return;
 
-      // The UID must be unique across the whole feed. Keying it on booking id
-      // plus property alone collided whenever one booking held two stays in
-      // the same property — two VEVENTs sharing a UID, which importers treat
-      // as one event being redefined, and which Airbnb rejects outright. The
-      // stay's index and dates make it unambiguous.
-      var uid = String(b.id) + "-" + String(s.propertyId) + "-" + stayIdx + "-" +
-                toIcalDate(s.checkIn) + "@hawthbushfarm.co.uk";
+      // The UID must be unique across the whole feed — Airbnb rejects a
+      // calendar containing two VEVENTs with the same UID, since by the spec
+      // that means one event redefining another.
+      //
+      // Deriving it from the booking id isn't enough: the data contains
+      // records that share an id (a booking duplicated in error keeps the id
+      // of the original), and one booking can hold two stays in the same
+      // property. A running counter makes it unique by construction, whatever
+      // state the data is in. The booking id is kept in the UID for
+      // traceability, but uniqueness no longer depends on it.
+      eventSeq += 1;
+      var uid = "hbf-" + eventSeq + "-" + String(b.id) + "-" + String(s.propertyId) +
+                "@hawthbushfarm.co.uk";
       // Deliberately says only that the dates are taken.
       var summary = b.bookingType === "Blocked" ? "Not available"
                   : b.source === "airbnb"        ? "Airbnb block"
