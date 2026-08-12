@@ -180,11 +180,17 @@ exports.handler = async function(event) {
   // and STATUS present, and no METHOD or X-WR-* extensions. All of those are
   // valid iCal, but there is no reason to hand a fussy importer anything it
   // doesn't need.
+  // Each property gets a distinct calendar identity. Without a name the three
+  // feeds are indistinguishable at calendar level, and an importer that keys
+  // its imports on calendar identity rather than URL can treat the second and
+  // third as re-imports of the first. The UIDs already differ per property;
+  // this makes the calendars themselves differ too.
   var ical = [
     "BEGIN:VCALENDAR",
     "CALSCALE:GREGORIAN",
-    "PRODID:-//Hawthbush Farm//Lettings//EN",
-    "VERSION:2.0"
+    "PRODID:-//Hawthbush Farm//Lettings " + propertyId + "//EN",
+    "VERSION:2.0",
+    "X-WR-CALNAME:Hawthbush Farm - " + propertyId
   ].concat(lines).concat(["END:VCALENDAR"]).join("\r\n") + "\r\n";
 
   return {
