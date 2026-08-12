@@ -1628,7 +1628,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04v";
+const APP_BUILD = "2026-08-12a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2702,7 +2702,16 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 11px", outline:"none", resize:"vertical" }} />
       </label>
 
+      {form.termsAcceptedAt && (
+        <div style={{ fontSize:12, color:T.green, background:T.greenBg, border:"1px solid #bbf7d0", borderRadius:7,
+          padding:"8px 12px", marginBottom:14 }}>
+          Terms &amp; Conditions accepted at checkout on{" "}
+          {new Date(form.termsAcceptedAt).toLocaleString("en-GB", { day:"numeric", month:"long", year:"numeric", hour:"2-digit", minute:"2-digit" })}
+        </div>
+      )}
+
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"16px 18px", marginBottom:18 }}>
+        <ManualEmailSenders booking={form}/>
         <EmailHistoryPanel bookingId={form.id} title="Emails Sent" emptyLabel="No emails sent for this booking yet."/>
       </div>
 
@@ -2711,6 +2720,116 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         <button onClick={onCancel} style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Cancel</button>
         {onDelete && <button onClick={onDelete} style={{ marginLeft:"auto", background:"#fff", color:T.red, border:`1.5px solid #fca5a5`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Delete</button>}
       </div>
+    </div>
+  );
+}
+
+// ─── MANUAL EMAIL TRIGGERS ────────────────────────────────────────────────────
+// Fire any stage email on demand, ignoring the schedule entirely — for testing
+// the templates, and for resending when a guest says nothing arrived.
+// These bypass the automatic rules on purpose, including the suppression of
+// lettings emails for event-linked bookings, so a one-off can always be sent.
+// They do not bypass the £0 guards: the server refuses those, because a
+// request for nothing is a fault however it was triggered.
+const MANUAL_EMAILS = [
+  { id:"booking_confirmed",    label:"Booking confirmed" },
+  { id:"deposit_request",      label:"Deposit request" },
+  { id:"balance_request",      label:"Balance request" },
+  { id:"payment_confirmation", label:"Payment received" },
+  { id:"arrival",              label:"Arrival info" }
+];
+
+function ManualEmailSenders({ booking }) {
+  const [busy, setBusy] = useState(null);
+  const [note, setNote] = useState(null);
+  const [confirmId, setConfirmId] = useState(null);
+
+  if (!booking || !booking.id) {
+    return (
+      <div style={{ fontSize:12, color:T.textLight, marginBottom:16 }}>
+        Save the booking before sending any emails.
+      </div>
+    );
+  }
+
+  const to = (booking.email || "").trim();
+  const schedule = booking.schedule || [];
+  const amountOf = function(label) {
+    const e = schedule.find(function(s){ return s.label === label; });
+    return Number(e && e.amount) || 0;
+  };
+  const paidSoFar = schedule.reduce(function(a,s){ return a + (s.paid ? Number(s.amount)||0 : 0); }, 0);
+
+  // Arrival comes in two flavours; the server picks by booking type, so mirror
+  // that here rather than making the user choose.
+  const resolveId = function(id) {
+    if (id !== "arrival") return id;
+    return booking.bookingType === "Wedding" ? "arrival_event" : "arrival_general";
+  };
+
+  const blockedReason = function(id) {
+    if (!to) return "No guest email on this booking";
+    if (id === "deposit_request" && !(amountOf("Deposit") > 0)) return "Deposit is £0";
+    if (id === "balance_request" && !(amountOf("Balance") > 0)) return "Balance is £0";
+    if (id === "payment_confirmation" && !(paidSoFar > 0)) return "Nothing marked as paid yet";
+    if (id === "arrival" && !booking.checkIn) return "No check-in date";
+    return null;
+  };
+
+  async function send(id) {
+    setBusy(id); setNote(null); setConfirmId(null);
+    try {
+      const res = await fetch("/.netlify/functions/send-accom-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: booking.id, emailType: resolveId(id) })
+      });
+      const data = await res.json().catch(function(){ return {}; });
+      if (!res.ok || data.error) throw new Error(data.error || ("Send failed (" + res.status + ")"));
+      setNote({ kind:"ok", text: "Sent to " + to + "." });
+    } catch (e) {
+      setNote({ kind:"error", text: String(e.message || e) });
+    }
+    setBusy(null);
+  }
+
+  return (
+    <div style={{ marginBottom:18, paddingBottom:16, borderBottom:`1px solid ${T.border}` }}>
+      <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:8, flexWrap:"wrap" }}>
+        <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Send an email now</h3>
+        <span style={{ fontSize:11, color:T.textLight }}>
+          ignores the schedule — for testing, or resending{to ? " to " + to : ""}
+        </span>
+      </div>
+      {booking.linkedEventId && (
+        <div style={{ fontSize:11.5, color:"#92400e", background:"#fffbeb", border:"1px solid #fde68a",
+          borderRadius:6, padding:"7px 10px", marginBottom:9, lineHeight:1.6 }}>
+          Attached to a farm event — only arrival info is sent automatically. These buttons still work if you want to send something by hand.
+        </div>
+      )}
+      <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+        {MANUAL_EMAILS.map(function(m) {
+          const reason = blockedReason(m.id);
+          const armed = confirmId === m.id;
+          return (
+            <button key={m.id} type="button"
+              disabled={!!reason || busy !== null}
+              onClick={function(){ armed ? send(m.id) : setConfirmId(m.id); }}
+              onBlur={function(){ if (armed) setConfirmId(null); }}
+              title={reason || ("Send the " + m.label.toLowerCase() + " email to " + to)}
+              style={{ background: armed ? T.green : "#fff", color: armed ? "#fff" : (reason ? T.textLight : T.text),
+                border:`1.5px solid ${armed ? T.green : T.border}`, borderRadius:7, padding:"6px 12px",
+                fontFamily:"inherit", fontSize:12, fontWeight:600,
+                cursor: reason ? "not-allowed" : "pointer", opacity: reason ? .55 : 1 }}>
+              {busy === m.id ? "Sending…" : armed ? "Send now?" : m.label}
+            </button>
+          );
+        })}
+      </div>
+      {note && (
+        <div style={{ marginTop:9, fontSize:12, lineHeight:1.55,
+          color: note.kind==="ok" ? T.green : T.red }}>{note.text}</div>
+      )}
     </div>
   );
 }
@@ -3598,6 +3717,88 @@ function ICalSettings({ properties, setProperties, onSave }) {
 }
 
 // ── Email Templates Editor ────────────────────────────────────────────────────
+// ─── TERMS & CONDITIONS ───────────────────────────────────────────────────────
+// Held as one block of text in Supabase and published at /terms.html, so it is
+// edited in exactly one place. Emails and the booking flow link to that page
+// rather than carrying the wording, which keeps them short and means a change
+// applies to everything already sent as well as everything to come.
+const TERMS_STORAGE = "hbf_terms_v1";
+const TERMS_URL = SITE_URL + "/terms.html";
+
+function TermsEditor() {
+  const [text, setText] = useState(null);
+  const [updatedAt, setUpdatedAt] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [flash, setFlash] = useState("");
+
+  useEffect(function() {
+    let cancelled = false;
+    (async function() {
+      try {
+        const t = await sbGet(TERMS_STORAGE);
+        if (cancelled) return;
+        setText((t && t.text) || "");
+        setUpdatedAt((t && t.updatedAt) || null);
+      } catch (e) { if (!cancelled) setText(""); }
+    })();
+    return function() { cancelled = true; };
+  }, []);
+
+  if (text === null) return <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>;
+
+  const save = async function() {
+    setSaving(true);
+    try {
+      const stamp = new Date().toISOString();
+      await sbSet(TERMS_STORAGE, { text: text, updatedAt: stamp });
+      setUpdatedAt(stamp);
+      setFlash("Saved — live on the website immediately");
+      setTimeout(function(){ setFlash(""); }, 3000);
+    } catch (e) {
+      setFlash("Save failed: " + (e.message || e));
+      setTimeout(function(){ setFlash(""); }, 4000);
+    }
+    setSaving(false);
+  };
+
+  const written = !!String(text).trim();
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:6, flexWrap:"wrap" }}>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:T.text }}>Terms &amp; Conditions</div>
+          <div style={{ fontSize:12, color:T.textMid, marginTop:2 }}>
+            Published at <a href={TERMS_URL} target="_blank" rel="noreferrer" style={{ color:T.accent }}>{TERMS_URL}</a> and linked from every email and the booking page
+          </div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {flash && <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>{flash}</span>}
+          <button onClick={save} disabled={saving}
+            style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,
+              cursor: saving ? "default" : "pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, opacity: saving ? .6 : 1 }}>
+            {saving ? "Saving…" : "Save terms"}
+          </button>
+        </div>
+      </div>
+      {!written && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"9px 12px",
+          margin:"8px 0 10px", fontSize:12, color:"#92400e", lineHeight:1.6 }}>
+          Nothing written yet, so no T&amp;C link appears in emails or at checkout. Paste your terms below and save to turn it on everywhere.
+        </div>
+      )}
+      <textarea value={text} onChange={function(e){ setText(e.target.value); }} rows={22}
+        placeholder={"Paste your terms and conditions here.\n\nLeave a blank line between paragraphs. A line on its own that ends without a full stop is treated as a heading."}
+        style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text,
+          fontFamily:"inherit", fontSize:13, lineHeight:1.7, padding:"12px 14px", outline:"none", resize:"vertical" }}/>
+      <div style={{ fontSize:11, color:T.textLight, marginTop:6 }}>
+        {updatedAt ? "Last updated " + new Date(updatedAt).toLocaleString("en-GB", { day:"numeric", month:"long", year:"numeric", hour:"2-digit", minute:"2-digit" }) : "Not yet saved."}
+        {written ? " · " + String(text).trim().split(/\s+/).length + " words" : ""}
+      </div>
+    </div>
+  );
+}
+
 function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
   const [sel, setSel] = useState(0);
   const [flash, setFlash] = useState("");
@@ -3782,7 +3983,7 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
 // ── Setup wrapper (sub-tabs: Pricing | Discount Codes | Airbnb Sync) ──────────
 function LettingsSetup({ properties, setProperties, onSaveProperties, discountCodes, setDiscountCodes, onSaveDiscountCodes, emailTemplates, setEmailTemplates, onSaveEmailTemplates }) {
   const [setupTab, setSetupTab] = useState("pricing");
-  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"]];
+  const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"],["terms","Terms & Conditions"]];
   return (
     <div>
       <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}` }}>
@@ -3801,6 +4002,7 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
       {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
       {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "emails"  && <EmailTemplatesEditor templates={emailTemplates} setTemplates={setEmailTemplates} onSave={onSaveEmailTemplates}/>}
+      {setupTab === "terms"   && <TermsEditor/>}
     </div>
   );
 }
@@ -3956,7 +4158,7 @@ const BACKUP_DATA_KEYS = [
   "hawthbush_bookings_v6", "hawthbush_staff_v5", "hbf_accom_v1", "hbf_accom_guests_v1",
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
-  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1"
+  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1"
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -3964,7 +4166,7 @@ const KEY_LABELS = {
   "hbf_viewings_v1":"Viewings", "hbf_viewing_requests_v1":"Viewing requests", "hbf_viewing_blocks_v1":"Viewing blocks",
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
-  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records"
+  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -4454,8 +4656,12 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     var next = editId ? bookings.map(function(b){ return b.id===editId ? rec : b; }) : bookings.concat([rec]);
     await saveBookings(next);
     setTab("calendar"); setForm(null); setEditId(null);
-    // Newly-created manual booking with a guest email — offer to send the Booking Confirmed email
-    if (isNew && rec.email && rec.bookingType !== "Blocked") {
+    // Newly-created manual booking with a guest email — offer to send the
+    // Booking Confirmed email. Not offered for accommodation attached to a
+    // farm event: those guests are invoiced through the event and shouldn't
+    // receive a lettings confirmation. The send buttons on the booking page
+    // can still fire it by hand if it's ever wanted.
+    if (isNew && rec.email && rec.bookingType !== "Blocked" && !rec.linkedEventId) {
       setAskSendConfirm(rec);
     }
   };
