@@ -20,6 +20,10 @@ const TEMPLATES_KEY = "hbf_email_templates_v1";
 const EMAIL_LOG_KEY = "hbf_email_log_v1";
 const TERMS_KEY     = "hbf_terms_v1";
 const SITE_ORIGIN   = "https://hawthbushfarm.netlify.app";
+// Returned with every response so the app can show which version of this
+// function actually answered — the quickest way to tell a code problem from a
+// "not deployed yet" problem.
+const FN_BUILD      = "2026-08-12e";
 
 // Fallback templates — mirrors the defaults in App.jsx, used only if the
 // Lettings > Settings > Email Templates page has never been saved yet.
@@ -328,20 +332,39 @@ exports.handler = async function(event) {
     var payLink = "", payLabel = "";
 
     var extra = {};
-    if (emailType === "booking_confirmed" || emailType === "deposit_request") {
-      if (depositEntry && !depositEntry.paid && Number(depositEntry.amount) > 0) {
-        var link = await createPaymentLink(booking, depositEntry, "Deposit");
-        extra.paymentLink = link;
-        extra.paymentLinkLine = link ? ("\n\nYou can pay your deposit securely here: " + link) : "";
-        payLink = link; payLabel = "Pay deposit";
+    var linkError = "";
+    async function linkFor(entry, label) {
+      if (!entry || Number(entry.amount) <= 0) return "";
+      if (entry.paid) { linkError = "The " + label + " is already marked as paid, so no payment link was created."; return ""; }
+      try {
+        return await createPaymentLink(booking, entry, label);
+      } catch (e) {
+        linkError = "Stripe wouldn't create a payment link: " + (e.message || e);
+        return "";
       }
     }
+
+    if (emailType === "booking_confirmed" || emailType === "deposit_request") {
+      var link = await linkFor(depositEntry, "Deposit");
+      extra.paymentLink = link;
+      extra.paymentLinkLine = link ? ("\n\nYou can pay your deposit securely here: " + link) : "";
+      payLink = link; payLabel = "Pay deposit";
+    }
     if (emailType === "balance_request") {
-      if (balanceEntry && !balanceEntry.paid && Number(balanceEntry.amount) > 0) {
-        var blink = await createPaymentLink(booking, balanceEntry, "Balance");
-        extra.paymentLink = blink;
-        payLink = blink; payLabel = "Pay balance";
-      }
+      var blink = await linkFor(balanceEntry, "Balance");
+      extra.paymentLink = blink;
+      extra.paymentLinkLine = blink ? ("\n\nYou can pay your balance securely here: " + blink) : "";
+      payLink = blink; payLabel = "Pay balance";
+    }
+
+    // Refuse to send a request for money that contains no way to pay. Silently
+    // sending one is worse than not sending it — the guest gets a bill with a
+    // dead end, and nobody finds out until they complain.
+    if ((emailType === "deposit_request" || emailType === "balance_request") && !payLink) {
+      return { statusCode: 400, headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        error: linkError || "No payment link could be created, so the email wasn't sent.",
+        fn: FN_BUILD
+      }) };
     }
     if (emailType === "payment_confirmation") {
       // Whatever has actually been marked paid so far.
@@ -376,7 +399,8 @@ exports.handler = async function(event) {
 
     await logEmail(subject, booking.email, emailType, booking.id, bodyText);
 
-    return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ok: true }) };
+    return { statusCode: 200, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ok: true, fn: FN_BUILD, paymentLink: payLink || null }) };
 
   } catch (err) {
     console.error("send-accom-email error:", err);
