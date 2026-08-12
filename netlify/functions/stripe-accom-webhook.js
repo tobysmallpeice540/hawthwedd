@@ -118,6 +118,7 @@ function buildTokens(booking, property, extra) {
     depositAmount:  depositEntry ? Number(depositEntry.amount || 0).toFixed(2) : "",
     depositDueDate: depositEntry ? fmtDateNice(depositEntry.dueDate) : "",
     amountPaid:     "",
+    receiptUrl:     "",
   };
   return Object.assign(tokens, extra || {});
 }
@@ -143,7 +144,11 @@ async function logEmail(subject, to, type, bookingId, bodyText) {
 // guests read mail in. Webfonts don't load reliably either, hence Georgia and
 // Helvetica rather than the Cormorant/Jost pairing used on the website.
 const BRAND = {
-  logo:    SITE_ORIGIN + "/email-logo.png",
+  // The live logo from hawthbushfarm.co.uk, requested at 400px wide so it stays
+  // crisp on high-DPI screens while rendering at 110px. Hot-linked rather than
+  // hosted here so it tracks the website; if the Squarespace site is ever
+  // rebuilt this URL should be re-checked.
+  logo:    "https://images.squarespace-cdn.com/content/v1/6897aa6fe61ae2143f465ab1/1754770036281-I54E64T6O6J1YLVL9KYF/logo.png?format=400w",
   site:    "https://www.hawthbushfarm.co.uk",
   bg:      "#f9f6f1",
   panel:   "#ffffff",
@@ -228,9 +233,13 @@ async function getTermsUrl() {
   return "";
 }
 
-async function sendViaResend(to, subject, bodyText) {
+async function sendViaResend(to, subject, bodyText, payLink, payLabel) {
   if (!RESEND_KEY || !to) return { ok: false, error: "RESEND_API_KEY not set or no recipient" };
-  var html = buildEmailHtml(bodyText, { termsUrl: await getTermsUrl() });
+  var html = buildEmailHtml(bodyText, {
+    termsUrl: await getTermsUrl(),
+    buttonUrl: payLink || "",
+    buttonLabel: payLabel || "Pay now"
+  });
   var res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
@@ -238,6 +247,27 @@ async function sendViaResend(to, subject, bodyText) {
   });
   if (!res.ok) return { ok: false, error: "Resend failed: " + await res.text() };
   return { ok: true };
+}
+
+// Stripe's receipt page for a completed session. The session itself doesn't
+// carry it — it lives on the charge behind the payment intent — so the intent
+// is retrieved with the charge expanded. Wrapped in its own try/catch and
+// always resolving: a missing receipt link must never stop a payment being
+// recorded, which is the part that actually matters.
+async function fetchReceiptUrl(session) {
+  try {
+    if (!session.payment_intent) return { receiptUrl: "", paymentIntentId: "" };
+    var piId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent.id;
+    var pi = await stripe.paymentIntents.retrieve(piId, { expand: ["latest_charge"] });
+    var charge = pi && pi.latest_charge;
+    return {
+      receiptUrl: (charge && charge.receipt_url) || "",
+      paymentIntentId: piId
+    };
+  } catch (e) {
+    console.error("Could not fetch Stripe receipt URL:", e.message);
+    return { receiptUrl: "", paymentIntentId: "" };
+  }
 }
 
 async function sendPaymentEmails(booking, amountPaidPence, templates, properties, opts) {
@@ -263,10 +293,12 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
   // A £0.00 receipt is confusing rather than reassuring.
   if (booking.email && Number(amountPaid) > 0) {
     var pcTmpl = templates.find(function(t) { return t.id === "payment_confirmation"; }) || DEFAULT_TEMPLATES.find(function(t) { return t.id === "payment_confirmation"; });
-    var pcTokens = buildTokens(booking, property, { amountPaid: amountPaid });
+    var pcTokens = buildTokens(booking, property, { amountPaid: amountPaid, receiptUrl: opts.receiptUrl || "" });
     var pcSubject = fillTemplate(pcTmpl.subject, pcTokens);
     var pcBody = fillTemplate(pcTmpl.body, pcTokens);
-    var pcRes = await sendViaResend(booking.email, pcSubject, pcBody);
+    // The receipt doubles as proof of payment, so it goes on the confirmation
+    // as a button rather than only being visible in the office.
+    var pcRes = await sendViaResend(booking.email, pcSubject, pcBody, opts.receiptUrl || "", "View your receipt");
     if (pcRes.ok) {
       await logEmail(pcSubject, booking.email, "payment_confirmation", booking.id, pcBody);
     } else {
@@ -311,6 +343,8 @@ exports.handler = async function(event) {
     const paidDate  = paidAt.slice(0, 10);
     const amountPence = session.amount_total || 0;
 
+    const receipt = await fetchReceiptUrl(session);
+
     const bookings   = (await sbGet(ACCOM_KEY)) || [];
     const properties = (await sbGet(PROPS_KEY)) || [];
     const templates   = (await sbGet(TEMPLATES_KEY)) || DEFAULT_TEMPLATES;
@@ -339,7 +373,12 @@ exports.handler = async function(event) {
       var schedule1 = (booking.schedule || []).map(function(s) {
         if (s.stripeId === sessionId || s.label === "Deposit") {
           if (s.paid) alreadyPaid = true;
-          return Object.assign({}, s, { paid: true, paidDate: paidDate });
+          return Object.assign({}, s, {
+            paid: true, paidDate: paidDate,
+            paidAmount: Math.round(amountPence) / 100,
+            receiptUrl: receipt.receiptUrl,
+            paymentIntentId: receipt.paymentIntentId
+          });
         }
         return s;
       });
@@ -350,7 +389,12 @@ exports.handler = async function(event) {
       var schedule2 = (booking.schedule || []).map(function(s) {
         if (s.label === scheduleLabel) {
           if (s.paid) alreadyPaid = true;
-          return Object.assign({}, s, { paid: true, paidDate: paidDate });
+          return Object.assign({}, s, {
+            paid: true, paidDate: paidDate,
+            paidAmount: Math.round(amountPence) / 100,
+            receiptUrl: receipt.receiptUrl,
+            paymentIntentId: receipt.paymentIntentId
+          });
         }
         return s;
       });
@@ -358,7 +402,10 @@ exports.handler = async function(event) {
     }
 
     if (!alreadyPaid) {
-      booking = await sendPaymentEmails(booking, amountPence, templates, properties, { sendBookingConfirmed: metaType === "accom_deposit" });
+      booking = await sendPaymentEmails(booking, amountPence, templates, properties, {
+        sendBookingConfirmed: metaType === "accom_deposit",
+        receiptUrl: receipt.receiptUrl
+      });
     } else {
       console.log("Schedule entry already marked paid — skipping duplicate email for session", sessionId);
     }

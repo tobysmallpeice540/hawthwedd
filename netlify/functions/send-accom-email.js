@@ -144,7 +144,11 @@ async function logEmail(subject, to, type, bookingId, bodyText) {
 // guests read mail in. Webfonts don't load reliably either, hence Georgia and
 // Helvetica rather than the Cormorant/Jost pairing used on the website.
 const BRAND = {
-  logo:    SITE_ORIGIN + "/email-logo.png",
+  // The live logo from hawthbushfarm.co.uk, requested at 400px wide so it stays
+  // crisp on high-DPI screens while rendering at 110px. Hot-linked rather than
+  // hosted here so it tracks the website; if the Squarespace site is ever
+  // rebuilt this URL should be re-checked.
+  logo:    "https://images.squarespace-cdn.com/content/v1/6897aa6fe61ae2143f465ab1/1754770036281-I54E64T6O6J1YLVL9KYF/logo.png?format=400w",
   site:    "https://www.hawthbushfarm.co.uk",
   bg:      "#f9f6f1",
   panel:   "#ffffff",
@@ -229,9 +233,13 @@ async function getTermsUrl() {
   return "";
 }
 
-async function sendViaResend(to, subject, bodyText, attachments) {
+async function sendViaResend(to, subject, bodyText, attachments, payLink, payLabel) {
   if (!RESEND_KEY) return { ok: false, error: "RESEND_API_KEY not set" };
-  var html = buildEmailHtml(bodyText, { termsUrl: await getTermsUrl() });
+  var html = buildEmailHtml(bodyText, {
+    termsUrl: await getTermsUrl(),
+    buttonUrl: payLink || "",
+    buttonLabel: payLabel || "Pay now"
+  });
   var res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
@@ -312,18 +320,27 @@ exports.handler = async function(event) {
       return { statusCode: 400, body: JSON.stringify({ error: "The balance on this booking is £0, so there is nothing to request." }) };
     }
 
+    // Whatever link was minted for this email, kept aside so it can also be
+    // rendered as a button. A payment request that reaches the guest without a
+    // way to pay is a failed email, so the button is added regardless of
+    // whether the template happens to include the {{paymentLink}} token —
+    // templates saved before that token existed simply had no link at all.
+    var payLink = "", payLabel = "";
+
     var extra = {};
     if (emailType === "booking_confirmed" || emailType === "deposit_request") {
       if (depositEntry && !depositEntry.paid && Number(depositEntry.amount) > 0) {
         var link = await createPaymentLink(booking, depositEntry, "Deposit");
         extra.paymentLink = link;
         extra.paymentLinkLine = link ? ("\n\nYou can pay your deposit securely here: " + link) : "";
+        payLink = link; payLabel = "Pay deposit";
       }
     }
     if (emailType === "balance_request") {
       if (balanceEntry && !balanceEntry.paid && Number(balanceEntry.amount) > 0) {
         var blink = await createPaymentLink(booking, balanceEntry, "Balance");
         extra.paymentLink = blink;
+        payLink = blink; payLabel = "Pay balance";
       }
     }
     if (emailType === "payment_confirmation") {
@@ -345,7 +362,7 @@ exports.handler = async function(event) {
       return { filename: a.name, content: base64 };
     });
 
-    var sendResult = await sendViaResend(booking.email, subject, bodyText, attachments);
+    var sendResult = await sendViaResend(booking.email, subject, bodyText, attachments, payLink, payLabel);
     if (!sendResult.ok) {
       return { statusCode: 502, body: JSON.stringify({ error: sendResult.error }) };
     }

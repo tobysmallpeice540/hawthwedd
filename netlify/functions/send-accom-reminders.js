@@ -148,7 +148,11 @@ async function logEmail(subject, to, type, bookingId, bodyText) {
 // guests read mail in. Webfonts don't load reliably either, hence Georgia and
 // Helvetica rather than the Cormorant/Jost pairing used on the website.
 const BRAND = {
-  logo:    SITE_ORIGIN + "/email-logo.png",
+  // The live logo from hawthbushfarm.co.uk, requested at 400px wide so it stays
+  // crisp on high-DPI screens while rendering at 110px. Hot-linked rather than
+  // hosted here so it tracks the website; if the Squarespace site is ever
+  // rebuilt this URL should be re-checked.
+  logo:    "https://images.squarespace-cdn.com/content/v1/6897aa6fe61ae2143f465ab1/1754770036281-I54E64T6O6J1YLVL9KYF/logo.png?format=400w",
   site:    "https://www.hawthbushfarm.co.uk",
   bg:      "#f9f6f1",
   panel:   "#ffffff",
@@ -233,9 +237,13 @@ async function getTermsUrl() {
   return "";
 }
 
-async function sendViaResend(to, subject, bodyText) {
+async function sendViaResend(to, subject, bodyText, payLink, payLabel) {
   if (!RESEND_KEY) return { ok: false, error: "RESEND_API_KEY not set" };
-  var html = buildEmailHtml(bodyText, { termsUrl: await getTermsUrl() });
+  var html = buildEmailHtml(bodyText, {
+    termsUrl: await getTermsUrl(),
+    buttonUrl: payLink || "",
+    buttonLabel: payLabel || "Pay now"
+  });
   var res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
@@ -293,6 +301,15 @@ exports.handler = async function() {
 
       if (booking.status === "cancelled" || booking.bookingType === "Blocked") continue;
 
+      // An online booking row is written before the guest reaches Stripe, so an
+      // abandoned checkout leaves a "pending" booking with an unpaid deposit.
+      // Chasing those would email people who never completed a booking, with a
+      // live payment link. The status is flipped to "confirmed" by the webhook
+      // the moment payment lands, so a real booking is only ever skipped in the
+      // few minutes it sits at the card screen.
+      var depositRow = (booking.schedule || []).find(function(s) { return s.label === "Deposit"; });
+      if (booking.status === "pending" && !(depositRow && depositRow.paid)) continue;
+
       // Accommodation attached to a farm event is billed through that event's
       // Xero invoices, so it must never get its own deposit/balance chasing —
       // the guest would be asked for money they are already being invoiced for.
@@ -321,7 +338,7 @@ exports.handler = async function() {
             var depTokens = buildTokens(booking, property, { paymentLink: depLink });
             var depSubject = fillTemplate(depTmpl.subject, depTokens);
             var depBody = fillTemplate(depTmpl.body, depTokens);
-            var depRes = await sendViaResend(booking.email, depSubject, depBody);
+            var depRes = await sendViaResend(booking.email, depSubject, depBody, depLink, "Pay deposit");
             if (depRes.ok) {
               await logEmail(depSubject, booking.email, "deposit_request", booking.id, depBody);
               flags.depositRequestSent = true;
@@ -346,7 +363,7 @@ exports.handler = async function() {
             var balTokens = buildTokens(booking, property, { paymentLink: balLink });
             var balSubject = fillTemplate(balTmpl.subject, balTokens);
             var balBody = fillTemplate(balTmpl.body, balTokens);
-            var balRes = await sendViaResend(booking.email, balSubject, balBody);
+            var balRes = await sendViaResend(booking.email, balSubject, balBody, balLink, "Pay balance");
             if (balRes.ok) {
               await logEmail(balSubject, booking.email, "balance_request", booking.id, balBody);
               flags.balanceRequestSent = true;

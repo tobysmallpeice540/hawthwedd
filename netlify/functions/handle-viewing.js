@@ -67,7 +67,11 @@ async function logEmail(entry) {
 // guests read mail in. Webfonts don't load reliably either, hence Georgia and
 // Helvetica rather than the Cormorant/Jost pairing used on the website.
 const BRAND = {
-  logo:    SITE_ORIGIN + "/email-logo.png",
+  // The live logo from hawthbushfarm.co.uk, requested at 400px wide so it stays
+  // crisp on high-DPI screens while rendering at 110px. Hot-linked rather than
+  // hosted here so it tracks the website; if the Squarespace site is ever
+  // rebuilt this URL should be re-checked.
+  logo:    "https://images.squarespace-cdn.com/content/v1/6897aa6fe61ae2143f465ab1/1754770036281-I54E64T6O6J1YLVL9KYF/logo.png?format=400w",
   site:    "https://www.hawthbushfarm.co.uk",
   bg:      "#f9f6f1",
   panel:   "#ffffff",
