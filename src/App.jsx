@@ -1628,7 +1628,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12b";
+const APP_BUILD = "2026-08-12e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -1653,7 +1653,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
     triggerLabel: "Send on booking creation",
     triggerDays: null,
     subject: "Booking Confirmed – {{propertyName}} – Ref {{bookingRef}}",
-    body: "Dear {{guestName}},\n\nThank you for booking with Hawthbush Farm! Your reservation is confirmed.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\n\nTotal: £{{totalAmount}}\n\nA deposit of £{{depositAmount}} is due by {{depositDueDate}}.\n\nIf you have any questions, please don't hesitate to get in touch.\n\nWarm regards,\nHawthbush Farm",
+    body: "Dear {{guestName}},\n\nThank you for booking with Hawthbush Farm! Your reservation is confirmed.\n\nBooking reference: {{bookingRef}}\n{{stayDetails}}\n\nTotal: £{{totalAmount}}\n\nA deposit of £{{depositAmount}} is due by {{depositDueDate}}.{{paymentLinkLine}}\n\nIf you have any questions, please don't hesitate to get in touch.\n\nWarm regards,\nHawthbush Farm",
     attachments: []
   },
   {
@@ -1715,7 +1715,7 @@ const EMAIL_TOKENS = [
   "{{checkIn}}", "{{checkOut}}", "{{nights}}",
   "{{checkInTime}}", "{{checkOutTime}}",
   "{{totalAmount}}", "{{depositAmount}}", "{{balanceAmount}}",
-  "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}", "{{paymentLink}}"
+  "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}", "{{paymentLink}}", "{{paymentLinkLine}}", "{{receiptUrl}}"
 ];
 
 // ── Month timeline: one lane per property ────────────────────────────────────
@@ -2408,7 +2408,7 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
 const selStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 11px", outline:"none", cursor:"pointer" };
 
 // ── Add / edit form ──────────────────────────────────────────────────────────
-function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onCancel, onDelete }) {
+function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete }) {
   var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
   var selPropIds = formStays.map(function(s){ return s.propertyId; });
   var totalValue = formStays.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
@@ -2684,13 +2684,42 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         </div>
         {!form.schedule.length && <div style={{ fontSize:12, color:T.textLight }}>No schedule. {zeroValue ? "Zero-value booking." : "Use auto-build, or leave blank if paid."}</div>}
         {form.schedule.map((s,i)=>(
-          <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 0.9fr 1.1fr auto", gap:10, alignItems:"center", marginBottom:8 }}>
-            <input value={s.label} onChange={e=>updSched(i,"label",e.target.value)} style={inlineInput} />
-            <input type="number" value={s.amount} onChange={e=>updSched(i,"amount",e.target.value)} style={inlineInput} />
-            <input type="date" value={s.dueDate||""} onChange={e=>updSched(i,"dueDate",e.target.value)} style={inlineInput} />
-            <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>
-              <input type="checkbox" checked={!!s.paid} onChange={e=>updSched(i,"paid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent }} />paid
-            </label>
+          <div key={i} style={{ marginBottom:8 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 0.9fr 1.1fr auto", gap:10, alignItems:"center" }}>
+              <input value={s.label} onChange={e=>updSched(i,"label",e.target.value)} style={inlineInput} />
+              <input type="number" value={s.amount} onChange={e=>updSched(i,"amount",e.target.value)} style={inlineInput} />
+              <input type="date" value={s.dueDate||""} onChange={e=>updSched(i,"dueDate",e.target.value)} style={inlineInput} />
+              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>
+                <input type="checkbox" checked={!!s.paid} onChange={e=>updSched(i,"paid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent }} />paid
+              </label>
+            </div>
+            {/* Stripe ticks "paid" itself when the webhook fires; this line
+                shows what it recorded, so a tick that came from a real payment
+                is distinguishable from one someone ticked by hand. */}
+            {s.paid && (s.paidDate || s.receiptUrl) && (
+              <div style={{ display:"flex", alignItems:"center", gap:9, flexWrap:"wrap",
+                fontSize:11, color:T.green, marginTop:4, paddingLeft:2 }}>
+                <span>
+                  {s.receiptUrl ? "Paid via Stripe" : "Marked paid"}
+                  {s.paidDate ? " " + fmtDate(s.paidDate) : ""}
+                  {Number(s.paidAmount) > 0 ? " · " + String(fmtMoney(s.paidAmount)) : ""}
+                  {Number(s.paidAmount) > 0 && Math.abs(Number(s.paidAmount) - Number(s.amount)) > 0.005
+                    ? " (scheduled " + String(fmtMoney(s.amount)) + ")" : ""}
+                </span>
+                {s.receiptUrl && (
+                  <a href={s.receiptUrl} target="_blank" rel="noreferrer"
+                    style={{ color:T.accent, fontWeight:600, textDecoration:"none" }}>
+                    Stripe receipt ↗
+                  </a>
+                )}
+                {s.paymentIntentId && (
+                  <a href={"https://dashboard.stripe.com/payments/" + s.paymentIntentId} target="_blank" rel="noreferrer"
+                    style={{ color:T.textLight, textDecoration:"none" }}>
+                    open in Stripe ↗
+                  </a>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -2715,10 +2744,25 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         <EmailHistoryPanel bookingId={form.id} title="Emails Sent" emptyLabel="No emails sent for this booking yet."/>
       </div>
 
-      <div style={{ display:"flex", gap:10 }}>
-        <button onClick={onSave} style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save booking</button>
-        <button onClick={onCancel} style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Cancel</button>
+      {/* Save keeps the booking open so the schedule can be built, emails sent
+          and figures adjusted in one sitting. Exit is deliberately separate. */}
+      <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+        <button onClick={function(){ onSave(true); }}
+          style={{ background:T.accent, color:"#fff", border:"none", padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>
+          Save booking
+        </button>
+        <button onClick={function(){ onSave(false); }}
+          style={{ background:"#fff", color:T.accent, border:`1.5px solid ${T.accent}`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>
+          Save &amp; exit
+        </button>
+        <button onClick={onExit}
+          style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>
+          Exit
+        </button>
         {onDelete && <button onClick={onDelete} style={{ marginLeft:"auto", background:"#fff", color:T.red, border:`1.5px solid #fca5a5`, padding:"11px 22px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Delete</button>}
+      </div>
+      <div style={{ fontSize:11, color:T.textLight, marginTop:8 }}>
+        Exit leaves without saving anything changed since the last save.
       </div>
     </div>
   );
@@ -3983,6 +4027,19 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
               </div>
             </div>
 
+            {/* A payment email whose body never mentions the link still gets a
+                Pay button added automatically, but the guest reads the text
+                first — so flag it rather than relying on the fallback. */}
+            {["booking_confirmed","deposit_request","balance_request"].indexOf(tmpl.id) !== -1
+              && String(tmpl.body || "").indexOf("{{payment") === -1 && (
+              <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"9px 12px",
+                marginBottom:16, fontSize:11.5, color:"#92400e", lineHeight:1.6 }}>
+                This email asks for money but the body has no <code>{"{{paymentLink}}"}</code> token, so no link appears in the text.
+                A <strong>Pay now</strong> button is added to the email automatically, but it reads better if you put the link in yourself —
+                paste <code>{"{{paymentLink}}"}</code> where the URL should go.
+              </div>
+            )}
+
             {/* Attachments */}
             <div>
               <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4, marginBottom:7 }}>Attachments (max 2 MB each)</div>
@@ -4670,7 +4727,9 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     if (clearFocusBooking) clearFocusBooking();
   }, [focusBookingId, loaded, bookings]);
 
-  const handleSave = async () => {
+  // stayOpen: keep the form on screen after saving, so several changes can be
+  // made and saved without losing your place. Exit is a separate button.
+  const handleSave = async (stayOpen) => {
     var rawStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
     var stays = rawStays.map(function(s) {
       var p = properties.find(function(pp){ return pp.id===s.propertyId; });
@@ -4692,7 +4751,20 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     var isNew = !editId;
     var next = editId ? bookings.map(function(b){ return b.id===editId ? rec : b; }) : bookings.concat([rec]);
     await saveBookings(next);
-    setTab("calendar"); setForm(null); setEditId(null);
+
+    if (stayOpen) {
+      // Stay on the booking, but keep editing the record that was actually
+      // written — otherwise a new booking would be saved again as a second
+      // copy on the next press, and the send buttons would have no id to
+      // work with.
+      setForm(rec);
+      setEditId(rec.id);
+      setFlash("Booking saved");
+      setTimeout(function(){ setFlash(""); }, 2000);
+    } else {
+      setTab("calendar"); setForm(null); setEditId(null);
+    }
+
     // Newly-created manual booking with a guest email — offer to send the
     // Booking Confirmed email. Not offered for accommodation attached to a
     // farm event: those guests are invoiced through the event and shouldn't
@@ -4791,7 +4863,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
-          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onCancel={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} />
+          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} />
         </div>
       )}
     </div>
