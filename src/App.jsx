@@ -538,6 +538,15 @@ function eventTypeLabel(ev) {
 }
 
 // Long-form date for invoice line descriptions, e.g. "29 May 2029"
+// "Monday 17 August 2026" — the weekday matters more than the year to whoever
+// is planning a week's cleaning, but both are cheap to show.
+function fmtWeekdayLong(iso) {
+  if (!iso) return "";
+  var d = new Date(String(iso).slice(0, 10) + "T00:00:00");
+  if (isNaN(d)) return String(iso);
+  return d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+}
+
 function fmtDateLong(iso) {
   if (!iso) return "";
   var d = new Date(String(iso).slice(0, 10) + "T00:00:00");
@@ -1628,7 +1637,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12g";
+const APP_BUILD = "2026-08-12j";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4260,7 +4269,7 @@ const BACKUP_DATA_KEYS = [
   "hawthbush_bookings_v6", "hawthbush_staff_v5", "hbf_accom_v1", "hbf_accom_guests_v1",
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
-  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1"
+  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1"
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -4268,7 +4277,7 @@ const KEY_LABELS = {
   "hbf_viewings_v1":"Viewings", "hbf_viewing_requests_v1":"Viewing requests", "hbf_viewing_blocks_v1":"Viewing blocks",
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
-  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions"
+  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -4623,6 +4632,134 @@ function BackupPanel() {
 }
 
 // ── Main Lettings view ───────────────────────────────────────────────────────
+// ─── WEEKLY CLEANING SUMMARY ──────────────────────────────────────────────────
+// Settings for the emailed version of the housekeeping view. The sending is
+// done by a scheduled Netlify function; this only stores what it should do.
+const CLEANING_EMAIL_KEY = "hbf_cleaning_email_v1";
+const WEEKDAYS = [
+  [1, "Monday"], [2, "Tuesday"], [3, "Wednesday"], [4, "Thursday"],
+  [5, "Friday"], [6, "Saturday"], [0, "Sunday"]
+];
+
+function parseEmailList(str) {
+  return String(str || "").split(",").map(function(e) { return e.trim(); })
+    .filter(function(e) { return e.indexOf("@") > 0; });
+}
+
+function CleaningSummarySettings() {
+  const [cfg, setCfg]   = useState(null);
+  const [flash, setFlash] = useState("");
+  const [busy, setBusy]   = useState(false);
+
+  useEffect(function() {
+    let cancelled = false;
+    (async function() {
+      try {
+        const c = await sbGet(CLEANING_EMAIL_KEY);
+        if (!cancelled) setCfg(c || { enabled: false, emails: "", weekday: 1 });
+      } catch (e) { if (!cancelled) setCfg({ enabled: false, emails: "", weekday: 1 }); }
+    })();
+    return function() { cancelled = true; };
+  }, []);
+
+  if (cfg === null) return <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>;
+
+  const recipients = parseEmailList(cfg.emails);
+  const upd = function(k, v) { setCfg(function(c) { return Object.assign({}, c, { [k]: v }); }); };
+
+  const save = async function() {
+    setBusy(true);
+    try {
+      await sbSet(CLEANING_EMAIL_KEY, cfg);
+      setFlash("Saved");
+    } catch (e) { setFlash("Save failed: " + (e.message || e)); }
+    setBusy(false);
+    setTimeout(function(){ setFlash(""); }, 3000);
+  };
+
+  const sendTest = async function() {
+    setBusy(true); setFlash("");
+    try {
+      const res = await fetch("/.netlify/functions/send-cleaning-summary", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true })
+      });
+      const data = await res.json().catch(function(){ return {}; });
+      if (!res.ok || data.error) throw new Error(data.error || "Send failed");
+      setFlash("Sent to " + (data.sentTo || []).join(", "));
+    } catch (e) { setFlash("Test failed: " + (e.message || e)); }
+    setBusy(false);
+    setTimeout(function(){ setFlash(""); }, 6000);
+  };
+
+  return (
+    <div>
+      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
+        The same fortnight of check-outs, check-ins, changeovers and farm events shown in the housekeeping
+        login, emailed once a week at 3am.
+      </p>
+
+      <label style={{ display:"flex", alignItems:"center", gap:9, cursor:"pointer", marginBottom:14 }}>
+        <input type="checkbox" checked={!!cfg.enabled} onChange={function(e){ upd("enabled", e.target.checked); }}
+          style={{ width:16, height:16, accentColor:T.green, cursor:"pointer" }}/>
+        <span style={{ fontSize:13, fontWeight:600, color: cfg.enabled ? T.green : T.textMid }}>
+          {cfg.enabled ? "Sending weekly" : "Not sending"}
+        </span>
+      </label>
+
+      <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:12, marginBottom:12 }}>
+        <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+          <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Send to — comma separated</span>
+          <input value={cfg.emails || ""} onChange={function(e){ upd("emails", e.target.value); }}
+            placeholder="cleaner@example.com, housekeeping@example.com"
+            style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text,
+              fontFamily:"inherit", fontSize:13, padding:"9px 11px", outline:"none" }}/>
+        </label>
+        <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
+          <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Day of the week</span>
+          <select value={cfg.weekday} onChange={function(e){ upd("weekday", Number(e.target.value)); }}
+            style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text,
+              fontFamily:"inherit", fontSize:13, padding:"9px 11px", outline:"none" }}>
+            {WEEKDAYS.map(function(d) { return <option key={d[0]} value={d[0]}>{d[1]}</option>; })}
+          </select>
+        </label>
+      </div>
+
+      {cfg.enabled && !recipients.length && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"8px 12px",
+          marginBottom:12, fontSize:12, color:"#92400e" }}>
+          Switched on, but there are no valid email addresses — nothing will be sent.
+        </div>
+      )}
+      {cfg.enabled && recipients.length > 0 && (
+        <div style={{ fontSize:12, color:T.textMid, marginBottom:12, lineHeight:1.6 }}>
+          Every <strong>{(WEEKDAYS.find(function(d){ return d[0] === Number(cfg.weekday); }) || [,"Monday"])[1]}</strong> at
+          3am to {recipients.length} address{recipients.length === 1 ? "" : "es"}: {recipients.join(", ")}
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+        <button onClick={save} disabled={busy}
+          style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,
+            cursor: busy ? "default" : "pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, opacity: busy ? .6 : 1 }}>
+          Save
+        </button>
+        <button onClick={sendTest} disabled={busy || !recipients.length}
+          title={recipients.length ? "Send it now, whatever day it is" : "Add an email address first"}
+          style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"9px 18px",
+            borderRadius:8, cursor: (busy || !recipients.length) ? "not-allowed" : "pointer",
+            fontFamily:"inherit", fontSize:13, fontWeight:600, opacity: (busy || !recipients.length) ? .55 : 1 }}>
+          Send one now
+        </button>
+        {flash && <span style={{ fontSize:12, color: flash.indexOf("fail") !== -1 ? T.red : T.green, fontWeight:600 }}>{flash}</span>}
+      </div>
+      <p style={{ fontSize:11, color:T.textLight, margin:"10px 0 0", lineHeight:1.6 }}>
+        "Send one now" ignores the day and the on/off switch, so it can be used to check the wording without waiting a week.
+      </p>
+    </div>
+  );
+}
+
 // ─── CLEANER VIEW ─────────────────────────────────────────────────────────────
 // A read-only, three-tab app for whoever is cleaning: what's coming up, the
 // lettings calendar, and the bookings list. Loads its own data rather than
@@ -4638,9 +4775,19 @@ function CleanerHome({ properties, accom, events }) {
     return d.toISOString().slice(0, 10);
   })();
 
+  const propOf = function(id) {
+    return (properties || []).find(function(x) { return x.id === id; }) || null;
+  };
   const propName = function(id) {
-    const p = (properties || []).find(function(x) { return x.id === id; });
+    const p = propOf(id);
     return p ? p.name : id;
+  };
+  // Rows sort by where the property sits in the configured list — Hamlet,
+  // Amly, Glamping — so every day reads in the same order. Farm events sit
+  // after the cottages.
+  const propRank = function(id) {
+    const i = (properties || []).findIndex(function(x) { return x.id === id; });
+    return i === -1 ? 900 : i;
   };
 
   // Everything happening in the window, keyed by the day it happens on.
@@ -4653,17 +4800,30 @@ function CleanerHome({ properties, accom, events }) {
 
   (events || []).forEach(function(ev) {
     if (!isValidEventDate(ev.date) || ev.status === "Cancelled") return;
-    add(ev.date, { kind: "event", label: ev.couple || "Event", detail: eventTypeLabel(ev) });
+    add(ev.date, {
+      kind: "event", rank: 999,
+      label: "Grain Store",
+      detail: (ev.couple || "Event") + " · " + eventTypeLabel(ev)
+    });
   });
 
   (accom || []).forEach(function(b) {
     if (b.status === "cancelled" || b.bookingType === "Blocked") return;
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    const wedding = b.bookingType === "Wedding";
     stays.forEach(function(s) {
+      const p = propOf(s.propertyId);
       const who = b.guestName || "Guest";
-      const guests = b.guestCount ? b.guestCount + " guest" + (b.guestCount === 1 ? "" : "s") : "";
-      add(s.checkOut, { kind: "out", label: propName(s.propertyId), detail: who + (guests ? " · " + guests : "") });
-      add(s.checkIn,  { kind: "in",  label: propName(s.propertyId), detail: who + (guests ? " · " + guests : "") });
+      const guests = b.guestCount ? b.guestCount + " guest" + (Number(b.guestCount) === 1 ? "" : "s") : "";
+      // Wedding parties get earlier access and a later checkout, so the times
+      // have to come from the booking type, not just the property.
+      const inTime  = p ? (wedding ? p.checkInFromWedding  : p.checkInFrom)  : "";
+      const outTime = p ? (wedding ? p.checkOutByWedding   : p.checkOutBy)   : "";
+      const tail = who + (guests ? " · " + guests : "");
+      add(s.checkOut, { kind: "out", rank: propRank(s.propertyId), label: propName(s.propertyId),
+        time: outTime || "", detail: tail });
+      add(s.checkIn,  { kind: "in",  rank: propRank(s.propertyId), label: propName(s.propertyId),
+        time: inTime || "", detail: tail });
     });
   });
 
@@ -4708,7 +4868,8 @@ function CleanerHome({ properties, accom, events }) {
 
       {days.map(function(d) {
         const items = byDay[d].slice().sort(function(a, z) {
-          const order = { out: 0, in: 1, event: 2 };
+          if (a.rank !== z.rank) return a.rank - z.rank;        // Hamlet, Amly, Glamping, then events
+          const order = { out: 0, in: 1, event: 2 };            // out before in on the same property
           return order[a.kind] - order[z.kind];
         });
         const changeovers = changeoverProps(items);
@@ -4717,7 +4878,7 @@ function CleanerHome({ properties, accom, events }) {
             padding:"13px 16px", marginBottom:10 }}>
             <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8, flexWrap:"wrap" }}>
               <span style={{ fontSize:14, fontWeight:700, color: d === today ? T.accent : T.text }}>
-                {d === today ? "Today · " : ""}{fmtDateLong(d)}
+                {d === today ? "Today · " : ""}{fmtWeekdayLong(d)}
               </span>
               {changeovers.length > 0 && (
                 <span style={{ fontSize:10, fontWeight:700, padding:"3px 9px", borderRadius:9,
@@ -4730,7 +4891,10 @@ function CleanerHome({ properties, accom, events }) {
               return (
                 <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"5px 0", flexWrap:"wrap" }}>
                   {chip(it.kind)}
-                  <span style={{ fontSize:13, fontWeight:600, color:T.text }}>{it.label}</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:T.text, minWidth:96 }}>{it.label}</span>
+                  {it.time && (
+                    <span style={{ fontSize:12, fontWeight:700, color:T.accent, minWidth:42 }}>{it.time}</span>
+                  )}
                   <span style={{ fontSize:12, color:T.textMid }}>{it.detail}</span>
                 </div>
               );
@@ -13591,6 +13755,12 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Backup &amp; restore</div>
         <BackupPanel/>
+      </div>
+
+      {/* Weekly cleaning summary */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Weekly cleaning summary</div>
+        <CleaningSummarySettings/>
       </div>
 
       {/* Todoist */}
