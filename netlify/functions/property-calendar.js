@@ -191,7 +191,15 @@ exports.handler = async function(event) {
     statusCode: 200,
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
-      "Cache-Control": "no-cache"
+      // Nothing should ever serve a stale copy of this: a booking made a
+      // minute ago must be visible to the next channel that asks. "no-cache"
+      // alone still permits a cached copy to be revalidated and reused, so
+      // no-store and must-revalidate are added for the CDN's benefit.
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Netlify-CDN-Cache-Control": "no-store",
+      // Not needed by Airbnb, which fetches server-side, but it costs nothing
+      // and lets a browser-based tool read the feed without being blocked.
+      "Access-Control-Allow-Origin": "*"
     },
     body: ical
   };
