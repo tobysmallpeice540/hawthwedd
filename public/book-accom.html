@@ -1091,6 +1091,19 @@ function renderSummaryView() {
   mount(html);
 }
 
+// Re-read the bookings and rebuild the occupied map. Used after a clash, so
+// the calendar the guest returns to shows the nights that have actually gone
+// rather than the snapshot they arrived with.
+function refreshAvailability() {
+  return sbGet("hbf_accom_v1").then(function(accomData) {
+    S.bookings = (accomData || []).map(function(b) {
+      if (b.stays && b.stays.length) return b;
+      return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
+    });
+    buildAvailability();
+  }).catch(function() { /* keep what we have; the error message still shows */ });
+}
+
 // ── Submit ────────────────────────────────────────────────────────────────────
 function submitBooking() {
   if (!S.cart.length) { S.error = "Please add at least one property to your booking."; renderCalendarView(); return; }
@@ -1122,8 +1135,9 @@ function submitBooking() {
       guestCount: S.guestCount,
       notes: S.notes.trim()
     })
-  }).then(function(r) { return r.json(); })
-    .then(function(data) {
+  }).then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(res) {
+      var data = res.data || {};
       if (data.url) {
         // Same-window hand-off. Stripe refuses to be framed, so when this page
         // is embedded the payment must take over the top window rather than
@@ -1135,7 +1149,21 @@ function submitBooking() {
         window.location.href = data.url;
         return;
       }
-      S.submitting = false; S.error = data.error || "Something went wrong. Please try again.";
+      S.submitting = false;
+      S.error = data.error || "Something went wrong. Please try again.";
+
+      // 409 means someone else took those nights while this guest was filling
+      // in the form. Their cart is now impossible, so clear it, reload the
+      // real availability and put them back on the calendar — leaving them on
+      // a Pay button that can never work would be worse than the setback.
+      if (res.status === 409) {
+        S.cart = [];
+        S.pendingCheckIn = null;
+        S.pendingNights = null;
+        S.pendingPropertyId = null;
+        refreshAvailability().then(function() { renderCalendarView(); });
+        return;
+      }
       renderSummaryView();
     })
     .catch(function() {
