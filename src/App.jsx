@@ -1590,10 +1590,29 @@ function consolidateSchedule(schedule) {
   });
 }
 
-function blankAccom(propId) {
+// A short booking reference: one letter and five digits, e.g. "A10432".
+// Random rather than sequential, so two bookings created at the same moment
+// can't be handed the same number, and checked against what already exists so
+// a clash is impossible rather than merely unlikely — the reference is the
+// primary key for the booking everywhere, including in Stripe's metadata.
+// "A" is added here, "W" by the website; both are still a letter and five
+// digits, and the letter says at a glance where the booking came from.
+// Mirrored in create-accom-checkout.js — the two must agree.
+function newBookingRef(existing, prefix) {
+  var taken = {};
+  (existing || []).forEach(function(b) { if (b && b.id) taken[String(b.id).toUpperCase()] = true; });
+  var letter = prefix || "A";
+  for (var i = 0; i < 200; i++) {
+    var id = letter + String(Math.floor(10000 + Math.random() * 90000));
+    if (!taken[id]) return id;
+  }
+  return letter + String(Date.now()).slice(-8);
+}
+
+function blankAccom(propId, existingBookings) {
   var pid = propId || "hamlet";
   return {
-    id: "a" + Date.now(),
+    id: newBookingRef(existingBookings, "A"),
     propertyId: pid, propertyName: "",
     propertyIds: [pid],
     guestName:"", email:"", phone:"",
@@ -1637,7 +1656,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12n";
+const APP_BUILD = "2026-08-12p";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -5029,8 +5048,8 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     catch (e) { console.error(e); setFlash("Save failed"); }
   };
 
-  const openNew  = () => { setForm(blankAccom()); setEditId(null); setTab("form"); };
-  const openNewBlock = () => { setForm(Object.assign({}, blankAccom(), { bookingType:"Blocked", guestName:"Not available" })); setEditId(null); setTab("form"); };
+  const openNew  = () => { setForm(blankAccom(null, bookings)); setEditId(null); setTab("form"); };
+  const openNewBlock = () => { setForm(Object.assign({}, blankAccom(null, bookings), { bookingType:"Blocked", guestName:"Not available" })); setEditId(null); setTab("form"); };
   const openEdit = (b) => {
     var editStays;
     if (b.stays && b.stays.length) {
@@ -5044,7 +5063,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     }
     var pIds = editStays.map(function(s){ return s.propertyId; }).filter(Boolean);
     if (!pIds.length) pIds = [b.propertyId||"hamlet"];
-    setForm(Object.assign({}, blankAccom(pIds[0]), b, { propertyIds:pIds, propertyId:pIds[0], stays:editStays, extras:(b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }));
+    setForm(Object.assign({}, blankAccom(pIds[0], bookings), b, { propertyIds:pIds, propertyId:pIds[0], stays:editStays, extras:(b.extras||[]).slice(), schedule:(b.schedule||[]).slice() }));
     setEditId(b.id); setTab("form");
   };
 
@@ -5066,7 +5085,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
         value: 0
       };
     });
-    setForm(Object.assign({}, blankAccom(ids[0]), {
+    setForm(Object.assign({}, blankAccom(ids[0], bookings), {
       propertyIds: ids,
       propertyId: ids[0],
       stays: stays,
