@@ -14,6 +14,7 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+const ATTEMPTS_KEY = "hbf_checkout_attempts_v1";
 const ACCOM_KEY    = "hbf_accom_v1";
 
 // ── Supabase helpers (no header spread) ──────────────────────────────────────
@@ -118,7 +119,14 @@ exports.handler = async function(event) {
     // Last line of defence against a double booking: re-check against current
     // data immediately before taking any money.
     const bookedAlready = await sbGet(ACCOM_KEY) || [];
-    const clashes = findClashes(bookedAlready, stays);
+    // Attempts younger than an hour hold their dates too — otherwise two
+    // guests at the card screen could both pay for the same nights.
+    const liveAttempts = ((await sbGet(ATTEMPTS_KEY)) || []).filter(function(a) {
+      if (!a || a.promotedAt || a.dismissed) return false;
+      var age = a.createdAt ? (Date.now() - new Date(a.createdAt).getTime()) : Infinity;
+      return isFinite(age) && age < 60 * 60 * 1000;
+    });
+    const clashes = findClashes(bookedAlready.concat(liveAttempts), stays);
     if (clashes.length) {
       var names = clashes.map(function(c) { return c.propertyName; })
         .filter(function(v, i, a) { return a.indexOf(v) === i; }).join(" and ");
@@ -215,7 +223,7 @@ exports.handler = async function(event) {
       phone:           phone || "",
       guestCount:      guestCount || 1,
       source:          "direct",
-      status:          "pending",
+      status:          "confirmed",
       bookingType:     "",
       linkedEventId:   null,
       stays:           normStays,
@@ -235,11 +243,37 @@ exports.handler = async function(event) {
       stripeSessionId: session.id
     };
 
-    // Re-read immediately before writing: another booking may have landed
-    // while this one was at the Stripe screen, and appending to the stale copy
-    // would erase it.
-    const latest = await sbGet(ACCOM_KEY) || [];
-    await sbSet(ACCOM_KEY, latest.concat([booking]));
+    // The booking is NOT written to the bookings list here. Until the deposit
+    // is actually paid it isn't a booking, and recording it as one filled the
+    // diary — and the Airbnb feed — with reservations that never happened.
+    //
+    // It is parked as a checkout attempt instead. The Stripe webhook promotes
+    // it to a real booking when payment lands; anything still sitting here
+    // afterwards is someone who dropped out, and surfaces on the home page so
+    // it can be followed up and dismissed.
+    //
+    // The attempt still holds the dates for an hour, so two guests can't pay
+    // for the same nights while one of them is at the card screen.
+    const attempts = await sbGet(ATTEMPTS_KEY) || [];
+    const attempt = {
+      id:              bookingId,
+      sessionId:       session.id,
+      createdAt:       booking.createdAt,
+      guestName:       guestName,
+      email:           email,
+      phone:           phone || "",
+      guestCount:      guestCount || 1,
+      stays:           normStays,
+      value:           totalAmount,
+      depositAmount:   depositAmount,
+      notes:           notes || "",
+      termsAcceptedAt: body.termsAcceptedAt || null,
+      dismissed:       false,
+      booking:         booking          // promoted wholesale once paid
+    };
+    // Keep the list from growing without limit; 200 is far more than could
+    // ever be outstanding at once.
+    await sbSet(ATTEMPTS_KEY, attempts.concat([attempt]).slice(-200));
 
     return {
       statusCode: 200,
