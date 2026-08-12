@@ -39,6 +39,17 @@
   status = 200
   force = true
 
+# Clean per-property calendar URLs. Airbnb rejects the raw function URL —
+# it wants something that looks like a calendar file, ending in .ics, and
+# the old Bookalet feeds did too. The splat carries "hamlet.ics" through as
+# the id and the function strips the extension.
+#   https://hawthbushfarm.netlify.app/ical/hamlet.ics
+[[redirects]]
+  from = "/ical/*"
+  to = "/.netlify/functions/property-calendar?id=:splat"
+  status = 200
+  force = true
+
 # Clean URL for the hosted iCalendar feed (events + viewings)
 [[redirects]]
   from = "/calendar.ics"
