@@ -18,6 +18,13 @@
 [functions."backup-data"]
   schedule = "0 3 * * *"
 
+# Weekly housekeeping summary. Netlify cron is UTC-only, so this fires at both
+# 02:00 and 03:00 UTC and the function sends only when it is 3am in London —
+# that way it lands at 3am local through GMT and BST alike. The run that isn't
+# 3am local exits immediately, as does any run on the wrong weekday.
+[functions."send-cleaning-summary"]
+  schedule = "0 2,3 * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"
