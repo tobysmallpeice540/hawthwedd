@@ -439,10 +439,28 @@ function withinHorizonForProp(prop, ds) {
 }
 
 // ── Build availability maps ───────────────────────────────────────────────────
+// How long an unpaid online booking holds its dates. The booking row is
+// written before the guest is sent to Stripe, so without an expiry an
+// abandoned checkout would block those nights for everyone, permanently.
+// Generous enough to cover someone fetching their card; the webhook flips the
+// status to "confirmed" the instant payment lands, after which it holds
+// indefinitely as a real booking.
+var PENDING_HOLD_MINUTES = 60;
+
+function pendingHoldExpired(b) {
+  if (b.status !== "pending") return false;
+  var deposit = (b.schedule || []).find(function(s) { return s.label === "Deposit"; });
+  if (deposit && deposit.paid) return false;      // paid but status not yet updated — keep the hold
+  if (!b.createdAt) return false;                 // no timestamp to judge by, so leave it holding
+  var age = Date.now() - new Date(b.createdAt).getTime();
+  return isFinite(age) && age > PENDING_HOLD_MINUTES * 60 * 1000;
+}
+
 function buildAvailability() {
   S.occupied = {};
   S.bookings.forEach(function(b) {
     if (b.status === "cancelled") return;
+    if (pendingHoldExpired(b)) return;
     var stays = (b.stays && b.stays.length) ? b.stays : [b];
     stays.forEach(function(st) {
       if (!st.propertyId || !st.checkIn || !st.checkOut) return;
