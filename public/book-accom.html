@@ -67,6 +67,41 @@
     .cal-cell.day-selected { background: #2d2a25 !important; color: #fff !important; }
     .cal-cell.day-selected .day-letter { color: #fff !important; }
 
+    /* Hover price card. The scale transform on .day-checkin:hover creates a
+       containing block, so the tip is positioned against the cell itself and
+       centred with a translate rather than left:0/right:0. */
+    .cal-cell { position: relative; }
+    .day-tip {
+      position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%);
+      background: #2d2a25; color: #fff; border-radius: 8px; padding: 8px 10px;
+      width: 172px; z-index: 40; text-align: left; line-height: 1.45;
+      box-shadow: 0 8px 22px rgba(0,0,0,.22);
+      opacity: 0; visibility: hidden; transition: opacity .12s ease;
+      pointer-events: none; font-size: 11px; white-space: normal;
+    }
+    .day-tip::after {
+      content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+      border: 5px solid transparent; border-top-color: #2d2a25;
+    }
+    .cal-cell:hover > .day-tip { opacity: 1; visibility: visible; }
+    .day-tip-date { font-weight: 700; font-size: 10px; letter-spacing: .3px; text-transform: uppercase; color: #c9bfa8; margin-bottom: 5px; }
+    .day-tip-row { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
+    .day-tip-name { display: flex; align-items: center; gap: 5px; min-width: 0; }
+    .day-tip-name span.dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .day-tip-price { font-weight: 700; flex-shrink: 0; }
+    .day-tip-note { margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,.18); color: #c9bfa8; font-size: 10px; }
+    /* Near the right-hand edge the tip would overflow the month card. */
+    .cal-cell:nth-child(7n) .day-tip,
+    .cal-cell:nth-child(7n+6) .day-tip { left: auto; right: -4px; transform: none; }
+    .cal-cell:nth-child(7n) .day-tip::after,
+    .cal-cell:nth-child(7n+6) .day-tip::after { left: auto; right: 14px; transform: none; }
+    .cal-cell:nth-child(7n+1) .day-tip,
+    .cal-cell:nth-child(7n+2) .day-tip { left: -4px; right: auto; transform: none; }
+    .cal-cell:nth-child(7n+1) .day-tip::after,
+    .cal-cell:nth-child(7n+2) .day-tip::after { left: 14px; right: auto; transform: none; }
+    /* Touch screens have no hover — the tip would stick after a tap. */
+    @media (hover: none) { .day-tip { display: none; } }
+
     .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; font-size: 12px; color: #7a7060; align-items: center; }
     .leg-item { display: flex; align-items: center; gap: 5px; }
     .leg-swatch { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
@@ -351,6 +386,21 @@ function allowedCheckOutDaysForProp(prop, ds) {
   if (prop.checkOutDays && prop.checkOutDays.length) return prop.checkOutDays;
   return null;
 }
+// Stay-length limits for a given check-in date. A season may override either;
+// blank or zero means inherit the property's own figure. Where two seasons
+// overlap, seasonForDate has already picked the higher-priority one, so its
+// limits are the ones that apply — same rule as the nightly rate.
+// Mirrors minNightsForDate / maxNightsForDate in App.jsx.
+function minNightsForProp(prop, ds) {
+  var s = ds ? seasonForDate(prop, ds) : null;
+  var v = s && Number(s.minNights);
+  return (v && v > 0) ? v : (Number(prop && prop.minNights) || 2);
+}
+function maxNightsForProp(prop, ds) {
+  var s = ds ? seasonForDate(prop, ds) : null;
+  var v = s && Number(s.maxNights);
+  return (v && v > 0) ? v : (Number(prop && prop.maxNights) || 28);
+}
 function checkInAllowedForProp(prop, ds) {
   var allowed = allowedCheckInDaysForProp(prop, ds);
   return !allowed || allowed.indexOf(isoWeekday(ds)) !== -1;
@@ -505,6 +555,44 @@ function renderViewToggle() {
   return html;
 }
 
+// Hover card for a calendar day: what's free that night and what it costs.
+// Prices are per night for THAT date, so a guest can read the seasonal rate
+// off the calendar without having to pick a date and work back from a total.
+function dayTipHtml(ds, info) {
+  var html = '<span class="day-tip">';
+  html += '<span class="day-tip-date">' + escHtml(fmtDate(ds)) + '</span>';
+
+  if (!info.avail.length) {
+    html += '<span style="color:#c9bfa8">Nothing available this night.</span></span>';
+    return html;
+  }
+
+  info.avail.forEach(function(p) {
+    var rate = getPriceForNight(p, ds);
+    html += '<span class="day-tip-row">';
+    html += '<span class="day-tip-name"><span class="dot" style="background:' + escHtml(p.colour || "#fff") + '"></span>' + escHtml(p.name) + '</span>';
+    html += '<span class="day-tip-price">' + (rate > 0 ? escHtml(fmt(rate)) : "&mdash;") + '</span>';
+    html += '</span>';
+  });
+
+  // The letters show what's free; the green shading shows where a stay can
+  // actually start. Spell out the difference rather than leaving the guest
+  // to work out why an available night isn't clickable.
+  var note = "";
+  if (info.checkinOk.length) {
+    var mins = info.checkinOk.map(function(p) { return minNightsForProp(p, ds); });
+    var minN = Math.min.apply(null, mins);
+    var maxN = Math.max.apply(null, mins);
+    note = "Click to start a stay here"
+         + (minN === maxN ? " (" + minN + " night min)" : " (" + minN + "&ndash;" + maxN + " night min)");
+  } else {
+    note = "Available, but stays can&rsquo;t start on this day.";
+  }
+  html += '<span class="day-tip-note">' + note + '</span>';
+  html += '</span>';
+  return html;
+}
+
 // ── One mini month calendar ───────────────────────────────────────────────────
 function renderMiniMonth(year, month, propList) {
   var nDays = daysInMonth(year, month);
@@ -538,6 +626,7 @@ function renderMiniMonth(year, month, propList) {
       });
       html += '</span>';
     }
+    if (!isPast) html += dayTipHtml(ds, info);
     html += '</div>';
   }
   html += '</div></div>';
@@ -579,13 +668,34 @@ function renderCalLegend(propList) {
   return html;
 }
 
+// "3 nights (£420 / night)". Where a stay straddles two seasons the nightly
+// rate isn't a single figure, so the average is shown and labelled as such
+// rather than quoting one of the rates and misleading on the others.
+function nightsLabel(st) {
+  var label = st.nights + " night" + (st.nights === 1 ? "" : "s");
+  if (!st.nights || !(st.value > 0)) return label;
+
+  var prop = S.properties.filter(function(p) { return p.id === st.propertyId; })[0];
+  var varies = false;
+  if (prop) {
+    var first = null;
+    for (var i = 0; i < st.nights; i++) {
+      var r = getPriceForNight(prop, addDays(st.checkIn, i));
+      if (first === null) first = r;
+      else if (r !== first) { varies = true; break; }
+    }
+  }
+  var perNight = st.value / st.nights;
+  return label + " (" + (varies ? "avg " : "") + fmt(Math.round(perNight * 100) / 100) + " / night)";
+}
+
 function renderCartSummary() {
   if (!S.cart.length) return "";
   var html = '<div class="panel" style="padding:16px 20px">';
   html += '<div style="font-size:12px;font-weight:700;color:#7a7060;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Added to your booking</div>';
   S.cart.forEach(function(st, i) {
     html += '<div class="cart-row">';
-    html += '<span style="font-size:13px">' + escHtml(st.propertyName) + ' &middot; ' + fmtDate(st.checkIn) + ' &rarr; ' + fmtDate(st.checkOut) + ' (' + st.nights + ' night' + (st.nights===1?"":"s") + ')</span>';
+    html += '<span style="font-size:13px">' + escHtml(st.propertyName) + ' &middot; ' + fmtDate(st.checkIn) + ' &rarr; ' + fmtDate(st.checkOut) + ' &middot; ' + nightsLabel(st) + '</span>';
     html += '<span style="display:flex;align-items:center;gap:10px"><strong>' + fmt(st.value) + '</strong><button class="btn-ghost" style="padding:3px 9px;font-size:11px" onclick="removeFromCart(' + i + ')">Remove</button></span>';
     html += '</div>';
   });
@@ -595,8 +705,10 @@ function renderCartSummary() {
 
 // ── Pending stay: property + nights picker ───────────────────────────────────
 function renderPendingNightsSelect(prop) {
-  var minN = prop.minNights || 2;
-  var maxN = Math.min(prop.maxNights || 28, maxFreeNightsForProp(prop, S.pendingCheckIn));
+  // Limits come from the season covering the check-in date, falling back to
+  // the property's own settings.
+  var minN = minNightsForProp(prop, S.pendingCheckIn);
+  var maxN = Math.min(maxNightsForProp(prop, S.pendingCheckIn), maxFreeNightsForProp(prop, S.pendingCheckIn));
 
   var options = [];
   for (var n = minN; n <= maxN; n++) {
@@ -681,7 +793,10 @@ function renderPropertyAndNightsSection() {
     html += '<div class="prop-card-head"><span class="prop-dot" style="background:' + col + '"></span><span class="prop-name">' + escHtml(p.name) + '</span></div>';
     var meta = [];
     if (p.sleeps) meta.push("Sleeps " + p.sleeps);
-    if (p.minNights) meta.push(p.minNights + " night min");
+    // Once a date is chosen the seasonal minimum is the one that matters, so
+    // show that rather than the property's general rule.
+    var metaMin = minNightsForProp(p, S.pendingCheckIn);
+    if (metaMin) meta.push(metaMin + " night min");
     if (meta.length) html += '<div class="prop-meta">' + meta.join(" &middot; ") + '</div>';
     html += '<div class="prop-rate">' + rateStr + '</div>';
     html += '</div>';
@@ -787,7 +902,7 @@ function renderSummaryView() {
   var totalAmt = S.cart.reduce(function(a, s) { return a + s.value; }, 0);
 
   S.cart.forEach(function(st) {
-    html += '<div class="q-row"><span>' + escHtml(st.propertyName) + ' &middot; ' + fmtDate(st.checkIn) + ' &rarr; ' + fmtDate(st.checkOut) + ' (' + st.nights + ' night' + (st.nights===1?"":"s") + ')</span><span>' + fmt(st.value) + '</span></div>';
+    html += '<div class="q-row"><span>' + escHtml(st.propertyName) + ' &middot; ' + fmtDate(st.checkIn) + ' &rarr; ' + fmtDate(st.checkOut) + ' &middot; ' + nightsLabel(st) + '</span><span>' + fmt(st.value) + '</span></div>';
   });
 
   var depPct = propsInCart.reduce(function(a, p) { return Math.max(a, p.depositPct || 50); }, 50);
