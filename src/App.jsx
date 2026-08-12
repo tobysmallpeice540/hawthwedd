@@ -1407,6 +1407,26 @@ function normalizeAccom(b) {
   return Object.assign({}, b, { stays: [stay] });
 }
 
+// Long-stay discount, as a cash amount off the stay subtotal.
+//
+// The setting is a percentage. Properties configured before the change hold a
+// £-per-night figure in the old longStayDiscount field instead, and that is
+// still honoured until a percentage is entered — reading the old number as a
+// percentage would quietly reprice every long stay.
+// Mirrored in book-accom.html; the two must agree or the public quote and the
+// office quote will differ.
+function longStayDiscountAmount(prop, nights, subtotal) {
+  if (!prop || !(prop.longStayThreshold > 0) || !(nights >= prop.longStayThreshold)) return 0;
+  const pct = Number(prop.longStayDiscountPct) || 0;
+  if (pct > 0) return Math.min(round2(subtotal), round2(subtotal * pct / 100));
+  const legacyPerNight = Number(prop.longStayDiscount) || 0;
+  return legacyPerNight > 0 ? Math.min(round2(subtotal), round2(legacyPerNight * nights)) : 0;
+}
+// Is this property still relying on the pre-percentage £/night figure?
+function usesLegacyLongStay(prop) {
+  return !!prop && !(Number(prop.longStayDiscountPct) > 0) && Number(prop.longStayDiscount) > 0;
+}
+
 // Compute Airbnb estimated value using the property's long-stay rules (×0.9 for Airbnb cut).
 // Returns null when baseRate not yet configured.
 function calcAirbnbEstimate(b, prop) {
@@ -1415,11 +1435,9 @@ function calcAirbnbEstimate(b, prop) {
   const co = (b.stays && b.stays[0] && b.stays[0].checkOut) || b.checkOut;
   const nights = nightsBetween(ci, co);
   if (!nights || nights <= 0) return null;
-  let rate = prop.baseRate;
-  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0) {
-    rate = Math.max(0, rate - prop.longStayDiscount);
-  }
-  return Math.round(rate * nights * 0.9 * 100) / 100;
+  const subtotal = prop.baseRate * nights;
+  const net = subtotal - longStayDiscountAmount(prop, nights, subtotal);
+  return Math.round(Math.max(0, net) * 0.9 * 100) / 100;
 }
 
 // The season that applies on a given date.
@@ -1482,11 +1500,8 @@ function quoteStay(prop, checkIn, checkOut) {
     subtotal += getPriceForNight(prop, d.toISOString().slice(0,10));
     d.setDate(d.getDate() + 1);
   }
-  let discount = 0;
-  if (prop.longStayThreshold > 0 && nights >= prop.longStayThreshold && prop.longStayDiscount > 0) {
-    discount = prop.longStayDiscount * nights;
-  }
-  const total = Math.max(0, subtotal - discount);
+  const discount = longStayDiscountAmount(prop, nights, subtotal);
+  const total = Math.max(0, round2(subtotal - discount));
   return { nights, subtotal, discount, total };
 }
 
@@ -1613,7 +1628,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04u";
+const APP_BUILD = "2026-08-04v";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3147,10 +3162,36 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                     <input type="number" value={p.longStayThreshold || ""} onChange={e => updProp(p.id, "longStayThreshold", Number(e.target.value))} style={inpStyle} placeholder="e.g. 7" min="0" />
                   </label>
                   <label style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Long-stay discount (£/night)</span>
-                    <input type="number" value={p.longStayDiscount || ""} onChange={e => updProp(p.id, "longStayDiscount", Number(e.target.value))} style={inpStyle} placeholder="e.g. 30" min="0" />
+                    <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Long-stay discount (%)</span>
+                    <input type="number" value={p.longStayDiscountPct || ""}
+                      onChange={e => updProp(p.id, "longStayDiscountPct", Number(e.target.value))}
+                      style={inpStyle} placeholder="e.g. 10" min="0" max="100" step="0.5" />
                   </label>
                 </div>
+                {/* Setting a percentage retires the old £/night figure. Until
+                    then it keeps applying, so pricing doesn't change silently. */}
+                {usesLegacyLongStay(p) && (
+                  <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"9px 12px",
+                    marginTop:-8, marginBottom:18, fontSize:11.5, color:"#92400e", lineHeight:1.6 }}>
+                    Still using the old fixed discount of <strong>{String(fmtMoney(p.longStayDiscount))} per night</strong>.
+                    Enter a percentage above to replace it — that figure is <em>not</em> being read as {p.longStayDiscount}%.
+                    <button onClick={() => updProp(p.id, "longStayDiscount", 0)}
+                      style={{ background:"none", border:"1px solid #fdba74", color:"#92400e", borderRadius:5, padding:"3px 9px",
+                        marginLeft:8, fontFamily:"inherit", fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                      Remove it
+                    </button>
+                  </div>
+                )}
+                {p.longStayThreshold > 0 && Number(p.longStayDiscountPct) > 0 && p.baseRate > 0 && (
+                  <div style={{ fontSize:11, color:T.textLight, marginTop:-8, marginBottom:18, lineHeight:1.6 }}>
+                    A {p.longStayThreshold}-night stay at the base rate would be{" "}
+                    {String(fmtMoney(round2(p.baseRate * p.longStayThreshold)))} less{" "}
+                    {String(fmtMoney(round2(p.baseRate * p.longStayThreshold * p.longStayDiscountPct / 100)))} ={" "}
+                    <strong style={{ color:T.textMid }}>
+                      {String(fmtMoney(round2(p.baseRate * p.longStayThreshold * (1 - p.longStayDiscountPct / 100))))}
+                    </strong>.
+                  </div>
+                )}
 
                 {/* ── Seasons ── */}
                 <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:4 }}>Seasons (override base rate for date ranges)</div>
