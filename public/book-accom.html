@@ -102,6 +102,13 @@
     /* Touch screens have no hover — the tip would stick after a tap. */
     @media (hover: none) { .day-tip { display: none; } }
 
+    .terms-accept { display: flex; align-items: flex-start; gap: 10px; background: #fff; border: 1.5px solid #e8e2d9; border-radius: 10px; padding: 13px 15px; margin: 4px 0 16px; cursor: pointer; font-size: 14px; line-height: 1.55; color: #2d2a25; transition: border-color .15s, background .15s; }
+    .terms-accept:hover { border-color: #b8a88a; }
+    .terms-accept.on { border-color: #3d7a4a; background: #f4fbf5; }
+    .terms-accept input { width: 17px; height: 17px; margin-top: 1px; flex-shrink: 0; accent-color: #3d7a4a; cursor: pointer; }
+    .terms-accept a { color: #2d2a25; }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
     .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; font-size: 12px; color: #7a7060; align-items: center; }
     .leg-item { display: flex; align-items: center; gap: 5px; }
     .leg-swatch { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
@@ -275,6 +282,8 @@ var S = {
   view: "calendar",       // "calendar" | "summary"
   // guest details
   guestName: "", email: "", phone: "", guestCount: 2, notes: "",
+  termsText: "",          // set at load; empty means no T&C published, so no tickbox
+  termsAccepted: false,
   submitting: false, error: ""
 };
 
@@ -913,6 +922,12 @@ function finishAndGoToSummary() {
 }
 
 // ── View 2: summary + guest details + checkout ───────────────────────────────
+function setTermsAccepted(on) {
+  S.termsAccepted = !!on;
+  S.error = "";
+  renderSummaryView();
+}
+
 function renderSummaryView() {
   S.view = "summary";
   var html = stepsHtml(2);
@@ -950,9 +965,20 @@ function renderSummaryView() {
   html += '<div class="form-field full"><label>Notes / special requirements</label><textarea id="f-notes" rows="3" oninput="S.notes=this.value" placeholder="Any special requirements or questions...">' + escHtml(S.notes) + '</textarea></div>';
   html += '</div>';
 
+  // Acceptance is required before paying, and the tick is recorded on the
+  // booking with a timestamp — the point of asking is being able to show later
+  // that the guest was shown them.
+  if (S.termsText) {
+    html += '<label class="terms-accept' + (S.termsAccepted ? " on" : "") + '">';
+    html += '<input type="checkbox" ' + (S.termsAccepted ? "checked" : "") + ' onchange="setTermsAccepted(this.checked)">';
+    html += '<span>I have read and accept the <a href="/terms.html" target="_blank" rel="noopener">Terms &amp; Conditions</a>.</span>';
+    html += '</label>';
+  }
+
   if (S.error) html += '<div class="alert alert-error">' + escHtml(S.error) + '</div>';
 
-  html += '<button class="btn-primary" ' + (S.submitting ? "disabled" : "") + ' onclick="submitBooking()">';
+  var blockedByTerms = !!S.termsText && !S.termsAccepted;
+  html += '<button class="btn-primary" ' + ((S.submitting || blockedByTerms) ? "disabled" : "") + ' onclick="submitBooking()">';
   html += S.submitting ? "Processing&hellip;" : ("Pay deposit " + fmt(dep) + " &rarr;");
   html += '</button>';
   html += '<p class="stripe-note">Secure payment via Stripe &mdash; we never store card details.</p>';
@@ -966,6 +992,7 @@ function submitBooking() {
   if (!S.cart.length) { S.error = "Please add at least one property to your booking."; renderCalendarView(); return; }
   if (!S.guestName.trim()) { S.error = "Please enter your name."; renderSummaryView(); return; }
   if (!S.email.trim() || S.email.indexOf("@") < 0) { S.error = "Please enter a valid email address."; renderSummaryView(); return; }
+  if (S.termsText && !S.termsAccepted) { S.error = "Please accept the Terms & Conditions to continue."; renderSummaryView(); return; }
 
   var propsInCart = S.cart.map(function(s) { return S.properties.filter(function(p) { return p.id === s.propertyId; })[0]; }).filter(Boolean);
   var totalAmount = S.cart.reduce(function(a, s) { return a + s.value; }, 0);
@@ -981,6 +1008,7 @@ function submitBooking() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       stays: S.cart,
+      termsAcceptedAt: (S.termsText && S.termsAccepted) ? new Date().toISOString() : null,
       totalAmount: totalAmount,
       depositAmount: depositAmount,
       balanceWeeks: balWks,
@@ -1038,9 +1066,12 @@ function showSuccess(prop, ci, co) {
   }
 
   function loadAndRender() {
-    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function(results) {
+    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1"), sbGet("hbf_terms_v1")]).then(function(results) {
       var propsData = results[0];
       var accomData = results[1];
+      // No terms written yet means no tickbox and no link — better than sending
+      // guests to an empty page and asking them to accept nothing.
+      S.termsText = (results[2] && results[2].text) ? String(results[2].text) : "";
       // Only properties ticked as publicly bookable reach this page. Filtering
       // once here means everything downstream — the calendar letters, the
       // legend, the property cards, availability — follows automatically.

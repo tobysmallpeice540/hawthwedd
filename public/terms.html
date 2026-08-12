@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terms &amp; Conditions | Hawthbush Farm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Jost', sans-serif; background: #f9f6f1; color: #2d2a25; min-height: 100vh; }
+    .header { background: #fff; border-bottom: 1px solid #e8e2d9; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .header h1 { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; letter-spacing: .5px; }
+    .header .sub { font-size: 13px; color: #7a7060; margin-top: 2px; }
+    .header a { font-size: 13px; color: #7a7060; text-decoration: none; border: 1px solid #e0d9ce; border-radius: 8px; padding: 8px 16px; background: #fff; }
+    .header a:hover { border-color: #b8a88a; }
+    .main { max-width: 760px; margin: 0 auto; padding: 36px 20px 80px; }
+    .panel { background: #fff; border: 1px solid #e8e2d9; border-radius: 14px; padding: 34px 38px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
+    .panel h2 { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; margin: 26px 0 10px; }
+    .panel h2:first-child { margin-top: 0; }
+    .panel p { font-size: 15px; line-height: 1.75; margin-bottom: 15px; color: #3d3a34; }
+    .panel li { font-size: 15px; line-height: 1.75; margin: 0 0 8px 20px; color: #3d3a34; }
+    .updated { font-size: 12px; color: #9a9080; margin-top: 26px; padding-top: 16px; border-top: 1px solid #e8e2d9; }
+    .muted { color: #7a7060; font-size: 15px; line-height: 1.7; }
+    @media print {
+      body { background: #fff; }
+      .header a, .no-print { display: none; }
+      .panel { border: none; box-shadow: none; padding: 0; }
+    }
+    @media (max-width: 600px) {
+      .header { padding: 18px 20px; }
+      .panel { padding: 24px 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>Hawthbush Farm</h1>
+      <div class="sub">Terms &amp; Conditions</div>
+    </div>
+    <a href="/book-accom.html">Book a stay &rarr;</a>
+  </div>
+  <div class="main">
+    <div class="panel" id="content">
+      <p class="muted">Loading&hellip;</p>
+    </div>
+  </div>
+
+<script>
+var SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+var TERMS_KEY = "hbf_terms_v1";
+
+function escHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// The terms are stored as plain text typed into a textarea, so the formatting
+// has to be inferred. Blank lines separate blocks. A short block with no
+// closing full stop reads as a heading; a block whose lines start with a
+// bullet character or "1." reads as a list. Everything else is a paragraph.
+// Deliberately conservative — the text is escaped first, so nothing pasted in
+// can inject markup into this page.
+function renderTerms(text) {
+  var blocks = String(text).replace(/\r\n/g, "\n").split(/\n{2,}/);
+  var html = "";
+
+  blocks.forEach(function(raw) {
+    var block = raw.trim();
+    if (!block) return;
+    var lines = block.split("\n").map(function(l) { return l.trim(); }).filter(Boolean);
+
+    var isList = lines.length > 0 && lines.every(function(l) {
+      return /^([-*•]|\d+[.)])\s+/.test(l);
+    });
+    if (isList) {
+      html += "<ul>";
+      lines.forEach(function(l) {
+        html += "<li>" + escHtml(l.replace(/^([-*•]|\d+[.)])\s+/, "")) + "</li>";
+      });
+      html += "</ul>";
+      return;
+    }
+
+    if (lines.length === 1 && block.length < 80 && !/[.!?:;,]$/.test(block)) {
+      html += "<h2>" + escHtml(block) + "</h2>";
+      return;
+    }
+
+    html += "<p>" + escHtml(block).replace(/\n/g, "<br>") + "</p>";
+  });
+
+  return html;
+}
+
+fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + TERMS_KEY + "&select=value", {
+  headers: { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY }
+})
+  .then(function(r) { return r.json(); })
+  .then(function(rows) {
+    var val = (rows && rows[0]) ? rows[0].value : null;
+    var text = (val && val.text) ? String(val.text) : "";
+    var el = document.getElementById("content");
+
+    if (!text.trim()) {
+      el.innerHTML = '<p class="muted">Our terms and conditions aren\'t published here yet. ' +
+        'Please email <a href="mailto:hello@hawthbushfarm.co.uk">hello@hawthbushfarm.co.uk</a> and we\'ll send them over.</p>';
+      return;
+    }
+
+    var html = renderTerms(text);
+    if (val.updatedAt) {
+      html += '<p class="updated">Last updated ' +
+        escHtml(new Date(val.updatedAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })) +
+        "</p>";
+    }
+    el.innerHTML = html;
+  })
+  .catch(function() {
+    document.getElementById("content").innerHTML =
+      '<p class="muted">Sorry, we couldn\'t load the terms just now. ' +
+      'Please email <a href="mailto:hello@hawthbushfarm.co.uk">hello@hawthbushfarm.co.uk</a> for a copy.</p>';
+  });
+</script>
+</body>
+</html>
