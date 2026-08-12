@@ -1613,7 +1613,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-04t";
+const APP_BUILD = "2026-08-04u";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3094,7 +3094,14 @@ function PropertyEditor({ properties, setProperties, onSave }) {
             <div onClick={() => setOpenId(open ? null : p.id)}
               style={{ display:"flex", alignItems:"center", gap:10, padding:"13px 16px", background:T.bgInput, cursor:"pointer", userSelect:"none" }}>
               <span style={{ width:13, height:13, borderRadius:3, background:p.colour, flexShrink:0 }}/>
-              <span style={{ fontSize:14, fontWeight:700, color:T.text, flex:1 }}>{p.name}</span>
+              <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{p.name}</span>
+              <span style={{ flex:1 }}>
+                {p.publicBookable === false && (
+                  <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>
+                    Not on website
+                  </span>
+                )}
+              </span>
               <span style={{ fontSize:12, color:T.textMid }}>
                 {p.baseRate ? "Base: " + String(fmtMoney(p.baseRate)) + "/night" : "No base rate"} ·{" "}
                 {p.seasons && p.seasons.length ? p.seasons.length + " season" + (p.seasons.length > 1 ? "s" : "") : "No seasons"}
@@ -3104,6 +3111,29 @@ function PropertyEditor({ properties, setProperties, onSave }) {
 
             {open && (
               <div style={{ padding:"18px 18px 20px" }}>
+
+                {/* ── Public visibility ── */}
+                {/* Stored as publicBookable. Properties saved before this
+                    setting existed have no flag, and undefined is treated as
+                    visible by the booking page, so the default is "shown". */}
+                <label style={{ display:"flex", alignItems:"flex-start", gap:9, cursor:"pointer",
+                  background: p.publicBookable === false ? "#fffbeb" : T.greenBg,
+                  border:`1px solid ${p.publicBookable === false ? "#fde68a" : "#bbf7d0"}`,
+                  borderRadius:8, padding:"10px 13px", marginBottom:18 }}>
+                  <input type="checkbox" checked={p.publicBookable !== false}
+                    onChange={e => updProp(p.id, "publicBookable", e.target.checked)}
+                    style={{ width:15, height:15, marginTop:1, accentColor:T.green, cursor:"pointer", flexShrink:0 }}/>
+                  <span>
+                    <span style={{ fontSize:13, fontWeight:700, color: p.publicBookable === false ? "#92400e" : T.green }}>
+                      Bookable on the public website
+                    </span>
+                    <span style={{ display:"block", fontSize:11, color:T.textMid, marginTop:2, lineHeight:1.6 }}>
+                      {p.publicBookable === false
+                        ? "Hidden from book-accom — no card, and no availability letter on the calendar. You can still take bookings for it in here."
+                        : "Shown on book-accom with its availability letter on the calendar."}
+                    </span>
+                  </span>
+                </label>
 
                 {/* ── Pricing ── */}
                 <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5, marginBottom:10 }}>Pricing</div>
