@@ -39,10 +39,13 @@ if (typeof window.storage === 'undefined') {
 // authentication (Supabase Auth), which would also record who changed what.
 //
 // `admin` sees the whole app. `bar` only ever sees Bar Management, including
-// the two rota reports.
+// the two rota reports. `cleaner` sees a read-only housekeeping view: what's
+// coming up in the next fortnight, the lettings calendar and the bookings
+// list — no prices, no guest contact details to edit, nothing saveable.
 const USERS = [
-  { user: 'admin', pass: 'Hawth8u$h',   role: 'admin' },
-  { user: 'bar',   pass: 'BarStaff26!', role: 'bar'   },
+  { user: 'admin',   pass: 'Hawth8u$h',    role: 'admin'   },
+  { user: 'bar',     pass: 'BarStaff26!',  role: 'bar'     },
+  { user: 'cleaner', pass: 'CleanHF26!',   role: 'cleaner' },
 ]
 const SESSION_KEY  = 'hbf_auth_v1'
 const SESSION_ROLE = 'hbf_auth_role_v1'

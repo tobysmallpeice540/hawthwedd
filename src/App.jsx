@@ -1628,7 +1628,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12f";
+const APP_BUILD = "2026-08-12g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4623,6 +4623,189 @@ function BackupPanel() {
 }
 
 // ── Main Lettings view ───────────────────────────────────────────────────────
+// ─── CLEANER VIEW ─────────────────────────────────────────────────────────────
+// A read-only, three-tab app for whoever is cleaning: what's coming up, the
+// lettings calendar, and the bookings list. Loads its own data rather than
+// going through LettingsView, so none of the editing, pricing, payment or
+// email machinery is reachable — there is nothing here that can be changed.
+const CLEANER_DAYS_AHEAD = 14;
+
+function CleanerHome({ properties, accom, events }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const end = (function() {
+    const d = new Date(today + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() + CLEANER_DAYS_AHEAD);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const propName = function(id) {
+    const p = (properties || []).find(function(x) { return x.id === id; });
+    return p ? p.name : id;
+  };
+
+  // Everything happening in the window, keyed by the day it happens on.
+  const byDay = {};
+  const add = function(date, item) {
+    if (!date || date < today || date > end) return;
+    if (!byDay[date]) byDay[date] = [];
+    byDay[date].push(item);
+  };
+
+  (events || []).forEach(function(ev) {
+    if (!isValidEventDate(ev.date) || ev.status === "Cancelled") return;
+    add(ev.date, { kind: "event", label: ev.couple || "Event", detail: eventTypeLabel(ev) });
+  });
+
+  (accom || []).forEach(function(b) {
+    if (b.status === "cancelled" || b.bookingType === "Blocked") return;
+    const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    stays.forEach(function(s) {
+      const who = b.guestName || "Guest";
+      const guests = b.guestCount ? b.guestCount + " guest" + (b.guestCount === 1 ? "" : "s") : "";
+      add(s.checkOut, { kind: "out", label: propName(s.propertyId), detail: who + (guests ? " · " + guests : "") });
+      add(s.checkIn,  { kind: "in",  label: propName(s.propertyId), detail: who + (guests ? " · " + guests : "") });
+    });
+  });
+
+  const days = Object.keys(byDay).sort();
+
+  const chip = function(kind) {
+    const map = {
+      out:   { text: "Check-out",  bg: "#fff7ed", fg: "#9a3412", bd: "#fdba74" },
+      in:    { text: "Check-in",   bg: T.greenBg, fg: T.green,   bd: "#bbf7d0" },
+      event: { text: "Farm event", bg: "#eef4fd", fg: T.midBlue, bd: "#bfdbfe" }
+    };
+    const c = map[kind];
+    return (
+      <span style={{ fontSize:10, fontWeight:700, padding:"3px 9px", borderRadius:9,
+        background:c.bg, color:c.fg, border:"1px solid " + c.bd, whiteSpace:"nowrap", flexShrink:0 }}>
+        {c.text}
+      </span>
+    );
+  };
+
+  // Check-out and check-in on the same property on the same day is a
+  // changeover — the thing most worth knowing about in advance.
+  const changeoverProps = function(items) {
+    const outs = items.filter(function(i){ return i.kind === "out"; }).map(function(i){ return i.label; });
+    return items.filter(function(i){ return i.kind === "in" && outs.indexOf(i.label) !== -1; })
+                .map(function(i){ return i.label; });
+  };
+
+  return (
+    <div>
+      <h2 style={{ fontSize:20, fontWeight:800, color:T.text, margin:"0 0 2px" }}>The next {CLEANER_DAYS_AHEAD} days</h2>
+      <div style={{ fontSize:13, color:T.textMid, marginBottom:18 }}>
+        {fmtDate(today)} to {fmtDate(end)}
+      </div>
+
+      {days.length === 0 && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 20px",
+          fontSize:14, color:T.textLight }}>
+          Nothing booked in the next {CLEANER_DAYS_AHEAD} days.
+        </div>
+      )}
+
+      {days.map(function(d) {
+        const items = byDay[d].slice().sort(function(a, z) {
+          const order = { out: 0, in: 1, event: 2 };
+          return order[a.kind] - order[z.kind];
+        });
+        const changeovers = changeoverProps(items);
+        return (
+          <div key={d} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10,
+            padding:"13px 16px", marginBottom:10 }}>
+            <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8, flexWrap:"wrap" }}>
+              <span style={{ fontSize:14, fontWeight:700, color: d === today ? T.accent : T.text }}>
+                {d === today ? "Today · " : ""}{fmtDateLong(d)}
+              </span>
+              {changeovers.length > 0 && (
+                <span style={{ fontSize:10, fontWeight:700, padding:"3px 9px", borderRadius:9,
+                  background:"#fef2f2", color:T.red, border:"1px solid #fca5a5" }}>
+                  Changeover: {changeovers.join(", ")}
+                </span>
+              )}
+            </div>
+            {items.map(function(it, i) {
+              return (
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"5px 0", flexWrap:"wrap" }}>
+                  {chip(it.kind)}
+                  <span style={{ fontSize:13, fontWeight:600, color:T.text }}>{it.label}</span>
+                  <span style={{ fontSize:12, color:T.textMid }}>{it.detail}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CleanerView() {
+  const [properties, setProperties] = useState(INITIAL_PROPERTIES);
+  const [accom, setAccom]           = useState([]);
+  const [events, setEvents]         = useState([]);
+  const [loaded, setLoaded]         = useState(false);
+  const [tab, setTab]               = useState("home");
+  const [cursor, setCursor]         = useState(new Date());
+  const [filterProp, setFilterProp]     = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+
+  useEffect(function() {
+    let cancelled = false;
+    (async function() {
+      try {
+        const results = await Promise.all([
+          sbGet(PROPERTIES_STORAGE), sbGet(ACCOM_STORAGE), sbGet(BOOKING_STORAGE)
+        ]);
+        if (cancelled) return;
+        if (results[0] && results[0].length) setProperties(results[0]);
+        setAccom(Array.isArray(results[1]) ? results[1].map(normalizeAccom) : []);
+        setEvents(Array.isArray(results[2]) ? results[2] : []);
+      } catch (e) { /* leave the defaults; the view still renders */ }
+      if (!cancelled) setLoaded(true);
+    })();
+    return function() { cancelled = true; };
+  }, []);
+
+  const tabs = [["home","What's coming up"],["calendar","Calendar"],["list","Bookings"]];
+
+  if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
+
+  return (
+    <div>
+      <div style={{ display:"flex", gap:4, marginBottom:20, borderBottom:`1px solid ${T.border}` }}>
+        {tabs.map(function(t) {
+          return (
+            <button key={t[0]} onClick={function(){ setTab(t[0]); }}
+              style={{ background:"none", border:"none",
+                borderBottom: tab===t[0] ? `3px solid ${T.accent}` : "3px solid transparent",
+                color: tab===t[0] ? T.accent : T.navInactive, fontFamily:"inherit", fontSize:14,
+                fontWeight: tab===t[0] ? 700 : 500, padding:"8px 16px 12px", cursor:"pointer" }}>
+              {t[1]}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events}/>}
+      {/* onOpen is deliberately a no-op — clicking a booking must not open an
+          editable form for someone who shouldn't be changing bookings. */}
+      {tab === "calendar" && (
+        <AccomCalendar properties={properties} bookings={accom} events={events}
+          cursor={cursor} setCursor={setCursor} onOpen={function(){}} onViewEventsCalendar={null}/>
+      )}
+      {tab === "list" && (
+        <AccomList properties={properties} bookings={accom}
+          filterProp={filterProp} setFilterProp={setFilterProp}
+          filterStatus={filterStatus} setFilterStatus={setFilterStatus}
+          onOpen={function(){}}/>
+      )}
+    </div>
+  );
+}
+
 function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType, focusBookingId, clearFocusBooking, prefillNew, clearPrefillNew }) {
   const [properties, setProperties]         = useState(INITIAL_PROPERTIES);
   const [bookings, setBookings]             = useState([]);
@@ -4994,7 +5177,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [invoiceRecords, setInvoiceRecords]   = useState([]);
   const [accomPrefill, setAccomPrefill]       = useState(null);
   const [staleBuild, setStaleBuild]           = useState(null);   // newer build seen
-  const barOnly = role === "bar";
+  const barOnly     = role === "bar";
+  const cleanerOnly = role === "cleaner";
 
   // Publish this build on load, then watch for a newer one. Any tab left open
   // across a deploy finds out within a minute instead of silently running old
@@ -5303,8 +5487,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:"system-ui,sans-serif",fontSize:20 }}>Loading…</div>;
 
-  // Bar-only: just the Bar section, no navigation to anything else.
-  if (barOnly) {
+  // Restricted logins: one section, no navigation to anything else.
+  if (barOnly || cleanerOnly) {
+    const shellTitle = barOnly ? "Bar Management" : "Housekeeping";
     return (
       <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
         <MobileGlobalStyles/>
@@ -5320,7 +5505,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         )}
         <header style={{ background:"#fff", borderBottom:`2px solid ${T.border}`, padding:"14px 24px", display:"flex", alignItems:"center", gap:14 }}>
           <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:40, width:"auto" }} />
-          <span style={{ fontSize:16, fontWeight:700, color:T.midBlue }}>Bar Management</span>
+          <span style={{ fontSize:16, fontWeight:700, color:T.midBlue }}>{shellTitle}</span>
           <span style={{ marginLeft:"auto", fontSize:11, color:T.textLight }}>build {APP_BUILD}</span>
           {onSignOut && (
             <button onClick={onSignOut}
@@ -5329,8 +5514,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
             </button>
           )}
         </header>
-        <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
-          <BarView/>
+        <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
+          {barOnly ? <BarView/> : <CleanerView/>}
         </div>
       </div>
     );
