@@ -1628,7 +1628,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12a";
+const APP_BUILD = "2026-08-12b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2711,7 +2711,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
       )}
 
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"16px 18px", marginBottom:18 }}>
-        <ManualEmailSenders booking={form}/>
+        <ManualEmailSenders booking={form} onBuildSchedule={form.linkedEventId ? null : regenSchedule}/>
         <EmailHistoryPanel bookingId={form.id} title="Emails Sent" emptyLabel="No emails sent for this booking yet."/>
       </div>
 
@@ -2739,7 +2739,7 @@ const MANUAL_EMAILS = [
   { id:"arrival",              label:"Arrival info" }
 ];
 
-function ManualEmailSenders({ booking }) {
+function ManualEmailSenders({ booking, onBuildSchedule }) {
   const [busy, setBusy] = useState(null);
   const [note, setNote] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
@@ -2767,11 +2767,27 @@ function ManualEmailSenders({ booking }) {
     return booking.bookingType === "Wedding" ? "arrival_event" : "arrival_general";
   };
 
+  // Entering a value doesn't create a payment schedule — that only happens when
+  // "Auto-build deposit + balance" is pressed. Without it there is no Deposit or
+  // Balance row to price the email from, so say that rather than reporting £0,
+  // which reads as though the figures are wrong.
+  const total = Number(booking.value) || 0;
+  const noSchedule = !schedule.length;
+
   const blockedReason = function(id) {
     if (!to) return "No guest email on this booking";
-    if (id === "deposit_request" && !(amountOf("Deposit") > 0)) return "Deposit is £0";
-    if (id === "balance_request" && !(amountOf("Balance") > 0)) return "Balance is £0";
-    if (id === "payment_confirmation" && !(paidSoFar > 0)) return "Nothing marked as paid yet";
+    if (id === "deposit_request" || id === "balance_request") {
+      if (noSchedule) {
+        return total > 0
+          ? "No payment schedule yet — build one first"
+          : "No payment schedule, and the booking value is £0";
+      }
+      const label = id === "deposit_request" ? "Deposit" : "Balance";
+      if (!(amountOf(label) > 0)) return "The " + label + " row is £0";
+    }
+    if (id === "payment_confirmation" && !(paidSoFar > 0)) {
+      return noSchedule ? "No payment schedule, so nothing can be marked paid" : "Nothing ticked as paid yet";
+    }
     if (id === "arrival" && !booking.checkIn) return "No check-in date";
     return null;
   };
@@ -2798,13 +2814,34 @@ function ManualEmailSenders({ booking }) {
       <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:8, flexWrap:"wrap" }}>
         <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Send an email now</h3>
         <span style={{ fontSize:11, color:T.textLight }}>
-          ignores the schedule — for testing, or resending{to ? " to " + to : ""}
+          ignores the due dates — for testing, or resending{to ? " to " + to : ""}
         </span>
+      </div>
+      {/* The email is built server-side from the stored booking, so anything
+          still sitting unsaved on this form won't appear in it. */}
+      <div style={{ fontSize:11, color:T.textLight, marginBottom:9, lineHeight:1.6 }}>
+        Sent from the saved booking — save first if you've just changed the figures.
       </div>
       {booking.linkedEventId && (
         <div style={{ fontSize:11.5, color:"#92400e", background:"#fffbeb", border:"1px solid #fde68a",
           borderRadius:6, padding:"7px 10px", marginBottom:9, lineHeight:1.6 }}>
           Attached to a farm event — only arrival info is sent automatically. These buttons still work if you want to send something by hand.
+        </div>
+      )}
+      {noSchedule && total > 0 && !booking.linkedEventId && (
+        <div style={{ fontSize:11.5, color:"#92400e", background:"#fffbeb", border:"1px solid #fde68a",
+          borderRadius:6, padding:"7px 10px", marginBottom:9, lineHeight:1.6, display:"flex",
+          alignItems:"center", gap:9, flexWrap:"wrap" }}>
+          <span style={{ flex:1, minWidth:200 }}>
+            This booking is {String(fmtMoney(total))} but has no payment schedule, so there's no deposit or balance to email about.
+          </span>
+          {onBuildSchedule && (
+            <button type="button" onClick={onBuildSchedule}
+              style={{ background:"none", border:"1px solid #fdba74", color:"#92400e", borderRadius:5,
+                padding:"4px 10px", fontFamily:"inherit", fontSize:11, fontWeight:700, cursor:"pointer", flexShrink:0 }}>
+              Build deposit + balance
+            </button>
+          )}
         </div>
       )}
       <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
