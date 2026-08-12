@@ -293,8 +293,9 @@ async function createPaymentLink(booking, entry, label) {
       quantity: 1,
     }],
     metadata: { bookingType: "accom_reminder", bookingId: String(booking.id), scheduleLabel: label },
-    success_url: SITE_ORIGIN + "/book-accom.html?paid=1",
-    cancel_url:  SITE_ORIGIN + "/book-accom.html?cancelled=1",
+    success_url: "https://www.hawthbushfarm.co.uk/book?paid=1",
+    // Back / cancel goes to the booking page on the main website.
+    cancel_url:  "https://www.hawthbushfarm.co.uk/book",
   });
   entry.stripeId = session.id;
   return session.url;

@@ -131,8 +131,14 @@ exports.handler = async function(event) {
         totalAmount:   String(totalAmount),
         depositAmount: String(depositAmount)
       },
-      success_url: baseUrl + "/book-accom.html?booked=1&prop=" + encodeURIComponent(propNamesJoined) + "&ci=" + checkIn + "&co=" + checkOut,
-      cancel_url:  baseUrl + "/book-accom.html?cancelled=1"
+      // Both Stripe exits land on the website, not on the bare Netlify page.
+      // The booking details ride along in the query string; the embed snippet
+      // on that page forwards them into the iframe so the confirmation shows
+      // the reference and dates rather than a bare "thank you".
+      success_url: "https://www.hawthbushfarm.co.uk/book?booked=1&prop=" + encodeURIComponent(propNamesJoined) + "&ci=" + checkIn + "&co=" + checkOut,
+      // Stripe's back arrow and the cancel path return the guest to the
+      // booking page on the main website, not to the bare Netlify page.
+      cancel_url:  "https://www.hawthbushfarm.co.uk/book"
     });
 
     // ── 2. Save pending booking to Supabase ──────────────────────────────────
