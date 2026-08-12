@@ -142,7 +142,12 @@ exports.handler = async function(event) {
     });
 
     // ── 2. Save pending booking to Supabase ──────────────────────────────────
-    const bookingId    = "web-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    // Short reference the guest can read out over the phone: a letter and five
+    // digits, e.g. W10432. The existing list is loaded first so the number is
+    // checked for collisions rather than assumed unique — it is the primary
+    // key for this booking everywhere, including the Stripe webhook.
+    const existing     = await sbGet(ACCOM_KEY) || [];
+    const bookingId    = newBookingRef(existing, "W");
     const todayISO     = new Date().toISOString().slice(0,10);
     // Balance timing should follow the booking's earliest check-in (not
     // necessarily the first stay added), and respect whatever balanceWeeks
@@ -214,9 +219,11 @@ exports.handler = async function(event) {
       stripeSessionId: session.id
     };
 
-    // Load existing bookings and append (no spread)
-    const existing = await sbGet(ACCOM_KEY) || [];
-    await sbSet(ACCOM_KEY, existing.concat([booking]));
+    // Re-read immediately before writing: another booking may have landed
+    // while this one was at the Stripe screen, and appending to the stale copy
+    // would erase it.
+    const latest = await sbGet(ACCOM_KEY) || [];
+    await sbSet(ACCOM_KEY, latest.concat([booking]));
 
     return {
       statusCode: 200,
@@ -234,6 +241,23 @@ exports.handler = async function(event) {
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// A short booking reference: one letter and five digits, e.g. "W10432".
+// Random rather than sequential so two bookings started at the same moment
+// can't be handed the same number, and checked against the bookings already
+// stored so a clash is impossible rather than merely unlikely. Falls back to
+// a longer number in the vanishingly unlikely event the space is exhausted.
+// Mirrored in App.jsx — both must agree or the two could collide.
+function newBookingRef(existing, prefix) {
+  var taken = {};
+  (existing || []).forEach(function(b) { if (b && b.id) taken[String(b.id).toUpperCase()] = true; });
+  var letter = prefix || "A";
+  for (var i = 0; i < 200; i++) {
+    var id = letter + String(Math.floor(10000 + Math.random() * 90000));
+    if (!taken[id]) return id;
+  }
+  return letter + String(Date.now()).slice(-8);
+}
+
 function fmtDate(iso) {
   if (!iso) return "";
   var d = new Date(iso + "T00:00:00");

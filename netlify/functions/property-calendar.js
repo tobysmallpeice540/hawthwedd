@@ -86,6 +86,13 @@ exports.handler = async function(event) {
     return { statusCode: 500, body: "Could not load bookings" };
   }
 
+  // Only recent and future stays are published. Anything that finished more
+  // than 30 days ago can't affect availability, and a leaner feed is quicker
+  // for the other side to accept.
+  var cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 30);
+  var cutoff = cutoffDate.toISOString().slice(0, 10).replace(/-/g, "");
+
   // Build VEVENT list for this property
   var lines = [];
   bookings.forEach(function(b) {
@@ -116,32 +123,36 @@ exports.handler = async function(event) {
       var start = toIcalDate(s.checkIn);
       var end   = toIcalDate(s.checkOut);
       if (!start || !end || end <= start) return;   // unusable dates: skip the event, keep the feed
+      if (end < cutoff) return;                     // finished long ago — blocks nothing, only bulk
 
       lines.push(foldLine("BEGIN:VEVENT"));
-      lines.push(foldLine("UID:" + uid));
+      lines.push(foldLine("DTEND;VALUE=DATE:" + end));
       lines.push(foldLine("DTSTAMP:" + toIcalStamp(b.createdAt)));
       lines.push(foldLine("DTSTART;VALUE=DATE:" + start));
-      lines.push(foldLine("DTEND;VALUE=DATE:" + end));
+      lines.push(foldLine("SEQUENCE:0"));
+      lines.push(foldLine("STATUS:CONFIRMED"));
       lines.push(foldLine("SUMMARY:" + escapeIcal(summary)));
+      lines.push(foldLine("UID:" + uid));
       lines.push(foldLine("END:VEVENT"));
     });
   });
 
+  // Kept deliberately close to the Bookalet feed Airbnb already accepts:
+  // properties in alphabetical order within each VEVENT, SEQUENCE and STATUS
+  // present, and no METHOD or X-WR-* extensions. Those extras are valid iCal
+  // but there is no reason to hand a fussy importer anything it doesn't need.
   var ical = [
     "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Hawthbush Farm//Lettings//EN",
     "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
-    "X-WR-CALNAME:Hawthbush Farm - " + propertyId,
-    "X-WR-CALDESC:Availability calendar for " + propertyId
+    "PRODID:-//Hawthbush Farm//Lettings//EN",
+    "VERSION:2.0",
+    "X-WR-CALNAME:Hawthbush Farm - " + propertyId
   ].concat(lines).concat(["END:VCALENDAR"]).join("\r\n") + "\r\n";
 
   return {
     statusCode: 200,
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
-      "Content-Disposition": "inline; filename=" + propertyId + ".ics",
       "Cache-Control": "no-cache"
     },
     body: ical
