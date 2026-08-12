@@ -202,6 +202,9 @@ exports.handler = async function(event) {
       schedule:        schedule,
       notes:           (notes ? notes + "\n" : "") + "Online booking — Stripe session: " + session.id,
       createdAt:       new Date().toISOString(),
+      // When the guest ticked the T&C box at checkout. Recorded so there is a
+      // record of acceptance if it is ever queried.
+      termsAcceptedAt: body.termsAcceptedAt || null,
       stripeSessionId: session.id
     };
 

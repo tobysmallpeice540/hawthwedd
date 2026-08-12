@@ -34,7 +34,8 @@ const DATA_KEYS = [
   "hbf_discount_codes_v1",
   "hbf_email_templates_v1",
   "hbf_email_log_v1",
-  "hbf_event_invoices_v1"
+  "hbf_event_invoices_v1",
+  "hbf_terms_v1"
 ];
 
 function jsonResponse(statusCode, body) {
