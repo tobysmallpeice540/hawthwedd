@@ -1637,7 +1637,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12j";
+const APP_BUILD = "2026-08-12n";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3760,7 +3760,10 @@ function ICalSettings({ properties, setProperties, onSave }) {
       </div>
 
       {properties.map(p => {
-        const exportUrl = SITE_URL + "/.netlify/functions/property-calendar?id=" + p.id;
+        // Airbnb validates that the URL looks like a calendar file, so the
+        // tidy /ical/<id>.ics form is what's offered rather than the raw
+        // function path. Both work; only this one is accepted by Airbnb.
+        const exportUrl = SITE_URL + "/ical/" + p.id + ".ics";
         const ss = syncState[p.id] || {};
         return (
           <div key={p.id} style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", marginBottom:14, background:"#fff", boxShadow:"0 2px 6px rgba(37,99,235,.04)" }}>
@@ -3784,6 +3787,10 @@ function ICalSettings({ properties, setProperties, onSave }) {
                   style={{ background:T.accentLight, color:T.accent, border:`1.5px solid ${T.accent}30`, borderRadius:7, padding:"8px 16px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
                   Copy
                 </button>
+              </div>
+              <div style={{ fontSize:11, color:T.textLight, marginTop:5, lineHeight:1.6 }}>
+                Dates only — every booking reads "Booked". This URL is public and guessable, so it carries no guest names;
+                Airbnb ignores the labels in any case. For the full picture with names, subscribe to the calendar feed in Settings.
               </div>
             </div>
 
