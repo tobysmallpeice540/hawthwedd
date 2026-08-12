@@ -1545,6 +1545,21 @@ function findAccomClashes(bookings, rec) {
   const out = [];
   const mine = (rec.stays && rec.stays.length) ? rec.stays : [rec];
 
+  // A booking overlapping *itself* — the same property listed twice on the
+  // same nights. The clash check below only compares against other bookings,
+  // so without this a record can quietly carry a duplicate stay, which then
+  // appears twice in the channel feeds under one booking id.
+  mine.forEach(function(s, i) {
+    if (!s || !s.propertyId || !s.checkIn || !s.checkOut) return;
+    mine.forEach(function(o, j) {
+      if (j <= i || !o || o.propertyId !== s.propertyId) return;
+      if (!o.checkIn || !o.checkOut) return;
+      if (s.checkIn < o.checkOut && s.checkOut > o.checkIn) {
+        out.push({ other: Object.assign({}, rec, { guestName: "this same booking" }), otherStay: o, stay: s });
+      }
+    });
+  });
+
   mine.forEach(function(s) {
     if (!s || !s.propertyId || !s.checkIn || !s.checkOut) return;
     (bookings || []).forEach(function(b) {
@@ -1686,7 +1701,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12r";
+const APP_BUILD = "2026-08-12s";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
