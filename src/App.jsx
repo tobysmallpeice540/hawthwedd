@@ -1701,7 +1701,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12s";
+const APP_BUILD = "2026-08-12v";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4340,7 +4340,7 @@ const BACKUP_DATA_KEYS = [
   "hawthbush_bookings_v6", "hawthbush_staff_v5", "hbf_accom_v1", "hbf_accom_guests_v1",
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
-  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_checkout_attempts_v1"
+  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1"
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -4348,7 +4348,7 @@ const KEY_LABELS = {
   "hbf_viewings_v1":"Viewings", "hbf_viewing_requests_v1":"Viewing requests", "hbf_viewing_blocks_v1":"Viewing blocks",
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
-  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_checkout_attempts_v1":"Checkout attempts"
+  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -5641,6 +5641,22 @@ export default function App({ role = "admin", onSignOut } = {}) {
   }, [mutateBookings]);
   const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
 
+  // Delete a lettings booking outright. Used for unpaid online bookings that
+  // are never going to be paid — reads the server's copy first so a booking
+  // added elsewhere since this tab loaded isn't wiped along with it.
+  const deleteAccomBooking = useCallback(async (booking) => {
+    try {
+      const server = await sbGet(ACCOM_STORAGE);
+      const base = Array.isArray(server) ? server : [];
+      const next = base.filter(function(b) { return String(b.id) !== String(booking.id); });
+      await sbSet(ACCOM_STORAGE, next);
+      setAccomBookings(next);
+    } catch (e) {
+      console.error("Could not delete booking:", e);
+      alert("Could not delete that booking — the database didn't respond. Nothing was changed.");
+    }
+  }, []);
+
   const saveAccomBooking = useCallback(async (bookingId, patch) => {
     setAccomBookings(function(prev) {
       var next = prev.map(function(b) { return b.id===bookingId ? Object.assign({}, b, patch) : b; });
@@ -5858,7 +5874,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
       <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
-        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken}/>}
+        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
@@ -9413,79 +9429,54 @@ function computeStock(products, events) {
 }
 
 // ─── Dashboard (Slice 2) ──────────────────────────────────────────────────────
-// ─── ABANDONED CHECKOUTS ──────────────────────────────────────────────────────
-// Someone filled in the booking form, reached Stripe and never paid. No
-// booking exists — deliberately, since an unpaid booking isn't one — but the
-// enquiry is worth chasing, so it surfaces here with everything needed to get
-// in touch, and can be dismissed once dealt with.
-const CHECKOUT_ATTEMPTS_KEY = "hbf_checkout_attempts_v1";
-const ATTEMPT_GRACE_MINUTES = 30;   // still at the card screen; don't nag yet
+// ─── UNPAID ONLINE BOOKINGS ───────────────────────────────────────────────────
+// Someone booked through the website and never paid the deposit. The booking
+// is recorded as "pending" and holds its dates everywhere, including on
+// Airbnb, so it can't be double-sold while you decide what to do. It's listed
+// here so it doesn't sit unnoticed: chase them, or delete it to free the
+// dates. Nothing expires it automatically — releasing someone's dates without
+// being asked to is the more dangerous mistake.
+const UNPAID_GRACE_MINUTES = 30;   // may still be at the card screen
 
-function AbandonedCheckouts() {
-  const [attempts, setAttempts] = useState(null);
+function UnpaidOnlineBookings({ bookings, onDelete }) {
   const [busy, setBusy] = useState(null);
 
-  useEffect(function() {
-    let cancelled = false;
-    (async function() {
-      try {
-        const a = await sbGet(CHECKOUT_ATTEMPTS_KEY);
-        if (!cancelled) setAttempts(Array.isArray(a) ? a : []);
-      } catch (e) { if (!cancelled) setAttempts([]); }
-    })();
-    return function() { cancelled = true; };
-  }, []);
-
-  if (attempts === null) return null;
-
   const now = Date.now();
-  const open = attempts.filter(function(a) {
-    if (!a || a.promotedAt || a.dismissed) return false;
-    const age = a.createdAt ? (now - new Date(a.createdAt).getTime()) : 0;
-    return age > ATTEMPT_GRACE_MINUTES * 60 * 1000;
+  const unpaid = (bookings || []).filter(function(b) {
+    if (!b || b.status !== "pending" || b.source !== "direct") return false;
+    const dep = (b.schedule || []).find(function(s) { return s.label === "Deposit"; });
+    if (dep && dep.paid) return false;                     // paid; status just hasn't caught up
+    const age = b.createdAt ? (now - new Date(b.createdAt).getTime()) : Infinity;
+    return !isFinite(age) || age > UNPAID_GRACE_MINUTES * 60 * 1000;
   }).sort(function(x, z) { return (z.createdAt || "") > (x.createdAt || "") ? 1 : -1; });
 
-  if (!open.length) return null;
-
-  const dismiss = async function(id) {
-    setBusy(id);
-    try {
-      // Re-read before writing: the list is also written by the checkout
-      // function, and overwriting a stale copy would lose a live attempt.
-      const server = await sbGet(CHECKOUT_ATTEMPTS_KEY);
-      const list = Array.isArray(server) ? server : [];
-      const next = list.map(function(a) {
-        return (a && a.id === id) ? Object.assign({}, a, { dismissed: true, dismissedAt: new Date().toISOString() }) : a;
-      });
-      await sbSet(CHECKOUT_ATTEMPTS_KEY, next);
-      setAttempts(next);
-    } catch (e) { /* leave it showing rather than pretend it went */ }
-    setBusy(null);
-  };
+  if (!unpaid.length) return null;
 
   return (
     <div style={{ background:"#fff", border:"1px solid #fdba74", borderRadius:12, padding:"18px 22px", marginBottom:20 }}>
       <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:4, flexWrap:"wrap" }}>
         <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:"#9a3412" }}>
-          Started a booking but didn't pay
+          Booked online but not paid
         </h3>
         <span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:9, background:"#fff7ed", color:"#9a3412", border:"1px solid #fdba74" }}>
-          {open.length}
+          {unpaid.length}
         </span>
       </div>
       <div style={{ fontSize:12, color:T.textMid, marginBottom:12, lineHeight:1.6 }}>
-        No booking was made and the dates are free. Worth a quick email in case they hit a problem.
+        These are holding their dates — on the website and on Airbnb. Chase them, or delete to release the dates.
       </div>
 
-      {open.map(function(a) {
-        const stays = a.stays || [];
+      {unpaid.map(function(b) {
+        const stays = (b.stays && b.stays.length) ? b.stays : [b];
+        const dep = (b.schedule || []).find(function(s) { return s.label === "Deposit"; });
         return (
-          <div key={a.id} style={{ borderTop:`1px solid ${T.border}`, padding:"11px 0", display:"flex",
+          <div key={b.id} style={{ borderTop:`1px solid ${T.border}`, padding:"11px 0", display:"flex",
             gap:12, alignItems:"flex-start", flexWrap:"wrap" }}>
             <div style={{ flex:1, minWidth:240 }}>
               <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
-                {a.guestName || "No name given"}
-                {a.guestCount ? <span style={{ fontWeight:400, color:T.textLight }}> · {a.guestCount} guest{Number(a.guestCount) === 1 ? "" : "s"}</span> : null}
+                {b.guestName || "No name given"}
+                <span style={{ fontWeight:400, color:T.textLight }}> · {b.id}</span>
+                {b.guestCount ? <span style={{ fontWeight:400, color:T.textLight }}> · {b.guestCount} guest{Number(b.guestCount) === 1 ? "" : "s"}</span> : null}
               </div>
               {stays.map(function(st, i) {
                 return (
@@ -9496,19 +9487,21 @@ function AbandonedCheckouts() {
                 );
               })}
               <div style={{ fontSize:12, color:T.textMid, marginTop:3 }}>
-                {a.email ? <a href={"mailto:" + a.email} style={{ color:T.accent }}>{a.email}</a> : <span style={{ color:T.textLight }}>no email</span>}
-                {a.phone ? " · " + a.phone : ""}
+                {b.email ? <a href={"mailto:" + b.email} style={{ color:T.accent }}>{b.email}</a> : <span style={{ color:T.textLight }}>no email</span>}
+                {b.phone ? " · " + b.phone : ""}
               </div>
               <div style={{ fontSize:11, color:T.textLight, marginTop:3 }}>
-                Tried {a.createdAt ? new Date(a.createdAt).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "—"}
-                {Number(a.depositAmount) > 0 ? " · deposit would have been " + String(fmtMoney(a.depositAmount)) : ""}
+                Booked {b.createdAt ? new Date(b.createdAt).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "—"}
+                {dep && Number(dep.amount) > 0 ? " · deposit " + String(fmtMoney(dep.amount)) + " unpaid" : ""}
               </div>
             </div>
-            <button onClick={function(){ dismiss(a.id); }} disabled={busy === a.id}
-              style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, borderRadius:7,
+            <button onClick={function(){ setBusy(b.id); Promise.resolve(onDelete(b)).then(function(){ setBusy(null); }); }}
+              disabled={busy === b.id}
+              title="Delete this booking and free the dates"
+              style={{ background:"#fff", color:T.red, border:"1.5px solid #fca5a5", borderRadius:7,
                 padding:"7px 14px", fontFamily:"inherit", fontSize:12, fontWeight:600,
-                cursor: busy === a.id ? "default" : "pointer", flexShrink:0 }}>
-              {busy === a.id ? "…" : "Dismiss"}
+                cursor: busy === b.id ? "default" : "pointer", flexShrink:0 }}>
+              {busy === b.id ? "…" : "Delete"}
             </button>
           </div>
         );
@@ -9517,7 +9510,7 @@ function AbandonedCheckouts() {
   );
 }
 
-function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
+function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom }) {
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
   const [viewEmail, setViewEmail]         = useState(null);
@@ -9712,9 +9705,12 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
       )}
 
       {/* Overdue money — unpaid raised invoices, and unpaid accommodation */}
-      <AbandonedCheckouts/>
+      <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom}/>
 
-      {(overdueInvoices.length > 0 || overdueAccom.length > 0) && (
+      {/* A zero is not "overdue" — it's nothing owed. Rows worth nothing are
+          filtered above; this also stops a section rendering a £0.00 header
+          if one ever gets through. */}
+      {(overdueInvoiceTotal > 0 || overdueAccomTotal > 0) && (
         <div style={{ background:"#fff", border:"1px solid #fecaca", borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(220,38,38,.08)", marginBottom:18 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
             <h3 style={{ margin:0, color:"#dc2626", fontWeight:700, fontSize:15 }}>Overdue</h3>
@@ -9723,7 +9719,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
             </span>
           </div>
 
-          {overdueInvoices.length > 0 && (
+          {overdueInvoiceTotal > 0 && (
             <div style={{ marginBottom: overdueAccom.length ? 16 : 0 }}>
               <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
                 Event invoices unpaid — £{overdueInvoiceTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
@@ -9751,7 +9747,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken }) {
             </div>
           )}
 
-          {overdueAccom.length > 0 && (
+          {overdueAccomTotal > 0 && (
             <div>
               <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
                 Accommodation unpaid — £{overdueAccomTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
@@ -13235,6 +13231,133 @@ function viewingConflicts(date, time, opts) {
   return out;
 }
 
+// Three months of dates for picking blocks. Click a day to start a range,
+// click a second to finish it — the From/To boxes above fill in, so the note,
+// slot and Block/Open choice still go through the same controls rather than
+// this becoming a second way to create blocks with its own rules.
+function BlockCalendar({ blocks, requests, bookings, from, to, onPick }) {
+  const [offset, setOffset] = useState(0);
+
+  const months = [];
+  const base = new Date();
+  base.setDate(1);
+  for (let i = 0; i < 3; i++) {
+    const d = new Date(base.getFullYear(), base.getMonth() + offset + i, 1);
+    months.push({ y: d.getFullYear(), m: d.getMonth() });
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const byDate = {};
+  (blocks || []).forEach(function(b) {
+    if (!b || !b.date) return;
+    const kind = b.kind || "block";
+    const cur = byDate[b.date];
+    // A whole-day entry outranks a slot-specific one in the shading.
+    if (!cur || (!b.slot && cur.slot)) byDate[b.date] = { kind: kind, slot: b.slot, note: b.note };
+  });
+  const viewingDates = {};
+  (requests || []).forEach(function(r) {
+    if (r && r.status === "confirmed" && r.date) viewingDates[r.date] = true;
+  });
+  const eventDates = {};
+  (bookings || []).forEach(function(b) {
+    if (b && b.date && b.couple) eventDates[b.date] = true;
+  });
+
+  const label = months.map(function(mm) {
+    return new Date(mm.y, mm.m, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+  });
+
+  const cellFor = function(ds) {
+    const blk = byDate[ds];
+    if (blk && blk.kind === "open") return { bg: T.greenBg, fg: T.green, title: "Open" + (blk.slot ? " " + blk.slot : " all day") + (blk.note ? " — " + blk.note : "") };
+    if (blk) return { bg: "#fef2f2", fg: T.red, title: (blk.slot ? "Blocked " + blk.slot : "Blocked all day") + (blk.note ? " — " + blk.note : "") };
+    if (eventDates[ds]) return { bg: "#f4f6f9", fg: T.textLight, title: "Farm event — automatically blocked" };
+    if (viewingDates[ds]) return { bg: "#eef4fd", fg: T.midBlue, title: "Viewing booked" };
+    return null;
+  };
+
+  const inRange = function(ds) {
+    if (!from) return false;
+    const end = to || from;
+    return ds >= from && ds <= end;
+  };
+
+  return (
+    <div style={{ marginBottom:16 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+        <button onClick={function(){ setOffset(offset - 3); }}
+          style={{ width:30, height:30, borderRadius:7, border:`1.5px solid ${T.border}`, background:"#fff",
+            color:T.text, fontSize:15, cursor:"pointer", fontFamily:"inherit" }}>‹</button>
+        <span style={{ fontSize:13, fontWeight:700, color:T.text, minWidth:190, textAlign:"center" }}>
+          {label[0]} – {label[2]}
+        </span>
+        <button onClick={function(){ setOffset(offset + 3); }}
+          style={{ width:30, height:30, borderRadius:7, border:`1.5px solid ${T.border}`, background:"#fff",
+            color:T.text, fontSize:15, cursor:"pointer", fontFamily:"inherit" }}>›</button>
+        {offset !== 0 && (
+          <button onClick={function(){ setOffset(0); }}
+            style={{ background:"none", border:"none", color:T.accent, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+            back to today
+          </button>
+        )}
+        <span style={{ marginLeft:"auto", fontSize:11, color:T.textLight }}>
+          {from && !to ? "Now click the last day of the range" : "Click a day to start a range"}
+        </span>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:12 }}>
+        {months.map(function(mm, mi) {
+          const nDays = new Date(mm.y, mm.m + 1, 0).getDate();
+          const firstDow = (new Date(mm.y, mm.m, 1).getDay() + 6) % 7;
+          const cells = [];
+          for (let p = 0; p < firstDow; p++) cells.push(<div key={"p"+p}/>);
+          for (let d = 1; d <= nDays; d++) {
+            const ds = mm.y + "-" + String(mm.m+1).padStart(2,"0") + "-" + String(d).padStart(2,"0");
+            const st = cellFor(ds);
+            const sel = inRange(ds);
+            const isToday = ds === today;
+            cells.push(
+              <button key={ds} onClick={function(){ onPick(ds); }} title={st ? st.title : ds}
+                style={{ height:26, borderRadius:4, cursor:"pointer", fontFamily:"inherit", fontSize:11,
+                  fontWeight: sel || isToday ? 700 : 500,
+                  border: isToday ? `1.5px solid ${T.accent}` : "1px solid transparent",
+                  background: sel ? T.accent : (st ? st.bg : "#fff"),
+                  color: sel ? "#fff" : (st ? st.fg : T.textMid),
+                  padding:0 }}>
+                {d}
+              </button>
+            );
+          }
+          return (
+            <div key={mi} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"9px 8px" }}>
+              <div style={{ fontSize:12, fontWeight:700, color:T.text, textAlign:"center", marginBottom:6 }}>{label[mi]}</div>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:2 }}>
+                {["M","T","W","T","F","S","S"].map(function(x,i){
+                  return <div key={i} style={{ fontSize:9, fontWeight:700, color:T.textLight, textAlign:"center" }}>{x}</div>;
+                })}
+                {cells}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8, fontSize:11, color:T.textMid }}>
+        {[["#fef2f2", T.red, "Blocked"], [T.greenBg, T.green, "Opened"], ["#eef4fd", T.midBlue, "Viewing booked"],
+          ["#f4f6f9", T.textLight, "Farm event"], [T.accent, "#fff", "Selected"]].map(function(x, i) {
+          return (
+            <span key={i} style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+              <span style={{ width:11, height:11, borderRadius:3, background:x[0], border:`1px solid ${T.border}` }}/>
+              {x[2]}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, patchBooking, mode="requests", confirmedSlot=null }) {
   const [acting, setActing]         = useState(null);
   const [blockDate,   setBlockDate]   = useState("");
@@ -13286,6 +13409,15 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   const handleDeclineClick = (req) => {
     setDeclineReason("");
     setDeclineModal({ req });
+  };
+
+  // First click sets the start and clears any end; second click completes the
+  // range. Clicking before the current start restarts from there rather than
+  // producing a backwards range.
+  const pickBlockDate = (ds) => {
+    if (!blockDate || blockDateTo) { setBlockDate(ds); setBlockDateTo(""); return; }
+    if (ds < blockDate) { setBlockDate(ds); setBlockDateTo(""); return; }
+    setBlockDateTo(ds === blockDate ? "" : ds);
   };
 
   const handleDeleteClick = (req) => setDeleteModal({ req });
@@ -13756,6 +13888,11 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             {blockKind === "open" ? "+ Open period" : "+ Add Block"}
           </button>
         </div>
+        {/* Sits between the input row and the list: pick the dates here, set
+            the kind/slot/reason above, then press Add. */}
+        <BlockCalendar blocks={blocks} requests={requests} bookings={bookings}
+          from={blockDate} to={blockDateTo} onPick={pickBlockDate}/>
+
         {blocks.length>0 && (
           <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
             {(()=>{
