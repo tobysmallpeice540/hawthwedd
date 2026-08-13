@@ -1701,7 +1701,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12v";
+const APP_BUILD = "2026-08-12w";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -13433,28 +13433,38 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   // `amend` = confirm, but at a time we propose rather than the one requested.
   // The agreed slot replaces the requested one everywhere: the stored request,
   // the diary entry and the confirmation email.
-  const handleAction = async (req, action, mode, existingEnqId, declineMsg, amended) => {
+  // silent: mark the request declined without emailing anyone. For requests
+  // that are obviously spam, duplicates, or ones already dealt with by phone —
+  // cases where a decline email would be noise or, worse, confusing.
+  const handleAction = async (req, action, mode, existingEnqId, declineMsg, amended, silent) => {
     setActing(req.id);
     const isAmend = action === "amend";
     const agreed = isAmend && amended
       ? { date: amended.date, time: amended.time }
       : { date: req.date, time: req.time };
     try {
-      // Send email via Netlify function
-      const res = await fetch("/.netlify/functions/handle-viewing", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ id: req.id, action, declineReason: declineMsg||"",
-          newDate: isAmend ? agreed.date : undefined, newTime: isAmend ? agreed.time : undefined }),
-      });
-      if (!res.ok) throw new Error("Function failed");
+      // A silent decline is handled entirely here — the function is what sends
+      // the email, so the way not to send one is not to call it.
+      if (!silent) {
+        const res = await fetch("/.netlify/functions/handle-viewing", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ id: req.id, action, declineReason: declineMsg||"",
+            newDate: isAmend ? agreed.date : undefined, newTime: isAmend ? agreed.time : undefined }),
+        });
+        if (!res.ok) throw new Error("Function failed");
+      }
 
       // Update request status
       const updatedRequests = requests.map(r => r.id===req.id
         ? Object.assign({}, r, {
             status: (action==="confirm"||isAmend) ? "confirmed" : "declined",
             date: agreed.date, time: agreed.time,
-            amendedFrom: isAmend ? { date: req.date, time: req.time } : r.amendedFrom
+            amendedFrom: isAmend ? { date: req.date, time: req.time } : r.amendedFrom,
+            // Recorded so the list can show that nothing was sent — otherwise
+            // a declined request looks identical either way and you can't tell
+            // whether the person was told.
+            declinedSilently: silent ? true : undefined
           })
         : r);
       await saveRequests(updatedRequests);
@@ -13577,6 +13587,14 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
               <span style={{ fontWeight:700, fontSize:15, color:T.text }}>{req.name}</span>
               {statusBadge(req.status)}
+              {/* Otherwise a declined request looks the same whether or not
+                  the person was ever told. */}
+              {req.declinedSilently && (
+                <span title="Declined without emailing them"
+                  style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9, background:T.bgInput, color:T.textLight, border:`1px solid ${T.border}` }}>
+                  no email sent
+                </span>
+              )}
               <span style={{ fontSize:12, color:T.textLight }}>{req.submittedAt ? new Date(req.submittedAt).toLocaleDateString("en-GB") : ""}</span>
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:"4px 16px", fontSize:13, color:T.textMid }}>
@@ -13673,10 +13691,17 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
                 style={{ width:"100%", border:`1.5px solid ${T.border}`, borderRadius:7, padding:"10px 12px", fontFamily:"inherit", fontSize:13, outline:"none", resize:"vertical", marginBottom:16 }}
               />
               <p style={{ fontSize:12, color:T.textLight, marginBottom:16 }}>This message will be included in the decline email sent to {req.name}.</p>
-              <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+              <div style={{ display:"flex", gap:10, justifyContent:"flex-end", flexWrap:"wrap" }}>
                 <button onClick={()=>setDeclineModal(null)}
                   style={{ padding:"9px 20px", border:`1px solid ${T.border}`, borderRadius:6, background:"#fff", color:T.textMid, fontFamily:"inherit", fontSize:13, cursor:"pointer" }}>
                   Cancel
+                </button>
+                {/* For spam, duplicates, or anything already settled by phone —
+                    clears the request without contacting anybody. */}
+                <button onClick={()=>{ handleAction(req,"decline","new",null,"",null,true); setDeclineModal(null); }} disabled={acting===req.id}
+                  title="Mark as declined without emailing them"
+                  style={{ padding:"9px 18px", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.textMid, fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                  Decline, no email
                 </button>
                 <button onClick={()=>{ handleAction(req,"decline","new",null,declineReason); setDeclineModal(null); }} disabled={acting===req.id}
                   style={{ padding:"9px 20px", background:T.red, border:"none", borderRadius:6, color:"#fff", fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>
