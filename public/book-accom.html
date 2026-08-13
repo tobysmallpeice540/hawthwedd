@@ -64,6 +64,11 @@
     .cal-cell.day-avail-only { background: #e3f7e6; color: #3d7a4a; }
     .cal-cell.day-checkin { background: #8fdba0; color: #1a4d28; cursor: pointer; transition: transform .1s; }
     .cal-cell.day-checkin:hover { transform: scale(1.08); z-index: 2; }
+    /* Blue = a date this stay could end on. Deliberately a different colour
+       from the green check-in shading so the two can't be confused. */
+    .cal-cell.day-checkout { background: #cfe4ff; color: #14396b; cursor: pointer; font-weight: 600; transition: transform .1s; }
+    .cal-cell.day-checkout:hover { transform: scale(1.08); z-index: 2; background: #b3d5ff; }
+    .cal-cell.day-checkout-on { background: #2563eb; color: #fff; }
     .cal-cell.day-selected { background: #2d2a25 !important; color: #fff !important; }
     .cal-cell.day-selected .day-letter { color: #fff !important; }
 
@@ -177,62 +182,64 @@
     body.embedded.compact-mode .main { padding-top: 0; padding-bottom: 12px; }
     body.embedded .view-toggle { margin-bottom: 6px; }
 
-    /* ══ COMPACT MODE ══════════════════════════════════════════════════════════
+    /* ══ COMPACT MODE
+       Type is one point larger than the original compact sizes — legible
+       without losing the density that makes three months fit across. ══════════════════════════════════════════════════════════
        Purely additive overrides, all scoped under body.compact-mode. Removing
        the class (or the ?compact=1 param) restores the standard layout exactly,
        so this is safe to trial and trivial to roll back.                        */
     body.compact-mode .main { max-width: 760px; padding: 18px 14px 50px; }
     body.compact-mode .header { padding: 12px 20px; }
-    body.compact-mode .header h1 { font-size: 21px; }
-    body.compact-mode .header .sub { font-size: 11px; }
+    body.compact-mode .header h1 { font-size: 22px; }
+    body.compact-mode .header .sub { font-size: 12px; }
 
     body.compact-mode .steps { margin-bottom: 16px; border-radius: 8px; }
-    body.compact-mode .step { padding: 7px 5px; font-size: 10.5px; }
+    body.compact-mode .step { padding: 7px 5px; font-size: 11.5px; }
 
-    body.compact-mode .page-title { font-size: 23px; margin-bottom: 3px; }
-    body.compact-mode .page-sub { font-size: 12.5px; margin-bottom: 14px; }
-    body.compact-mode .section-heading { font-size: 17px; margin: 15px 0 8px; }
+    body.compact-mode .page-title { font-size: 24px; margin-bottom: 3px; }
+    body.compact-mode .page-sub { font-size: 13.5px; margin-bottom: 14px; }
+    body.compact-mode .section-heading { font-size: 18px; margin: 15px 0 8px; }
 
     body.compact-mode .panel { padding: 14px 15px; margin-bottom: 12px; border-radius: 11px; }
-    body.compact-mode .panel h3 { font-size: 17px; margin-bottom: 9px; }
+    body.compact-mode .panel h3 { font-size: 18px; margin-bottom: 9px; }
 
     /* Property cards: tighter, 3-across on desktop, 2-across even on phones */
     body.compact-mode .prop-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
     body.compact-mode .prop-card { padding: 9px 10px; border-radius: 9px; border-width: 1.5px; }
     body.compact-mode .prop-card-head { gap: 6px; margin-bottom: 3px; }
     body.compact-mode .prop-dot { width: 9px; height: 9px; }
-    body.compact-mode .prop-name { font-size: 14.5px; }
-    body.compact-mode .prop-meta { font-size: 10.5px; line-height: 1.35; }
-    body.compact-mode .prop-rate { font-size: 10.5px; margin-top: 2px; }
+    body.compact-mode .prop-name { font-size: 15.5px; }
+    body.compact-mode .prop-meta { font-size: 11.5px; line-height: 1.35; }
+    body.compact-mode .prop-rate { font-size: 11.5px; margin-top: 2px; }
 
     /* Calendar: 3 months, tighter cells */
     body.compact-mode .cal-nav { gap: 8px; margin-bottom: 10px; }
-    body.compact-mode .cal-nav-btn { width: 32px; height: 32px; font-size: 17px; border-radius: 8px; }
-    body.compact-mode .cal-nav-label { font-size: 16px; min-width: 150px; }
+    body.compact-mode .cal-nav-btn { width: 32px; height: 32px; font-size: 18px; border-radius: 8px; }
+    body.compact-mode .cal-nav-label { font-size: 17px; min-width: 150px; }
     body.compact-mode .cal-months-grid { grid-template-columns: repeat(3, 1fr); gap: 9px; margin-bottom: 10px; }
     body.compact-mode .mini-cal { padding: 8px 7px; border-radius: 9px; }
-    body.compact-mode .mini-cal-title { font-size: 13px; margin-bottom: 5px; }
+    body.compact-mode .mini-cal-title { font-size: 14px; margin-bottom: 5px; }
     body.compact-mode .cal-grid { gap: 2px; }
-    body.compact-mode .cal-dow { font-size: 8px; padding-bottom: 2px; }
-    body.compact-mode .cal-cell { min-height: 27px; border-radius: 4px; gap: 0; }
-    body.compact-mode .cal-num { font-size: 10px; }
-    body.compact-mode .day-letter { font-size: 7px; }
+    body.compact-mode .cal-dow { font-size: 9px; padding-bottom: 2px; }
+    body.compact-mode .cal-cell { min-height: 30px; border-radius: 4px; gap: 0; }
+    body.compact-mode .cal-num { font-size: 11px; }
+    body.compact-mode .day-letter { font-size: 8px; }
     body.compact-mode .day-letters { gap: 1px; }
 
-    body.compact-mode .legend { gap: 9px; font-size: 10.5px; margin-bottom: 10px; }
+    body.compact-mode .legend { gap: 9px; font-size: 11.5px; margin-bottom: 10px; }
     body.compact-mode .leg-swatch { width: 10px; height: 10px; }
-    body.compact-mode .letter-key { font-size: 10.5px; gap: 8px; margin-bottom: 12px; }
-    body.compact-mode .letter-key b { font-size: 10.5px; }
+    body.compact-mode .letter-key { font-size: 11.5px; gap: 8px; margin-bottom: 12px; }
+    body.compact-mode .letter-key b { font-size: 11.5px; }
 
     body.compact-mode .quote-box { padding: 11px 13px; margin: 10px 0 12px; }
-    body.compact-mode .q-row { font-size: 12.5px; }
-    body.compact-mode .q-row.tot { font-size: 14px; }
-    body.compact-mode .btn-primary { padding: 11px 20px; font-size: 14px; margin-top: 11px; }
-    body.compact-mode .btn-ghost { padding: 7px 14px; font-size: 12px; }
-    body.compact-mode .nights-select { padding: 8px 11px; font-size: 13px; max-width: 100%; }
-    body.compact-mode .alert { padding: 8px 12px; font-size: 12px; margin-bottom: 10px; }
+    body.compact-mode .q-row { font-size: 13.5px; }
+    body.compact-mode .q-row.tot { font-size: 15px; }
+    body.compact-mode .btn-primary { padding: 11px 20px; font-size: 15px; margin-top: 11px; }
+    body.compact-mode .btn-ghost { padding: 7px 14px; font-size: 13px; }
+    body.compact-mode .nights-select { padding: 8px 11px; font-size: 14px; max-width: 100%; }
+    body.compact-mode .alert { padding: 8px 12px; font-size: 13px; margin-bottom: 10px; }
     body.compact-mode .form-grid { gap: 9px; }
-    body.compact-mode .form-field input, body.compact-mode .form-field textarea { padding: 8px 11px; font-size: 13px; }
+    body.compact-mode .form-field input, body.compact-mode .form-field textarea { padding: 8px 11px; font-size: 14px; }
     body.compact-mode .divider { margin: 15px 0; }
     body.compact-mode .cart-row { padding: 5px 0; }
 
@@ -240,7 +247,7 @@
        drop to 2 only when genuinely too narrow. */
     @media (max-width: 560px) {
       body.compact-mode .cal-months-grid { grid-template-columns: repeat(2, 1fr); gap: 7px; }
-      body.compact-mode .cal-cell { min-height: 25px; }
+      body.compact-mode .cal-cell { min-height: 28px; }
       body.compact-mode .prop-grid { grid-template-columns: repeat(2, 1fr); }
       body.compact-mode .main { padding: 14px 9px 40px; }
     }
@@ -464,43 +471,11 @@ function withinHorizonForProp(prop, ds) {
 }
 
 // ── Build availability maps ───────────────────────────────────────────────────
-// How long an unpaid online booking holds its dates. The booking row is
-// written before the guest is sent to Stripe, so without an expiry an
-// abandoned checkout would block those nights for everyone, permanently.
-// Generous enough to cover someone fetching their card; the webhook flips the
-// status to "confirmed" the instant payment lands, after which it holds
-// indefinitely as a real booking.
-var PENDING_HOLD_MINUTES = 60;
-
-function pendingHoldExpired(b) {
-  if (b.status !== "pending") return false;
-  var deposit = (b.schedule || []).find(function(s) { return s.label === "Deposit"; });
-  if (deposit && deposit.paid) return false;      // paid but status not yet updated — keep the hold
-  if (!b.createdAt) return false;                 // no timestamp to judge by, so leave it holding
-  var age = Date.now() - new Date(b.createdAt).getTime();
-  return isFinite(age) && age > PENDING_HOLD_MINUTES * 60 * 1000;
-}
-
-// Someone at the Stripe card screen right now holds their dates, even though
-// no booking exists yet — otherwise a second guest could be shown the same
-// nights as free and pay for them. The hold lapses after an hour, matching
-// the server-side check, so an abandoned attempt frees the dates by itself.
-function liveAttempts(attemptData) {
-  var cutoff = Date.now() - PENDING_HOLD_MINUTES * 60 * 1000;
-  return (attemptData || []).filter(function(a) {
-    if (!a || a.promotedAt || a.dismissed) return false;
-    var t = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    return isFinite(t) && t > cutoff;
-  }).map(function(a) {
-    return { id: "attempt-" + a.id, status: "confirmed", stays: a.stays || [] };
-  });
-}
-
 function buildAvailability() {
   S.occupied = {};
   S.bookings.forEach(function(b) {
+    // Pending (started online, not yet paid) still holds its dates.
     if (b.status === "cancelled") return;
-    if (pendingHoldExpired(b)) return;
     var stays = (b.stays && b.stays.length) ? b.stays : [b];
     stays.forEach(function(st) {
       if (!st.propertyId || !st.checkIn || !st.checkOut) return;
@@ -658,6 +633,34 @@ function renderViewToggle() {
   return html;
 }
 
+// Once a check-in date and property are settled, work out every date the
+// guest could check out on: within the min/max night limits, all nights free,
+// and an allowed check-out weekday. Returned as a map so the calendar can mark
+// them without recomputing per cell.
+function validCheckOutDates() {
+  var out = {};
+  if (!S.pendingCheckIn) return out;
+  var prop = S.properties.filter(function(p) { return p.id === S.pendingPropertyId; })[0];
+  if (!prop) return out;
+
+  var minN = minNightsForProp(prop, S.pendingCheckIn);
+  var maxN = Math.min(maxNightsForProp(prop, S.pendingCheckIn), maxFreeNightsForProp(prop, S.pendingCheckIn));
+  for (var n = minN; n <= maxN; n++) {
+    var co = addDays(S.pendingCheckIn, n);
+    if (!checkOutAllowedForProp(prop, co)) continue;
+    out[co] = n;
+  }
+  return out;
+}
+
+// Clicking a check-out day is the same as choosing that many nights.
+function selectCheckOutDate(ds) {
+  var valid = validCheckOutDates();
+  if (!valid[ds]) return;
+  S.pendingNights = valid[ds];
+  renderCalendarView();
+}
+
 // Hover card for a calendar day: what's free that night and what it costs.
 // Prices are per night for THAT date, so a guest can read the seasonal rate
 // off the calendar without having to pick a date and work back from a total.
@@ -697,7 +700,11 @@ function dayTipHtml(ds, info) {
 }
 
 // ── One mini month calendar ───────────────────────────────────────────────────
-function renderMiniMonth(year, month, propList) {
+function renderMiniMonth(year, month, propList, checkOuts) {
+  checkOuts = checkOuts || {};
+  // With one property on show its letter is on every cell and tells you
+  // nothing, so it's dropped.
+  var showLetters = (propList || []).length > 1;
   var nDays = daysInMonth(year, month);
   var firstDow = (new Date(year, month, 1).getDay() + 6) % 7; // 0=Mon
   var html = '<div class="mini-cal">';
@@ -714,7 +721,18 @@ function renderMiniMonth(year, month, propList) {
 
     var cls = "cal-cell";
     var onclick = "";
+    var isCheckOut = !!checkOuts[ds];
+    var isChosenOut = isCheckOut && S.pendingNights && checkOuts[ds] === S.pendingNights;
+
     if (isPast) cls += " day-past";
+    else if (isCheckOut) {
+      // Offered as a check-out date. This wins over the ordinary check-in
+      // styling: mid-selection, "where can this stay end" is the only
+      // question the guest is being asked.
+      cls += " day-checkout";
+      if (isChosenOut) cls += " day-checkout-on";
+      onclick = ' onclick="selectCheckOutDate(\'' + ds + '\')"';
+    }
     else if (info.checkinOk.length) { cls += " day-checkin"; onclick = ' onclick="selectCheckInDate(\'' + ds + '\')"'; }
     else if (info.avail.length) cls += " day-avail-only";
     else cls += " day-blocked";
@@ -722,7 +740,7 @@ function renderMiniMonth(year, month, propList) {
 
     html += '<div class="' + cls + '"' + onclick + '>';
     html += '<span class="cal-num">' + d + '</span>';
-    if (info.avail.length) {
+    if (showLetters && info.avail.length) {
       html += '<span class="day-letters">';
       info.avail.forEach(function(p) {
         html += '<span class="day-letter" style="color:' + (p.colour || "#333") + '">' + propLetter(p) + '</span>';
@@ -760,9 +778,11 @@ function renderCalLegend(propList) {
   var list = propList || S.properties;
   var html = '<div class="legend">';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#8fdba0"></div>Available to check in</div>';
+  if (S.pendingCheckIn) html += '<div class="leg-item"><div class="leg-swatch" style="background:#cfe4ff"></div>Click to check out</div>';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#e3f7e6"></div>Available (not a check-in day)</div>';
   html += '<div class="leg-item"><div class="leg-swatch" style="background:#fff;border:1px solid #ddd"></div>Not available</div>';
   html += '</div>';
+  if (list.length < 2) { html += '</div>'; return html; }
   html += '<div class="letter-key">';
   list.forEach(function(p) {
     html += '<span><b style="color:' + (p.colour || "#333") + '">' + propLetter(p) + '</b>' + escHtml(p.name) + '</span>';
@@ -863,7 +883,7 @@ function renderPropertyAndNightsSection() {
   var usedIds = S.cart.map(function(s) { return s.propertyId; });
   var sole = onlyProperty();
   var html = sole
-    ? '<h3 class="section-heading">' + escHtml(sole.name) + '</h3>'
+    ? '<h3 class="section-heading">Your stay</h3>'
     : '<h3 class="section-heading"><em>Either</em> choose your property</h3>';
   html += '<div class="panel">';
 
@@ -890,18 +910,9 @@ function renderPropertyAndNightsSection() {
     return html;
   }
 
-  // Sole property: it's already selected, so a clickable card offering the
-  // choice of it is just noise. One line of detail instead.
-  if (sole) {
-    var soleMeta = [];
-    if (sole.sleeps) soleMeta.push("Sleeps " + sole.sleeps);
-    var soleMin = minNightsForProp(sole, S.pendingCheckIn);
-    if (soleMin) soleMeta.push(soleMin + " night minimum");
-    if (sole.baseRate > 0) soleMeta.push("from " + fmt(sole.baseRate) + " / night");
-    if (soleMeta.length) {
-      html += '<div class="prop-meta" style="margin-bottom:2px">' + soleMeta.join(" &middot; ") + '</div>';
-    }
-  } else {
+  // The card is shown even when there's only one property — it carries the
+  // sleeps/minimum/price detail and reads better than a bare line of text.
+  // It's simply already selected and does nothing when clicked.
   html += '<div class="prop-grid">';
   candidates.forEach(function(p) {
     var sel = S.pendingPropertyId === p.id;
@@ -920,7 +931,6 @@ function renderPropertyAndNightsSection() {
     html += '</div>';
   });
   html += '</div>';
-  }
 
   if (S.pendingPropertyId && usedIds.indexOf(S.pendingPropertyId) === -1) {
     var prop = S.properties.filter(function(x) { return x.id === S.pendingPropertyId; })[0];
@@ -975,15 +985,16 @@ function renderCalendarView() {
   html += stepsHtml(1);
   html += '<h2 class="page-title">Book Your Stay</h2>';
   html += '<p class="page-sub">' + (sole
-    ? 'Choose your check-in date below, then how many nights you\'d like to stay.'
-    : 'Choose your check-in date below, or pick a property first to see just its availability. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.') + '</p>';
+    ? '<strong>Choose your check-in date below</strong>, then how many nights you&rsquo;d like to stay.'
+    : '<strong>Choose your check-in date below</strong>, or pick a property first to see just its availability. You can add up to ' + Math.min(MAX_PROPERTIES_PER_BOOKING, S.properties.length) + ' properties to one booking.') + '</p>';
   html += renderCartSummary();
   html += renderPropertyAndNightsSection();
   html += '<h3 class="section-heading">' + (sole ? 'Choose your date' : '<em>Or</em> choose your date') + '</h3>';
   html += renderCalNav();
   var calProps = calendarFilterProperties();
+  var checkOuts = validCheckOutDates();
   html += '<div class="cal-months-grid">';
-  S.calMonths.forEach(function(m) { html += renderMiniMonth(m.year, m.month, calProps); });
+  S.calMonths.forEach(function(m) { html += renderMiniMonth(m.year, m.month, calProps, checkOuts); });
   html += '</div>';
   html += renderCalLegend(calProps);
   mount(html);
@@ -1110,11 +1121,11 @@ function renderSummaryView() {
 // the calendar the guest returns to shows the nights that have actually gone
 // rather than the snapshot they arrived with.
 function refreshAvailability() {
-  return Promise.all([sbGet("hbf_accom_v1"), sbGet("hbf_checkout_attempts_v1")]).then(function(r) {
-    S.bookings = (r[0] || []).map(function(b) {
+  return sbGet("hbf_accom_v1").then(function(accomData) {
+    S.bookings = (accomData || []).map(function(b) {
       if (b.stays && b.stays.length) return b;
       return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
-    }).concat(liveAttempts(r[1]));
+    });
     buildAvailability();
   }).catch(function() { /* keep what we have; the error message still shows */ });
 }
@@ -1241,7 +1252,7 @@ function showSuccess(prop, ci, co) {
   }
 
   function loadAndRender() {
-    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1"), sbGet("hbf_terms_v1"), sbGet("hbf_checkout_attempts_v1")]).then(function(results) {
+    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1"), sbGet("hbf_terms_v1")]).then(function(results) {
       var propsData = results[0];
       var accomData = results[1];
       // No terms written yet means no tickbox and no link — better than sending
@@ -1265,7 +1276,7 @@ function showSuccess(prop, ci, co) {
       S.bookings = (accomData || []).map(function(b) {
         if (b.stays && b.stays.length) return b;
         return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
-      }).concat(liveAttempts(results[3]));
+      });
       S.calMonths = calMonthsList();
       buildAvailability();
       if (params.get("cancelled") === "1") {

@@ -7,7 +7,9 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Georgia, 'Times New Roman', serif; background: transparent; color: #2c2c2c; }
-    .container { max-width: 680px; margin: 0 auto; padding: 24px 16px 60px; }
+    /* No heading of its own — the host page carries the title and intro. Top
+       padding is zero so the first card sits flush under whatever is above it. */
+    .container { max-width: 680px; margin: 0 auto; padding: 0 16px 24px; }
     .intro { text-align:center; margin-bottom:28px; }
     .intro h1 { font-size:26px; font-weight:400; color:#1e3a2f; letter-spacing:.5px; margin-bottom:8px; }
     .intro p { font-size:14px; color:#666; line-height:1.7; max-width:480px; margin:0 auto; }
@@ -57,11 +59,6 @@
 </head>
 <body>
 <div class="container">
-  <div class="intro">
-    <h1>Book a Viewing</h1>
-    <p>We'd love to show you around Hawthbush Farm. Choose a date and time and we'll confirm your visit.</p>
-  </div>
-
   <div id="form-area">
     <div id="err" class="err" style="display:none"></div>
 
@@ -135,6 +132,18 @@ const SB_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsIn
 const SLOTS   = ["10:00","12:00","14:00","16:00","18:00"];
 const OK_DAYS = [2,3,4,5,6]; // Tue–Sat
 
+// Slots not offered on particular weekdays, keyed by JS day number
+// (0=Sun … 6=Sat). Friday evenings aren't worked, so 18:00 is withdrawn —
+// but an explicit "open" period in the app still overrides this, which is the
+// point of having openings at all.
+const SLOT_EXCEPTIONS = { 5: ["18:00"] };
+
+function slotOfferedOnDay(ds, s) {
+  var dow = new Date(ds + "T00:00:00").getDay();
+  var off = SLOT_EXCEPTIONS[dow];
+  return !off || off.indexOf(s) === -1;
+}
+
 let cur = new Date(), selDate = null, selTime = null;
 let data = { requests:[], blocks:[], bookings:[], enquiries:[] };
 
@@ -190,6 +199,8 @@ function slotAvailable(ds, s) {
   if (blockEntries(ds).some(b => !b.slot || b.slot === s)) return false;
   const opens = openEntries(ds);
   if (opens.length) {
+    // An opening is a deliberate act, so it can bring back a slot the
+    // weekday rules would normally withdraw.
     // A whole-day opening offers every slot; a slot-specific one offers only that slot.
     const allDayOpen = opens.some(o => !o.slot);
     if (!allDayOpen && !opens.some(o => o.slot === s)) return false;
@@ -197,6 +208,7 @@ function slotAvailable(ds, s) {
   }
   // No opening: fall back to the normal rules, which the caller has applied
   // for the weekday and the farm-event check.
+  if (!slotOfferedOnDay(ds, s)) return false;
   return !data.bookings.some(b => b.date === ds && b.couple);
 }
 
@@ -255,7 +267,28 @@ function pickSlot(s) {
   document.getElementById("details-card").scrollIntoView({behavior:"smooth",block:"start"});
 }
 
-function changeMonth(d){ cur.setMonth(cur.getMonth()+d); renderCal(); }
+function changeMonth(d){ cur.setMonth(cur.getMonth()+d); renderCal(); reportHeight(); }
+
+// ── Embedding support ────────────────────────────────────────────────────────
+// The page grows and shrinks as the guest moves through it — picking a date
+// reveals the times, picking a time reveals the form — so a fixed iframe
+// height either clips it or leaves a gap. The height is posted to the parent,
+// which resizes. Harmless when not embedded.
+var lastReportedHeight = 0;
+function reportHeight() {
+  if (window.parent === window.self) return;
+  var h = Math.max(
+    document.body.scrollHeight, document.documentElement.scrollHeight,
+    document.body.offsetHeight, document.documentElement.offsetHeight
+  );
+  if (Math.abs(h - lastReportedHeight) < 12) return;
+  lastReportedHeight = h;
+  // Only a number is ever sent — no visitor details cross the boundary.
+  window.parent.postMessage({ hawthbushHeight: h }, "*");
+}
+window.addEventListener("load", reportHeight);
+window.addEventListener("resize", reportHeight);
+setInterval(reportHeight, 800);
 
 async function submitRequest() {
   const name=document.getElementById("f-name").value.trim();
