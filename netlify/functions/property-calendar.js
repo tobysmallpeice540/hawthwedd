@@ -18,10 +18,6 @@ const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const ACCOM_KEY    = "hbf_accom_v1";
 
-// Must match PENDING_HOLD_MINUTES in book-accom.html, or the two disagree
-// about whether an abandoned checkout still holds its dates.
-const PENDING_HOLD_MINUTES = 60;
-
 async function sbGet(key) {
   const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
     headers: {
@@ -126,18 +122,9 @@ exports.handler = async function(event) {
     // wrong even when tolerated: Airbnb already knows about its own bookings.
     if (b.source === "airbnb") return;
 
-    // An online booking is written to the database before the guest reaches
-    // Stripe, so an abandoned checkout leaves an unpaid "pending" row. The
-    // public booking page releases those after an hour; without the same rule
-    // here they would block the dates on Airbnb permanently. A pending row
-    // whose deposit is paid keeps its block — that is a real booking whose
-    // status simply hasn't caught up.
-    if (b.status === "pending") {
-      var dep = (b.schedule || []).find(function(x) { return x.label === "Deposit"; });
-      var paid = dep && dep.paid;
-      var age = b.createdAt ? (Date.now() - new Date(b.createdAt).getTime()) : 0;
-      if (!paid && isFinite(age) && age > PENDING_HOLD_MINUTES * 60 * 1000) return;
-    }
+    // Pending bookings block too. Someone who started a booking online and
+    // hasn't paid yet still has the dates held — they are listed on the home
+    // page and can be deleted by hand, which releases them everywhere at once.
     var stays = (b.stays && b.stays.length) ? b.stays : [b];
     stays.forEach(function(s, stayIdx) {
       if (s.propertyId !== propertyId) return;

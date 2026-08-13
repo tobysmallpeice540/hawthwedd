@@ -27,7 +27,6 @@ const SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 const RESEND_KEY    = process.env.RESEND_API_KEY;
 const FROM_EMAIL    = "hello@hawthbushfarm.co.uk";
-const ATTEMPTS_KEY = "hbf_checkout_attempts_v1";
 const ACCOM_KEY     = "hbf_accom_v1";
 const PROPS_KEY     = "hbf_properties_v1";
 const TEMPLATES_KEY = "hbf_email_templates_v1";
@@ -378,24 +377,6 @@ exports.handler = async function(event) {
 
     if (metaType === "accom_deposit") {
       targetIdx = bookings.findIndex(function(b) { return b.stripeSessionId === sessionId; });
-
-      // Not there? This is the normal path now. Online bookings are parked as
-      // checkout attempts and only become real bookings once the deposit is
-      // paid — which is this moment. Promote the attempt.
-      if (targetIdx === -1) {
-        const attempts = (await sbGet(ATTEMPTS_KEY)) || [];
-        const aIdx = attempts.findIndex(function(a) { return a && a.sessionId === sessionId; });
-        if (aIdx !== -1 && attempts[aIdx].booking) {
-          const promoted = Object.assign({}, attempts[aIdx].booking);
-          bookings.push(promoted);
-          targetIdx = bookings.length - 1;
-
-          // Mark the attempt done rather than deleting it, so a replayed
-          // webhook can't promote the same attempt twice.
-          attempts[aIdx] = Object.assign({}, attempts[aIdx], { promotedAt: new Date().toISOString() });
-          try { await sbSet(ATTEMPTS_KEY, attempts); } catch (e) { console.error("attempt update failed:", e.message); }
-        }
-      }
     } else {
       const bookingId = session.metadata.bookingId;
       targetIdx = bookings.findIndex(function(b) { return String(b.id) === String(bookingId); });
