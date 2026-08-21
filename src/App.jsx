@@ -306,7 +306,7 @@ const INITIAL_BOOKINGS = [
   { id:206, status:"Confirmed", couple:"Anna & Jasper",            date:"2027-07-24", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"annafarnfield@hotmail.co.uk", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   { id:207, status:"Confirmed", couple:"Megan Grover & Simon",     date:"2027-07-30", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"85 approx", mealChildren:"", mealBabies:"", eveGuests:"", phone:"7905777283", email:"groverdalywedding2027@gmail.com", email2:"", ceremony:"1pm in clearing", guestArrivalTime:"", caterers:"Likely Circa", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"yes", amlyFee:"", hamletBooked:"yes", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   { id:208, status:"Confirmed", couple:"Tom and Becky",            date:"2027-08-21", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"saltdeanbeach@gmail.com", email2:"", ceremony:"Time tbc", guestArrivalTime:"", caterers:"Possibly brother", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
-  { id:209, status:"Holding",   couple:"Liberty Kimber and Toby",  date:"2027-08-28", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"Awaiting completed forms", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
+  { id:209, status:"Holding",   couple:"Liberty Kimber and Toby",  date:"2027-08-28", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", email3:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"Awaiting completed forms", venueFee:"", deposit:"", payment2:"", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
   { id:210, status:"Confirmed", couple:"Rachel Daly & Luke",       date:"2027-09-11", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"100 tbc", mealChildren:"", mealBabies:"", eveGuests:"20 tbc", phone:"07714 068219", email:"racheldaly_10@hotmail.com", email2:"", ceremony:"", guestArrivalTime:"", caterers:"Pizza trucks etc", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"no", amlyFee:"", hamletBooked:"no", hamletFee:"", campingBooked:"no", campingFee:"", nonStandard:"", venueFee:"", deposit:"1000", payment2:"2325", finalPayment:"", extras:"", corkage:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{} },
 ];
 
@@ -1087,6 +1087,12 @@ function LinkedAccomPanel({ eventDate, eventEndDate, eventId, accomBookings, acc
                         </span>
                       );
                     })}
+                    {/* The agreed price for this property, pushed to the right
+                        so a multi-property booking reads as a priced list
+                        rather than one lump sum on the header row. */}
+                    <span style={{ marginLeft:"auto", fontSize:12, fontWeight:700, color:T.text, whiteSpace:"nowrap" }}>
+                      {Number(s.value) > 0 ? String(fmtMoney(s.value)) : <span style={{ color:T.textLight, fontWeight:400 }}>no price set</span>}
+                    </span>
                   </div>
                 );
               });
@@ -1373,7 +1379,7 @@ function ContactHistoryPanel({ contacts, onChange }) {
   );
 }
 
-const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"14:00","checkOutByWedding":"11:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
+const INITIAL_PROPERTIES = [{"id":"hamlet","name":"The Hamlet","bookaletName":"The Hamlet","sleeps":14,"depositPct":50,"balanceWeeks":4,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"15:00","checkOutByWedding":"11:00","colour":"#2563eb","colourBg":"#dbeafe","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"amly","name":"Amly Barn","bookaletName":"Amly Barn","sleeps":6,"depositPct":50,"balanceWeeks":6,"breakageDefault":0,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"15:00","checkOutByWedding":"11:00","colour":"#16a34a","colourBg":"#dcfce7","blockedByFarmEvents":true,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0},{"id":"glamping","name":"Glamping","bookaletName":"Glamping","sleeps":20,"depositPct":20,"balanceWeeks":6,"breakageDefault":125,"checkInFrom":"16:00","checkOutBy":"10:00","checkInFromWedding":"15:00","checkOutByWedding":"11:00","colour":"#9333ea","colourBg":"#f3e8ff","blockedByFarmEvents":false,"minNights":2,"maxNights":28,"seasons":[],"baseRate":0,"longStayThreshold":0,"longStayDiscount":0}];
 
 const ACCOM_STATUS_META = {
   confirmed: { label:"Confirmed", bg:T.greenBg,  text:T.green },
@@ -1436,17 +1442,49 @@ function usesLegacyLongStay(prop) {
   return !!prop && !(Number(prop.longStayDiscountPct) > 0) && Number(prop.longStayDiscount) > 0;
 }
 
-// Compute Airbnb estimated value using the property's long-stay rules (×0.9 for Airbnb cut).
-// Returns null when baseRate not yet configured.
-function calcAirbnbEstimate(b, prop) {
-  if (!prop || !prop.baseRate || prop.baseRate <= 0) return null;
-  const ci = (b.stays && b.stays[0] && b.stays[0].checkIn) || b.checkIn;
-  const co = (b.stays && b.stays[0] && b.stays[0].checkOut) || b.checkOut;
-  const nights = nightsBetween(ci, co);
-  if (!nights || nights <= 0) return null;
-  const subtotal = prop.baseRate * nights;
-  const net = subtotal - longStayDiscountAmount(prop, nights, subtotal);
-  return Math.round(Math.max(0, net) * 0.9 * 100) / 100;
+// Airbnb list prices run above what we charge direct, because the guest is
+// paying Airbnb's fees on top and the nightly rate is set to match. This is
+// the uplift applied to our own calendar price to estimate what an imported
+// booking was worth.
+const AIRBNB_UPLIFT_PCT = 15;
+
+// What an Airbnb-imported booking was probably worth, priced off our own
+// calendar: every night at the rate we'd charge direct for that date —
+// seasons, long-stay discount and all — then uplifted.
+//
+// Returns null when it can't be priced (no property, no rate configured, no
+// usable dates) rather than guessing, so the caller can show nothing instead
+// of a confident-looking zero.
+function estimateLettingValue(b, properties) {
+  const stays = (b.stays && b.stays.length) ? b.stays : [b];
+  let total = 0;
+  let priced = 0;
+
+  stays.forEach(function(st) {
+    if (!st || !st.checkIn || !st.checkOut) return;
+    const prop = (properties || []).find(function(p) { return p.id === st.propertyId; });
+    if (!prop || !(Number(prop.baseRate) > 0)) return;
+    const q = quoteStay(prop, st.checkIn, st.checkOut);
+    if (!q || !(q.total > 0)) return;
+    total += q.total;
+    priced += 1;
+  });
+
+  if (!priced) return null;
+  return Math.round(total * (1 + AIRBNB_UPLIFT_PCT / 100) * 100) / 100;
+}
+
+// The figure to show for a booking, and whether it's an estimate.
+//
+// A value typed in by hand always wins — if someone has recorded what Airbnb
+// actually paid, that is the truth and no estimate should override it. Only
+// an Airbnb booking with no value of its own gets priced off the calendar.
+function lettingValue(b, properties) {
+  const entered = Number(b && b.value) || 0;
+  if (entered > 0) return { value: entered, estimated: false };
+  if (!b || b.source !== "airbnb") return { value: 0, estimated: false };
+  const est = estimateLettingValue(b, properties);
+  return est === null ? { value: 0, estimated: false } : { value: est, estimated: true };
 }
 
 // The season that applies on a given date.
@@ -1577,6 +1615,48 @@ function findAccomClashes(bookings, rec) {
   return out;
 }
 
+// Arrival and departure times for a stay.
+//
+// Order of precedence: a time typed onto the stay itself, then the property's
+// configured times, then the house rules below. Wedding parties get earlier
+// access and a later checkout — driven by whether the booking is a wedding or
+// is attached to a farm event, since an event-linked let is a wedding party
+// whatever the booking type says.
+const DEFAULT_CHECK_IN       = "16:00";
+const DEFAULT_CHECK_OUT      = "10:00";
+const WEDDING_CHECK_IN       = "15:00";
+const WEDDING_CHECK_OUT      = "11:00";
+
+function isWeddingStay(booking) {
+  return !!(booking && (booking.bookingType === "Wedding" || booking.linkedEventId));
+}
+
+// The times that apply when nothing has been typed on the stay.
+function defaultStayTimes(booking, prop) {
+  if (isWeddingStay(booking)) {
+    return {
+      inTime:  (prop && prop.checkInFromWedding)  || WEDDING_CHECK_IN,
+      outTime: (prop && prop.checkOutByWedding)   || WEDDING_CHECK_OUT
+    };
+  }
+  return {
+    inTime:  (prop && prop.checkInFrom) || DEFAULT_CHECK_IN,
+    outTime: (prop && prop.checkOutBy)  || DEFAULT_CHECK_OUT
+  };
+}
+
+// What to actually show for a stay, and whether it came from the rules or was
+// set by hand — so the form can show an overridden time differently.
+function stayTimes(booking, stay, prop) {
+  const d = defaultStayTimes(booking, prop);
+  return {
+    inTime:  (stay && stay.checkInTime)  || d.inTime,
+    outTime: (stay && stay.checkOutTime) || d.outTime,
+    inOverridden:  !!(stay && stay.checkInTime  && stay.checkInTime  !== d.inTime),
+    outOverridden: !!(stay && stay.checkOutTime && stay.checkOutTime !== d.outTime)
+  };
+}
+
 // Log an automated email to Supabase. Called from send handlers (phase 2).
 async function logEmail(entry) {
   try {
@@ -1701,7 +1781,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-12w";
+const APP_BUILD = "2026-08-13d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2429,7 +2509,18 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
             : <span style={{ color:T.textLight, fontSize:11 }}>Let</span>}
         </div>
         <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
-        <div style={{ padding:"11px 12px" }}>{b.value>0 ? fmtMoney(b.value) : "—"}</div>
+        <div style={{ padding:"11px 12px" }}>
+          {(function() {
+            const v = lettingValue(b, properties);
+            if (!(v.value > 0)) return "—";
+            return (
+              <span title={v.estimated ? "Estimated from our own calendar rate for these dates, plus " + AIRBNB_UPLIFT_PCT + "%" : ""}>
+                {String(fmtMoney(v.value))}
+                {v.estimated && <span style={{ marginLeft:5, fontSize:10, color:T.amber, fontWeight:700 }}>(est)</span>}
+              </span>
+            );
+          })()}
+        </div>
         <div style={{ padding:"11px 12px" }}>{paidState(b)}</div>
       </div>
     );
@@ -2481,7 +2572,47 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
 const selStyle = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 11px", outline:"none", cursor:"pointer" };
 
 // ── Add / edit form ──────────────────────────────────────────────────────────
-function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete }) {
+// The clock beside a date. Shows the time that applies — from the rules
+// unless someone has set one — and opens a time picker when clicked. An
+// overridden time is shown in amber so it's obvious it isn't the default;
+// "reset" puts it back to the rule rather than to blank, which is what people
+// actually mean when they undo one of these.
+function StayTimeField({ booking, stay, prop, which, onChange }) {
+  const [open, setOpen] = useState(false);
+  const t = stayTimes(booking, stay, prop);
+  const value = which === "in" ? t.inTime : t.outTime;
+  const overridden = which === "in" ? t.inOverridden : t.outOverridden;
+
+  if (!open) {
+    return (
+      <button type="button" onClick={function(){ setOpen(true); }}
+        title={overridden ? "Set by hand — click to change" : "Default for this booking — click to change"}
+        style={{ background:"none", border:"none", padding:"3px 0 0", cursor:"pointer", fontFamily:"inherit",
+          fontSize:11, color: overridden ? T.amber : T.textLight, fontWeight: overridden ? 700 : 500,
+          display:"flex", alignItems:"center", gap:4 }}>
+        <span aria-hidden="true">🕑</span>{value}
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:4, paddingTop:3 }}>
+      <input type="time" value={value} step="900" autoFocus
+        onChange={function(e){ onChange(e.target.value); }}
+        onBlur={function(){ setOpen(false); }}
+        style={{ ...inlineInput, padding:"3px 5px", fontSize:11, width:78 }}/>
+      {overridden && (
+        <button type="button" onMouseDown={function(e){ e.preventDefault(); onChange(""); setOpen(false); }}
+          title="Back to the default time"
+          style={{ background:"none", border:"none", color:T.textLight, cursor:"pointer", fontSize:10, fontFamily:"inherit", padding:0 }}>
+          reset
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent }) {
   var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
   var selPropIds = formStays.map(function(s){ return s.propertyId; });
   var totalValue = formStays.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
@@ -2550,7 +2681,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
   const rmExtra = (i)=> setForm(f=>({ ...f, extras: f.extras.filter((_,idx)=> idx!==i) }));
 
   return (
-    <div style={{ maxWidth:860 }}>
+    <div style={{ maxWidth:1020 }}>
       {form.bookingType === "Blocked" && (
         <div style={{ marginBottom:16, padding:"10px 14px", background:"#f1f5f9", border:`1.5px solid #cbd5e1`, borderRadius:8, fontSize:12, color:T.textMid, lineHeight:1.5 }}>
           This marks the property as unavailable for the selected dates. It won't be treated as a guest booking, and will sync out to Airbnb as blocked.
@@ -2601,7 +2732,19 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
               })}
             </select>
             {form.linkedEventId && (
-              <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>Linked to event #{form.linkedEventId}</span>
+              <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>
+                {onOpenEvent ? (
+                  <button type="button" onClick={function(){ onOpenEvent(form.linkedEventId); }}
+                    title="Open this event"
+                    style={{ background:"none", border:"none", padding:0, color:T.accent, fontFamily:"inherit",
+                      fontSize:11, fontWeight:700, cursor:"pointer", textDecoration:"underline" }}>
+                    {(function() {
+                      const ev = (events || []).find(function(e) { return String(e.id) === String(form.linkedEventId); });
+                      return ev ? (ev.couple || "Event #" + form.linkedEventId) + " →" : "Open event #" + form.linkedEventId + " →";
+                    })()}
+                  </button>
+                ) : ("Linked to event #" + form.linkedEventId)}
+              </span>
             )}
           </label>
         )}
@@ -2624,38 +2767,49 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
 
       {/* Per-property stays grid */}
       <div style={{ border:`1px solid ${T.border}`, borderRadius:9, overflow:"hidden", marginBottom:16 }}>
-        <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 50px 60px 1fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5 }}>
-          {["Property","Check-in","Check-out","Nights","Guests","Price (£)"].map(function(h){ return <div key={h} style={{ padding:"9px 12px" }}>{h}</div>; })}
+        <div style={{ display:"grid", gridTemplateColumns:"1.7fr 52px 1fr 1fr 44px 54px 1.4fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5 }}>
+          {["Property","Maybe","Check-in","Check-out","Nights","Guests","Price (£)"].map(function(h){ return <div key={h} style={{ padding:"9px 12px" }}>{h}</div>; })}
         </div>
         {formStays.map(function(s, idx) {
           var p = properties.find(function(pp){ return pp.id===s.propertyId; });
           var nights = nightsBetween(s.checkIn, s.checkOut);
           var q = (p && p.baseRate && s.checkIn && s.checkOut) ? quoteStay(p, s.checkIn, s.checkOut) : null;
           return (
-            <div key={s.propertyId} style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr 50px 60px 1fr", borderBottom: idx < formStays.length-1 ? `1px solid ${T.border}` : "none", background:"#fff", alignItems:"center" }}>
+            <div key={s.propertyId} style={{ display:"grid", gridTemplateColumns:"1.7fr 52px 1fr 1fr 44px 54px 1.4fr", borderBottom: idx < formStays.length-1 ? `1px solid ${T.border}` : "none", background:"#fff", alignItems:"center" }}>
               <div style={{ padding:"10px 12px", display:"flex", alignItems:"center", gap:7, fontSize:13, fontWeight:600 }}>
                 {p && <span style={{ width:10, height:10, borderRadius:"50%", background:p.colour, display:"inline-block", flexShrink:0 }}/>}
                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p ? p.name : s.propertyId}</span>
                 {idx > 0 && (
                   <button type="button" onClick={function(){ copyDatesFromAbove(idx); }}
                     title="Copy check-in/check-out dates from the property above"
-                    style={{ ...smallBtn, padding:"3px 8px", fontSize:11, whiteSpace:"nowrap", flexShrink:0, marginLeft:"auto" }}>
-                    ⧉ Copy dates
+                    style={{ ...smallBtn, padding:"3px 7px", fontSize:11, whiteSpace:"nowrap", flexShrink:0, marginLeft:"auto" }}>
+                    ⧉ Copy
                   </button>
                 )}
               </div>
+              {/* Provisional marker — recorded on the stay for later use; it
+                  changes nothing else today. */}
+              <div style={{ padding:"10px 8px", display:"flex", justifyContent:"center" }}>
+                <input type="checkbox" checked={!!s.maybe} onChange={function(e){ updStay(idx,"maybe",e.target.checked); }}
+                  title="Provisional — not confirmed"
+                  style={{ width:16, height:16, accentColor:T.amber, cursor:"pointer" }}/>
+              </div>
               <div style={{ padding:"6px 8px" }}>
                 <input type="date" value={s.checkIn||""} onChange={function(e){ updStay(idx,"checkIn",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                <StayTimeField booking={form} stay={s} prop={p} which="in"
+                  onChange={function(v){ updStay(idx,"checkInTime",v); }}/>
               </div>
               <div style={{ padding:"6px 8px" }}>
                 <input type="date" value={s.checkOut||""} onChange={function(e){ updStay(idx,"checkOut",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                <StayTimeField booking={form} stay={s} prop={p} which="out"
+                  onChange={function(v){ updStay(idx,"checkOutTime",v); }}/>
               </div>
               <div style={{ padding:"10px 8px", fontSize:13, color:T.textMid, textAlign:"center" }}>{nights||"—"}</div>
               <div style={{ padding:"6px 8px" }}>
                 <input type="number" value={s.guestCount||""} placeholder="—" onChange={function(e){ updStay(idx,"guestCount",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
               </div>
               <div style={{ padding:"6px 8px", display:"flex", gap:6, alignItems:"center" }}>
-                <input type="number" value={s.value||""} placeholder="0" onChange={function(e){ updStay(idx,"value",e.target.value); }} style={{ ...inlineInput, flex:1, minWidth:0 }}/>
+                <input type="number" value={s.value||""} placeholder="0" onChange={function(e){ updStay(idx,"value",e.target.value); }} style={{ ...inlineInput, flex:1, minWidth:62 }}/>
                 {q && (
                   <button type="button" onClick={function(){ updStay(idx,"value",q.total); }}
                     title={"Pricing estimate: "+fmtMoney(q.total)}
@@ -2744,7 +2898,14 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         <div style={{ border:"1px solid #bfdbfe", background:"#eff6ff", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
           <div style={{ fontSize:13, fontWeight:700, color:"#1d4ed8", marginBottom:4 }}>Billed through the linked event</div>
           <div style={{ fontSize:12, color:"#1d4ed8", lineHeight:1.6 }}>
-            This accommodation is invoiced with event #{form.linkedEventId} — split 50% on the 1&nbsp;December invoice and 50% on the final invoice,
+            This accommodation is invoiced with{" "}
+            {onOpenEvent ? (
+              <button type="button" onClick={function(){ onOpenEvent(form.linkedEventId); }}
+                style={{ background:"none", border:"none", padding:0, color:"#1d4ed8", fontFamily:"inherit",
+                  fontSize:12, fontWeight:700, cursor:"pointer", textDecoration:"underline" }}>
+                event #{form.linkedEventId}
+              </button>
+            ) : ("event #" + form.linkedEventId)} — split 50% on the 1&nbsp;December invoice and 50% on the final invoice,
             along with any extras below. No deposit or balance requests are sent for it, and no payment schedule applies.
             Unlink the event above if this should be billed as a standard let instead.
           </div>
@@ -3175,26 +3336,38 @@ function AccomReport({ properties, bookings }) {
     return stays.some(s => s.checkIn && s.checkIn.startsWith(year));
   });
 
-  // Revenue by source category
-  const direct   = yearBookings.filter(b => b.source!=="airbnb" && !b.estimated && Number(b.value)>0);
-  const airbnbEst = yearBookings.filter(b => b.source==="airbnb" && Number(b.value)>0);
-  const wedding  = yearBookings.filter(b => b.bookingType==="Wedding" && Number(b.value)>0);
+  // Value each booking once, using the recorded figure where there is one and
+  // a calendar-based estimate for Airbnb bookings that have none.
+  const valued = yearBookings.map(function(b) {
+    const v = lettingValue(b, properties);
+    return { b: b, value: v.value, estimated: v.estimated };
+  }).filter(function(r) { return r.value > 0; });
 
-  const sumVal = (arr) => arr.reduce((s,b) => s + (Number(b.value)||0), 0);
+  // Buckets are mutually exclusive — a wedding-linked booking used to land in
+  // both "direct" and "wedding", which inflated the year total by its whole
+  // value a second time.
+  const bucketOf = function(b) {
+    return b.source === "airbnb" ? "airbnb" : b.bookingType === "Wedding" ? "wedding" : "direct";
+  };
+  const direct    = valued.filter(function(r) { return bucketOf(r.b) === "direct"; });
+  const airbnbEst = valued.filter(function(r) { return bucketOf(r.b) === "airbnb"; });
+  const wedding   = valued.filter(function(r) { return bucketOf(r.b) === "wedding"; });
+
+  const sumVal = (arr) => arr.reduce((s, r) => s + (Number(r.value) || 0), 0);
+  const estCount = valued.filter(function(r) { return r.estimated; }).length;
 
   // Revenue by property (across all sources)
   const byProp = {};
   properties.forEach(p => { byProp[p.id] = { direct:0, airbnb:0, wedding:0, total:0 }; });
-  yearBookings.forEach(b => {
-    const val = Number(b.value)||0;
-    if (val<=0) return;
+  valued.forEach(r => {
+    const b = r.b;
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
     // Distribute value equally across stays of this booking (simple split)
-    const perStay = val / stays.length;
+    const perStay = r.value / stays.length;
     stays.forEach(s => {
       if (!s.checkIn || !s.checkIn.startsWith(year)) return;
       if (!byProp[s.propertyId]) byProp[s.propertyId] = { direct:0, airbnb:0, wedding:0, total:0 };
-      const bucket = b.source==="airbnb" ? "airbnb" : b.bookingType==="Wedding" ? "wedding" : "direct";
+      const bucket = bucketOf(b);
       byProp[s.propertyId][bucket] = (byProp[s.propertyId][bucket]||0) + perStay;
       byProp[s.propertyId].total   = (byProp[s.propertyId].total||0)   + perStay;
     });
@@ -3237,16 +3410,17 @@ function AccomReport({ properties, bookings }) {
 
       {/* Summary cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:24 }}>
-        <StatCard label="Direct / Manual" value={fmtMoney(sumVal(direct))} sub={`${direct.length} bookings`}/>
-        <StatCard label="Airbnb (estimated)" value={fmtMoney(sumVal(airbnbEst))} sub={`${airbnbEst.length} blocks — estimate only`}/>
+        <StatCard label="Direct lettings" value={fmtMoney(sumVal(direct))} sub={`${direct.length} booking${direct.length===1?"":"s"}`}/>
+        <StatCard label="Airbnb lettings" value={fmtMoney(sumVal(airbnbEst))}
+          sub={`${airbnbEst.length} booking${airbnbEst.length===1?"":"s"}` + (estCount ? ` — ${estCount} estimated` : "")}/>
         <StatCard label="Wedding-linked" value={fmtMoney(sumVal(wedding))} sub={`${wedding.length} bookings`}/>
       </div>
 
       {/* Revenue by source bar chart */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", marginBottom:20, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
         <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15 }}>Revenue by source — {year}</h3>
-        {srcRow("Direct / Manual", direct, T.accent)}
-        {srcRow("Airbnb (est.)", airbnbEst, T.amber)}
+        {srcRow("Direct lettings", direct, T.accent)}
+        {srcRow("Airbnb lettings", airbnbEst, T.amber)}
         {srcRow("Wedding-linked", wedding, T.green)}
         <div style={{ borderTop:`1px solid ${T.border}`, marginTop:12, paddingTop:10, display:"flex", justifyContent:"flex-end", fontSize:14, fontWeight:700, color:T.midBlue }}>
           Total: {fmtMoney(totalAll)}
@@ -3284,7 +3458,11 @@ function AccomReport({ properties, bookings }) {
             </tbody>
           </table>
         </div>
-        <div style={{ marginTop:10, fontSize:11, color:T.textLight }}>* Airbnb figures are estimates based on stored booking values. Pricing rules applied when baseRate is configured.</div>
+        <div style={{ marginTop:10, fontSize:11, color:T.textLight, lineHeight:1.6 }}>
+          * Where an Airbnb booking has no recorded value, it is priced from our own calendar for those dates —
+          seasonal rate and long-stay discount included — plus {AIRBNB_UPLIFT_PCT}%, since Airbnb rates are set above
+          our direct prices. A value entered by hand always takes precedence over the estimate.
+        </div>
       </div>
     </div>
   );
@@ -3609,7 +3787,7 @@ function PropertyEditor({ properties, setProperties, onSave }) {
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                       <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
                         <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-in from</span>
-                        <input value={p.checkInFromWedding || ""} onChange={e => updProp(p.id, "checkInFromWedding", e.target.value)} style={inpStyle} placeholder="14:00" />
+                        <input value={p.checkInFromWedding || ""} onChange={e => updProp(p.id, "checkInFromWedding", e.target.value)} style={inpStyle} placeholder="15:00" />
                       </label>
                       <label style={{ display:"flex", flexDirection:"column", gap:3 }}>
                         <span style={{ fontSize:11, color:T.textMid, fontWeight:600 }}>Check-out by</span>
@@ -4340,7 +4518,7 @@ const BACKUP_DATA_KEYS = [
   "hawthbush_bookings_v6", "hawthbush_staff_v5", "hbf_accom_v1", "hbf_accom_guests_v1",
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
-  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1"
+  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1"
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -4348,7 +4526,7 @@ const KEY_LABELS = {
   "hbf_viewings_v1":"Viewings", "hbf_viewing_requests_v1":"Viewing requests", "hbf_viewing_blocks_v1":"Viewing blocks",
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
-  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings"
+  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -4888,8 +5066,10 @@ function CleanerHome({ properties, accom, events }) {
       const guests = b.guestCount ? b.guestCount + " guest" + (Number(b.guestCount) === 1 ? "" : "s") : "";
       // Wedding parties get earlier access and a later checkout, so the times
       // have to come from the booking type, not just the property.
-      const inTime  = p ? (wedding ? p.checkInFromWedding  : p.checkInFrom)  : "";
-      const outTime = p ? (wedding ? p.checkOutByWedding   : p.checkOutBy)   : "";
+      // A time typed onto the stay wins over the property's rule.
+      const times = stayTimes(b, s, p);
+      const inTime  = times.inTime;
+      const outTime = times.outTime;
       const tail = who + (guests ? " · " + guests : "");
       add(s.checkOut, { kind: "out", rank: propRank(s.propertyId), label: propName(s.propertyId),
         time: outTime || "", detail: tail });
@@ -5041,7 +5221,7 @@ function CleanerView() {
   );
 }
 
-function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType, focusBookingId, clearFocusBooking, prefillNew, clearPrefillNew }) {
+function LettingsView({ events, calendarTrigger, setView: setAppView, setReportType: setAppReportType, focusBookingId, clearFocusBooking, prefillNew, clearPrefillNew, onOpenEvent }) {
   const [properties, setProperties]         = useState(INITIAL_PROPERTIES);
   const [bookings, setBookings]             = useState([]);
   const [guests, setGuests]                 = useState([]);
@@ -5366,7 +5546,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
-          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} />
+          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} onOpenEvent={onOpenEvent} />
         </div>
       )}
     </div>
@@ -5378,7 +5558,34 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
 export default function App({ role = "admin", onSignOut } = {}) {
   const [bookings, setBookings] = useState([]);
   const [staff, setStaff]       = useState([]);
-  const [view, setView]         = useState("home");
+  // Navigation history. setView is used in dozens of places, so rather than
+  // change every call site it's wrapped: the real setter is renamed and a
+  // recording version takes its place. Every jump pushes the view being left,
+  // and Back pops it — without pushing, or Back would toggle between two
+  // pages forever.
+  const [view, setViewRaw]      = useState("home");
+  const [viewHistory, setViewHistory] = useState([]);
+  const goingBackRef = useRef(false);
+
+  const setView = useCallback(function(next) {
+    setViewRaw(function(current) {
+      const target = typeof next === "function" ? next(current) : next;
+      if (!goingBackRef.current && target !== current) {
+        setViewHistory(function(h) { return h.concat([current]).slice(-25); });
+      }
+      goingBackRef.current = false;
+      return target;
+    });
+  }, []);
+
+  const goBack = useCallback(function() {
+    setViewHistory(function(h) {
+      if (!h.length) return h;
+      goingBackRef.current = true;
+      setViewRaw(h[h.length - 1]);
+      return h.slice(0, -1);
+    });
+  }, []);
   const [lettingsCalTrigger, setLettingsCalTrigger] = useState(0);
   const [xeroToken, setXeroToken]   = useState(() => xeroGetToken());
   const [gmailToken, setGmailToken] = useState(() => gmailGetToken());
@@ -5514,6 +5721,14 @@ export default function App({ role = "admin", onSignOut } = {}) {
     window.addEventListener("focus", onFocus);
     return function() { stopped = true; clearInterval(t); window.removeEventListener("focus", onFocus); };
   }, []);
+
+  // Open a specific event's detail page from anywhere — used by the link on a
+  // letting that's attached to an event.
+  const goToEvent = (id) => {
+    const b = bookings.find(x => String(x.id) === String(id));
+    if (!b) { alert("That event could not be found — it may have been deleted."); return; }
+    handleEdit(b.id);
+  };
 
   // Navigate straight to a specific enquiry's detail page (used from Viewings + Year Calendar)
   const goToEnquiry = (id) => { setFocusEnquiryId(id); setView("enquiries"); };
@@ -5665,7 +5880,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
     });
   }, []);
 
-  const emptyBooking = ()=>({ couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{}, contacts:[], invoiceEmails:"" });
+  // createdAt is new on events; older records simply don't have one, which is
+  // correct — they weren't created recently and shouldn't appear as new.
+  const emptyBooking = ()=>({ createdAt: new Date().toISOString(), couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", email3:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{}, contacts:[], invoiceEmails:"" });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -5686,12 +5903,22 @@ export default function App({ role = "admin", onSignOut } = {}) {
         });
       });
   };
-  const handleSubmit = async ()=>{
+  // stayOpen: save and remain on the form, so several tabs can be filled in
+  // without bouncing back to the list each time.
+  const handleSubmit = async (stayOpen)=>{
     if(!formData.couple||!formData.date){ alert("Event name and date are required."); return; }
     // Single-record merge against the latest state (see saveBookingRecord) so
     // an explicit Save can't roll back edits made elsewhere in the meantime.
     const id = editId != null ? editId : nextBookingId(bookings);
-    await saveBookingRecord(id, {...formData, id});
+    await saveBookingRecord(id, {...formData, id, createdAt: formData.createdAt || new Date().toISOString()});
+
+    if (stayOpen) {
+      // Keep editing the record that was written. Without this a new event
+      // would be saved again as a second record on the next press.
+      setEditId(id);
+      setFormData(function(f){ return Object.assign({}, f, { id: id }); });
+      return;
+    }
     setView("list");
   };
 
@@ -5872,9 +6099,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
         </div>
       )}
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
-      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}/>
+      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
       <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
-        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking}/>}
+        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
@@ -5893,13 +6120,13 @@ export default function App({ role = "admin", onSignOut } = {}) {
               const newId=nextBookingId(bookings);
               setEditId(newId);
               setFormData(f=>({...f, id:newId}));
-              await saveBookingRecord(newId, {...fd, id:newId});
+              await saveBookingRecord(newId, {...fd, id:newId, createdAt: fd.createdAt || new Date().toISOString()});
             }
           }}
         />}
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onPurgeOrphan={removeStaffFromRotas} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
-        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)}/>}
+        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)} onOpenEvent={goToEvent}/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
@@ -5916,7 +6143,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
-function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab }) {
+function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab, onBack, canGoBack }) {
   // "calendar" is a virtual tab that maps to view="lettings" (calendar sub-tab)
   const tabs = [
     {id:"home",label:"Home"},
@@ -5959,6 +6186,14 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
             <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:38, width:"auto", imageRendering:"crisp-edges" }} />
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            {canGoBack && onBack && (
+            <button onClick={onBack} title="Back to the previous page"
+              style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:7, width:34, height:34,
+                cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:17, color:T.textMid, fontFamily:"inherit", flexShrink:0 }}>
+              ←
+            </button>
+          )}
             <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"8px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>+ New</button>
             <button onClick={()=>setMenuOpen(function(v){ return !v; })} aria-label="Menu"
               style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:6, width:38, height:38, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, color:T.text }}>
@@ -5985,7 +6220,15 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
 
   return (
     <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
-      <div style={{ display:"flex", alignItems:"center", marginRight:36, padding:"8px 0", flexShrink:0 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginRight:36, padding:"8px 0", flexShrink:0 }}>
+        {canGoBack && onBack && (
+          <button onClick={onBack} title="Back to the previous page"
+            style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:8, width:36, height:36,
+              cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+              fontSize:18, color:T.textMid, fontFamily:"inherit" }}>
+            ←
+          </button>
+        )}
         <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:52, width:"auto", imageRendering:"crisp-edges" }} />
       </div>
       <nav style={{ display:"flex", gap:0, flex:1 }}>
@@ -6888,6 +7131,7 @@ const TEXT_FIELDS = [
   { key:"phone",           label:"Phone",                 type:"text",     section:"contact" },
   { key:"email",           label:"Email",                 type:"email",    section:"contact" },
   { key:"email2",          label:"2nd Email",             type:"email",    section:"contact" },
+  { key:"email3",          label:"3rd Email",             type:"email",    section:"contact" },
   { key:"ceremony",        label:"Ceremony / Clearing",   type:"text",     section:"vendors" },
   { key:"guestArrivalTime",label:"Guest Arrival Time",    type:"text",     section:"vendors" },
   { key:"caterers",        label:"Caterers",              type:"text",     section:"vendors" },
@@ -6916,7 +7160,44 @@ const FORM_SECTIONS = {
 };
 
 // ─── GMAIL THREAD PANEL ──────────────────────────────────────────────────────
+// Stars live here, not in Gmail. Marking a thread important in the app
+// shouldn't reach into someone's mailbox and change what they see there —
+// and Gmail's own stars are personal to whoever is signed in, whereas this is
+// shared by everyone using the app.
+const STARRED_EMAILS_KEY = "hbf_starred_emails_v1";
+
 function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, entityId, entityType="booking" }) {
+  const [starred, setStarred] = useState({});
+
+  useEffect(function() {
+    let cancelled = false;
+    (async function() {
+      try {
+        const st = await sbGet(STARRED_EMAILS_KEY);
+        if (!cancelled && st && typeof st === "object") setStarred(st);
+      } catch (e) { /* stars are a convenience; failing to load one isn't worth surfacing */ }
+    })();
+    return function() { cancelled = true; };
+  }, []);
+
+  const toggleStar = async function(threadId, subject) {
+    // Read the server copy first: two people looking at different bookings
+    // share this one record, and writing a stale copy would drop their stars.
+    let base = {};
+    try {
+      const server = await sbGet(STARRED_EMAILS_KEY);
+      if (server && typeof server === "object") base = server;
+    } catch (e) { base = starred; }
+
+    const next = Object.assign({}, base);
+    if (next[threadId]) delete next[threadId];
+    else next[threadId] = { at: new Date().toISOString(), subject: subject || "" };
+
+    setStarred(next);
+    try { await sbSet(STARRED_EMAILS_KEY, next); }
+    catch (e) { setStarred(base); alert("Couldn't save that star — the database didn't respond."); }
+  };
+
   const [threads,      setThreads]      = useState(null);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState(null);
@@ -7080,11 +7361,21 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
   return (
     <div style={{ marginTop:16 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>📧 {threads.length} email thread{threads.length!==1?"s":""} with {emailList.join(", ")}</span>
+        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>
+          📧 {threads.length} email thread{threads.length!==1?"s":""} with {emailList.join(", ")}
+          {(function() {
+            const n = threads.filter(function(t){ return starred[t.id]; }).length;
+            return n ? <span style={{ marginLeft:8, color:"#a16207" }}>★ {n} starred</span> : null;
+          })()}
+        </span>
         <button onClick={load} style={{ background:"none", border:"none", color:T.midBlue, cursor:"pointer", fontSize:11, fontWeight:600 }}>↻ Refresh</button>
       </div>
       <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-        {threads.map(thread => {
+        {threads.slice().sort(function(a, z) {
+          // Starred to the top, otherwise leave Gmail's own ordering alone.
+          const sa = starred[a.id] ? 1 : 0, sz = starred[z.id] ? 1 : 0;
+          return sz - sa;
+        }).map(thread => {
           const lastMsg  = thread.messages?.[thread.messages.length-1];
           const firstMsg = thread.messages?.[0];
           const subject  = getHeader(firstMsg, "Subject") || "(no subject)";
@@ -7098,7 +7389,9 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
           // Count attachments across all full messages
           const totalAtts = fullMessages ? fullMessages.reduce((s,m) => s + getAttachments(m?.payload?.parts).length, 0) : 0;
           return (
-            <div key={thread.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,.05)" }}>
+            <div key={thread.id} style={{ background: starred[thread.id] ? "#fffdf5" : "#fff",
+              border:`1px solid ${starred[thread.id] ? "#fde68a" : T.border}`, borderRadius:8, overflow:"hidden",
+              boxShadow:"0 1px 3px rgba(0,0,0,.05)" }}>
               <div onClick={()=>handleExpand(thread.id)}
                 style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 14px", cursor:"pointer" }}>
                 <div style={{ flex:1, minWidth:0 }}>
@@ -7111,6 +7404,12 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
                   {!isOpen && <div style={{ fontSize:11, color:T.textMid, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{decodeEntities(snippet)}</div>}
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+                  <button onClick={function(e){ e.stopPropagation(); toggleStar(thread.id, subject); }}
+                    title={starred[thread.id] ? "Remove star" : "Star this email as important"}
+                    style={{ background:"none", border:"none", cursor:"pointer", padding:"0 2px", fontSize:15, lineHeight:1,
+                      color: starred[thread.id] ? "#eab308" : T.border, fontFamily:"inherit" }}>
+                    {starred[thread.id] ? "★" : "☆"}
+                  </button>
                   <span style={{ fontSize:10, color:T.textLight, whiteSpace:"nowrap" }}>{new Date(date).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</span>
                   <a href={gmailUrl} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()}
                     style={{ color:T.midBlue, fontSize:11, fontWeight:600, textDecoration:"none" }}>↗</a>
@@ -7661,8 +7960,17 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             })}
           </div>
           <div style={{ marginTop:16, display:"flex", flexDirection:"column", gap:8 }}>
-            <button onClick={onSubmit} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>{isEdit?"Save Changes":"Create Booking"}</button>
-            <button onClick={onCancel} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+            {/* The sidebar is on screen for every section, so these are
+                available from whichever tab you happen to be on. */}
+            <button onClick={function(){ onSubmit(true); }}
+              style={{ background:T.midBlue, color:"#fff", border:"none", padding:"12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>
+              {isEdit?"Save":"Create booking"}
+            </button>
+            <button onClick={function(){ onSubmit(false); }}
+              style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+              Save &amp; exit
+            </button>
+            <button onClick={onCancel} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Exit</button>
             {autoSaveState!=="idle" && (
               <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", fontSize:11, fontWeight:600, textAlign:"center",
                 color: autoSaveState==="saving" ? T.textLight : (autoSaveState==="error"||autoSaveState==="blocked") ? T.red : T.green }}>
@@ -7890,17 +8198,17 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="contact" && (
             <>
-              {(formData.email || formData.email2) && (
+              {(formData.email || formData.email2 || formData.email3) && (
                 <div style={{ marginBottom:18 }}>
-                  <GmailThreadPanel emails={[formData.email, formData.email2].filter(Boolean)} gmailToken={gmailToken} formData={formData} update={update} onAutoSave={onAutoSave}/>
+                  <GmailThreadPanel emails={[formData.email, formData.email2, formData.email3].filter(Boolean)} gmailToken={gmailToken} formData={formData} update={update} onAutoSave={onAutoSave}/>
                 </div>
               )}
               <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, marginBottom:18 }}>
                 <ContactHistoryPanel contacts={formData.contacts||[]} onChange={(c)=>update("contacts",c)}/>
               </div>
-              {(formData.email || formData.email2) && (
+              {(formData.email || formData.email2 || formData.email3) && (
                 <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22 }}>
-                  <EmailHistoryPanel emails={[formData.email, formData.email2].filter(Boolean)} typeFilter={(t)=>t.indexOf("viewing_")===0}
+                  <EmailHistoryPanel emails={[formData.email, formData.email2, formData.email3].filter(Boolean)} typeFilter={(t)=>t.indexOf("viewing_")===0}
                     title="Viewing Emails Sent" emptyLabel="No viewing emails sent yet."/>
                 </div>
               )}
@@ -9429,6 +9737,125 @@ function computeStock(products, events) {
 }
 
 // ─── Dashboard (Slice 2) ──────────────────────────────────────────────────────
+// ─── NEW LETTINGS ─────────────────────────────────────────────────────────────
+// Anything that arrived in the last week, from the website, from Airbnb's feed
+// or typed in here. Airbnb bookings in particular land silently on an hourly
+// sync, so without this the first you'd know is spotting it on the calendar.
+const NEW_LETTING_DAYS = 7;
+
+function NewLettings({ bookings, properties, onOpen, events, onOpenEvent }) {
+  const cutoff = Date.now() - NEW_LETTING_DAYS * 24 * 60 * 60 * 1000;
+  const isRecent = function(rec) {
+    const t = rec && rec.createdAt ? new Date(rec.createdAt).getTime() : NaN;
+    return isFinite(t) && t > cutoff;
+  };
+
+  const recentLets = (bookings || []).filter(function(b) {
+    if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return false;
+    // Unpaid website bookings have their own panel; listing them twice would
+    // just be noise.
+    if (b.status === "pending") return false;
+    return isRecent(b);
+  }).map(function(b) { return { kind: "let", rec: b, createdAt: b.createdAt }; });
+
+  // Events only carry a createdAt from this build onward, so nothing older
+  // appears — which is right, since it wasn't added recently.
+  const recentEvents = (events || []).filter(function(e) {
+    if (!e || e.status === "Cancelled") return false;
+    return isRecent(e);
+  }).map(function(e) { return { kind: "event", rec: e, createdAt: e.createdAt }; });
+
+  const recent = recentLets.concat(recentEvents)
+    .sort(function(x, z) { return (z.createdAt || "") > (x.createdAt || "") ? 1 : -1; });
+
+  if (!recent.length) return null;
+
+  const sourceChip = function(b) {
+    const map = {
+      airbnb: { text: "Airbnb", bg: "#fff1f2", fg: "#be123c", bd: "#fecdd3" },
+      direct: { text: "Website", bg: T.greenBg, fg: T.green, bd: "#bbf7d0" }
+    };
+    const c = map[b.source] || { text: "Added here", bg: T.bgInput, fg: T.textMid, bd: T.border };
+    return (
+      <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9,
+        background:c.bg, color:c.fg, border:"1px solid " + c.bd, whiteSpace:"nowrap", flexShrink:0 }}>
+        {c.text}
+      </span>
+    );
+  };
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px",
+      marginBottom:20, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10, flexWrap:"wrap" }}>
+        <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:T.accent }}>New bookings</h3>
+        <span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:9, background:T.accentLight, color:T.accent }}>
+          {recent.length}
+        </span>
+        <span style={{ fontSize:12, color:T.textLight }}>added in the last {NEW_LETTING_DAYS} days</span>
+      </div>
+
+      {recent.map(function(item) {
+        // Farm events read differently from lettings — one date, a venue fee,
+        // no properties — so they get their own row rather than being forced
+        // through the lettings shape.
+        if (item.kind === "event") {
+          const e = item.rec;
+          const fee = round2(parseMoney(e.venueFee));
+          return (
+            <div key={"ev-" + e.id} onClick={onOpenEvent ? function(){ onOpenEvent(e.id); } : undefined}
+              style={{ borderTop:`1px solid ${T.border}`, padding:"9px 0", display:"flex", gap:10,
+                alignItems:"center", flexWrap:"wrap", cursor: onOpenEvent ? "pointer" : "default" }}>
+              <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9,
+                background:"#eef4fd", color:T.midBlue, border:"1px solid #bfdbfe", whiteSpace:"nowrap", flexShrink:0 }}>
+                Event
+              </span>
+              <span style={{ fontSize:13, fontWeight:600, color:T.text, minWidth:130 }}>{e.couple || "(no name)"}</span>
+              <span style={{ fontSize:12, color:T.textMid, flex:1, minWidth:200 }}>
+                {eventTypeLabel(e)}{isValidEventDate(e.date) ? " · " + fmtDate(e.date) : ""}
+                {e.status ? " · " + e.status : ""}
+              </span>
+              <span style={{ fontSize:12, color:T.textLight, whiteSpace:"nowrap" }}>
+                {e.createdAt ? new Date(e.createdAt).toLocaleDateString("en-GB", { day:"numeric", month:"short" }) : ""}
+              </span>
+              <span style={{ fontSize:13, fontWeight:700, color:T.text, width:96, textAlign:"right", whiteSpace:"nowrap" }}>
+                {fee > 0 ? String(fmtMoney(fee)) : "—"}
+              </span>
+            </div>
+          );
+        }
+
+        const b = item.rec;
+        const stays = (b.stays && b.stays.length) ? b.stays : [b];
+        const v = lettingValue(b, properties);
+        return (
+          <div key={b.id} onClick={onOpen ? function(){ onOpen(b.id); } : undefined}
+            style={{ borderTop:`1px solid ${T.border}`, padding:"9px 0", display:"flex", gap:10,
+              alignItems:"center", flexWrap:"wrap", cursor: onOpen ? "pointer" : "default" }}>
+            {sourceChip(b)}
+            <span style={{ fontSize:13, fontWeight:600, color:T.text, minWidth:130 }}>
+              {b.guestName || "(no name)"}
+            </span>
+            <span style={{ fontSize:12, color:T.textMid, flex:1, minWidth:200 }}>
+              {stays.map(function(st, i) {
+                return (i ? " · " : "") + (st.propertyName || st.propertyId) + " " +
+                       fmtDate(st.checkIn) + " → " + fmtDate(st.checkOut);
+              }).join("")}
+            </span>
+            <span style={{ fontSize:12, color:T.textLight, whiteSpace:"nowrap" }}>
+              {b.createdAt ? new Date(b.createdAt).toLocaleDateString("en-GB", { day:"numeric", month:"short" }) : ""}
+            </span>
+            <span style={{ fontSize:13, fontWeight:700, color:T.text, width:96, textAlign:"right", whiteSpace:"nowrap" }}>
+              {v.value > 0 ? String(fmtMoney(v.value)) : "—"}
+              {v.estimated && <span style={{ marginLeft:4, fontSize:10, color:T.amber, fontWeight:700 }}>(est)</span>}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── UNPAID ONLINE BOOKINGS ───────────────────────────────────────────────────
 // Someone booked through the website and never paid the deposit. The booking
 // is recorded as "pending" and holds its dates everywhere, including on
@@ -9510,7 +9937,7 @@ function UnpaidOnlineBookings({ bookings, onDelete }) {
   );
 }
 
-function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom }) {
+function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent }) {
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
   const [viewEmail, setViewEmail]         = useState(null);
@@ -9666,13 +10093,19 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const pendingViewings = (viewingRequests||[]).filter(r=>r.status==="pending");
 
   // Overdue accom payments: schedule entries where paid=false AND dueDate < today AND booking not cancelled
+  // A schedule row worth nothing isn't a debt. Zero-value rows get left behind
+  // when a booking's price is changed to nil, and chasing someone for £0.00 is
+  // worse than useless. Event-linked lettings are billed on the event's Xero
+  // invoices, so they don't belong here either.
   const overduePayments = [];
   accomBookings.forEach(b => {
-    if (b.status==="cancelled") return;
+    if (b.status==="cancelled" || b.bookingType==="Blocked") return;
+    if (b.linkedEventId) return;
     (b.schedule||[]).forEach(s => {
-      if (!s.paid && s.dueDate && s.dueDate < today) {
-        overduePayments.push({ booking:b, entry:s });
-      }
+      if (s.paid) return;
+      if (!s.dueDate || s.dueDate >= today) return;
+      if (!(Number(s.amount) > 0)) return;
+      overduePayments.push({ booking:b, entry:s });
     });
   });
 
@@ -9705,6 +10138,8 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
       )}
 
       {/* Overdue money — unpaid raised invoices, and unpaid accommodation */}
+      <NewLettings bookings={accomBookings} properties={accomProperties} onOpen={onOpenAccom}
+        events={bookings} onOpenEvent={onOpenEvent}/>
       <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom}/>
 
       {/* A zero is not "overdue" — it's nothing owed. Rows worth nothing are
@@ -12543,10 +12978,19 @@ const INITIAL_ENQUIRIES = [
   }
 ];
 
+// Warm → Cold → Freezing. "Hot" was retired, but it is kept here so the
+// enquiries still carrying it render honestly as Hot rather than silently
+// falling back to Cold and misrepresenting the record. It is excluded from
+// the picker, so re-saving any of them moves it to a current category.
 const TEMP_CONFIG = {
-  cold: { label:"Cold", bg:"#e0f2fe", text:"#075985", border:"#7dd3fc" },
-  warm: { label:"Warm", bg:"#fef3c7", text:"#92400e", border:"#fcd34d" },
-  hot:  { label:"Hot",  bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
+  warm:     { label:"Warm",     bg:"#fef3c7", text:"#92400e", border:"#fcd34d" },
+  cold:     { label:"Cold",     bg:"#e0f2fe", text:"#075985", border:"#7dd3fc" },
+  freezing: { label:"Freezing", bg:"#eef2f7", text:"#475569", border:"#cbd5e1" },
+};
+// Selectable in the enquiry form. Hot is deliberately absent.
+const TEMP_CHOICES = ["warm", "cold", "freezing"];
+const LEGACY_TEMP_CONFIG = {
+  hot: { label:"Hot", bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
 };
 const OUTCOME_CONFIG = {
   undecided:    { label:"Undecided",    bg:"#f5f9ff", text:"#3d5a7a", border:"#c8d9ef" },
@@ -12560,7 +13004,7 @@ const METHOD_CONFIG = {
 };
 
 function TempBadge({ temp }) {
-  const c = TEMP_CONFIG[temp] || TEMP_CONFIG.cold;
+  const c = TEMP_CONFIG[temp] || LEGACY_TEMP_CONFIG[temp] || TEMP_CONFIG.cold;
   return <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:c.bg, color:c.text, border:`1px solid ${c.border}`, whiteSpace:"nowrap" }}>{c.label}</span>;
 }
 function OutcomeBadge({ outcome }) {
@@ -14262,7 +14706,11 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   const [selected, setSelected]   = useState(null); // id of open enquiry
   const [adding, setAdding]       = useState(false);
   const [filter, setFilter]       = useState("undecided"); // undecided | all | booked | didnotbook
-  const [tempFilter, setTempFilter] = useState("all");
+  // "current" is everything that isn't freezing — the default, since a frozen
+  // enquiry is one you've decided not to think about for now.
+  const [tempFilter, setTempFilter] = useState("current");
+  const [sortBy, setSortBy] = useState("temp");     // "temp" | "contact"
+  const [sortDir, setSortDir] = useState("desc");   // for contact: desc = longest ago first
   const [search, setSearch]       = useState("");
   const [confirmDlg, setConfirmDlg] = useState(null);
 
@@ -14328,16 +14776,47 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
     );
   }
 
-  const TEMP_ORDER = { hot:0, warm:1, cold:2 };
+  // Legacy "hot" sorts alongside warm — it was the keenest category, and
+  // burying it at the bottom would hide the very enquiries most worth acting on.
+  const TEMP_ORDER = { hot:0, warm:1, cold:2, freezing:3 };
+
+  const lastContactOf = function(e) {
+    const dated = (e.contacts || []).filter(function(c){ return c && c.date; });
+    if (!dated.length) return null;
+    return dated.slice().sort(function(a,b){ return b.date > a.date ? 1 : -1; })[0];
+  };
+  const daysSinceContact = function(e) {
+    const lc = lastContactOf(e);
+    if (!lc) return null;
+    const t = new Date(lc.date + "T00:00:00").getTime();
+    if (!isFinite(t)) return null;
+    return Math.max(0, Math.round((Date.now() - t) / 86400000));
+  };
+
   const filtered = enquiries.filter(e => {
     if (filter !== "all" && e.outcome !== filter) return false;
-    if (tempFilter !== "all" && e.temperature !== tempFilter) return false;
+    if (tempFilter === "current" && e.temperature === "freezing") return false;
+    if (tempFilter === "freezing" && e.temperature !== "freezing") return false;
     if (search) {
       const q = search.toLowerCase();
       return (e.name||"").toLowerCase().includes(q) || (e.email||"").toLowerCase().includes(q) || (e.datePreference||"").toLowerCase().includes(q);
     }
     return true;
-  }).sort((a,b) => (TEMP_ORDER[a.temperature]??2) - (TEMP_ORDER[b.temperature]??2));
+  }).sort(function(a, b) {
+    if (sortBy === "contact") {
+      // Never-contacted sorts as the most overdue, because it is.
+      const da = daysSinceContact(a), db = daysSinceContact(b);
+      const va = da === null ? Infinity : da;
+      const vb = db === null ? Infinity : db;
+      return sortDir === "desc" ? vb - va : va - vb;
+    }
+    return (TEMP_ORDER[a.temperature] ?? 2) - (TEMP_ORDER[b.temperature] ?? 2);
+  });
+
+  const toggleContactSort = function() {
+    if (sortBy !== "contact") { setSortBy("contact"); setSortDir("desc"); return; }
+    setSortDir(function(d){ return d === "desc" ? "asc" : "desc"; });
+  };
 
   return (
     <div style={{ paddingTop:28 }}>
@@ -14358,8 +14837,10 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         </div>
         <div style={{ width:1, height:24, background:T.border }}/>
         {/* Temperature filter */}
-        {[["all","All"],["cold","Cold"],["warm","Warm"],["hot","Hot"]].map(([v,l])=>(
-          <button key={v} onClick={()=>setTempFilter(v)} style={{ background:tempFilter===v?(TEMP_CONFIG[v]?.bg||T.midBlue):"#fff", color:tempFilter===v?(TEMP_CONFIG[v]?.text||"#fff"):T.textMid, border:`1.5px solid ${tempFilter===v?(TEMP_CONFIG[v]?.border||T.midBlue):T.border}`, padding:"6px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:tempFilter===v?700:400 }}>{l}</button>
+        {[["current","Current"],["freezing","Freezing"],["all","All"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setTempFilter(v)}
+            title={v==="current" ? "Everything except Freezing" : v==="freezing" ? "Only Freezing" : "Everything"}
+            style={{ background:tempFilter===v?(TEMP_CONFIG[v]?.bg||T.midBlue):"#fff", color:tempFilter===v?(TEMP_CONFIG[v]?.text||"#fff"):T.textMid, border:`1.5px solid ${tempFilter===v?(TEMP_CONFIG[v]?.border||T.midBlue):T.border}`, padding:"6px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:tempFilter===v?700:400 }}>{l}</button>
         ))}
         <div style={{ flex:1 }}/>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or email…"
@@ -14372,9 +14853,24 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr style={{ background:"#eef4fd" }}>
-              {["Name","Event","Date Preference","First Viewing","Contacts","Temp","Outcome",""].map(h=>(
-                <th key={h} style={{ padding:"10px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
-              ))}
+              {["Name","Event","Date Preference","First Viewing","Last contact","Temp","Outcome",""].map(h=>{
+                const sortable = h === "Last contact";
+                const active = sortable && sortBy === "contact";
+                return (
+                  <th key={h} onClick={sortable ? toggleContactSort : undefined}
+                    title={sortable ? "Sort by how long since the last contact" : undefined}
+                    style={{ padding:"10px 14px", textAlign:"left", color: active ? T.midBlue : T.textMid,
+                      fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700,
+                      cursor: sortable ? "pointer" : "default", userSelect:"none", whiteSpace:"nowrap" }}>
+                    {h}
+                    {sortable && (
+                      <span style={{ marginLeft:5, fontSize:10, color: active ? T.midBlue : T.border }}>
+                        {active ? (sortDir === "desc" ? "▼" : "▲") : "↕"}
+                      </span>
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -14382,7 +14878,8 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
               <tr><td colSpan={8} style={{ padding:40, textAlign:"center", color:T.textLight }}>No enquiries match this filter.</td></tr>
             )}
             {filtered.map((e,i)=>{
-              const lastContact = [...(e.contacts||[])].filter(c=>c.date).sort((a,b)=>b.date>a.date?1:-1)[0];
+              const lastContact = lastContactOf(e);
+              const days = daysSinceContact(e);
               const tc = TEMP_CONFIG[e.temperature];
               const rowBg = tc ? tc.bg : "transparent";
               const rowHover = tc ? tc.bg : "#f0f6ff";
@@ -14397,9 +14894,20 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
                   <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.eventType||"—"}</td>
                   <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.datePreference||"—"}</td>
                   <td style={{ padding:"11px 14px", fontSize:13, color:T.accent, fontWeight:500 }}>{e.firstViewing||"—"}</td>
-                  <td style={{ padding:"11px 14px", fontSize:13 }}>
-                    <span style={{ color:(e.contacts||[]).length>0?T.midBlue:T.textLight, fontWeight:600 }}>{(e.contacts||[]).length}</span>
-                    {lastContact && <div style={{ fontSize:10, color:T.textLight }}>{lastContact.date}</div>}
+                  <td style={{ padding:"11px 14px", fontSize:13, whiteSpace:"nowrap" }}>
+                    {lastContact ? (
+                      <>
+                        <span style={{ fontWeight:700,
+                          color: days >= 90 ? T.red : days >= 30 ? "#92400e" : T.midBlue }}>
+                          {days === 0 ? "Today" : days === 1 ? "Yesterday" : days + " days ago"}
+                        </span>
+                        <div style={{ fontSize:10, color:T.textLight }}>
+                          {fmtDate(lastContact.date)} · {(e.contacts||[]).length} contact{(e.contacts||[]).length===1?"":"s"}
+                        </div>
+                      </>
+                    ) : (
+                      <span style={{ color:T.textLight }}>Never</span>
+                    )}
                   </td>
                   <td style={{ padding:"11px 14px" }}><TempBadge temp={e.temperature}/></td>
                   <td style={{ padding:"11px 14px" }}><OutcomeBadge outcome={e.outcome}/></td>
@@ -14537,13 +15045,18 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
             <div style={{ marginBottom:16 }}>
               <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:8, fontWeight:600 }}>Temperature</label>
               <div style={{ display:"flex", gap:8 }}>
-                {Object.entries(TEMP_CONFIG).map(([v,c])=>(
+                {TEMP_CHOICES.map(function(v){ const c = TEMP_CONFIG[v]; return (
                   <label key={v} style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", padding:"8px 14px", borderRadius:8, background:form.temperature===v?c.bg:"#fff", border:`1.5px solid ${form.temperature===v?c.border:T.border}`, transition:"all .15s" }}>
                     <input type="radio" name="temp" value={v} checked={form.temperature===v} onChange={()=>update("temperature",v)} style={{ accentColor:c.text }}/>
                     <span style={{ fontSize:13, fontWeight:700, color:form.temperature===v?c.text:T.textMid }}>{c.label}</span>
                   </label>
-                ))}
+                ); })}
               </div>
+              {form.temperature === "hot" && (
+                <div style={{ fontSize:11, color:"#92400e", marginTop:6, lineHeight:1.6 }}>
+                  This enquiry is still marked <strong>Hot</strong>, a category that has been retired. Pick one above to update it.
+                </div>
+              )}
             </div>
 
             {/* Outcome dropdown */}
