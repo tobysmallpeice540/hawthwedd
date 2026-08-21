@@ -131,16 +131,20 @@ function buildDays(properties, accom, events, from) {
   (accom || []).forEach(function(b) {
     if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
-    const wedding = b.bookingType === "Wedding";
+    const wedding = b.bookingType === "Wedding" || !!b.linkedEventId;
     stays.forEach(function(s) {
       if (!s) return;
       const p = propOf(s.propertyId);
       const who = b.guestName || "Guest";
       const guests = b.guestCount ? b.guestCount + " guest" + (Number(b.guestCount) === 1 ? "" : "s") : "";
       const detail = who + (guests ? " · " + guests : "");
-      // Wedding parties get earlier access and a later checkout.
-      const inTime  = p ? (wedding ? p.checkInFromWedding : p.checkInFrom) : "";
-      const outTime = p ? (wedding ? p.checkOutByWedding  : p.checkOutBy)  : "";
+      // A time set on the stay itself wins; otherwise the property's rule, and
+      // failing that the house defaults. Wedding parties get earlier access
+      // and a later checkout. Mirrors stayTimes() in App.jsx.
+      const inTime  = s.checkInTime  || (p ? (wedding ? p.checkInFromWedding : p.checkInFrom) : "")
+                      || (wedding ? "15:00" : "16:00");
+      const outTime = s.checkOutTime || (p ? (wedding ? p.checkOutByWedding  : p.checkOutBy)  : "")
+                      || (wedding ? "11:00" : "10:00");
       add(s.checkOut, { kind: "out", rank: propRank(s.propertyId), label: propName(s.propertyId), time: outTime || "", detail: detail });
       add(s.checkIn,  { kind: "in",  rank: propRank(s.propertyId), label: propName(s.propertyId), time: inTime  || "", detail: detail });
     });

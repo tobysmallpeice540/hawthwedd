@@ -197,12 +197,21 @@ exports.handler = async function(event) {
     ];
 
     // Normalise stays — ensure propertyName is populated
+    // House rules for a standard let. Wedding parties get different times, but
+    // nobody books one of those through the public page — those are created in
+    // the app and linked to an event there.
+    const DEFAULT_CHECK_IN  = "16:00";
+    const DEFAULT_CHECK_OUT = "10:00";
+
     const normStays = stays.map(function(s) {
       return {
         propertyId:   s.propertyId   || "",
         propertyName: s.propertyName || s.propertyId || "",
         checkIn:      s.checkIn      || checkIn,
         checkOut:     s.checkOut     || checkOut,
+        checkInTime:  DEFAULT_CHECK_IN,
+        checkOutTime: DEFAULT_CHECK_OUT,
+        maybe:        false,
         nights:       s.nights       || 0,
         value:        Number(s.value) || 0
       };
