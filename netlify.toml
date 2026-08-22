@@ -4,7 +4,7 @@
   functions = "netlify/functions"
 
 [build.environment]
-  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,RESEND_API_KEY,ZETTLE_API_KEY,ZETTLE_CLIENT_ID,TODOIST_ICS_URL,SUPABASE_SERVICE_KEY,HBF_ADMIN_TOKEN,STRIPE_TICKET_WEBHOOK_SECRET,STRIPE_TICKET_SECRET_KEY"
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,RESEND_API_KEY,ZETTLE_API_KEY,ZETTLE_CLIENT_ID,TODOIST_ICS_URL,SUPABASE_SERVICE_KEY,HBF_ADMIN_TOKEN,STRIPE_TICKET_WEBHOOK_SECRET,STRIPE_TICKET_SECRET_KEY,BREVO_API_KEY"
 
 # Hourly Airbnb iCal sync - runs at the top of every hour
 [functions."sync-all-icals"]
@@ -36,6 +36,14 @@
 # abandoned buyer's name and email sitting in the table for ever.
 [functions."expire-ticket-holds"]
   schedule = "17 * * * *"
+
+# Top up the Brevo lists from ticket sales, weddings booked, event enquiries
+# and cottage bookings. Hourly, rather than wired into every save path: two of
+# those paths run in the browser, where an API key must never go. Brevo's
+# import upserts, so the first run is the backfill and every run after it
+# quietly picks up whoever is new.
+[functions."brevo-sync"]
+  schedule = "23 * * * *"
 
 # Proxy Xero connections endpoint
 [[redirects]]
