@@ -42,7 +42,11 @@
 # those paths run in the browser, where an API key must never go. Brevo's
 # import upserts, so the first run is the backfill and every run after it
 # quietly picks up whoever is new.
-[functions."brevo-sync"]
+#
+# The schedule sits on the shim, not on brevo-sync itself: Netlify returns 403
+# to any HTTP request aimed at a scheduled function, so scheduling the worker
+# directly would make it impossible to run on demand or to test.
+[functions."brevo-sync-cron"]
   schedule = "23 * * * *"
 
 # Proxy Xero connections endpoint
