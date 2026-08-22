@@ -15,6 +15,17 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Jost', sans-serif; background: #f9f6f1; color: #2d2a25; min-height: 100vh; }
 
+    /* Site header — the logo mark rather than set type, so the page reads as
+       part of hawthbushfarm.co.uk rather than a payment form bolted onto it. */
+    .site-header { background: #fff; border-bottom: 1px solid #e8e2d9; padding: 18px 20px 16px; text-align: center; position: relative; }
+    .brand-mark { height: 58px; width: auto; display: block; margin: 0 auto; }
+    .brand-sub { font-size: 11.5px; letter-spacing: 1.8px; text-transform: uppercase; color: #7a7060; margin-top: 10px; }
+    .header-link { position: absolute; right: 22px; top: 50%; transform: translateY(-50%); font-size: 13px; color: #7a7060; text-decoration: none; }
+    .header-link:hover { color: #2d2a25; }
+    @media (max-width: 700px) {
+      .brand-mark { height: 46px; }
+      .header-link { position: static; transform: none; display: inline-block; margin-top: 11px; }
+    }
     .header { background: #fff; border-bottom: 1px solid #e8e2d9; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; }
     .header h1 { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; letter-spacing: .5px; }
     .header .sub { font-size: 13px; color: #7a7060; margin-top: 2px; }
@@ -51,6 +62,17 @@
     .sum-desc img { max-width: 100%; height: auto; border-radius: 8px; }
 
     .mapframe { width: 100%; height: 220px; border: 0; border-radius: 12px; margin-top: 14px; }
+
+    /* On a phone the order summary stacks below the ticket picker, so without
+       this you could reach the Continue button without ever having seen which
+       event you are buying for — there is no event page above it when the
+       website links straight in with ?buy=1. */
+    .checkout-head { display: none; }
+    @media (max-width: 860px) {
+      .checkout-head { display: block; margin-bottom: 18px; }
+      .checkout-head h2 { font-family: 'Cormorant Garamond', serif; font-size: 26px; font-weight: 600; line-height: 1.15; }
+      .checkout-head .when { font-size: 13.5px; color: #7a7060; margin-top: 4px; }
+    }
 
     /* Steps */
     .steps { display: flex; margin-bottom: 26px; border-radius: 10px; overflow: hidden; border: 1px solid #e8e2d9; }
@@ -131,12 +153,10 @@
 </head>
 <body>
 
-<div class="header" id="page-header">
-  <div>
-    <h1>Hawthbush Farm</h1>
-    <div class="sub">The Grain Store &mdash; Gun Hill, East Sussex</div>
-  </div>
-  <a href="/whats-on" style="font-size:13px; color:#7a7060; text-decoration:none;">What&rsquo;s on &rarr;</a>
+<div class="site-header" id="page-header">
+  <a href="https://www.hawthbushfarm.co.uk"><img class="brand-mark" src="/email-logo.png" alt="Hawthbush Farm"></a>
+  <div class="brand-sub">The Grain Store &middot; Gun Hill, East Sussex</div>
+  <a class="header-link" href="/whats-on">What&rsquo;s on &rarr;</a>
 </div>
 <script>
 (function () {
@@ -434,6 +454,8 @@
   function renderCheckout() {
     var inner = step === 1 ? stepTickets() : step === 2 ? stepDetails() : stepPayment();
     app.innerHTML =
+      '<div class="checkout-head"><h2>' + esc(ev.name) + "</h2>" +
+        '<div class="when">' + esc(whenLine(ev)) + " &middot; " + esc(ev.venue_name || "") + "</div></div>" +
       stepsHtml() +
       '<div class="layout">' +
         '<div><div class="panel">' + (errorMsg ? '<div class="alert alert-error">' + esc(errorMsg) + "</div>" : "") + inner + "</div></div>" +
@@ -641,7 +663,17 @@
     }).then(function (r) {
       return r.json().then(function (body) { return { ok: r.ok, body: body }; });
     }).then(function (res) {
-      if (res.ok && res.body.url) { window.location.href = res.body.url; return; }
+      if (res.ok && res.body.url) {
+        // Stripe Checkout refuses to run inside a frame, so if this page is
+        // embedded the payment takes over the whole window. Exactly what
+        // book-accom.html does. The webhook is unaffected either way — Stripe
+        // posts that to the server and never sees the browser at all.
+        try {
+          if (window.top && window.top !== window.self) { window.top.location.href = res.body.url; return; }
+        } catch (e) { /* cross-origin parent: fall through to a normal redirect */ }
+        window.location.href = res.body.url;
+        return;
+      }
       busy = false;
       errorMsg = res.body.error || "Something went wrong. Please try again.";
       // A refusal is nearly always "somebody else got there first", so the

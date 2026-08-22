@@ -14,6 +14,7 @@
 
     .ticket { background: #fff; border: 1px solid #e8e2d9; border-radius: 18px; padding: 26px 24px 28px; box-shadow: 0 3px 16px rgba(0,0,0,.05); text-align: center; }
     .brand { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; letter-spacing: .5px; }
+    .brand img { height: 52px; width: auto; display: block; margin: 0 auto; }
     .brand-sub { font-size: 12px; color: #7a7060; letter-spacing: 1.4px; text-transform: uppercase; margin-top: 2px; }
     .ev-name { font-family: 'Cormorant Garamond', serif; font-size: 30px; font-weight: 600; line-height: 1.15; margin: 20px 0 8px; }
     .ev-when { font-size: 15px; font-weight: 500; }
@@ -104,7 +105,7 @@
     }).join("<br>");
 
     var head =
-      '<div class="brand">Hawthbush Farm</div>' +
+      '<div class="brand"><img src="/email-logo.png" alt="Hawthbush Farm"></div>' +
       '<div class="brand-sub">' + esc(e.venue_name || "The Grain Store") + "</div>" +
       '<div class="ev-name">' + esc(e.name) + "</div>" +
       '<div class="ev-when">' + esc(fmtDate(e.starts_at)) + " · " + esc(fmtTime(e.starts_at)) + "</div>" +
@@ -176,7 +177,14 @@
           body: JSON.stringify({ token: token })
         }).then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
           .then(function (res) {
-            if (res.ok && res.b.url) { window.location.href = res.b.url; return; }
+            if (res.ok && res.b.url) {
+              // Stripe won't run in a frame; take the whole window if embedded.
+              try {
+                if (window.top && window.top !== window.self) { window.top.location.href = res.b.url; return; }
+              } catch (e) { /* cross-origin parent */ }
+              window.location.href = res.b.url;
+              return;
+            }
             document.getElementById("pay-msg").textContent = res.b.error || "Something went wrong. Please try again.";
             payBtn.disabled = false; payBtn.textContent = "Pay the balance";
           })
