@@ -8,10 +8,22 @@
 // is therefore not one URL away from anyone who reads the JavaScript. This
 // function holds the service key and is the only way in.
 //
-// Authenticated with HBF_ADMIN_TOKEN in an x-admin-token header. The app asks
-// for that key once per device and keeps it in localStorage, deliberately NOT
-// in the bundle: putting it in the source would hand it to every visitor and
-// undo the point of the paragraph above.
+// Two ways in, and they are not equivalent:
+//
+//   x-admin-token: HBF_ADMIN_TOKEN     full access. The office key, entered
+//                                      once per device and kept in
+//                                      localStorage — deliberately not in the
+//                                      bundle, which every visitor can read.
+//
+//   Authorization: Bearer <jwt>        a real Supabase session. The token is
+//                                      verified with Supabase and the role is
+//                                      read from the profiles table, so it
+//                                      cannot be forged from the browser.
+//
+// Role decides what the action may be. Bar staff can work the door — scan a
+// code, admit a head count — and reach nothing else: not the order list, not
+// buyer emails, not an event's takings. That is the whole point of letting
+// them in at all.
 //
 // Required env vars: SUPABASE_SERVICE_KEY · HBF_ADMIN_TOKEN
 
@@ -97,11 +109,51 @@ function countsAsSold(o) {
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
+// Everything a bar login may do. Deliberately short, and deliberately not
+// events.list — that carries takings per event, which is none of their
+// business. door.events returns just enough to choose which door they are on.
+var DOOR_ACTIONS = {
+  "ping": true, "door.events": true, "door.list": true,
+  "door.admit": true, "door.unadmit": true
+};
+
+function allowedFor(role, action) {
+  if (role === "admin") return true;
+  if (role === "bar") return DOOR_ACTIONS[action] === true;
+  return false;   // cleaner has no business in the box office at all
+}
+
+// Who is asking. The office key means admin. A session is verified with
+// Supabase — a JWT the browser invented gets rejected here, not trusted — and
+// the role comes from the profiles table rather than from anything the client
+// sent.
+async function resolveCaller(event) {
+  var headerToken = event.headers["x-admin-token"];
+  if (ADMIN_TOKEN && headerToken === ADMIN_TOKEN) {
+    return { role: "admin", who: "office key" };
+  }
+
+  var auth = event.headers["authorization"] || event.headers["Authorization"] || "";
+  var jwt = auth.replace(/^Bearer\s+/i, "").trim();
+  if (!jwt) return null;
+
+  var res = await fetch(SUPABASE_URL + "/auth/v1/user", {
+    headers: { "apikey": SERVICE_KEY, "Authorization": "Bearer " + jwt }
+  });
+  if (!res.ok) return null;
+  var user = await res.json();
+  if (!user || !user.id) return null;
+
+  var rows = await sbRest("profiles?id=eq." + user.id + "&select=role,active,name,email");
+  var p = rows && rows[0];
+  // A revoked account keeps its password working at Supabase but stops here.
+  if (!p || p.active === false) return null;
+
+  return { role: p.role, userId: user.id, who: p.name || p.email || "signed in" };
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") return bad("Method not allowed", 405);
-
-  var token = event.headers["x-admin-token"];
-  if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) return bad("Unauthorised", 401);
 
   var body;
   try { body = JSON.parse(event.body || "{}"); }
@@ -109,12 +161,18 @@ exports.handler = async function(event) {
 
   var action = body.action;
 
+  var caller = await resolveCaller(event);
+  if (!caller) return bad("Unauthorised", 401);
+  if (!allowedFor(caller.role, action)) {
+    return bad("Your login doesn't have access to that.", 403);
+  }
+
   try {
     switch (action) {
 
       // Used by Box Office → Settings to check a pasted key before saving it.
       case "ping":
-        return ok({ ok: true });
+        return ok({ ok: true, role: caller.role, who: caller.who });
 
       // ── EVENTS ─────────────────────────────────────────────────────────────
       case "events.list": {
@@ -407,6 +465,12 @@ exports.handler = async function(event) {
       // ── THE DOOR ───────────────────────────────────────────────────────────
       // The whole guest list in one response, on purpose: the scanner keeps
       // working when the barn wifi drops, which it does.
+      // Just enough to choose a door: no takings, no order counts, no buyers.
+      case "door.events": {
+        var dEvents = await sbRest("box_events?status=neq.draft&select=id,name,starts_at,venue_name&order=starts_at.desc.nullslast&limit=50");
+        return ok({ events: dEvents || [] });
+      }
+
       case "door.list": {
         var dEv = await sbRest("box_events?id=eq." + body.eventId + "&select=id,name,starts_at,venue_name,capacity");
         if (!dEv || !dEv[0]) return bad("Event not found", 404);
@@ -444,7 +508,7 @@ exports.handler = async function(event) {
         });
         await sbRest("box_checkins", {
           method: "POST", prefer: "return=minimal",
-          body: { order_id: aOrd.id, count: count, checked_by: body.by || "" }
+          body: { order_id: aOrd.id, count: count, checked_by: body.by || caller.who || "" }
         });
         return ok({ ok: true, order: (aUpdated && aUpdated[0]) || aOrd, admittedNow: count });
       }
@@ -462,7 +526,7 @@ exports.handler = async function(event) {
         });
         await sbRest("box_checkins", {
           method: "POST", prefer: "return=minimal",
-          body: { order_id: uOrd.id, count: -back, checked_by: body.by || "" }
+          body: { order_id: uOrd.id, count: -back, checked_by: body.by || caller.who || "" }
         });
         return ok({ order: uUpdated && uUpdated[0] });
       }
