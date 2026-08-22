@@ -1792,7 +1792,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22d";
+const APP_BUILD = "2026-08-22e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8321,6 +8321,10 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
         <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Staff Database</h2>
         <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>+ Add Staff Member</button>
       </div>
+
+      {/* Logins live beside the staff records, because they are the same
+          people and the two go out of step otherwise. */}
+      <StaffLogins/>
 
       {/* Minimum wage bands — include rolled-up holiday pay, and change each April */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
@@ -15507,61 +15511,25 @@ function BoxStat({ label, value, sub, tone }) {
   );
 }
 
-// ── The admin key ────────────────────────────────────────────────────────────
-// Asked for once per device and kept in localStorage. It is not in the bundle
-// because the bundle is public: putting it here would hand every visitor the
-// key to the buyer list, which is the exact thing these tables were set up to
-// prevent.
-function BoxKeyGate({ onDone }) {
-  const [val, setVal] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  async function save() {
-    setBusy(true); setErr("");
-    try {
-      localStorage.setItem(BOX_KEY_LS, val.trim());
-      await boxAdmin("ping", {});
-      onDone();
-    } catch (e) {
-      localStorage.removeItem(BOX_KEY_LS);
-      setErr(e.status === 401 ? "That key wasn't accepted." : e.message);
-    }
-    setBusy(false);
-  }
-
-  return (
-    <div style={{ maxWidth:520, margin:"40px auto" }}>
-      <BoxTicketTermsEditor/>
-
-      <BoxCard title="Box office key">
-        <p style={{ fontSize:13.5, color:T.textMid, lineHeight:1.65, margin:"0 0 6px" }}>
-          The box office holds the names, emails and phone numbers of everyone who has bought a ticket, so it sits
-          behind a key rather than behind the app's password alone.
-        </p>
-        <p style={{ fontSize:12.5, color:T.textLight, lineHeight:1.6, margin:"0 0 16px" }}>
-          Paste the <code>HBF_ADMIN_TOKEN</code> from the Netlify environment settings. It's stored on this device only —
-          you'll need it once on each computer or phone you use.
-        </p>
-        <BoxInput value={val} onChange={setVal} type="password" placeholder="HBF_ADMIN_TOKEN"/>
-        {err && <div style={{ marginTop:10, background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:13 }}>{err}</div>}
-        <div style={{ marginTop:14 }}>
-          <BoxBtn onClick={save} disabled={busy || !val.trim()}>{busy ? "Checking…" : "Unlock the box office"}</BoxBtn>
-        </div>
-      </BoxCard>
-    </div>
-  );
-}
+// ── Reaching the box office ──────────────────────────────────────────────────
+// There used to be a key to paste in here, once per device. It is gone: access
+// is now the signed-in role, checked by box-admin.js on every request. The
+// office key survives only as an env var for server-to-server calls, where
+// there is no person to be.
+//
+// boxAdmin() below still sends a key if one happens to be left in localStorage
+// from before, so nobody mid-session is thrown out by this change.
 
 // ── The tab itself ───────────────────────────────────────────────────────────
 function BoxOfficeView({ bookings }) {
-  const [hasKey, setHasKey] = useState(()=>!!boxKey());
   const [tab, setTab]       = useState("events");
   const [openEventId, setOpenEventId] = useState(null);
 
   const tabs = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
 
-  if (!hasKey) return <BoxKeyGate onDone={()=>setHasKey(true)}/>;
+  // No key to paste any more. Access is the signed-in role, checked by
+  // box-admin.js on every request — which is both less to remember and a
+  // stronger claim than a shared secret sitting in localStorage.
 
   return (
     <div style={{ paddingTop:24 }}>
@@ -15588,7 +15556,7 @@ function BoxOfficeView({ bookings }) {
         : <BoxEventsScreen onOpen={setOpenEventId}/>)}
       {tab === "orders"   && <BoxOrdersScreen onOpenEvent={function(id) { setOpenEventId(id); setTab("events"); }}/>}
       {tab === "door"     && <BoxDoorScreen/>}
-      {tab === "settings" && <BoxSettingsScreen onForgetKey={()=>setHasKey(false)}/>}
+      {tab === "settings" && <BoxSettingsScreen/>}
     </div>
   );
 }
@@ -17543,7 +17511,7 @@ function printDoorList(door, typeNames) {
 }
 
 // ── Box office settings ──────────────────────────────────────────────────────
-function BoxSettingsScreen({ onForgetKey }) {
+function BoxSettingsScreen() {
   const [templates, setTemplates] = useState(DEFAULT_BOX_TEMPLATES);
   const [loaded, setLoaded] = useState(false);
   const [flash, setFlash] = useState("");
@@ -17600,16 +17568,6 @@ function BoxSettingsScreen({ onForgetKey }) {
           : <BoxTemplatesEditor templates={templates} setTemplates={setTemplates}/>}
       </BoxCard>
 
-      <BoxCard title="Box office key">
-        <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.65 }}>
-          This device is holding a key that unlocks the buyer list. Forget it if you're signing off a shared computer —
-          the app will simply ask for it again next time.
-        </p>
-        <BoxBtn tone="danger" onClick={function() {
-          try { localStorage.removeItem(BOX_KEY_LS); } catch (e) {}
-          onForgetKey();
-        }}>Forget the key on this device</BoxBtn>
-      </BoxCard>
 
       <BoxCard title="What runs on its own">
         <div style={{ fontSize:13, color:T.textMid, lineHeight:1.85 }}>
@@ -17831,8 +17789,6 @@ function BoxBrevoPanel() {
   const [result, setResult] = useState(null);
   const [err, setErr] = useState("");
 
-  const hasKey = !!boxKey();
-
   async function run() {
     setBusy(true); setErr(""); setResult(null);
     try { setResult(await boxAdmin("brevo.sync")); }
@@ -17846,7 +17802,7 @@ function BoxBrevoPanel() {
 
   return (
     <BoxCard title="Brevo mailing lists" right={
-      <BoxBtn onClick={run} disabled={busy || !hasKey}>{busy ? "Syncing…" : "Sync now"}</BoxBtn>
+      <BoxBtn onClick={run} disabled={busy}>{busy ? "Syncing…" : "Sync now"}</BoxBtn>
     }>
       <p style={{ fontSize:13, color:T.textMid, margin:"0 0 10px", lineHeight:1.65 }}>
         Ticket buyers, weddings booked, event enquiries and cottage guests are pushed to their Brevo lists every hour.
@@ -17857,14 +17813,6 @@ function BoxBrevoPanel() {
         Nobody is ever added twice: Brevo updates an existing contact rather than duplicating it, which is also why
         pressing this repeatedly is harmless.
       </p>
-
-      {!hasKey && (
-        <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:7,
-          padding:"9px 12px", fontSize:12.5, marginTop:12, lineHeight:1.6 }}>
-          The hourly sync runs regardless. To press this button, enter the admin key once on this device under
-          <strong> Box Office \u2192 Settings</strong>.
-        </div>
-      )}
 
       {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginTop:12 }}>{err}</div>}
 
@@ -17887,5 +17835,187 @@ function BoxBrevoPanel() {
         </div>
       )}
     </BoxCard>
+  );
+}
+
+// ── Staff logins ─────────────────────────────────────────────────────────────
+// Who can sign in, and as what. Administrator only, enforced by user-admin.js
+// rather than by this screen being hidden — a screen that merely isn't drawn
+// is not a permission.
+async function userAdmin(action, payload) {
+  const headers = { "Content-Type": "application/json" };
+  if (SESSION_TOKEN) headers["Authorization"] = "Bearer " + SESSION_TOKEN;
+  const res = await fetch("/.netlify/functions/user-admin", {
+    method: "POST", headers: headers,
+    body: JSON.stringify(Object.assign({ action }, payload || {}))
+  });
+  let body = {};
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok) { const err = new Error(body.error || `Request failed (${res.status})`); err.status = res.status; throw err; }
+  return body;
+}
+
+const ROLE_LABEL = {
+  admin:   { label: "Administrator", note: "Everything",                       bg: T.accentLight, fg: T.accent },
+  bar:     { label: "Bar",           note: "Bar stock take and ticket check-in", bg: T.amberBg,    fg: T.amber },
+  cleaner: { label: "Housekeeping",  note: "Changeovers",                      bg: T.greenBg,     fg: T.green },
+};
+
+function StaffLogins() {
+  const [users, setUsers]   = useState(null);
+  const [meId, setMeId]     = useState(null);
+  const [err, setErr]       = useState("");
+  const [msg, setMsg]       = useState("");
+  const [busy, setBusy]     = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm]     = useState({ name:"", email:"", role:"bar", password:"" });
+  const [confirmOff, setConfirmOff] = useState(null);
+
+  async function load() {
+    setErr("");
+    try { const r = await userAdmin("users.list"); setUsers(r.users || []); setMeId(r.me); }
+    catch (e) { setErr(e.message); setUsers([]); }
+  }
+  useEffect(function() { load(); }, []);
+
+  function flash(t) { setMsg(t); setTimeout(function(){ setMsg(""); }, 4000); }
+
+  async function act(id, fn, done) {
+    setBusy(id); setErr("");
+    try { await fn(); if (done) flash(done); await load(); }
+    catch (e) { setErr(e.message); }
+    setBusy(null);
+  }
+
+  async function create() {
+    setBusy("new"); setErr("");
+    try {
+      await userAdmin("users.create", form);
+      flash(form.email + " can now sign in.");
+      setForm({ name:"", email:"", role:"bar", password:"" });
+      setAdding(false);
+      await load();
+    } catch (e) { setErr(e.message); }
+    setBusy(null);
+  }
+
+  // Long enough to be worth having, readable enough to be passed on once.
+  function suggestPassword() {
+    const words = ["barn","harvest","orchard","meadow","willow","copse","thistle","bramble","furrow","paddock"];
+    const w = () => words[Math.floor(Math.random() * words.length)];
+    setForm(function(f) { return Object.assign({}, f, { password: w() + "-" + w() + "-" + Math.floor(10 + Math.random() * 90) }); });
+  }
+
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" };
+
+  return (
+    <div style={card}>
+      {confirmOff && (
+        <ConfirmDialog
+          message={`Switch off ${confirmOff.email}?`}
+          subMessage="They will be signed out and their password will stop working. Their record and anything they did stays. You can switch them back on at any time."
+          confirmLabel="Switch off"
+          icon="🔒"
+          onConfirm={function() {
+            const u = confirmOff; setConfirmOff(null);
+            act(u.id, function() { return userAdmin("users.setActive", { id: u.id, active: false }); }, u.email + " switched off.");
+          }}
+          onCancel={()=>setConfirmOff(null)}
+        />
+      )}
+
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+        <div>
+          <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Logins</div>
+          <div style={{ fontSize:12.5, color:T.textLight, marginTop:3 }}>
+            One account per person. A leaver is switched off here and is out in seconds, with no deploy.
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+          {msg && <span style={{ fontSize:12, color:T.green, fontWeight:700 }}>{msg}</span>}
+          {!adding && <BoxBtn tone="dark" onClick={()=>setAdding(true)}>+ Add a login</BoxBtn>}
+        </div>
+      </div>
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{err}</div>}
+
+      {adding && (
+        <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:9, padding:"15px 16px", marginBottom:14 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+            <BoxField label="Name"><BoxInput value={form.name} onChange={v=>setForm(Object.assign({}, form, { name:v }))} placeholder="Jane Smith"/></BoxField>
+            <BoxField label="Email"><BoxInput type="email" value={form.email} onChange={v=>setForm(Object.assign({}, form, { email:v }))} placeholder="jane@hawthbushfarm.co.uk"/></BoxField>
+            <BoxField label="Role" hint={ROLE_LABEL[form.role] ? ROLE_LABEL[form.role].note : ""}>
+              <select value={form.role} onChange={e=>setForm(Object.assign({}, form, { role:e.target.value }))} style={boxInput}>
+                <option value="bar">Bar</option>
+                <option value="cleaner">Housekeeping</option>
+                <option value="admin">Administrator</option>
+              </select>
+            </BoxField>
+            <BoxField label="First password" hint="They can change it later; tell them in person, not by email.">
+              <div style={{ display:"flex", gap:7 }}>
+                <BoxInput value={form.password} onChange={v=>setForm(Object.assign({}, form, { password:v }))} placeholder="at least 10 characters"/>
+                <BoxBtn tone="ghost" onClick={suggestPassword}>Suggest</BoxBtn>
+              </div>
+            </BoxField>
+          </div>
+          <div style={{ display:"flex", gap:9 }}>
+            <BoxBtn onClick={create} disabled={busy === "new"}>{busy === "new" ? "Creating…" : "Create login"}</BoxBtn>
+            <BoxBtn tone="ghost" onClick={function(){ setAdding(false); setErr(""); }}>Cancel</BoxBtn>
+          </div>
+        </div>
+      )}
+
+      {users === null && <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>}
+      {users && !users.length && !err && <div style={{ fontSize:13, color:T.textLight }}>No logins yet.</div>}
+
+      {(users || []).map(function(u) {
+        const r = ROLE_LABEL[u.role] || { label: u.role, note: "", bg: T.bgInput, fg: T.textMid };
+        const isMe = u.id === meId;
+        return (
+          <div key={u.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"12px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap", opacity: u.active === false ? .55 : 1 }}>
+            <div style={{ flex:"1 1 190px", minWidth:0 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:T.text }}>
+                {u.name || u.email}{isMe && <span style={{ fontWeight:400, color:T.textLight }}> — you</span>}
+              </div>
+              <div style={{ fontSize:12, color:T.textLight }}>
+                {u.email}
+                {u.last_sign_in_at
+                  ? " · last in " + boxDate(u.last_sign_in_at)
+                  : " · never signed in"}
+              </div>
+            </div>
+
+            {u.active === false
+              ? <BoxPill bg={T.redBg} fg={T.red}>Switched off</BoxPill>
+              : <BoxPill bg={r.bg} fg={r.fg}>{r.label}</BoxPill>}
+
+            <select value={u.role} disabled={busy === u.id || u.active === false}
+              onChange={e=>act(u.id, function() { return userAdmin("users.setRole", { id: u.id, role: e.target.value }); }, "Role updated.")}
+              style={Object.assign({}, boxInput, { width:150 })}>
+              <option value="bar">Bar</option>
+              <option value="cleaner">Housekeeping</option>
+              <option value="admin">Administrator</option>
+            </select>
+
+            <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+              <BoxBtn tone="ghost" disabled={busy === u.id}
+                onClick={()=>act(u.id, function() { return userAdmin("users.sendReset", { id: u.id }); }, "Reset link sent to " + u.email)}>
+                Send reset
+              </BoxBtn>
+              {u.active === false
+                ? <BoxBtn tone="green" disabled={busy === u.id}
+                    onClick={()=>act(u.id, function() { return userAdmin("users.setActive", { id: u.id, active: true }); }, u.email + " switched back on.")}>
+                    Switch on
+                  </BoxBtn>
+                : <BoxBtn tone="danger" disabled={busy === u.id || isMe}
+                    title={isMe ? "You can't switch off your own account" : "Signs them out and stops their password working"}
+                    onClick={()=>setConfirmOff(u)}>
+                    Switch off
+                  </BoxBtn>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
