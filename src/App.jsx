@@ -15545,6 +15545,26 @@ function BoxOfficeView({ bookings }) {
   );
 }
 
+// A URL with a label and a copy button. Two of these sit on a published event:
+// the one that goes on the website's own button, and the full page.
+function BoxCopyLink({ label, url, primary }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <div style={{ fontSize:11, fontWeight:700, color: primary ? T.midBlue : T.textLight,
+        textTransform:"uppercase", letterSpacing:.6, marginBottom:4 }}>{label}</div>
+      <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+        <code style={{ background:T.bgInput, border:`1.5px solid ${primary ? T.accent : T.border}`, borderRadius:6,
+          padding:"7px 11px", fontSize:11.5, color:T.text, wordBreak:"break-all", flex:1, minWidth:180 }}>{url}</code>
+        <BoxBtn tone={copied ? "green" : (primary ? "primary" : "ghost")} onClick={function() {
+          try { navigator.clipboard.writeText(url); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch (e) {}
+        }}>{copied ? "\u2713 Copied" : "Copy"}</BoxBtn>
+        <a href={url} target="_blank" rel="noreferrer" style={{ fontSize:12.5, color:T.accent, fontWeight:600 }}>Open \u2197</a>
+      </div>
+    </div>
+  );
+}
+
 // ── Events list ──────────────────────────────────────────────────────────────
 function BoxEventsScreen({ onOpen }) {
   const [events, setEvents] = useState([]);
@@ -15659,7 +15679,6 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
   const [err, setErr]         = useState("");
   const [dirty, setDirty]     = useState(false);
   const [pane, setPane]       = useState("details");
-  const [copied, setCopied]   = useState(false);
   const [askDelete, setAskDelete] = useState(false);
 
   async function load() {
@@ -15721,6 +15740,9 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
 
   const publicUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/tickets/" + form.slug +
     (form.access_code ? "?code=" + encodeURIComponent(form.access_code) : "");
+  // Straight to the ticket picker, skipping our event page.
+  const buyUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/tickets/" + form.slug +
+    "?buy=1" + (form.access_code ? "&code=" + encodeURIComponent(form.access_code) : "");
 
   const issued    = (data.ticket_types || []).filter(t=>!t.hidden).reduce((a,t)=>a + (t.quantity || 0), 0);
   const sold      = (data.ticket_types || []).reduce((a,t)=>a + (t.sold || 0), 0);
@@ -15778,12 +15800,15 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
           </div>
           <div style={{ flex:1, minWidth:200 }}>
             {form.status === "published" ? (
-              <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-                <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"7px 11px", fontSize:11.5, color:T.text, wordBreak:"break-all", flex:1, minWidth:180 }}>{publicUrl}</code>
-                <BoxBtn tone={copied ? "green" : "ghost"} onClick={function() {
-                  try { navigator.clipboard.writeText(publicUrl); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch (e) {}
-                }}>{copied ? "✓ Copied" : "Copy link"}</BoxBtn>
-                <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize:12.5, color:T.accent, fontWeight:600 }}>Open ↗</a>
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {/* The link the Squarespace "Select tickets" button points at.
+                    It skips this app's own event page entirely and opens the
+                    ticket picker, because the event page is built on the
+                    website instead. */}
+                <BoxCopyLink label="Select tickets button — use this on the website"
+                  url={buyUrl} primary/>
+                <BoxCopyLink label="Full page, with description and map"
+                  url={publicUrl}/>
               </div>
             ) : (
               <div style={{ fontSize:12.5, color:T.textLight }}>
@@ -16341,6 +16366,7 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
   const [msg, setMsg]         = useState("");
   const [search, setSearch]   = useState("");
   const [showCancelled, setShowCancelled] = useState(false);
+  const [openOrder, setOpenOrder] = useState(null);   // order id whose detail is showing
 
   const typeName = {};
   (types || []).forEach(function(t) { typeName[t.id] = t.name; });
@@ -16375,6 +16401,20 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
     setBusy(true); setErr("");
     try { await boxAdmin("orders.markPaid", { id: order.id, method: "taken by hand" }); await onReload(); }
     catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  // Prompt someone for the balance now, rather than waiting for the daily run.
+  // box-billing.js still sends the automatic one on the due date and chases
+  // once after — this doesn't replace either.
+  async function sendBalance(order, kind) {
+    setBusy(true); setErr("");
+    try {
+      await boxAdmin("orders.sendBalance", { id: order.id, kind: kind });
+      setMsg((kind === "overdue" ? "Overdue reminder" : "Balance request") + " sent to " + order.email);
+      setTimeout(()=>setMsg(""), 5000);
+      await onReload();
+    } catch (e) { setErr(e.message); }
     setBusy(false);
   }
 
@@ -16464,7 +16504,42 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
                 {o.status !== "cancelled" && o.status !== "refunded" && (
                   <BoxBtn tone="danger" onClick={()=>setCancelling(o)} disabled={busy}>Cancel</BoxBtn>
                 )}
+                <BoxBtn tone="ghost" onClick={()=>setOpenOrder(openOrder === o.id ? null : o.id)}>
+                  {openOrder === o.id ? "Hide" : "Details"}
+                </BoxBtn>
               </div>
+
+              {openOrder === o.id && (
+                <div style={{ flexBasis:"100%", background:T.bgInput, border:`1px solid ${T.border}`,
+                  borderRadius:9, padding:"16px 18px", marginTop:4 }}>
+                  {o.balance_pence > 0 && o.status === "deposit_paid" && (
+                    <div style={{ marginBottom:16, paddingBottom:16, borderBottom:`1px solid ${T.border}` }}>
+                      <div style={{ fontSize:13, color:T.textMid, marginBottom:9, lineHeight:1.6 }}>
+                        <strong>{boxMoney(o.balance_pence)}</strong> outstanding
+                        {o.balance_due_on ? `, due ${boxDate(o.balance_due_on)}` : ""}.
+                        {o.chased_at ? ` Chased ${boxDate(o.chased_at)}.` : ""}
+                        {" "}A fresh payment link is minted each time, so nothing sent goes stale.
+                      </div>
+                      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                        <BoxBtn onClick={()=>sendBalance(o, "due")} disabled={busy || !o.email}>
+                          Send balance request
+                        </BoxBtn>
+                        <BoxBtn tone="ghost" onClick={()=>sendBalance(o, "overdue")} disabled={busy || !o.email}>
+                          Send overdue reminder
+                        </BoxBtn>
+                      </div>
+                    </div>
+                  )}
+                  {/* The same email history panel the lettings side uses —
+                      every box office email is logged against the order
+                      reference, so it lists them and opens the full text. */}
+                  <EmailHistoryPanel
+                    title="Emails sent"
+                    emptyLabel="Nothing has been emailed for this booking yet."
+                    bookingId={o.order_ref}
+                    emails={[o.email]}/>
+                </div>
+              )}
             </div>
           );
         })}
