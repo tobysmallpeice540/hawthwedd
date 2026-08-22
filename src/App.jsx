@@ -10140,12 +10140,8 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
         </div>
       )}
 
-      {/* Ticketed nights — sales at a glance, and anything owing */}
-      <BoxOfficeDashboardCard setView={setView}/>
-
-      {/* Overdue money — unpaid raised invoices, and unpaid accommodation */}
-      <NewLettings bookings={accomBookings} properties={accomProperties} onOpen={onOpenAccom}
-        events={bookings} onOpenEvent={onOpenEvent}/>
+      {/* Booked online but not yet paid — these need chasing, so they stay
+          near the top with the other things waiting on someone. */}
       <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom}/>
 
       {/* A zero is not "overdue" — it's nothing owed. Rows worth nothing are
@@ -10296,6 +10292,13 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {overduePayments.length>8 && <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("lettings")}>+ {overduePayments.length-8} more</div>}
         </div>
       </div>
+
+      {/* Ticket sales and new bookings sit below the viewing requests. Both
+          are worth reading when there is a minute; neither is somebody waiting
+          on a reply, which is what the panels above are. */}
+      <BoxOfficeDashboardCard setView={setView}/>
+      <NewLettings bookings={accomBookings} properties={accomProperties} onOpen={onOpenAccom}
+        events={bookings} onOpenEvent={onOpenEvent}/>
 
       {/* Email log */}
       <div style={sectionStyle}>
@@ -14676,6 +14679,10 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
         </div>
       </div>
 
+      {/* Mailing lists. Not under Box Office: it syncs weddings, enquiries and
+          cottage guests as well as ticket buyers. */}
+      <BoxBrevoPanel/>
+
       {/* Integrations */}
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Integrations</div>
@@ -17552,6 +17559,74 @@ function BoxTicketTermsEditor() {
         <div style={{ marginTop:10 }}>
           <a href="/terms.html?tickets=1" target="_blank" rel="noreferrer"
             style={{ fontSize:12.5, color:T.accent, fontWeight:600 }}>See how it reads ↗</a>
+        </div>
+      )}
+    </BoxCard>
+  );
+}
+
+// ── Brevo mailing lists ──────────────────────────────────────────────────────
+// The sync runs hourly on its own. This is here because the first run is the
+// backfill, and because "did that actually work?" is a fair question to want
+// answered without reading a log.
+function BoxBrevoPanel() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState("");
+
+  const hasKey = !!boxKey();
+
+  async function run() {
+    setBusy(true); setErr(""); setResult(null);
+    try { setResult(await boxAdmin("brevo.sync")); }
+    catch (e) {
+      setErr(e.status === 401
+        ? "This device hasn't been given the admin key yet — enter it under Box Office \u2192 Settings and try again."
+        : e.message);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <BoxCard title="Brevo mailing lists" right={
+      <BoxBtn onClick={run} disabled={busy || !hasKey}>{busy ? "Syncing…" : "Sync now"}</BoxBtn>
+    }>
+      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 10px", lineHeight:1.65 }}>
+        Ticket buyers, weddings booked, event enquiries and cottage guests are pushed to their Brevo lists every hour.
+        Each contact carries a <code>RECORD_DATE</code> of when they actually came in — their order, enquiry or booking
+        date — not when the sync ran.
+      </p>
+      <p style={{ fontSize:12, color:T.textLight, margin:"0 0 4px", lineHeight:1.6 }}>
+        Nobody is ever added twice: Brevo updates an existing contact rather than duplicating it, which is also why
+        pressing this repeatedly is harmless.
+      </p>
+
+      {!hasKey && (
+        <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:7,
+          padding:"9px 12px", fontSize:12.5, marginTop:12, lineHeight:1.6 }}>
+          The hourly sync runs regardless. To press this button, enter the admin key once on this device under
+          <strong> Box Office \u2192 Settings</strong>.
+        </div>
+      )}
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginTop:12 }}>{err}</div>}
+
+      {result && (
+        <div style={{ marginTop:14 }}>
+          {(result.results || []).map(function(r) {
+            return (
+              <div key={r.list} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12,
+                fontSize:13, padding:"7px 0", borderTop:`1px solid ${T.border}` }}>
+                <span style={{ fontWeight:600, color:T.text }}>{r.list}</span>
+                {r.error
+                  ? <span style={{ color:T.red, fontSize:12 }}>{r.error}</span>
+                  : <span style={{ color:T.textMid }}>{r.sent} contact{r.sent === 1 ? "" : "s"}{r.note ? " · " + r.note : ""}</span>}
+              </div>
+            );
+          })}
+          <div style={{ fontSize:11.5, color:T.textLight, marginTop:8 }}>
+            Brevo processes an import in the background, so the counts in Brevo catch up a minute or two later.
+          </div>
         </div>
       )}
     </BoxCard>
