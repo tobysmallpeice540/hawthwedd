@@ -499,6 +499,18 @@ exports.handler = async function(event) {
         await sbRest("box_waitlist?id=eq." + body.id, { method: "DELETE", prefer: "return=minimal" });
         return ok({ ok: true });
 
+      // Runs the Brevo sync on demand. The hourly shim calls the same worker
+      // with the same token, so the button and the clock do the same thing.
+      case "brevo.sync": {
+        var bres = await fetch(SITE_ORIGIN + "/.netlify/functions/brevo-sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-admin-token": ADMIN_TOKEN }
+        });
+        var bout = await bres.json().catch(function() { return {}; });
+        if (!bres.ok) return bad(bout.error || "The Brevo sync failed.", 502);
+        return ok(bout);
+      }
+
       // ── SALES SUMMARY ──────────────────────────────────────────────────────
       case "summary": {
         var sOrders = await sbRest("box_orders?event_id=eq." + body.eventId + "&select=*");

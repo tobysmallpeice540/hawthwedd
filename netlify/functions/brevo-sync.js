@@ -19,12 +19,19 @@
 // backfill produces a real history you can segment on rather than everybody
 // appearing to have arrived on the same afternoon.
 //
-// Required env vars: BREVO_API_KEY · SUPABASE_SERVICE_KEY
+// Netlify refuses HTTP requests to any function carrying a `schedule`, which
+// makes a scheduled function impossible to run on demand or to test. So this
+// is a plain HTTP function behind HBF_ADMIN_TOKEN, and brevo-sync-cron.js is
+// the scheduled shim that calls it hourly. The app's Box Office → Settings
+// screen calls it the same way, through box-admin.js.
+//
+// Required env vars: BREVO_API_KEY · SUPABASE_SERVICE_KEY · HBF_ADMIN_TOKEN
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const BREVO_KEY    = process.env.BREVO_API_KEY;
 const BREVO_API    = "https://api.brevo.com/v3";
+const ADMIN_TOKEN  = process.env.HBF_ADMIN_TOKEN;
 
 // The date each contact came in on. Created automatically on first run.
 const DATE_ATTR = "RECORD_DATE";
@@ -158,7 +165,12 @@ async function importInto(listId, contacts, label) {
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
-exports.handler = async function() {
+exports.handler = async function(event) {
+  var token = (event && event.headers && event.headers["x-admin-token"]) || "";
+  if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+    return { statusCode: 401, body: JSON.stringify({ error: "Unauthorised" }) };
+  }
+
   if (!BREVO_KEY || !SERVICE_KEY) {
     var missing = [];
     if (!BREVO_KEY) missing.push("BREVO_API_KEY");
