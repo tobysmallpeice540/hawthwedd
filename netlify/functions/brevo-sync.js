@@ -33,8 +33,21 @@ const BREVO_KEY    = process.env.BREVO_API_KEY;
 const BREVO_API    = "https://api.brevo.com/v3";
 const ADMIN_TOKEN  = process.env.HBF_ADMIN_TOKEN;
 
-// The date each contact came in on. Created automatically on first run.
-const DATE_ATTR = "RECORD_DATE";
+// Attributes created automatically on first run.
+//
+// RECORD_DATE   when this person actually came in — their order, enquiry or
+//               booking date, not the date the sync happened to run.
+// OPT_IN        true. Contacts imported into a Brevo list are mailable anyway;
+//               this exists so the basis is recorded against the contact
+//               rather than only in somebody's memory.
+// CONSENT_BASIS why we may email them. Every one of these four lists is an
+//               existing customer or a direct enquirer, which is the UK
+//               "soft opt-in" basis under PECR — it holds only while every
+//               message carries a working unsubscribe link.
+const DATE_ATTR    = "RECORD_DATE";
+const OPTIN_ATTR   = "OPT_IN";
+const BASIS_ATTR   = "CONSENT_BASIS";
+const BASIS_VALUE  = "soft opt-in - existing customer or enquirer";
 
 const LISTS = {
   boxOffice: 8,
@@ -108,6 +121,8 @@ function collect(rows) {
     if (r.first) out.FIRSTNAME = r.first;
     if (r.last)  out.LASTNAME  = r.last;
     if (r.date)  out[DATE_ATTR] = r.date;
+    out[OPTIN_ATTR] = true;
+    out[BASIS_ATTR] = BASIS_VALUE;
     return out;
   });
 }
@@ -130,17 +145,25 @@ async function brevo(path, opts) {
   return { ok: res.ok, status: res.status, body: json, text: text };
 }
 
-// The date attribute has to exist before a contact can carry it. Creating it is
+// An attribute has to exist before a contact can carry it. Creating one is
 // idempotent in practice: a second attempt just reports it already exists.
-async function ensureDateAttribute() {
-  var r = await brevo("/contacts/attributes/normal/" + DATE_ATTR, {
+async function ensureAttribute(name, type) {
+  var r = await brevo("/contacts/attributes/normal/" + name, {
     method: "POST",
-    body: { type: "date" }
+    body: { type: type }
   });
-  if (r.ok) return "created";
-  if (r.status === 400) return "already there";
-  console.error("Could not create " + DATE_ATTR + ":", r.status, r.text);
-  return "failed";
+  if (r.ok) return name + ": created";
+  if (r.status === 400) return name + ": already there";
+  console.error("Could not create " + name + ":", r.status, r.text);
+  return name + ": FAILED";
+}
+
+async function ensureAttributes() {
+  var out = [];
+  out.push(await ensureAttribute(DATE_ATTR, "date"));
+  out.push(await ensureAttribute(OPTIN_ATTR, "boolean"));
+  out.push(await ensureAttribute(BASIS_ATTR, "text"));
+  return out;
 }
 
 // One call per list however many contacts it holds. Brevo processes the import
@@ -148,6 +171,11 @@ async function ensureDateAttribute() {
 // with several thousand cottage guests.
 async function importInto(listId, contacts, label) {
   if (!contacts.length) return { list: label, sent: 0, note: "nothing to send" };
+  // Note what is deliberately NOT sent here: emailBlacklisted. Someone who has
+  // unsubscribed stays unsubscribed, and no amount of re-importing brings them
+  // back. Setting an opt-in attribute does not override that, and it must not —
+  // resurrecting an unsubscribe would be the one genuinely serious mistake this
+  // function could make.
   var r = await brevo("/contacts/import", {
     method: "POST",
     body: {
@@ -180,7 +208,7 @@ exports.handler = async function(event) {
   }
 
   try {
-    var attr = await ensureDateAttribute();
+    var attrs = await ensureAttributes();
 
     // ── 1. Ticket buyers ────────────────────────────────────────────────────
     // Only people who actually bought: an abandoned checkout is not a customer.
@@ -242,11 +270,11 @@ exports.handler = async function(event) {
     results.push(await importInto(LISTS.enquiries, enquiryContacts, "Event Enquiries"));
     results.push(await importInto(LISTS.cottages,  cottages,        "Cottage Guests"));
 
-    console.log("[brevo-sync] " + DATE_ATTR + ": " + attr + " · " + JSON.stringify(results));
+    console.log("[brevo-sync] " + attrs.join(" · ") + " · " + JSON.stringify(results));
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ok: true, dateAttribute: attr, results: results })
+      body: JSON.stringify({ ok: true, attributes: attrs, results: results })
     };
 
   } catch (err) {
