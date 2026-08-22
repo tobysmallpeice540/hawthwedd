@@ -74,6 +74,29 @@ function sbAuthHeaders() {
 // These helpers now say so. They still return null rather than throwing,
 // because dozens of callers depend on that, but the failure is no longer
 // silent: it reaches the console and a banner at the top of the app.
+// Which keys came back empty and were replaced by built-in example data.
+//
+// `sbGet(KEY) || INITIAL_SOMETHING` is how this app has always handled a first
+// run, and it is why an empty read looked like a working farm for an hour: the
+// seed list carries plausible names and dates, so nothing seemed wrong until
+// somebody noticed the attachments had gone. Saving from that state would have
+// written the examples over the real records.
+//
+// So a fallback is now recorded, shouted about, and — the part that matters —
+// writes to that key are refused until the read works again.
+const SEED_FALLBACK = {};
+
+function noteSeedFallback(key, what) {
+  if (SEED_FALLBACK[key]) return;
+  SEED_FALLBACK[key] = true;
+  const msg = `${what} came back empty, so the app is showing built-in example data. ` +
+    `Do not save — it would replace the real records. Reload once this is sorted.`;
+  console.error("SEED FALLBACK: " + key + " — " + msg);
+  try {
+    window.dispatchEvent(new CustomEvent("hbf-data-failure", { detail: { what, status: 0, msg } }));
+  } catch (e) {}
+}
+
 function noteDataFailure(what, status, detail) {
   const msg = `${what} failed: ${status}${detail ? " — " + String(detail).slice(0, 200) : ""}`;
   console.error("Supabase " + msg);
@@ -92,6 +115,12 @@ const sbGet = async (key) => {
 };
 
 const sbSet = async (key, value) => {
+  // The guard that would have prevented today's near miss.
+  if (SEED_FALLBACK[key]) {
+    const e = new Error("refusing to save " + key + ": the app is holding example data, not yours");
+    console.error(e.message);
+    throw e;
+  }
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
     method: "POST",
     headers: Object.assign(sbAuthHeaders(), {
@@ -1842,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22h";
+const APP_BUILD = "2026-08-22i";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -5815,7 +5844,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
   useEffect(()=>{
     (async()=>{
       try {
-        const raw = (await sbGet(BOOKING_STORAGE)) || INITIAL_BOOKINGS;
+        const stored = await sbGet(BOOKING_STORAGE);
+          if (!stored) noteSeedFallback(BOOKING_STORAGE, "The wedding diary");
+          const raw = stored || INITIAL_BOOKINGS;
         const migrated = raw.map(b => ({
           ...b,
           amlyBooked:    b.amlyBooked === true ? "yes" : b.amlyBooked === false ? "no" : b.amlyBooked || "no",
@@ -5828,7 +5859,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         }));
         setBookings(migrated);
       } catch { setBookings(INITIAL_BOOKINGS); }
-      try { const r = await sbGet(STAFF_STORAGE); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
+      try { const r = await sbGet(STAFF_STORAGE); if (!r) noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
       try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r || []); } catch { setEnquiries([]); }
         try { const r = await sbGet(VR_STORAGE); setViewingRequests(r || []); } catch { setViewingRequests([]); }
         try { const r = await sbGet(VB_STORAGE); setViewingBlocks(r || []); } catch { setViewingBlocks([]); }
