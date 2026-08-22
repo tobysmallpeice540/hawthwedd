@@ -7,9 +7,40 @@
 //   · from public/my-ticket.html, when someone presses "Pay the balance"
 //   · from box-billing.js, to mint the link that goes in the balance email
 //
-// Required env vars: STRIPE_SECRET_KEY · SUPABASE_SERVICE_KEY
+// Required env vars: STRIPE_TICKET_SECRET_KEY · SUPABASE_SERVICE_KEY
 
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+// Ticketing runs on its OWN Stripe account, separate from the cottage bookings.
+// That is a bookkeeping decision, not a technical one: Stripe settles as a
+// single lump sum per account, so sharing one would put ticket income and
+// letting income in the same bank deposit with no way to split them afterwards.
+// Two accounts means two payout streams and a clean reconciliation.
+//
+// Deliberately NO fallback to STRIPE_SECRET_KEY. If this variable is missing the
+// function fails loudly at load, which is right — falling back would quietly
+// take ticket money into the lettings account and undo the whole point.
+//
+// The API version is pinned deliberately, and should stay pinned.
+//
+// This Stripe account dates from 2018 and its default version was 2018-11-08,
+// which predates price_data, discounts, expires_at and mode:"payment" on
+// Checkout — every session this code creates would have been rejected. Pinning
+// fixes that here rather than depending on an account-wide setting, so a
+// future change to the account default cannot silently alter what these
+// functions send.
+//
+// 2024-06-20 is the version stripe-node 16.x is generated against, so the
+// library and the API agree. If the library is upgraded, move this with it.
+//
+// The Stripe ACCOUNT is on a newer version (2026-07-29.dahlia), so webhook
+// payloads arrive newer than the version used to make calls. That mismatch is
+// intentional and safe — Stripe supports it, and this webhook reads only
+// session.id and session.metadata, which are stable across every version.
+// Do not "fix" it by bumping this string alone: the pinned version must match
+// the installed stripe package, and that package is shared with the cottage
+// booking functions, which are live.
+const stripe = require("stripe")(process.env.STRIPE_TICKET_SECRET_KEY, {
+  apiVersion: "2024-06-20"
+});
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
