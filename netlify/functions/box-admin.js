@@ -364,6 +364,41 @@ exports.handler = async function(event) {
         return ok({ order: cUpdated && cUpdated[0] });
       }
 
+      // The balance email by hand. box-billing.js still sends it automatically
+      // on the due date and chases once after — this is for the times a human
+      // wants to prompt someone now, without waiting for the schedule.
+      // force:true because the automatic one may already have gone.
+      case "orders.sendBalance": {
+        var bRows = await sbRest("box_orders?id=eq." + body.id + "&select=*");
+        var bOrd = bRows && bRows[0];
+        if (!bOrd) return bad("Order not found", 404);
+        if (!bOrd.email) return bad("That booking has no email address.", 409);
+        if (Number(bOrd.balance_pence) <= 0 || bOrd.balance_paid_at) {
+          return bad("There's nothing outstanding on that booking.", 409);
+        }
+
+        // Mint a fresh payment link rather than reusing an old one — Stripe
+        // sessions expire, and a dead link in a chase email is worse than none.
+        var payLink = "";
+        try {
+          var plRes = await fetch(SITE_ORIGIN + "/.netlify/functions/pay-balance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: bOrd.qr_token })
+          });
+          var plOut = await plRes.json();
+          if (!plRes.ok || !plOut.url) return bad(plOut.error || "Could not create a payment link.", 502);
+          payLink = plOut.url;
+        } catch (e) {
+          return bad("Could not create a payment link: " + e.message, 502);
+        }
+
+        var sentBal = await sendEmail(body.kind === "overdue" ? "balance_overdue" : "balance_due",
+          { orderId: bOrd.id, payLink: payLink, force: true });
+        if (!sentBal) return bad("The email could not be sent — check the Resend key.", 502);
+        return ok({ ok: true, payLink: payLink });
+      }
+
       case "orders.resend": {
         var sent = await sendEmail(body.kind || "booking_confirmed", { orderId: body.id, force: true });
         return sent ? ok({ ok: true }) : bad("The email could not be sent — check the Resend key.", 502);
