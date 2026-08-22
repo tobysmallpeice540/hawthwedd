@@ -1822,7 +1822,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22f";
+const APP_BUILD = "2026-08-22g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -13403,23 +13403,40 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
 
   const [blobUrls, setBlobUrls] = useState({});
   const [pdfUrls,  setPdfUrls]  = useState({});
+  const [fileErrs, setFileErrs] = useState({});
+
+  // fetch().then(r => r.blob()) succeeds on a 400 as happily as on a 200: the
+  // error page becomes a blob, gets an object URL, and renders as a blank
+  // image with nothing logged anywhere. That is how a bucket that had stopped
+  // answering managed to look like nothing at all. Check the response before
+  // believing it, and put the reason on screen when it fails.
+  const loadPreview = async (file, setter) => {
+    const url = storageUrl(file.url);
+    try {
+      const res = await fetch(url, { headers: sbAuthHeaders() });
+      if (!res.ok) throw new Error(res.status + " — " + (await res.text()).slice(0, 160));
+      const blob = await res.blob();
+      if (!blob.size) throw new Error("the file came back empty");
+      setter(p => ({ ...p, [file.url]: URL.createObjectURL(blob) }));
+      setFileErrs(p => { const n = { ...p }; delete n[file.url]; return n; });
+    } catch (e) {
+      console.warn("File preview failed:", url, e);
+      setFileErrs(p => ({ ...p, [file.url]: String(e.message || e) }));
+    }
+  };
 
   useEffect(() => {
     files.filter(f=>isImage(f)).forEach(file => {
-      if (blobUrls[file.url]) return;
-      fetch(storageUrl(file.url), { headers: sbAuthHeaders() })
-        .then(r=>r.blob()).then(blob=>setBlobUrls(p=>({...p,[file.url]:URL.createObjectURL(blob)})))
-        .catch(e=>console.warn("Preview fetch failed:",e));
+      if (blobUrls[file.url] || fileErrs[file.url]) return;
+      loadPreview(file, setBlobUrls);
     });
     return () => { Object.values(blobUrls).forEach(u=>URL.revokeObjectURL(u)); };
   }, [files]);
 
   useEffect(() => {
     files.filter(f=>isPdf(f)).forEach(file => {
-      if (pdfUrls[file.url]) return;
-      fetch(storageUrl(file.url), { headers: sbAuthHeaders() })
-        .then(r=>r.blob()).then(blob=>setPdfUrls(p=>({...p,[file.url]:URL.createObjectURL(blob)})))
-        .catch(e=>console.warn("PDF fetch failed:",e));
+      if (pdfUrls[file.url] || fileErrs[file.url]) return;
+      loadPreview(file, setPdfUrls);
     });
     return () => { Object.values(pdfUrls).forEach(u=>URL.revokeObjectURL(u)); };
   }, [files]);
@@ -13507,7 +13524,14 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                 ? <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
                     <img src={blobUrls[file.url]} alt={file.name} style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}/>
                   </a>
-                : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading preview…</div>
+                : fileErrs[file.url]
+                  ? <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px", background:T.redBg, color:T.red, fontSize:12, lineHeight:1.5 }}>
+                      <span>&#9888;</span>
+                      <span style={{ flex:1 }}>Couldn't load this file — {fileErrs[file.url]}</span>
+                      <button onClick={()=>setFileErrs(p=>{ const n={...p}; delete n[file.url]; return n; })}
+                        style={{ background:"#fff", border:`1px solid #fca5a5`, color:T.red, borderRadius:5, padding:"4px 10px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>Retry</button>
+                    </div>
+                  : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading preview…</div>
               }
               <FooterBar file={file} idx={idx} tight/>
             </div>
@@ -13516,7 +13540,14 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
             <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               {pdfUrls[file.url]
                 ? <iframe src={pdfUrls[file.url]} title={file.name} style={{ width:"100%", height:500, border:"none", background:"#f8fafd", display:"block" }}/>
-                : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading PDF…</div>
+                : fileErrs[file.url]
+                  ? <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px", background:T.redBg, color:T.red, fontSize:12, lineHeight:1.5 }}>
+                      <span>&#9888;</span>
+                      <span style={{ flex:1 }}>Couldn't load this file — {fileErrs[file.url]}</span>
+                      <button onClick={()=>setFileErrs(p=>{ const n={...p}; delete n[file.url]; return n; })}
+                        style={{ background:"#fff", border:`1px solid #fca5a5`, color:T.red, borderRadius:5, padding:"4px 10px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>Retry</button>
+                    </div>
+                  : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading PDF…</div>
               }
               <FooterBar file={file} idx={idx} tight/>
             </div>
@@ -18093,8 +18124,9 @@ function ActivityLogPanel() {
 
   const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
 
-  // The build-version ping is written by every browser on every load; it would
-  // drown everything else.
+  // hbf_app_build_v1 is the deploy marker, written once by whichever browser
+  // loads a new build first. It is a fact about the app, not a change to the
+  // data, so it doesn't belong in a log about who edited what.
   const shown = (rows || [])
     .filter(function(r) { return r.key !== "hbf_app_build_v1"; })
     .filter(function(r) { return !onlyPeople || r.actor_id; })
@@ -18116,7 +18148,7 @@ function ActivityLogPanel() {
 
       <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 12px", lineHeight:1.6 }}>
         Every change to the data, with who made it. Append-only — it cannot be edited or tidied up, including by an
-        administrator. Untick <em>People only</em> to include the scheduled jobs.
+        administrator. Untick <em>People only</em> to include the nightly backup and the other scheduled jobs.
       </p>
 
       {err && <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
