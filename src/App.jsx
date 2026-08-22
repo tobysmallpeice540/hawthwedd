@@ -1792,7 +1792,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22b";
+const APP_BUILD = "2026-08-22c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -16424,6 +16424,16 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
       .map(function(l) { return l.qty + " × " + (typeName[l.ticket_type_id] || "Ticket"); }).join(", ");
   }
 
+  // A checkout that was started and abandoned is noise, so pending orders are
+  // normally hidden. But one that is still pending long after the 15-minute
+  // hold has lapsed is not noise — it is a payment that may have gone through
+  // without the webhook landing, and hiding it is how such a thing goes
+  // unnoticed until somebody turns up at the door with a ticket nobody has.
+  const stuck = (orders || []).filter(function(o) {
+    if (o.status !== "pending") return false;
+    return (Date.now() - new Date(o.created_at).getTime()) > 15 * 60 * 1000;
+  });
+
   const rows = (orders || [])
     .filter(function(o) { return o.status !== "pending"; })
     .filter(function(o) { return showCancelled || (o.status !== "cancelled" && o.status !== "refunded"); })
@@ -16491,6 +16501,37 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
           onConfirm={()=>doCancel(cancelling, true)}
           onCancel={()=>setCancelling(null)}
         />
+      )}
+
+      {!!stuck.length && (
+        <div style={{ background:T.amberBg, border:"1px solid #fcd34d", borderRadius:10, padding:"15px 18px", marginBottom:18 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:"#92400e", marginBottom:6 }}>
+            {stuck.length} unconfirmed {stuck.length === 1 ? "checkout" : "checkouts"}
+          </div>
+          <div style={{ fontSize:12.5, color:"#92400e", marginBottom:10, lineHeight:1.6 }}>
+            Started more than fifteen minutes ago and never confirmed. Usually somebody who changed their mind —
+            but if they say they paid, check Stripe for the reference before telling them otherwise. These are
+            cleared away automatically after two hours.
+          </div>
+          {stuck.map(function(o) {
+            return (
+              <div key={o.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"7px 0", borderTop:"1px solid #fcd34d", flexWrap:"wrap" }}>
+                <span style={{ fontSize:13.5, fontWeight:700, color:T.text, flex:"1 1 160px" }}>
+                  {o.first_name} {o.last_name} <code style={{ fontWeight:400, color:"#92400e" }}>{o.order_ref}</code>
+                </span>
+                <span style={{ fontSize:12.5, color:"#92400e" }}>{o.email}</span>
+                <span style={{ fontSize:12.5, color:"#92400e" }}>{o.total_qty} × {boxMoney(o.total_pence)}</span>
+                <span style={{ fontSize:11.5, color:"#92400e" }}>{boxDate(o.created_at)} {boxTime(o.created_at)}</span>
+                {o.stripe_session_id && (
+                  <a href={stripeDashboardUrl(BOX_STRIPE_ACCOUNT, o.stripe_session_id)} target="_blank" rel="noreferrer"
+                    style={{ fontSize:12.5, fontWeight:600, color:"#635bff" }}>Check Stripe ↗</a>
+                )}
+                <BoxBtn tone="green" onClick={()=>markPaid(o)} disabled={busy}
+                  title="They did pay — record it and issue the tickets">Mark paid</BoxBtn>
+              </div>
+            );
+          })}
+        </div>
       )}
 
       <BoxCard title={`Orders (${rows.length})`} right={
