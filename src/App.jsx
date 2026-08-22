@@ -1792,7 +1792,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22c";
+const APP_BUILD = "2026-08-22d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -16838,6 +16838,14 @@ function BoxOrdersScreen({ onOpenEvent }) {
       o.balance_due_on && String(o.balance_due_on).slice(0, 10) < today;
   });
 
+  // Same reasoning as the per-event list: a checkout still pending long after
+  // the 15-minute hold lapsed may be a payment whose webhook never landed, and
+  // it is swept away after two hours. It should not vanish quietly.
+  const stuck = orders.filter(function(o) {
+    if (o.status !== "pending") return false;
+    return (Date.now() - new Date(o.created_at).getTime()) > 15 * 60 * 1000;
+  });
+
   const rows = orders
     .filter(function(o) { return o.status !== "pending"; })
     .filter(function(o) {
@@ -16872,6 +16880,31 @@ function BoxOrdersScreen({ onOpenEvent }) {
                 <span style={{ fontSize:12.5, color:T.textMid }}>{o.email}{o.phone ? " · " + o.phone : ""}</span>
                 <span style={{ fontSize:13.5, fontWeight:700, color:T.red }}>{boxMoney(o.balance_pence)}</span>
                 <span style={{ fontSize:11.5, color:T.textLight }}>due {boxDate(o.balance_due_on)}</span>
+                <BoxBtn tone="ghost" onClick={()=>onOpenEvent(o.event_id)}>Open event</BoxBtn>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!!stuck.length && (
+        <div style={{ background:T.amberBg, border:"1px solid #fcd34d", borderRadius:10, padding:"15px 18px", marginBottom:18 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:"#92400e", marginBottom:6 }}>
+            {stuck.length} unconfirmed {stuck.length === 1 ? "checkout" : "checkouts"}
+          </div>
+          <div style={{ fontSize:12.5, color:"#92400e", marginBottom:10, lineHeight:1.6 }}>
+            Started more than fifteen minutes ago and never confirmed. Usually somebody who changed their mind.
+            Open the event to check Stripe or record it as paid — these are cleared away after two hours.
+          </div>
+          {stuck.map(function(o) {
+            return (
+              <div key={o.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"7px 0", borderTop:"1px solid #fcd34d", flexWrap:"wrap" }}>
+                <span style={{ fontSize:13.5, fontWeight:700, color:T.text, flex:"1 1 160px" }}>
+                  {o.first_name} {o.last_name} <code style={{ fontWeight:400, color:"#92400e" }}>{o.order_ref}</code>
+                </span>
+                <span style={{ fontSize:12.5, color:"#92400e" }}>{eventName[o.event_id] || ""}</span>
+                <span style={{ fontSize:12.5, color:"#92400e" }}>{o.total_qty} × {boxMoney(o.total_pence)}</span>
+                <span style={{ fontSize:11.5, color:"#92400e" }}>{boxDate(o.created_at)} {boxTime(o.created_at)}</span>
                 <BoxBtn tone="ghost" onClick={()=>onOpenEvent(o.event_id)}>Open event</BoxBtn>
               </div>
             );
@@ -16945,7 +16978,9 @@ function BoxDoorScreen() {
   const [door, setDoor]       = useState(null);       // { event, orders, lines, checkins }
   const [loading, setLoading] = useState(false);
   const [err, setErr]         = useState("");
-  const [scanning, setScanning] = useState(false);
+  // Two deliberate modes. Manual is the default, so opening the door screen
+  // never grabs the camera on its own — you ask for it.
+  const [doorMode, setDoorMode] = useState("manual");   // "manual" | "scan"
   const [result, setResult]   = useState(null);       // { tone, order, message }
   const [search, setSearch]   = useState("");
   const [doorFilter, setDoorFilter] = useState("all");
@@ -17142,7 +17177,7 @@ function BoxDoorScreen() {
           {!online && <span style={{ display:"block", fontWeight:700 }}>Offline — check-ins are being saved on this phone</span>}
           {!!queueLen && <span style={{ display:"block" }}>{queueLen} waiting to sync</span>}
         </div>
-        <BoxBtn tone="ghost" onClick={function() { setEventId(null); setDoor(null); setScanning(false); }}
+        <BoxBtn tone="ghost" onClick={function() { setEventId(null); setDoor(null); setDoorMode("manual"); }}
           style={{ background:"rgba(255,255,255,.15)", color:"#fff", border:"1.5px solid rgba(255,255,255,.4)" }}>Change event</BoxBtn>
       </div>
 
@@ -17151,18 +17186,30 @@ function BoxDoorScreen() {
       {/* Result banner */}
       {result && <BoxScanResult result={result} lines={typeNames[result.order && result.order.id]} onAdmit={admit} onClear={()=>setResult(null)}/>}
 
-      {scanning
-        ? <BoxScanner onCode={function(text) { lookup(text); }} onClose={()=>setScanning(false)}/>
-        : (
-          <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap" }}>
-            <BoxBtn tone="dark" onClick={()=>setScanning(true)} style={{ padding:"14px 26px", fontSize:15 }}>Scan tickets</BoxBtn>
-            <BoxBtn tone="ghost" onClick={function() { printDoorList(door, typeNames); }} style={{ padding:"14px 22px" }}>Print the list</BoxBtn>
-            <BoxBtn tone="ghost" onClick={()=>openEvent(eventId)} disabled={loading} style={{ padding:"14px 22px" }}>
-              {loading ? "Refreshing…" : "Refresh"}
-            </BoxBtn>
-          </div>
-        )}
+      <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+        {[["scan","Scan"],["manual","Manual list"]].map(function([v, l]) {
+          const on = doorMode === v;
+          return (
+            <button key={v} onClick={()=>setDoorMode(v)}
+              style={{ background: on ? T.midBlue : "#fff", color: on ? "#fff" : T.textMid,
+                border:`2px solid ${on ? T.midBlue : T.border}`, borderRadius:9, padding:"14px 30px",
+                fontFamily:"inherit", fontSize:16, fontWeight:700, cursor:"pointer" }}>{l}</button>
+          );
+        })}
+        <div style={{ flex:1 }}/>
+        <BoxBtn tone="ghost" onClick={function() { printDoorList(door, typeNames); }} style={{ padding:"13px 20px" }}>Print</BoxBtn>
+        <BoxBtn tone="ghost" onClick={()=>openEvent(eventId)} disabled={loading} style={{ padding:"13px 20px" }}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </BoxBtn>
+      </div>
 
+      {/* The camera exists only while Scan is chosen. Leaving the mode
+          unmounts the scanner, which is what releases the camera. */}
+      {doorMode === "scan" && (
+        <BoxScanner onCode={function(text) { lookup(text); }} onClose={()=>setDoorMode("manual")}/>
+      )}
+
+      {doorMode === "manual" && (
       <BoxCard title={`Guest list — ${listed.length} booking${listed.length === 1 ? "" : "s"}`} right={
         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
           {[["all","Everyone"],["waiting","Still to come"],["in","Arrived"]].map(function([v, l]) {
@@ -17204,6 +17251,7 @@ function BoxDoorScreen() {
           })}
         </div>
       </BoxCard>
+      )}
     </div>
   );
 }
