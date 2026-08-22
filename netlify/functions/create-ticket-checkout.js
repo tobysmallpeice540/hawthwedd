@@ -52,6 +52,7 @@ const stripe = require("stripe")(process.env.STRIPE_TICKET_SECRET_KEY, {
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const SITE_ORIGIN  = "https://hawthbushfarm.netlify.app";
+const ADMIN_TOKEN  = process.env.HBF_ADMIN_TOKEN;
 
 // The hold inside box_reserve_order() is 15 minutes. Stripe won't let a session
 // expire sooner than 30 minutes, so 30 it is — a payment landing after the hold
@@ -166,7 +167,45 @@ exports.handler = async function(event) {
       };
     }
 
-    // ── 2. What Stripe is actually asked to take ────────────────────────────
+    // ── 2. Nothing to pay? Then don't send anyone to Stripe ─────────────────
+    // A free ticket, or a discount that takes the total to nothing. Sending
+    // someone to a card page that asks for no card is a pointless step, and
+    // worse than pointless: the order stays `pending` until a webhook comes
+    // back, and a pending order is invisible in the app and on the door, and
+    // is swept away after two hours. So it is settled here and now.
+    if (Number(reserved.pay_now_pence) === 0) {
+      var freeNow = new Date().toISOString();
+      await sbRest("box_orders?id=eq." + reserved.order_id, {
+        method: "PATCH", prefer: "return=minimal",
+        body: { status: "paid", paid_at: freeNow, tickets_issued_at: freeNow }
+      });
+
+      // Same confirmation email as any other paid order, QR and all.
+      try {
+        await fetch(SITE_ORIGIN + "/.netlify/functions/send-ticket-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: ADMIN_TOKEN, kind: "booking_confirmed", orderId: reserved.order_id })
+        });
+      } catch (e) {
+        console.error("free ticket confirmation email failed:", e.message);
+      }
+
+      var freeOrigin = (event.headers["origin"] || SITE_ORIGIN).replace(/\/$/, "");
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: freeOrigin + "/tickets/" + encodeURIComponent(slug) +
+               "?ref=" + encodeURIComponent(reserved.order_ref) +
+               "&t=" + encodeURIComponent(reserved.qr_token),
+          orderRef: reserved.order_ref,
+          free: true
+        })
+      };
+    }
+
+    // ── 3. What Stripe is actually asked to take ────────────────────────────
     var evRows = await sbRest("box_events?slug=eq." + encodeURIComponent(slug) + "&select=name,starts_at,venue_name,payment_mode,balance_days");
     var ev = (evRows && evRows[0]) || { name: "Tickets" };
     var typeRows = await sbRest("box_order_lines?order_id=eq." + reserved.order_id +
