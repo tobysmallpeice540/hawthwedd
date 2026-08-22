@@ -5,6 +5,11 @@
 const SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 
+// The box office lives in real tables with RLS on, so the anon key above can't
+// see it. The service key can — and the internal calendar should show a
+// ticketed night whether or not it's a public one.
+const SERVICE_KEY   = process.env.SUPABASE_SERVICE_KEY;
+
 const BOOKINGS_KEY  = "hawthbush_bookings_v6";
 const ENQUIRIES_KEY = "hbf_enquiries_v1";
 const ACCOM_KEY     = "hbf_accom_v1";
@@ -98,14 +103,39 @@ const VTIMEZONE = [
   "END:VTIMEZONE",
 ];
 
+// Ticketed events, read with the service key. Names and times only — no buyer
+// details go anywhere near this feed.
+const boxEvents = async () => {
+  if (!SERVICE_KEY) return [];
+  try {
+    const res = await fetch(
+      SUPABASE_URL + "/rest/v1/box_events?status=neq.draft&select=id,name,slug,starts_at,ends_at,venue_name,status",
+      { headers: { "apikey": SERVICE_KEY, "Authorization": "Bearer " + SERVICE_KEY } }
+    );
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (e) { return []; }
+};
+
+// The wall-clock time in London, as iCalendar wants it with a TZID.
+const londonParts = (iso) => {
+  const dtf = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const p = {};
+  dtf.formatToParts(new Date(iso)).forEach((x) => { p[x.type] = x.value; });
+  return p.year + p.month + p.day + "T" + (p.hour === "24" ? "00" : p.hour) + p.minute + "00";
+};
+
 exports.handler = async () => {
   let bookings  = [];
   let enquiries = [];
   let accom     = [];
+  let ticketed  = [];
 
   try { bookings  = (await sbGet(BOOKINGS_KEY))  || []; } catch (e) { bookings = []; }
   try { enquiries = (await sbGet(ENQUIRIES_KEY)) || []; } catch (e) { enquiries = []; }
   try { accom     = (await sbGet(ACCOM_KEY))     || []; } catch (e) { accom = []; }
+  try { ticketed  = (await boxEvents())          || []; } catch (e) { ticketed = []; }
 
   const stamp = dtStamp();
   const lines = [];
@@ -218,6 +248,28 @@ exports.handler = async () => {
     });
   });
 
+  // ── 4. Ticketed events (Box Office) ──────────────────────────────────────
+  ticketed.forEach((e) => {
+    if (!e || !e.starts_at) return;
+    const start = londonParts(e.starts_at);
+    // Three hours is the usual shape of an evening in the Grain Store, and a
+    // guessed end beats an event with no duration at all.
+    const end = londonParts(e.ends_at || new Date(new Date(e.starts_at).getTime() + 3 * 3600000).toISOString());
+    lines.push("BEGIN:VEVENT");
+    lines.push("UID:boxevent-" + e.id + "@hawthbushfarm.co.uk");
+    lines.push("DTSTAMP:" + stamp);
+    lines.push("SEQUENCE:0");
+    lines.push("STATUS:CONFIRMED");
+    lines.push("DTSTART;TZID=Europe/London:" + start);
+    lines.push("DTEND;TZID=Europe/London:" + end);
+    lines.push(fold("SUMMARY:" + esc((e.status === "published" ? "" : "[" + e.status.toUpperCase() + "] ") + e.name)));
+    lines.push(fold("DESCRIPTION:" + esc("Ticketed event · " + (e.venue_name || "The Grain Store"))));
+    lines.push(fold("LOCATION:" + esc(e.venue_name || "The Grain Store")));
+    lines.push("CATEGORIES:Box Office");
+    lines.push("TRANSP:OPAQUE");
+    lines.push("END:VEVENT");
+  });
+
   const ics = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -225,7 +277,7 @@ exports.handler = async () => {
     "CALSCALE:GREGORIAN",
     "X-WR-CALNAME:Hawthbush Farm",
     "X-WR-TIMEZONE:Europe/London",
-    "X-WR-CALDESC:Events\\, viewings and lettings bookings at Hawthbush Farm",
+    "X-WR-CALDESC:Events\\, viewings\\, lettings and ticketed nights at Hawthbush Farm",
     "X-PUBLISHED-TTL:PT1H",
     "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
   ]
