@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22i";
+const APP_BUILD = "2026-08-22j";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7230,6 +7230,10 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
 // ─── FORM ─────────────────────────────────────────────────────────────────────
 const EVENT_TYPES = ["Wedding (Peak)","Wedding (Off Peak)","Party","Wake","Other"];
 
+// What an enquiry is about. Deliberately plainer than EVENT_TYPES above, which
+// carries the peak/off-peak split that only matters once something is booked.
+const ENQUIRY_EVENT_TYPES = ["Wedding", "Party", "Celebration of Life", "Other"];
+
 const TEXT_FIELDS = [
   { key:"couple",          label:"Couple / Event Name",  type:"text",     section:"core",     required:true },
   { key:"date",            label:"Event Date",            type:"date",     section:"core",     required:true },
@@ -10453,12 +10457,12 @@ function BarView() {
 
   useEffect(() => {
     (async () => {
-      try { const r = await sbGet(BAR_PRODUCTS_KEY); setProducts(r || INITIAL_PRODUCTS); } catch { setProducts(INITIAL_PRODUCTS); }
-      try { const r = await sbGet(BAR_EVENTS_KEY);   setEvents(r || INITIAL_BAR_EVENTS); }   catch { setEvents(INITIAL_BAR_EVENTS); }
+      try { const r = await sbGet(BAR_PRODUCTS_KEY); if (!r) noteSeedFallback(BAR_PRODUCTS_KEY, "The bar product list"); setProducts(r || INITIAL_PRODUCTS); } catch { setProducts(INITIAL_PRODUCTS); }
+      try { const r = await sbGet(BAR_EVENTS_KEY);   if (!r) noteSeedFallback(BAR_EVENTS_KEY, "The bar event list"); setEvents(r || INITIAL_BAR_EVENTS); }   catch { setEvents(INITIAL_BAR_EVENTS); }
       // Farm events + staff, so the rota reports can live here too — bar staff
       // need their rota without being given the run of the whole app.
       try { const r = await sbGet(BOOKING_STORAGE); setFarmEvents(r || []); } catch { setFarmEvents([]); }
-      try { const r = await sbGet(STAFF_STORAGE);   setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
+      try { const r = await sbGet(STAFF_STORAGE);   if (!r) noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
       setLoaded(true);
     })();
   }, []);
@@ -14784,18 +14788,8 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
         <TodoistSettings/>
       </div>
 
-      {/* Logins */}
-      <div style={card}>
-        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Bar staff login</div>
-          <p style={{ fontSize:13, color:T.textMid, margin:"0 0 8px", lineHeight:1.6 }}>
-            Bar staff can sign in as <strong>bar</strong> to get Bar Management and the rota reports only — no events,
-            lettings, enquiries or financials. Change either password in <code>src/main.jsx</code>.
-          </p>
-        <p style={{ fontSize:12, color:T.textLight, margin:0, lineHeight:1.6 }}>
-          Passwords are stored in the app's code, so treat this as keeping people to the right screens rather than as
-          security. Anyone determined can read them by viewing the page source.
-        </p>
-      </div>
+      {/* Logins are managed under Staff now that each person has their own.
+          The card here explained a shared password that no longer exists. */}
 
       {/* Staff */}
       {setView && (
@@ -14880,6 +14874,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
     (async () => {
       try {
         const r = await sbGet(ENQUIRIES_STORAGE);
+        if (!r) noteSeedFallback(ENQUIRIES_STORAGE, "The enquiry list");
         setEnquiries(r || INITIAL_ENQUIRIES);
       } catch { setEnquiries(INITIAL_ENQUIRIES); }
       setLoaded(true);
@@ -14942,10 +14937,38 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   // burying it at the bottom would hide the very enquiries most worth acting on.
   const TEMP_ORDER = { hot:0, warm:1, cold:2, freezing:3 };
 
+  // Contact means anything either way, not only what somebody remembered to
+  // log. An enquiry that arrived yesterday has been in touch, and so has one
+  // whose viewing was last week — counting only the manual contact log made
+  // both look neglected, which is what turned the list cold.
+  //
+  // firstViewing and viewingForm are deliberately ignored: they hold free text
+  // like "Sunday 26th April" and "RECIEVED", so any date read out of them
+  // would be a guess.
   const lastContactOf = function(e) {
-    const dated = (e.contacts || []).filter(function(c){ return c && c.date; });
-    if (!dated.length) return null;
-    return dated.slice().sort(function(a,b){ return b.date > a.date ? 1 : -1; })[0];
+    const today = new Date().toISOString().slice(0, 10);
+    const events = [];
+
+    (e.contacts || []).forEach(function(c) {
+      if (c && c.date) events.push({ date: c.date, method: c.method || "contact", note: c.note });
+    });
+
+    // A viewing that has happened is contact. One still to come is not.
+    (e.viewings || []).forEach(function(v) {
+      if (v && v.date && v.date <= today) events.push({ date: v.date, method: "viewing" });
+    });
+
+    // The enquiry itself. Its id is minted as enq_<epoch>, so the moment it
+    // arrived is recoverable — which is what makes "they filled the form in
+    // yesterday" read as one day rather than as never.
+    const m = String(e.id || "").match(/^enq_(\d{10,})$/);
+    if (m) {
+      const d = new Date(Number(m[1]));
+      if (isFinite(d.getTime())) events.push({ date: d.toISOString().slice(0, 10), method: "enquiry received" });
+    }
+
+    if (!events.length) return null;
+    return events.sort(function(a, b) { return b.date > a.date ? 1 : -1; })[0];
   };
   const daysSinceContact = function(e) {
     const lc = lastContactOf(e);
@@ -15184,7 +15207,17 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
             <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
               <FRow label="Name"><input value={form.name||""} onChange={e=>update("name",e.target.value)} placeholder="Full name" style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-                <FRow label="Event Type"><input type="text" value={form.eventType||""} onChange={e=>update("eventType",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
+                <FRow label="Event Type">
+                  <select value={form.eventType||""} onChange={e=>update("eventType",e.target.value)}
+                    style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}>
+                    <option value="">—</option>
+                    {ENQUIRY_EVENT_TYPES.map(function(t){ return <option key={t} value={t}>{t}</option>; })}
+                    {/* Anything typed in before this list existed stays
+                        selectable, so no enquiry silently changes what it is. */}
+                    {form.eventType && ENQUIRY_EVENT_TYPES.indexOf(form.eventType) === -1 &&
+                      <option value={form.eventType}>{form.eventType}</option>}
+                  </select>
+                </FRow>
                 <FRow label="Numbers"><input type="text" value={form.numbers||""} onChange={e=>update("numbers",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
                 <FRow label="Date Preference"><input type="text" value={form.datePreference||""} onChange={e=>update("datePreference",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
                 <FRow label="Source"><input type="text" value={form.source||""} onChange={e=>update("source",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
