@@ -46,9 +46,28 @@ function MobileGlobalStyles() {
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 
+// ─── SESSION ─────────────────────────────────────────────────────────────────
+// Set by main.jsx once somebody signs in, and again whenever the token is
+// refreshed. Every read and write below sends it.
+//
+// This is the whole of the client-side change for real accounts: 85 call sites
+// go through the three helpers underneath, so they never had to move. The
+// `apikey` header stays the anon key because Supabase requires a project key
+// there; what changes is the Authorization bearer, which becomes the signed-in
+// user rather than the key every visitor has.
+//
+// Falling back to the anon key when there is no session is deliberate, and is
+// the rollback: until row level security is switched on, the app works either
+// way, so a bad auth deploy cannot lock anyone out of their own data.
+let SESSION_TOKEN = null;
+export function setSessionToken(token) { SESSION_TOKEN = token || null; }
+function sbAuthHeaders() {
+  return { apikey: SUPABASE_KEY, Authorization: `Bearer ${SESSION_TOKEN || SUPABASE_KEY}` };
+}
+
 const sbGet = async (key) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}&select=value`, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    headers: sbAuthHeaders()
   });
   const rows = await res.json();
   return rows?.[0]?.value ?? null;
@@ -57,12 +76,10 @@ const sbGet = async (key) => {
 const sbSet = async (key, value) => {
   await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
     method: "POST",
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
+    headers: Object.assign(sbAuthHeaders(), {
       "Content-Type": "application/json",
       Prefer: "resolution=merge-duplicates"
-    },
+    }),
     body: JSON.stringify({ key, value, updated_at: new Date().toISOString() })
   });
 };
@@ -104,7 +121,7 @@ async function fetchLatestBuild() {
 const sbDelete = async (key) => {
   await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}`, {
     method: "DELETE",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    headers: sbAuthHeaders()
   });
 };
 
@@ -114,12 +131,10 @@ const STORAGE_BUCKET = "booking-files";
 const sbUploadFile = async (path, file) => {
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`, {
     method: "POST",
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
+    headers: Object.assign(sbAuthHeaders(), {
       "Content-Type": file.type || "application/octet-stream",
       "x-upsert": "true",
-    },
+    }),
     body: file,
   });
   if (!res.ok) throw new Error(await res.text());
@@ -129,11 +144,7 @@ const sbUploadFile = async (path, file) => {
 const sbDeleteFile = async (path) => {
   await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}`, {
     method: "DELETE",
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      "Content-Type": "application/json",
-    },
+    headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
     body: JSON.stringify({ prefixes: [path] }),
   });
 };
@@ -1781,7 +1792,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-21a";
+const APP_BUILD = "2026-08-22a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -5696,6 +5707,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [invoiceRecords, setInvoiceRecords]   = useState([]);
   const [accomPrefill, setAccomPrefill]       = useState(null);
   const [staleBuild, setStaleBuild]           = useState(null);   // newer build seen
+  const [barSection, setBarSection] = useState("bar");
   const barOnly     = role === "bar";
   const cleanerOnly = role === "cleaner";
 
@@ -6042,9 +6054,14 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:"system-ui,sans-serif",fontSize:20 }}>Loading…</div>;
 
-  // Restricted logins: one section, no navigation to anything else.
+  // Restricted logins: their own section, and nothing else reachable.
   if (barOnly || cleanerOnly) {
     const shellTitle = barOnly ? "Bar Management" : "Housekeeping";
+    // Bar staff also work the door. They get the scanner and nothing else from
+    // the box office — box-admin.js allows a bar session the door actions only,
+    // so the order list, buyer details and takings stay out of reach whatever
+    // this screen tries to ask for.
+    const barTabs = [["bar","Bar Management"],["door","Ticket Check-in"]];
     return (
       <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
         <MobileGlobalStyles/>
@@ -6070,7 +6087,22 @@ export default function App({ role = "admin", onSignOut } = {}) {
           )}
         </header>
         <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
-          {barOnly ? <BarView/> : <CleanerView/>}
+          {barOnly && (
+            <div style={{ display:"flex", gap:2, marginBottom:20, borderBottom:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+              {barTabs.map(function([id, lbl]) {
+                const on = barSection === id;
+                return (
+                  <button key={id} onClick={function() { setBarSection(id); }}
+                    style={{ background:"none", border:"none", borderBottom: on ? `3px solid ${T.midBlue}` : "3px solid transparent",
+                      color: on ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13.5,
+                      fontWeight: on ? 700 : 500, padding:"6px 18px 10px", cursor:"pointer" }}>{lbl}</button>
+                );
+              })}
+            </div>
+          )}
+          {cleanerOnly && <CleanerView/>}
+          {barOnly && barSection === "bar"  && <BarView/>}
+          {barOnly && barSection === "door" && <BoxDoorScreen/>}
         </div>
       </div>
     );
@@ -7306,7 +7338,7 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
       const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
       const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": att.mimeType || "application/octet-stream", "x-upsert": "true" },
+        headers: Object.assign(sbAuthHeaders(), { "Content-Type": att.mimeType || "application/octet-stream", "x-upsert": "true" }),
         body: blob,
       });
       if (!uploadRes.ok) throw new Error(await uploadRes.text());
@@ -13345,7 +13377,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   useEffect(() => {
     files.filter(f=>isImage(f)).forEach(file => {
       if (blobUrls[file.url]) return;
-      fetch(file.url, { headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }})
+      fetch(file.url, { headers: sbAuthHeaders() })
         .then(r=>r.blob()).then(blob=>setBlobUrls(p=>({...p,[file.url]:URL.createObjectURL(blob)})))
         .catch(e=>console.warn("Preview fetch failed:",e));
     });
@@ -13355,7 +13387,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   useEffect(() => {
     files.filter(f=>isPdf(f)).forEach(file => {
       if (pdfUrls[file.url]) return;
-      fetch(file.url, { headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }})
+      fetch(file.url, { headers: sbAuthHeaders() })
         .then(r=>r.blob()).then(blob=>setPdfUrls(p=>({...p,[file.url]:URL.createObjectURL(blob)})))
         .catch(e=>console.warn("PDF fetch failed:",e));
     });
@@ -15312,9 +15344,18 @@ function boxKey() {
 }
 
 async function boxAdmin(action, payload) {
+  // Either credential will do, and they mean different things: the office key
+  // is full access, a session is scoped to whatever the person's role allows.
+  // Bar staff have the second and not the first, which is how they reach the
+  // door without reaching the order list.
+  const headers = { "Content-Type": "application/json" };
+  const key = boxKey();
+  if (key) headers["x-admin-token"] = key;
+  if (SESSION_TOKEN) headers["Authorization"] = "Bearer " + SESSION_TOKEN;
+
   const res = await fetch("/.netlify/functions/box-admin", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-admin-token": boxKey() },
+    headers: headers,
     body: JSON.stringify(Object.assign({ action }, payload || {}))
   });
   let body = {};
@@ -16870,8 +16911,10 @@ function BoxDoorScreen() {
   const [online, setOnline]   = useState(()=> typeof navigator === "undefined" ? true : navigator.onLine);
 
   useEffect(function() {
-    boxAdmin("events.list").then(function(r) {
-      setEvents((r.events || []).filter(function(e) { return e.status !== "draft"; }));
+    // door.events, not events.list — the latter carries takings per event and
+    // is admin-only, which would shut bar staff out of their own door screen.
+    boxAdmin("door.events").then(function(r) {
+      setEvents(r.events || []);
     }).catch(function(e) { setErr(e.message); });
   }, []);
 
