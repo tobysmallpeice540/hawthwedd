@@ -121,6 +121,22 @@ exports.handler = async function(event) {
     return { statusCode: 400, body: JSON.stringify({ error: "No tickets were selected." }) };
   }
 
+  // A missing environment variable and a genuine fault produce the same
+  // shrug for the customer, which makes setup problems needlessly hard to
+  // find. Name them explicitly in the log instead.
+  var missing = [];
+  if (!process.env.STRIPE_TICKET_SECRET_KEY) missing.push("STRIPE_TICKET_SECRET_KEY");
+  if (!SERVICE_KEY) missing.push("SUPABASE_SERVICE_KEY");
+  if (missing.length) {
+    console.error("create-ticket-checkout NOT CONFIGURED — missing env vars: " + missing.join(", ") +
+      " (set them in Netlify, then redeploy — function env is read at deploy time)");
+    return {
+      statusCode: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Ticket sales aren't switched on yet. Please get in touch and we'll sort it out." })
+    };
+  }
+
   try {
     // ── 1. Reserve. This either succeeds completely or changes nothing. ──────
     var reserved = await sbRpc("box_reserve_order", {
@@ -235,7 +251,10 @@ exports.handler = async function(event) {
     };
 
   } catch (err) {
-    console.error("create-ticket-checkout error:", err);
+    // err.type distinguishes a Stripe rejection (bad key, wrong account, API
+    // version) from a Supabase or logic fault — the two need different fixes.
+    console.error("create-ticket-checkout error:", err && err.type ? "[" + err.type + "] " : "",
+      err && err.message ? err.message : err);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: "Something went wrong opening the payment page. Please try again." })
