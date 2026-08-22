@@ -42,6 +42,13 @@
     .buy-avail { font-size: 13px; color: #7a7060; margin-bottom: 16px; }
     .buy-avail.low { color: #a8551f; font-weight: 500; }
     .buy-note { font-size: 12px; color: #9a9080; margin-top: 12px; line-height: 1.55; text-align: center; }
+    /* The description in the order summary. Capped and scrollable so a long
+       one can't push the total off the screen on a phone. */
+    .sum-desc { font-size: 13px; line-height: 1.6; color: #5a5348; max-height: 168px; overflow-y: auto; margin-bottom: 12px; }
+    .sum-desc p { margin-bottom: 8px; }
+    .sum-desc p:last-child { margin-bottom: 0; }
+    .sum-desc ul, .sum-desc ol { margin: 0 0 8px 18px; }
+    .sum-desc img { max-width: 100%; height: auto; border-radius: 8px; }
 
     .mapframe { width: 100%; height: 220px; border: 0; border-radius: 12px; margin-top: 14px; }
 
@@ -161,6 +168,11 @@
   // The invite link can carry the code — /tickets/harvest-supper?code=BARN26 —
   // so most people never type anything at all.
   var accessCode = params.get("code") || sessionStorage.getItem("hbf_code_" + slug) || "";
+
+  // The event page itself is built in Squarespace, so ?buy=1 skips straight to
+  // the ticket picker. That is the URL the "Select tickets" button there points
+  // at — this page then only handles choosing, paying and confirming.
+  var directBuy = params.get("buy") === "1";
 
   var ev = null;
   var qty = {};                 // ticket_type_id -> n
@@ -400,7 +412,10 @@
 
     return '<div class="buy-panel">' +
       '<h3 style="font-family:\'Cormorant Garamond\',serif;font-size:20px;margin-bottom:4px">' + esc(ev.name) + "</h3>" +
-      '<p class="muted" style="margin-bottom:14px">' + esc(whenLine(ev)) + "<br>" + esc(ev.venue_name || "") + "</p>" +
+      '<p class="muted" style="margin-bottom:10px">' + esc(whenLine(ev)) + "<br>" + esc(ev.venue_name || "") + "</p>" +
+      // With the event page living on the main website, this summary is the
+      // only place the description appears during checkout.
+      (ev.description ? '<div class="sum-desc">' + ev.description + "</div>" : "") +
       '<hr class="divider" style="margin:12px 0">' +
       (lines || '<p class="muted">No tickets selected yet.</p>') +
       totals +
@@ -469,7 +484,9 @@
       '<hr class="divider">' + discountBlock +
       '<button class="btn-primary" id="to-details"' +
         (totalQty() === 0 || (ev.min_per_order && totalQty() < ev.min_per_order) ? " disabled" : "") + ">Continue</button>" +
-      '<div style="text-align:center;margin-top:12px"><button class="btn-link" id="back-event">← Back to the event</button></div>';
+      (directBuy
+        ? ""
+        : '<div style="text-align:center;margin-top:12px"><button class="btn-link" id="back-event">← Back to the event</button></div>');
   }
 
   function stepDetails() {
@@ -730,7 +747,11 @@
           return;
         }
         ev = data;
-        if (!keepStep && !params.get("ref")) step = 0;
+        if (!keepStep && !params.get("ref")) {
+          // A sold-out event still shows its own page, because that is where
+          // the waitlist form lives.
+          step = (directBuy && !ev.gated && !ev.sold_out) ? 1 : 0;
+        }
         // Anything already in the basket that has since sold is trimmed back
         // rather than left to fail at the till.
         (ev.ticket_types || []).forEach(function (t) {
