@@ -147,29 +147,31 @@ function slotOfferedOnDay(ds, s) {
 let cur = new Date(), selDate = null, selTime = null;
 let data = { requests:[], blocks:[], bookings:[], enquiries:[] };
 
-const sbGet = async k => {
-  const r = await fetch(`${SB_URL}/rest/v1/app_data?key=eq.${k}&select=value`,
-    { headers:{ apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}` }});
-  const j = await r.json(); return j?.[0]?.value ?? [];
-};
-
+// One call, answering only what this page needs: which slots are taken, which
+// are blocked or deliberately opened, and which days have a farm event on.
+//
+// It used to download the entire wedding diary and every enquiry — couple
+// names, phone numbers, email addresses — to work out "is something on that
+// day". None of that leaves the database now.
 async function load() {
-  const [req, blk, bks, enq] = await Promise.all([
-    sbGet("hbf_viewing_requests_v1"), sbGet("hbf_viewing_blocks_v1"),
-    sbGet("hawthbush_bookings_v6"), sbGet("hbf_enquiries_v1")
-  ]);
-  data = { requests:req||[], blocks:blk||[], bookings:bks||[], enquiries:enq||[] };
+  const r = await fetch(`${SB_URL}/rest/v1/rpc/public_viewing_availability`, {
+    method: "POST",
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+    body: "{}"
+  });
+  const a = await r.json();
+  data = {
+    taken:     (a && a.taken)     || [],
+    blocks:    (a && a.blocks)    || [],
+    eventDays: (a && a.eventDays) || []
+  };
 }
 
 // All viewings already scheduled (added on a booking or enquiry in the admin app,
 // or confirmed from an online request) — these occupy a slot and block it.
-function scheduledViewings() {
-  const out = [];
-  (data.bookings||[]).forEach(b => (b.viewings||[]).forEach(v => { if (v && v.date) out.push(v); }));
-  (data.enquiries||[]).forEach(e => (e.viewings||[]).forEach(v => { if (v && v.date) out.push(v); }));
-  (data.requests||[]).filter(r=>r.status==="confirmed").forEach(r => out.push({ date:r.date, time:r.time }));
-  return out;
-}
+// Already merged server-side: viewings booked against a wedding, against an
+// enquiry, and confirmed online requests all arrive as plain date + time.
+function scheduledViewings() { return data.taken || []; }
 function takenSlots(ds) {
   return scheduledViewings().filter(v=>v.date===ds).map(v=>v.time);
 }
@@ -177,6 +179,10 @@ function takenSlots(ds) {
 // Entries in hbf_viewing_blocks_v1 are either kind:"block" (hide a slot) or
 // kind:"open" (make a normally-unavailable one bookable). Older records have no
 // kind and are treated as blocks.
+// A farm event blocks the day. Whose wedding it is was never this page's
+// business, so it now receives dates and nothing else.
+function eventOn(ds) { return (data.eventDays || []).indexOf(ds) !== -1; }
+
 function blockEntries(ds) {
   return data.blocks.filter(b => b.date === ds && (b.kind || "block") === "block");
 }
@@ -190,7 +196,7 @@ function dayOpened(ds) { return openEntries(ds).length > 0; }
 
 function dayBlocked(ds) {
   if (blockEntries(ds).some(b => !b.slot)) return true;
-  if (!dayOpened(ds) && data.bookings.some(b => b.date === ds && b.couple)) return true;
+  if (!dayOpened(ds) && eventOn(ds)) return true;
   return SLOTS.every(s => !slotAvailable(ds, s));
 }
 
@@ -209,7 +215,7 @@ function slotAvailable(ds, s) {
   // No opening: fall back to the normal rules, which the caller has applied
   // for the weekday and the farm-event check.
   if (!slotOfferedOnDay(ds, s)) return false;
-  return !data.bookings.some(b => b.date === ds && b.couple);
+  return !eventOn(ds);
 }
 
 function slotBlocked(ds, s) { return !slotAvailable(ds, s); }

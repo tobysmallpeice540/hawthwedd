@@ -328,6 +328,23 @@ function sbGet(key) {
   });
 }
 
+// Availability comes from a database function, not from the bookings blob.
+// This page used to download every cottage booking — names, emails, phones,
+// prices, payment schedules — and use exactly three fields of it. Now the
+// server answers the only question the page ever asked, and no guest detail
+// leaves the database at all.
+function sbRpc(fn, args) {
+  return fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+    method: "POST",
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": "Bearer " + SUPABASE_KEY,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(args || {})
+  }).then(function(r) { return r.json(); });
+}
+
 // ── Date helpers ──────────────────────────────────────────────────────────────
 // IMPORTANT: date-only strings (YYYY-MM-DD) are parsed/formatted anchored to
 // UTC noon-of-nothing (Date.UTC), never via `new Date(iso + "T00:00:00")".
@@ -1121,11 +1138,11 @@ function renderSummaryView() {
 // the calendar the guest returns to shows the nights that have actually gone
 // rather than the snapshot they arrived with.
 function refreshAvailability() {
-  return sbGet("hbf_accom_v1").then(function(accomData) {
-    S.bookings = (accomData || []).map(function(b) {
-      if (b.stays && b.stays.length) return b;
-      return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
-    });
+  return sbRpc("public_accom_busy").then(function(busy) {
+    // One pseudo-booking holding every occupied stay. buildAvailability only
+    // ever walks stays[], and the function has already dropped the cancelled
+    // ones, so the occupied map comes out identical to before.
+    S.bookings = [{ stays: busy || [] }];
     buildAvailability();
   }).catch(function() { /* keep what we have; the error message still shows */ });
 }
@@ -1241,9 +1258,9 @@ function showSuccess(prop, ci, co) {
   // Returning from Stripe. "booked" is a new booking; "paid" is a deposit or
   // balance settled from a link in an email, where there is no cart to show.
   if (params.get("booked") === "1") {
-    Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1")]).then(function() {
-      showSuccess(params.get("prop"), params.get("ci"), params.get("co"));
-    });
+    // Both results were discarded here — the bookings blob was downloaded and
+    // thrown away. showSuccess reads nothing but the query string.
+    showSuccess(params.get("prop"), params.get("ci"), params.get("co"));
     return;
   }
   if (params.get("paid") === "1") {
@@ -1252,9 +1269,9 @@ function showSuccess(prop, ci, co) {
   }
 
   function loadAndRender() {
-    return Promise.all([sbGet("hbf_properties_v1"), sbGet("hbf_accom_v1"), sbGet("hbf_terms_v1")]).then(function(results) {
+    return Promise.all([sbGet("hbf_properties_v1"), sbRpc("public_accom_busy"), sbGet("hbf_terms_v1")]).then(function(results) {
       var propsData = results[0];
-      var accomData = results[1];
+      var busy = results[1];
       // No terms written yet means no tickbox and no link — better than sending
       // guests to an empty page and asking them to accept nothing.
       S.termsText = (results[2] && results[2].text) ? String(results[2].text) : "";
@@ -1273,10 +1290,7 @@ function showSuccess(prop, ci, co) {
         { id:"amly",     name:"Amly Barn",   sleeps:6,  colour:"#16a34a", depositPct:50, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] },
         { id:"glamping", name:"Glamping",    sleeps:20, colour:"#9333ea", depositPct:20, balanceWeeks:6, minNights:2, maxNights:28, baseRate:0, seasons:[] }
       ];
-      S.bookings = (accomData || []).map(function(b) {
-        if (b.stays && b.stays.length) return b;
-        return Object.assign({}, b, { stays: [{ propertyId: b.propertyId, checkIn: b.checkIn, checkOut: b.checkOut }] });
-      });
+      S.bookings = [{ stays: busy || [] }];
       S.calMonths = calMonthsList();
       buildAvailability();
       if (params.get("cancelled") === "1") {
