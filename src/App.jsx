@@ -2947,7 +2947,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
                   </a>
                 )}
                 {s.paymentIntentId && (
-                  <a href={"https://dashboard.stripe.com/payments/" + s.paymentIntentId} target="_blank" rel="noreferrer"
+                  <a href={"https://dashboard.stripe.com/" + ACCOM_STRIPE_ACCOUNT + (/_test_/.test(String(s.paymentIntentId || "")) ? "/test" : "") + "/payments/" + s.paymentIntentId} target="_blank" rel="noreferrer"
                     style={{ color:T.textLight, textDecoration:"none" }}>
                     open in Stripe ↗
                   </a>
@@ -15234,6 +15234,24 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
 // Email templates and their timings DO stay in app_data (hbf_box_templates_v1):
 // one person edits them occasionally, so the blob really is the right tool.
 
+// The two Stripe accounts. They are deliberately separate: Stripe settles as a
+// single lump sum per account, so sharing one would put ticket income and
+// letting income in the same bank deposit with no way to split them for the
+// books. Account ids aren't secret — they only decide which account the
+// dashboard opens in, which matters because both sit behind the same login and
+// a link that lands in the wrong one silently finds nothing.
+const BOX_STRIPE_ACCOUNT   = "acct_1DeKnBKCwZHyDyxr";   // ticketing
+const ACCOM_STRIPE_ACCOUNT = "acct_1Pyd6CBQuJjvSXJo";   // lettings
+
+// Session ids carry their own mode — cs_test_… against cs_live_… — so a link
+// made during the test-mode rehearsal opens the test dashboard rather than
+// searching live payments and finding nothing.
+function stripeDashboardUrl(account, sessionId) {
+  const mode = /_test_/.test(String(sessionId || "")) ? "/test" : "";
+  return "https://dashboard.stripe.com/" + account + mode +
+    "/search?query=" + encodeURIComponent(sessionId || "");
+}
+
 const BOX_TEMPLATES_STORAGE = "hbf_box_templates_v1";
 // Tickets get their own terms. Refunds and cancellation for a night out are
 // nothing like the terms for a week in a cottage, and the checkout links to
@@ -16438,7 +16456,7 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
                   </BoxBtn>
                 )}
                 {o.stripe_session_id && (
-                  <a href={"https://dashboard.stripe.com/search?query=" + encodeURIComponent(o.stripe_session_id)}
+                  <a href={stripeDashboardUrl(BOX_STRIPE_ACCOUNT, o.stripe_session_id)}
                     target="_blank" rel="noreferrer"
                     style={{ padding:"9px 15px", borderRadius:7, border:`1.5px solid ${T.border}`, color:"#635bff",
                       fontSize:13, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>Stripe ↗</a>
