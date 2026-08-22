@@ -65,16 +65,34 @@ function sbAuthHeaders() {
   return { apikey: SUPABASE_KEY, Authorization: `Bearer ${SESSION_TOKEN || SUPABASE_KEY}` };
 }
 
+// A refused request used to be indistinguishable from an empty one. PostgREST
+// answers a 401 with JSON, `rows?.[0]?.value` is then undefined, and every
+// caller reads that as "there is no data" — so an expired session, a missing
+// grant or a policy change all looked exactly like a farm with no bookings in
+// it. Nothing was logged and nothing was shown.
+//
+// These helpers now say so. They still return null rather than throwing,
+// because dozens of callers depend on that, but the failure is no longer
+// silent: it reaches the console and a banner at the top of the app.
+function noteDataFailure(what, status, detail) {
+  const msg = `${what} failed: ${status}${detail ? " — " + String(detail).slice(0, 200) : ""}`;
+  console.error("Supabase " + msg);
+  try {
+    window.dispatchEvent(new CustomEvent("hbf-data-failure", { detail: { what, status, msg } }));
+  } catch (e) { /* never let reporting a fault cause one */ }
+}
+
 const sbGet = async (key) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}&select=value`, {
     headers: sbAuthHeaders()
   });
+  if (!res.ok) { noteDataFailure(`reading ${key}`, res.status, await res.text()); return null; }
   const rows = await res.json();
   return rows?.[0]?.value ?? null;
 };
 
 const sbSet = async (key, value) => {
-  await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
     method: "POST",
     headers: Object.assign(sbAuthHeaders(), {
       "Content-Type": "application/json",
@@ -82,6 +100,7 @@ const sbSet = async (key, value) => {
     }),
     body: JSON.stringify({ key, value, updated_at: new Date().toISOString() })
   });
+  if (!res.ok) noteDataFailure(`saving ${key}`, res.status, await res.text());
 };
 
 // ─── BUILD VERSION GUARD ─────────────────────────────────────────────────────
@@ -119,10 +138,11 @@ async function fetchLatestBuild() {
 }
 
 const sbDelete = async (key) => {
-  await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}`, {
     method: "DELETE",
     headers: sbAuthHeaders()
   });
+  if (!res.ok) noteDataFailure(`deleting ${key}`, res.status, await res.text());
 };
 
 // ─── SUPABASE STORAGE HELPERS ──────────────────────────────────────────────
@@ -1822,7 +1842,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22g";
+const APP_BUILD = "2026-08-22h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6095,6 +6115,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
     return (
       <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
         <MobileGlobalStyles/>
+      <DataFailureBanner/>
         {staleBuild && (
           <div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9999, background:"#dc2626", color:"#fff",
             padding:"12px 20px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
@@ -6141,6 +6162,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
       <MobileGlobalStyles/>
+      <DataFailureBanner/>
 
       {/* An out-of-date tab is dangerous, not just inconvenient — saving from
           it can destroy records. Make it impossible to miss. */}
@@ -17713,7 +17735,6 @@ function BoxOfficeDashboardCard({ setView }) {
   const [owing, setOwing]   = useState(0);
 
   useEffect(function() {
-    if (!boxKey()) return;
     let live = true;
     (async function() {
       try {
@@ -18177,6 +18198,46 @@ function ActivityLogPanel() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── When the database says no ────────────────────────────────────────────────
+// Twice now a refused request has looked exactly like an empty farm: no
+// bookings, no files, no explanation. This makes that impossible — any read or
+// write that is turned down puts a bar across the top of the app saying what
+// was refused and why.
+function DataFailureBanner() {
+  const [fault, setFault] = useState(null);
+
+  useEffect(function() {
+    function onFault(e) { setFault(e.detail); }
+    window.addEventListener("hbf-data-failure", onFault);
+    return function() { window.removeEventListener("hbf-data-failure", onFault); };
+  }, []);
+
+  if (!fault) return null;
+
+  // 401/403 nearly always means the session has lapsed, which a reload fixes.
+  const isAuth = fault.status === 401 || fault.status === 403;
+
+  return (
+    <div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9998, background:T.red, color:"#fff",
+      padding:"11px 18px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap",
+      boxShadow:"0 2px 12px rgba(0,0,0,.25)" }}>
+      <span style={{ fontSize:13.5, fontWeight:700 }}>
+        {isAuth ? "The database refused that request" : "Couldn't reach the database"}
+      </span>
+      <span style={{ fontSize:12, opacity:.92, flex:1, minWidth:220 }}>
+        {fault.msg}
+        {isAuth ? " — your sign-in may have lapsed. Reloading usually fixes it." : ""}
+      </span>
+      <button onClick={function(){ window.location.reload(); }}
+        style={{ background:"#fff", color:T.red, border:"none", padding:"7px 16px", borderRadius:6,
+          cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:800 }}>Reload</button>
+      <button onClick={function(){ setFault(null); }}
+        style={{ background:"none", color:"#fff", border:"1px solid rgba(255,255,255,.6)", padding:"7px 12px",
+          borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12.5 }}>Dismiss</button>
     </div>
   );
 }
