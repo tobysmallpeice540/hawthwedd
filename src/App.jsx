@@ -138,8 +138,38 @@ const sbUploadFile = async (path, file) => {
     body: file,
   });
   if (!res.ok) throw new Error(await res.text());
-  return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`;
+  return storageUrl(path);
 };
+
+// Files live in a private bucket, so there is no public URL to hand out. This
+// builds the authenticated one, and — importantly — also repairs the public
+// URLs stored on older records, so nothing had to be migrated when the bucket
+// was closed. Both forms go in, the working form comes out.
+function storageUrl(pathOrUrl) {
+  const v = String(pathOrUrl || "");
+  if (!v) return "";
+  if (v.indexOf("/storage/v1/object/") !== -1) {
+    return v.replace("/storage/v1/object/public/", "/storage/v1/object/authenticated/");
+  }
+  return `${SUPABASE_URL}/storage/v1/object/authenticated/${STORAGE_BUCKET}/${v.replace(/^\/+/, "")}`;
+}
+
+// A plain <a href> can't carry an Authorization header, so opening a file from
+// a private bucket has to fetch it first and hand the browser a blob. Same
+// result for the person clicking; the difference is that the file is no longer
+// readable by anyone who guesses the URL.
+async function openStoredFile(file) {
+  try {
+    const res = await fetch(storageUrl(file.url || file.path), { headers: sbAuthHeaders() });
+    if (!res.ok) throw new Error(await res.text());
+    const blobUrl = URL.createObjectURL(await res.blob());
+    window.open(blobUrl, "_blank", "noopener");
+    // Long enough for the new tab to have taken it.
+    setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 60000);
+  } catch (e) {
+    alert("Could not open that file: " + (e.message || e));
+  }
+}
 
 const sbDeleteFile = async (path) => {
   await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}`, {
@@ -1792,7 +1822,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22e";
+const APP_BUILD = "2026-08-22f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7336,13 +7366,9 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
       const id = entityId || formData?.id || formData?.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
       const safeName = att.filename.replace(/[^a-zA-Z0-9._-]/g,"_");
       const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
-      const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`, {
-        method: "POST",
-        headers: Object.assign(sbAuthHeaders(), { "Content-Type": att.mimeType || "application/octet-stream", "x-upsert": "true" }),
-        body: blob,
-      });
-      if (!uploadRes.ok) throw new Error(await uploadRes.text());
-      const url = `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`;
+      // Was a second copy of the upload helper. One path in and out means the
+      // bucket can be changed in one place rather than two.
+      const url = await sbUploadFile(path, blob);
       // Add to booking files
       const newFile = { name: att.filename, url, path, type: att.mimeType || "", docType: guessDocType(att.filename), uploadedAt: new Date().toISOString().slice(0,10) };
       const currentFiles = formData?.files || [];
@@ -13381,7 +13407,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   useEffect(() => {
     files.filter(f=>isImage(f)).forEach(file => {
       if (blobUrls[file.url]) return;
-      fetch(file.url, { headers: sbAuthHeaders() })
+      fetch(storageUrl(file.url), { headers: sbAuthHeaders() })
         .then(r=>r.blob()).then(blob=>setBlobUrls(p=>({...p,[file.url]:URL.createObjectURL(blob)})))
         .catch(e=>console.warn("Preview fetch failed:",e));
     });
@@ -13391,7 +13417,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   useEffect(() => {
     files.filter(f=>isPdf(f)).forEach(file => {
       if (pdfUrls[file.url]) return;
-      fetch(file.url, { headers: sbAuthHeaders() })
+      fetch(storageUrl(file.url), { headers: sbAuthHeaders() })
         .then(r=>r.blob()).then(blob=>setPdfUrls(p=>({...p,[file.url]:URL.createObjectURL(blob)})))
         .catch(e=>console.warn("PDF fetch failed:",e));
     });
@@ -13446,7 +13472,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
       <DocTypeSelect file={file} idx={idx}/>
       {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
-      <a href={file.url} target="_blank" rel="noreferrer" style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>⬇ Open</a>
+      <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>⬇ Open</a>
       <button onClick={()=>handleDelete(idx)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>✕ Remove</button>
     </div>
   );
@@ -13516,7 +13542,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                   {file.uploadedAt && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Uploaded {file.uploadedAt}</div>}
                 </div>
                 <DocTypeSelect file={file} idx={idx}/>
-                <a href={file.url} target="_blank" rel="noreferrer" style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>⬇ Open</a>
+                <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>⬇ Open</a>
                 <button onClick={()=>handleDelete(idx)} style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>✕ Remove</button>
               </div>
             </div>
@@ -14714,6 +14740,9 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
           </a>
         </div>
       </div>
+
+      {/* Who changed what, and when */}
+      <ActivityLogPanel/>
 
       {/* Mailing lists. Not under Box Office: it syncs weddings, enquiries and
           cottage guests as well as ticket buyers. */}
@@ -18013,6 +18042,106 @@ function StaffLogins() {
                     Switch off
                   </BoxBtn>}
             </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Activity log ─────────────────────────────────────────────────────────────
+// The thing that was actually wanted the day data disappeared: who changed
+// what, and when. It records the key, the person and the moment — not the
+// contents. The daily backup keeps thirty days of full snapshots, so between
+// the two you can answer both "who touched this" and "what did it look like
+// before"; keeping every version here as well would be hundreds of megabytes
+// of duplicated bookings for no gain.
+const AUDIT_KEY_LABELS = {
+  "hawthbush_bookings_v6": "Weddings",
+  "hbf_accom_v1":          "Cottage bookings",
+  "hbf_enquiries_v1":      "Enquiries",
+  "hbf_viewings_v1":       "Viewings",
+  "hbf_viewing_requests_v1": "Viewing requests",
+  "hbf_viewing_blocks_v1": "Viewing blocks",
+  "hawthbush_staff_v5":    "Staff",
+  "hbf_properties_v1":     "Properties",
+  "hbf_bar_products_v1":   "Bar products",
+  "hbf_bar_events_v1":     "Bar events",
+  "hbf_email_log_v1":      "Email log",
+  "hbf_app_build_v1":      "App build",
+};
+
+function ActivityLogPanel() {
+  const [rows, setRows]   = useState(null);
+  const [err, setErr]     = useState("");
+  const [onlyPeople, setOnlyPeople] = useState(true);
+
+  async function load() {
+    setErr("");
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/audit_log?select=*&order=at.desc&limit=200`,
+        { headers: sbAuthHeaders() });
+      if (!res.ok) throw new Error(await res.text());
+      setRows(await res.json());
+    } catch (e) {
+      setErr("Couldn't read the activity log. If you've just run the Phase 6 SQL, reload the page.");
+      setRows([]);
+    }
+  }
+  useEffect(function() { load(); }, []);
+
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
+
+  // The build-version ping is written by every browser on every load; it would
+  // drown everything else.
+  const shown = (rows || [])
+    .filter(function(r) { return r.key !== "hbf_app_build_v1"; })
+    .filter(function(r) { return !onlyPeople || r.actor_id; })
+    .slice(0, 60);
+
+  return (
+    <div style={card}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:10, flexWrap:"wrap" }}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Activity</div>
+        <div style={{ display:"flex", gap:9, alignItems:"center" }}>
+          <label style={{ fontSize:12.5, color:T.textMid, display:"flex", alignItems:"center", gap:6, cursor:"pointer" }}>
+            <input type="checkbox" checked={onlyPeople} onChange={e=>setOnlyPeople(e.target.checked)}
+              style={{ accentColor:T.accent, cursor:"pointer" }}/>
+            People only
+          </label>
+          <BoxBtn tone="ghost" onClick={load}>Refresh</BoxBtn>
+        </div>
+      </div>
+
+      <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 12px", lineHeight:1.6 }}>
+        Every change to the data, with who made it. Append-only — it cannot be edited or tidied up, including by an
+        administrator. Untick <em>People only</em> to include the scheduled jobs.
+      </p>
+
+      {err && <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
+      {rows === null && <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>}
+      {rows && !shown.length && !err && <div style={{ fontSize:13, color:T.textLight }}>Nothing recorded yet.</div>}
+
+      {shown.map(function(r) {
+        return (
+          <div key={r.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"8px 0", borderTop:`1px solid ${T.border}`, fontSize:13, flexWrap:"wrap" }}>
+            <span style={{ color:T.textLight, fontSize:11.5, minWidth:118 }}>
+              {boxDate(r.at)} {boxTime(r.at)}
+            </span>
+            <span style={{ fontWeight:600, color: r.actor_id ? T.text : T.textLight, flex:"1 1 150px" }}>
+              {r.actor_id ? (r.actor_email || "someone") : "scheduled job"}
+            </span>
+            <span style={{ color:T.textMid, flex:"1 1 140px" }}>
+              {AUDIT_KEY_LABELS[r.key] || r.key}
+            </span>
+            <span style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.5,
+              color: r.action === "delete" ? T.red : T.textLight }}>{r.action}</span>
+            {r.bytes != null && (
+              <span style={{ fontSize:11.5, color:T.textLight, minWidth:64, textAlign:"right" }}>
+                {(r.bytes / 1024).toFixed(0)} KB
+              </span>
+            )}
           </div>
         );
       })}
