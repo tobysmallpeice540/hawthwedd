@@ -1269,7 +1269,10 @@ function showSuccess(prop, ci, co) {
   }
 
   function loadAndRender() {
-    return Promise.all([sbGet("hbf_properties_v1"), sbRpc("public_accom_busy"), sbGet("hbf_terms_v1")]).then(function(results) {
+    // Properties come through a function, not the raw blob: that record also
+    // holds the Airbnb iCal import URLs, which are secret by virtue of being
+    // unguessable and have no business on a public page.
+    return Promise.all([sbRpc("public_properties"), sbRpc("public_accom_busy"), sbGet("hbf_terms_v1")]).then(function(results) {
       var propsData = results[0];
       var busy = results[1];
       // No terms written yet means no tickbox and no link — better than sending
