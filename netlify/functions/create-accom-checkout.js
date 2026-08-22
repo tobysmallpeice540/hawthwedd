@@ -5,15 +5,20 @@
 // Required Netlify env vars:
 //   STRIPE_SECRET_KEY       — Stripe secret key (sk_live_...)
 //   SUPABASE_URL            — https://rkqbyisfmvwulsyxzwjz.supabase.co
-//   SUPABASE_ANON_KEY       — Supabase anon key (or hardcode below)
+//   SUPABASE_SERVICE_KEY    — Supabase service key (server-side only)
 //
 // Also add to netlify.toml [build.environment]:
-//   SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY,STRIPE_SECRET_KEY"
+//   SECRETS_SCAN_OMIT_KEYS = "SUPABASE_SERVICE_KEY,STRIPE_SECRET_KEY,…"
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+// The service key, not the anon key. Server-side code has no business
+// holding the same credential the public pages carry — and once app_data
+// has row level security this is what keeps the scheduled jobs working.
+// No fallback to the anon key on purpose: a missing variable should fail
+// loudly rather than quietly reopen what this change closes.
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const ACCOM_KEY    = "hbf_accom_v1";
 
 // ── Supabase helpers (no header spread) ──────────────────────────────────────

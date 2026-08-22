@@ -1,6 +1,11 @@
 // netlify/functions/submit-viewing.js
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+// The service key, not the anon key. Server-side code has no business
+// holding the same credential the public pages carry — and once app_data
+// has row level security this is what keeps the scheduled jobs working.
+// No fallback to the anon key on purpose: a missing variable should fail
+// loudly rather than quietly reopen what this change closes.
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const RESEND_KEY   = process.env.RESEND_API_KEY;
 const STORAGE_KEY  = "hbf_viewing_requests_v1";
 const NOTIFY_EMAIL = "hello@hawthbushfarm.co.uk";

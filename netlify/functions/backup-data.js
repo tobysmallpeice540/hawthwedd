@@ -12,7 +12,12 @@
 // hbf_backup_index_v1, with the oldest pruned beyond KEEP_SNAPSHOTS.
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+// The service key, not the anon key. Server-side code has no business
+// holding the same credential the public pages carry — and once app_data
+// has row level security this is what keeps the scheduled jobs working.
+// No fallback to the anon key on purpose: a missing variable should fail
+// loudly rather than quietly reopen what this change closes.
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const INDEX_KEY = "hbf_backup_index_v1";
 const KEEP_SNAPSHOTS = 30;
