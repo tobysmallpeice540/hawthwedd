@@ -4,7 +4,7 @@
   functions = "netlify/functions"
 
 [build.environment]
-  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,RESEND_API_KEY,ZETTLE_API_KEY,ZETTLE_CLIENT_ID,TODOIST_ICS_URL"
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,RESEND_API_KEY,ZETTLE_API_KEY,ZETTLE_CLIENT_ID,TODOIST_ICS_URL,SUPABASE_SERVICE_KEY,HBF_ADMIN_TOKEN,STRIPE_TICKET_WEBHOOK_SECRET"
 
 # Hourly Airbnb iCal sync - runs at the top of every hour
 [functions."sync-all-icals"]
@@ -24,6 +24,18 @@
 # 3am local exits immediately, as does any run on the wrong weekday.
 [functions."send-cleaning-summary"]
   schedule = "0 2,3 * * *"
+
+# Box office: balance emails, the single overdue chase, and event reminders.
+# Runs an hour after the lettings reminders so the two don't compete for the
+# Resend rate limit on a busy morning.
+[functions."box-billing"]
+  schedule = "0 8 * * *"
+
+# Box office hygiene: clear out abandoned checkouts. The 15-minute hold in
+# box_reserve_order() is what actually frees the seats — this only stops an
+# abandoned buyer's name and email sitting in the table for ever.
+[functions."expire-ticket-holds"]
+  schedule = "17 * * * *"
 
 # Proxy Xero connections endpoint
 [[redirects]]
@@ -56,6 +68,24 @@
   to = "/.netlify/functions/calendar-feed"
   status = 200
   force = true
+
+# ── Box office public pages ──────────────────────────────────────────────────
+# These must stay above the /* catch-all below, or every one of them ends up
+# serving the React admin app instead.
+[[redirects]]
+  from = "/tickets/*"
+  to = "/ticket-event.html"
+  status = 200
+
+[[redirects]]
+  from = "/my-ticket/*"
+  to = "/my-ticket.html"
+  status = 200
+
+[[redirects]]
+  from = "/whats-on"
+  to = "/whats-on.html"
+  status = 200
 
 [[redirects]]
   from = "/*"
