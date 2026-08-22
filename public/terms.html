@@ -51,6 +51,14 @@
 var SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 var TERMS_KEY = "hbf_terms_v1";
+// Tickets have their own terms — refunds and cancellation for a night out are
+// nothing like the terms for a week in a cottage, and showing the wrong ones
+// at a checkout would be worse than showing none. /terms.html?tickets=1
+var TICKET_TERMS_KEY = "hbf_ticket_terms_v1";
+if (window.location.search.indexOf("tickets=1") !== -1) {
+  TERMS_KEY = TICKET_TERMS_KEY;
+  document.title = "Ticket Terms & Conditions | Hawthbush Farm";
+}
 
 function escHtml(s) {
   return String(s == null ? "" : s)

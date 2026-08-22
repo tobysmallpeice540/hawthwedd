@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What's on | Hawthbush Farm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Jost', sans-serif; background: #f9f6f1; color: #2d2a25; min-height: 100vh; }
+    .header { background: #fff; border-bottom: 1px solid #e8e2d9; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; letter-spacing: .5px; }
+    .header .sub { font-size: 13px; color: #7a7060; margin-top: 2px; }
+    .main { max-width: 1000px; margin: 0 auto; padding: 36px 20px 80px; }
+
+    .page-title { font-family: 'Cormorant Garamond', serif; font-size: 34px; font-weight: 600; margin-bottom: 6px; }
+    .page-sub { font-size: 14px; color: #7a7060; margin-bottom: 28px; line-height: 1.55; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+    .card { background: #fff; border: 1px solid #e8e2d9; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.04); text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: box-shadow .15s, transform .15s; }
+    .card:hover { box-shadow: 0 8px 24px rgba(0,0,0,.09); transform: translateY(-2px); }
+    .card img { width: 100%; height: 168px; object-fit: cover; background: #ece6dc; display: block; }
+    .card-body { padding: 17px 19px 20px; flex: 1; display: flex; flex-direction: column; }
+    .card-date { font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: #b8a88a; font-weight: 600; }
+    .card-name { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; margin: 6px 0 8px; line-height: 1.2; }
+    .card-meta { font-size: 13px; color: #7a7060; margin-top: auto; }
+    .pill { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: #f4f1ea; color: #7a7060; }
+    .pill.out { background: #fef2f2; color: #b91c1c; }
+
+    .empty { background: #fff; border: 1px solid #e8e2d9; border-radius: 14px; padding: 40px 26px; text-align: center; color: #7a7060; font-size: 15px; line-height: 1.6; }
+    @media (max-width: 600px) { .header { padding: 16px 18px; } .main { padding: 22px 14px 60px; } }
+  </style>
+</head>
+<body>
+
+<div class="header" id="page-header">
+  <div>
+    <h1>Hawthbush Farm</h1>
+    <div class="sub">The Grain Store &mdash; Gun Hill, East Sussex</div>
+  </div>
+  <a href="https://www.hawthbushfarm.co.uk" style="font-size:13px; color:#7a7060; text-decoration:none;">&#8592; Back to website</a>
+</div>
+<script>
+(function () {
+  var framed = false;
+  try { framed = window.top !== window.self; } catch (e) { framed = true; }
+  if (framed || window.location.search.indexOf("embed=1") !== -1) {
+    var h = document.getElementById("page-header");
+    if (h) h.parentNode.removeChild(h);
+    document.documentElement.style.background = "transparent";
+    document.body.style.background = "transparent";
+  }
+})();
+</script>
+
+<div class="main">
+  <h2 class="page-title">What&rsquo;s on</h2>
+  <p class="page-sub">Comedy nights, supper clubs and parties in the Grain Store.</p>
+  <div id="list"><p style="color:#7a7060">Loading&hellip;</p></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+  var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+  var list = document.getElementById("list");
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function money(pence) {
+    var p = Math.round(Number(pence) || 0);
+    return "£" + (p / 100).toFixed(p % 100 === 0 ? 0 : 2);
+  }
+  function fmtDate(ts) {
+    return new Date(ts).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "long" });
+  }
+  function fmtTime(ts) {
+    return new Date(ts).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" });
+  }
+
+  // Only published, listed events come back from here — a private event is
+  // filtered out in Postgres, not hidden with CSS.
+  fetch(SUPABASE_URL + "/rest/v1/rpc/box_public_whats_on", {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" },
+    body: "{}"
+  }).then(function (r) { return r.json(); })
+    .then(function (events) {
+      if (!events || !events.length) {
+        list.innerHTML = '<div class="empty">There&rsquo;s nothing on sale just at the moment.<br>' +
+          'Do check back soon &mdash; or <a href="https://www.hawthbushfarm.co.uk" style="color:#2d2a25">get in touch</a>.</div>';
+        return;
+      }
+      list.innerHTML = '<div class="grid">' + events.map(function (e) {
+        return '<a class="card" href="/tickets/' + encodeURIComponent(e.slug) + '">' +
+          (e.page_image ? '<img src="' + esc(e.page_image) + '" alt="">' : "") +
+          '<div class="card-body">' +
+            '<div class="card-date">' + esc(fmtDate(e.starts_at)) + "</div>" +
+            '<div class="card-name">' + esc(e.name) + "</div>" +
+            '<div class="card-meta">' + esc(fmtTime(e.starts_at)) + " · " + esc(e.venue_name || "") + "<br>" +
+              (e.sold_out
+                ? '<span class="pill out">Sold out</span>'
+                : '<span class="pill">' + (e.from_pence === 0 ? "Free" : "From " + money(e.from_pence)) + "</span>") +
+            "</div>" +
+          "</div></a>";
+      }).join("") + "</div>";
+    })
+    .catch(function () {
+      list.innerHTML = '<div class="empty">We couldn&rsquo;t load the listings just now. Please refresh and try again.</div>';
+    });
+})();
+</script>
+</body>
+</html>

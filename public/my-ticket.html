@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Your ticket | Hawthbush Farm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Jost', sans-serif; background: #f9f6f1; color: #2d2a25; min-height: 100vh; }
+    .main { max-width: 480px; margin: 0 auto; padding: 30px 16px 60px; }
+
+    .ticket { background: #fff; border: 1px solid #e8e2d9; border-radius: 18px; padding: 26px 24px 28px; box-shadow: 0 3px 16px rgba(0,0,0,.05); text-align: center; }
+    .brand { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; letter-spacing: .5px; }
+    .brand-sub { font-size: 12px; color: #7a7060; letter-spacing: 1.4px; text-transform: uppercase; margin-top: 2px; }
+    .ev-name { font-family: 'Cormorant Garamond', serif; font-size: 30px; font-weight: 600; line-height: 1.15; margin: 20px 0 8px; }
+    .ev-when { font-size: 15px; font-weight: 500; }
+    .ev-where { font-size: 13px; color: #7a7060; margin-top: 3px; }
+
+    .qr-box { margin: 22px 0 6px; padding: 18px; border: 1px solid #e8e2d9; border-radius: 14px; background: #fff; }
+    .qr-box img { width: 100%; max-width: 280px; height: auto; display: block; margin: 0 auto; image-rendering: pixelated; }
+    .ref { font-size: 26px; font-weight: 700; letter-spacing: 3px; margin-top: 14px; }
+    .ref-sub { font-size: 12px; color: #7a7060; margin-top: 4px; }
+
+    .holds { display: inline-block; background: #f4f1ea; border-radius: 999px; padding: 7px 16px; font-size: 14px; margin-top: 16px; }
+    .lines { font-size: 14px; color: #3a362f; line-height: 1.7; margin-top: 12px; }
+
+    .perf { border-top: 2px dashed #e0d9ce; margin: 22px -24px 0; padding: 20px 24px 0; }
+
+    .alert { border-radius: 10px; padding: 13px 16px; font-size: 14px; line-height: 1.55; text-align: left; }
+    .alert-warn  { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+    .alert-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .alert-ok    { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+    .alert-info  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+
+    .btn-primary { display: block; width: 100%; padding: 14px 24px; background: #2d2a25; color: #fff; border: none; border-radius: 10px; font-family: 'Jost', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; text-decoration: none; text-align: center; }
+    .btn-primary:hover:not(:disabled) { background: #4a4540; }
+    .btn-primary:disabled { background: #c0bab0; cursor: not-allowed; }
+    .btn-ghost { display: inline-block; padding: 10px 18px; background: none; color: #7a7060; border: 1.5px solid #e0d9ce; border-radius: 9px; font-family: 'Jost', sans-serif; font-size: 13px; cursor: pointer; text-decoration: none; margin-top: 12px; }
+    .muted { color: #7a7060; font-size: 13px; line-height: 1.6; }
+    .sum-row { display: flex; justify-content: space-between; font-size: 14px; padding: 3px 0; }
+    .sum-row.tot { font-weight: 700; border-top: 1px solid #e8e2d9; margin-top: 8px; padding-top: 8px; }
+
+    @media print {
+      body { background: #fff; }
+      .no-print { display: none !important; }
+      .ticket { border: none; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="main" id="app"><p class="muted" style="text-align:center">Loading your ticket&hellip;</p></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+  var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+
+  // The token in the path is the whole credential. It's 32 random characters,
+  // so it can't be guessed from an order reference glimpsed on someone else's
+  // ticket — which is exactly why the QR carries this and not the reference.
+  var token = decodeURIComponent((window.location.pathname.split("/my-ticket/")[1] || "").replace(/\/$/, ""));
+  var app = document.getElementById("app");
+  var paidJustNow = new URLSearchParams(window.location.search).get("paid") === "1";
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function money(pence) {
+    var p = Math.round(Number(pence) || 0);
+    return "£" + (p / 100).toFixed(p % 100 === 0 ? 0 : 2);
+  }
+  function fmtDate(ts) {
+    if (!ts) return "";
+    return new Date(ts).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  }
+  function fmtDateShort(v) {
+    if (!v) return "";
+    var d = new Date(String(v).length <= 10 ? v + "T12:00:00Z" : v);
+    return d.toLocaleDateString("en-GB", { timeZone: "Europe/London", day: "numeric", month: "long", year: "numeric" });
+  }
+  function fmtTime(ts) {
+    if (!ts) return "";
+    return new Date(ts).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function rpc(fn, args) {
+    return fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify(args)
+    }).then(function (r) { return r.json(); });
+  }
+
+  function render(t) {
+    var e = t.event || {};
+    var lines = (t.lines || []).map(function (l) {
+      return l.qty + " × " + esc(l.name);
+    }).join("<br>");
+
+    var head =
+      '<div class="brand">Hawthbush Farm</div>' +
+      '<div class="brand-sub">' + esc(e.venue_name || "The Grain Store") + "</div>" +
+      '<div class="ev-name">' + esc(e.name) + "</div>" +
+      '<div class="ev-when">' + esc(fmtDate(e.starts_at)) + " · " + esc(fmtTime(e.starts_at)) + "</div>" +
+      '<div class="ev-where">' + esc([e.venue_name, e.venue_postcode].filter(Boolean).join(", ")) + "</div>";
+
+    var body;
+
+    if (t.status === "cancelled" || t.status === "refunded") {
+      body = '<div class="perf"><div class="alert alert-error">' +
+        "This booking has been cancelled, so these tickets are no longer valid.<br>" +
+        "Reference " + esc(t.order_ref) + ". If that's a surprise, please get in touch and we'll put it right." +
+        "</div></div>";
+
+    } else if (!t.tickets_issued) {
+      // Deposit paid, balance outstanding. Deliberately no QR: there is
+      // nothing to scan until the balance clears, and showing a code that
+      // wouldn't work on the door would be worse than showing none.
+      body =
+        '<div class="perf">' +
+          (paidJustNow
+            ? '<div class="alert alert-ok" style="margin-bottom:14px">Thank you — your payment is being confirmed. This page will update in a moment.</div>'
+            : "") +
+          '<div class="alert alert-warn">' +
+            "<strong>Your table is reserved.</strong><br>" +
+            "Your tickets are issued once the balance is settled — you'll get them by email straight away." +
+          "</div>" +
+          '<div class="holds">' + t.total_qty + " place" + (t.total_qty === 1 ? "" : "s") + " held</div>" +
+          '<div class="lines">' + lines + "</div>" +
+          '<div style="margin-top:16px;text-align:left">' +
+            '<div class="sum-row"><span>Total</span><span>' + money(t.total_pence) + "</span></div>" +
+            '<div class="sum-row"><span>Deposit paid</span><span>−' + money(t.deposit_pence) + "</span></div>" +
+            '<div class="sum-row tot"><span>Balance due</span><span>' + money(t.balance_pence) + "</span></div>" +
+            (t.balance_due_on ? '<div class="muted" style="margin-top:6px">Due by ' + esc(fmtDateShort(t.balance_due_on)) + "</div>" : "") +
+          "</div>" +
+          '<div class="ref" style="font-size:20px;margin-top:16px">' + esc(t.order_ref) + "</div>" +
+          '<button class="btn-primary no-print" id="pay-balance">Pay the balance — ' + money(t.balance_pence) + "</button>" +
+          '<div id="pay-msg" class="muted no-print" style="margin-top:8px"></div>' +
+        "</div>";
+
+    } else {
+      var qrUrl = "/.netlify/functions/ticket-qr?t=" + encodeURIComponent(token);
+      var left = Math.max((t.total_qty || 0) - (t.admitted || 0), 0);
+      body =
+        '<div class="qr-box"><img src="' + qrUrl + '" alt="Your ticket QR code"></div>' +
+        '<div class="ref">' + esc(t.order_ref) + "</div>" +
+        '<div class="ref-sub">One code for the whole booking</div>' +
+        '<div class="holds">' + t.total_qty + " ticket" + (t.total_qty === 1 ? "" : "s") +
+          (t.admitted ? " · " + t.admitted + " already in" : "") + "</div>" +
+        '<div class="lines">' + lines + "</div>" +
+        (t.admitted && left === 0
+          ? '<div class="alert alert-info no-print" style="margin-top:14px">Everyone on this booking has been checked in.</div>'
+          : "") +
+        '<div class="muted no-print" style="margin-top:16px">' +
+          "Show this on your phone at the door — turn your screen brightness up. " +
+          "You can forward this link to the rest of your party; it's the same code for everyone." +
+        "</div>" +
+        '<button class="btn-ghost no-print" onclick="window.print()">Print this ticket</button>';
+    }
+
+    app.innerHTML = '<div class="ticket">' + head + body + "</div>";
+
+    var payBtn = document.getElementById("pay-balance");
+    if (payBtn) {
+      payBtn.addEventListener("click", function () {
+        payBtn.disabled = true; payBtn.textContent = "Opening Stripe…";
+        fetch("/.netlify/functions/pay-balance", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: token })
+        }).then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
+          .then(function (res) {
+            if (res.ok && res.b.url) { window.location.href = res.b.url; return; }
+            document.getElementById("pay-msg").textContent = res.b.error || "Something went wrong. Please try again.";
+            payBtn.disabled = false; payBtn.textContent = "Pay the balance";
+          })
+          .catch(function () {
+            document.getElementById("pay-msg").textContent = "We couldn't reach the payment page. Please try again.";
+            payBtn.disabled = false; payBtn.textContent = "Pay the balance";
+          });
+      });
+    }
+  }
+
+  function load(attempt) {
+    rpc("box_my_ticket", { p_token: token }).then(function (t) {
+      if (!t || !t.ok) {
+        app.innerHTML = '<div class="ticket"><div class="brand">Hawthbush Farm</div>' +
+          '<p class="muted" style="margin-top:18px">We couldn\'t find a ticket for that link. ' +
+          "Please check it against the one in your confirmation email, or get in touch and we'll sort it out.</p></div>";
+        return;
+      }
+      render(t);
+      // Straight back from paying a balance, the webhook may not have landed
+      // yet — so wait for it rather than telling someone they still owe money
+      // they've just handed over.
+      if (paidJustNow && !t.tickets_issued && (attempt || 0) < 10) {
+        setTimeout(function () { load((attempt || 0) + 1); }, 2000);
+      }
+    }).catch(function () {
+      app.innerHTML = '<div class="ticket"><p class="muted">We couldn\'t load your ticket. Please refresh and try again.</p></div>';
+    });
+  }
+
+  if (!token) {
+    app.innerHTML = '<div class="ticket"><p class="muted">That link is missing its ticket code.</p></div>';
+  } else {
+    load(0);
+  }
+})();
+</script>
+</body>
+</html>

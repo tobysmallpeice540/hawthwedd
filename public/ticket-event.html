@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tickets | Hawthbush Farm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* Same visual language as book-accom.html — warm, editorial, farm.
+       Cormorant Garamond for headings, Jost for everything else. This page is
+       standalone and dependency-free by design, like the other public pages:
+       it reads Supabase through the anon key and POSTs to Netlify functions,
+       and is not part of the React app. */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Jost', sans-serif; background: #f9f6f1; color: #2d2a25; min-height: 100vh; }
+
+    .header { background: #fff; border-bottom: 1px solid #e8e2d9; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; letter-spacing: .5px; }
+    .header .sub { font-size: 13px; color: #7a7060; margin-top: 2px; }
+    .main { max-width: 1080px; margin: 0 auto; padding: 30px 20px 80px; }
+
+    .hero { width: 100%; height: 320px; object-fit: cover; display: block; background: #ece6dc; }
+    .hero-wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 0; }
+    .hero-wrap img { width: 100%; height: 320px; object-fit: cover; border-radius: 16px; display: block; box-shadow: 0 3px 16px rgba(0,0,0,.06); }
+
+    .panel { background: #fff; border: 1px solid #e8e2d9; border-radius: 14px; padding: 24px 26px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
+    .panel h3 { font-family: 'Cormorant Garamond', serif; font-size: 21px; font-weight: 600; margin-bottom: 14px; }
+
+    .event-title { font-family: 'Cormorant Garamond', serif; font-size: 40px; font-weight: 600; line-height: 1.1; margin-bottom: 10px; }
+    .event-when { font-size: 16px; color: #2d2a25; margin-bottom: 4px; font-weight: 500; }
+    .event-where { font-size: 14px; color: #7a7060; margin-bottom: 22px; }
+    .event-body { font-size: 15px; line-height: 1.7; color: #3a362f; }
+    .event-body p { margin-bottom: 13px; }
+    .event-body ul, .event-body ol { margin: 0 0 13px 20px; }
+    .event-body a { color: #2d2a25; }
+    .event-body img { max-width: 100%; height: auto; border-radius: 10px; }
+
+    .layout { display: grid; grid-template-columns: 1fr 340px; gap: 26px; align-items: start; }
+    .buy-panel { position: sticky; top: 20px; background: #fff; border: 1px solid #e8e2d9; border-radius: 14px; padding: 22px 22px 24px; box-shadow: 0 3px 16px rgba(0,0,0,.06); }
+    .buy-price { font-family: 'Cormorant Garamond', serif; font-size: 27px; font-weight: 600; margin-bottom: 3px; }
+    .buy-avail { font-size: 13px; color: #7a7060; margin-bottom: 16px; }
+    .buy-avail.low { color: #a8551f; font-weight: 500; }
+    .buy-note { font-size: 12px; color: #9a9080; margin-top: 12px; line-height: 1.55; text-align: center; }
+
+    .mapframe { width: 100%; height: 220px; border: 0; border-radius: 12px; margin-top: 14px; }
+
+    /* Steps */
+    .steps { display: flex; margin-bottom: 26px; border-radius: 10px; overflow: hidden; border: 1px solid #e8e2d9; }
+    .step { flex: 1; padding: 11px 8px; text-align: center; background: #f9f6f1; font-size: 12px; font-weight: 600; color: #9a9080; border-right: 1px solid #e8e2d9; }
+    .step:last-child { border-right: none; }
+    .step.active { background: #2d2a25; color: #fff; }
+    .step.done { background: #edf7ed; color: #3d7a3d; }
+
+    /* Ticket rows */
+    .t-row { display: flex; align-items: center; gap: 14px; padding: 15px 0; border-top: 1px solid #f0ece4; flex-wrap: wrap; }
+    .t-row:first-of-type { border-top: none; }
+    .t-info { flex: 1; min-width: 150px; }
+    .t-name { font-size: 16px; font-weight: 500; }
+    .t-desc { font-size: 13px; color: #7a7060; line-height: 1.5; margin-top: 3px; }
+    .t-avail { font-size: 12px; color: #a8551f; margin-top: 4px; font-weight: 500; }
+    .t-price { font-size: 16px; font-weight: 600; min-width: 66px; text-align: right; }
+    .stepper { display: flex; align-items: center; gap: 4px; }
+    .stepper button { width: 34px; height: 34px; border-radius: 8px; border: 1.5px solid #e0d9ce; background: #fff; color: #2d2a25; font-size: 18px; cursor: pointer; line-height: 1; }
+    .stepper button:hover:not(:disabled) { border-color: #b8a88a; }
+    .stepper button:disabled { color: #d8d2c6; cursor: not-allowed; }
+    .stepper .n { width: 34px; text-align: center; font-size: 16px; font-weight: 600; }
+
+    .sum-row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 4px 0; }
+    .sum-row.tot { font-weight: 700; font-size: 17px; border-top: 1px solid #e0d9ce; margin-top: 9px; padding-top: 10px; }
+    .sum-row.disc { color: #3d7a4a; }
+    .sum-row.dep { color: #5a7a3a; font-weight: 600; }
+    .sum-row.bal { font-size: 12.5px; color: #9a9080; }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+    .form-field { display: flex; flex-direction: column; gap: 5px; }
+    .form-field.full { grid-column: 1 / -1; }
+    .form-field label { font-size: 11px; font-weight: 600; color: #7a7060; text-transform: uppercase; letter-spacing: .5px; }
+    .form-field input {
+      background: #fafaf8; border: 1.5px solid #e0d9ce; border-radius: 8px; color: #2d2a25;
+      font-family: 'Jost', sans-serif; font-size: 14px; padding: 10px 13px; outline: none; transition: border-color .15s;
+    }
+    .form-field input:focus { border-color: #b8a88a; box-shadow: 0 0 0 3px #f0e8d840; }
+
+    .btn-primary { display: block; width: 100%; padding: 14px 24px; background: #2d2a25; color: #fff; border: none; border-radius: 10px; font-family: 'Jost', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; transition: background .15s; letter-spacing: .2px; }
+    .btn-primary:hover:not(:disabled) { background: #4a4540; }
+    .btn-primary:disabled { background: #c0bab0; cursor: not-allowed; }
+    .btn-ghost { padding: 10px 20px; background: none; color: #7a7060; border: 1.5px solid #e0d9ce; border-radius: 9px; font-family: 'Jost', sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .btn-ghost:hover { border-color: #b8a88a; color: #2d2a25; }
+    .btn-link { background: none; border: none; color: #7a7060; font-family: 'Jost', sans-serif; font-size: 13px; text-decoration: underline; cursor: pointer; padding: 0; }
+
+    .alert { border-radius: 8px; padding: 11px 15px; font-size: 13px; margin-bottom: 14px; line-height: 1.5; }
+    .alert-info  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .alert-warn  { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+    .alert-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .alert-ok    { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+
+    .divider { border: none; border-top: 1px solid #e8e2d9; margin: 20px 0; }
+    .stripe-note { font-size: 12px; color: #9a9080; text-align: center; margin-top: 10px; }
+    .muted { color: #7a7060; font-size: 13px; line-height: 1.6; }
+
+    .terms-accept { display: flex; align-items: flex-start; gap: 10px; background: #fff; border: 1.5px solid #e8e2d9; border-radius: 10px; padding: 13px 15px; margin: 12px 0 4px; cursor: pointer; font-size: 13.5px; line-height: 1.55; transition: border-color .15s, background .15s; }
+    .terms-accept.on { border-color: #3d7a4a; background: #f4fbf5; }
+    .terms-accept input { width: 17px; height: 17px; margin-top: 1px; flex-shrink: 0; accent-color: #3d7a4a; cursor: pointer; }
+
+    .done-panel { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 14px; padding: 30px 28px; text-align: center; }
+    .done-tick { width: 54px; height: 54px; border-radius: 50%; background: #16a34a; color: #fff; font-size: 28px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
+    .done-ref { font-size: 26px; font-weight: 700; letter-spacing: 3px; margin: 12px 0 4px; }
+
+    .code-gate { max-width: 460px; margin: 0 auto; }
+
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      /* On a phone the buy panel belongs under the description, not floating
+         beside it — so it stops being sticky and simply follows the content. */
+      .buy-panel { position: static; }
+      .header { padding: 16px 18px; }
+      .main { padding: 20px 12px 60px; }
+      .form-grid { grid-template-columns: 1fr; }
+      .hero-wrap img { height: 200px; }
+      .event-title { font-size: 30px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header" id="page-header">
+  <div>
+    <h1>Hawthbush Farm</h1>
+    <div class="sub">The Grain Store &mdash; Gun Hill, East Sussex</div>
+  </div>
+  <a href="/whats-on" style="font-size:13px; color:#7a7060; text-decoration:none;">What&rsquo;s on &rarr;</a>
+</div>
+<script>
+(function () {
+  var framed = false;
+  try { framed = window.top !== window.self; } catch (e) { framed = true; }
+  if (framed || window.location.search.indexOf("embed=1") !== -1) {
+    var h = document.getElementById("page-header");
+    if (h) h.parentNode.removeChild(h);
+    document.documentElement.style.background = "transparent";
+    document.body.style.background = "transparent";
+  }
+})();
+</script>
+
+<div id="hero"></div>
+<div class="main" id="app"><p class="muted">Loading&hellip;</p></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+  var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
+  var CHECKOUT_FN = "/.netlify/functions/create-ticket-checkout";
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  var slug = decodeURIComponent((window.location.pathname.split("/tickets/")[1] || "").replace(/\/$/, ""));
+  var params = new URLSearchParams(window.location.search);
+  // The invite link can carry the code — /tickets/harvest-supper?code=BARN26 —
+  // so most people never type anything at all.
+  var accessCode = params.get("code") || sessionStorage.getItem("hbf_code_" + slug) || "";
+
+  var ev = null;
+  var qty = {};                 // ticket_type_id -> n
+  var step = 0;                 // 0 = event page, 1 = tickets, 2 = details, 3 = payment
+  var details = { firstName: "", lastName: "", email: "", email2: "", phone: "" };
+  var discountCode = "";
+  var discountMsg = "";
+  var discountShown = false;     // whether the "Got a discount code?" field is open
+  var applied = null;            // { code, discount_pence, label } once checked
+  var errorMsg = "";
+  var busy = false;
+  var termsOk = false;
+  var waitlistDone = false;
+  var ticketTerms = false;       // whether ticket terms have been published
+
+  var app = document.getElementById("app");
+  var heroEl = document.getElementById("hero");
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function money(pence) {
+    var p = Math.round(Number(pence) || 0);
+    return "£" + (p / 100).toFixed(p % 100 === 0 ? 0 : 2);
+  }
+  // Everything is Europe/London and there is no timezone picker anywhere.
+  function fmtDate(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    return d.toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  }
+  function fmtTime(ts) {
+    if (!ts) return "";
+    return new Date(ts).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" });
+  }
+  function whenLine(e) {
+    if (!e.starts_at) return "";
+    var line = fmtDate(e.starts_at) + " · " + fmtTime(e.starts_at);
+    if (e.ends_at) {
+      var sameDay = fmtDate(e.starts_at) === fmtDate(e.ends_at);
+      line += sameDay ? " – " + fmtTime(e.ends_at) : " – " + fmtDate(e.ends_at) + " " + fmtTime(e.ends_at);
+    }
+    return line;
+  }
+  function isEmail(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "")); }
+
+  function rpc(fn, args) {
+    return fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify(args)
+    }).then(function (r) { return r.json(); });
+  }
+
+  function totalQty() {
+    return Object.keys(qty).reduce(function (a, k) { return a + (qty[k] || 0); }, 0);
+  }
+  function subtotalPence() {
+    if (!ev) return 0;
+    return (ev.ticket_types || []).reduce(function (a, t) { return a + (qty[t.id] || 0) * t.price_pence; }, 0);
+  }
+  // Shown for reassurance only. The real figure is recalculated in Postgres
+  // before Stripe is asked for a penny — the browser is never trusted with a
+  // price, so a number tampered with here changes nothing but this display.
+  function discountPence() {
+    return applied ? Math.min(applied.discount_pence, subtotalPence()) : 0;
+  }
+  function totalPence() {
+    return Math.max(subtotalPence() - discountPence(), 0);
+  }
+  // The deposit is per ticket, so a discount comes off the balance rather than
+  // off what's taken today — a £20 deposit stays £20 a head either way.
+  function depositPence() {
+    if (!ev || ev.payment_mode !== "deposit") return 0;
+    return Math.min(ev.deposit_pence * totalQty(), totalPence());
+  }
+
+  // ── Rendering ──────────────────────────────────────────────────────────────
+  function render() {
+    if (!ev) return;
+    if (params.get("ref")) return renderDone();
+    if (ev.gated) return renderGate();
+    heroEl.innerHTML = ev.header_image
+      ? '<div class="hero-wrap"><img src="' + esc(ev.header_image) + '" alt=""></div>' : "";
+    if (step === 0) return renderEvent();
+    return renderCheckout();
+  }
+
+  // The gate. A wrong code shows only the event name and date — enough for the
+  // page not to look broken, and nothing a stranger shouldn't have.
+  function renderGate() {
+    heroEl.innerHTML = "";
+    var locked = ev.locked;
+    app.innerHTML =
+      '<div class="code-gate">' +
+        '<div class="panel" style="text-align:center">' +
+          '<h3 style="font-size:26px">' + esc(ev.name) + '</h3>' +
+          '<p class="muted" style="margin-bottom:18px">' + esc(whenLine(ev)) + '<br>' + esc(ev.venue_name || "") + '</p>' +
+          '<hr class="divider">' +
+          (locked
+            ? '<div class="alert alert-warn">Too many attempts. Please wait a few minutes and try again.</div>'
+            : '<p class="muted" style="margin-bottom:14px">This is a private event. Please enter the access code from your invitation.</p>' +
+              (accessCode ? '<div class="alert alert-error">That code wasn\'t recognised.</div>' : "") +
+              '<div class="form-field"><input id="gate-code" placeholder="Access code" autocomplete="off" ' +
+                'style="text-align:center;letter-spacing:2px;text-transform:uppercase"></div>' +
+              '<button class="btn-primary" id="gate-go">Continue</button>') +
+        '</div>' +
+      '</div>';
+
+    var input = document.getElementById("gate-code");
+    if (input) {
+      input.focus();
+      input.addEventListener("keydown", function (e) { if (e.key === "Enter") submitCode(); });
+      document.getElementById("gate-go").addEventListener("click", submitCode);
+    }
+    function submitCode() {
+      var v = (input.value || "").trim();
+      if (!v) return;
+      accessCode = v;
+      sessionStorage.setItem("hbf_code_" + slug, v);
+      load();
+    }
+  }
+
+  function availLine(e) {
+    if (e.sold_out) return '<div class="buy-avail low">Sold out</div>';
+    var labels = (e.ticket_types || []).map(function (t) { return t.avail_label; }).filter(Boolean);
+    if (!labels.length) return "";
+    return '<div class="buy-avail low">' + esc(labels[0]) + "</div>";
+  }
+
+  function renderEvent() {
+    var cheapest = (ev.ticket_types || []).reduce(function (a, t) {
+      return (a === null || t.price_pence < a) ? t.price_pence : a;
+    }, null);
+
+    var mapHtml = "";
+    if (!ev.hide_map && ev.venue_postcode) {
+      // A plain Google Maps embed — no API key, no tracking script.
+      mapHtml = '<iframe class="mapframe" loading="lazy" referrerpolicy="no-referrer-when-downgrade" ' +
+        'src="https://maps.google.com/maps?q=' + encodeURIComponent(ev.venue_postcode) + '&output=embed"></iframe>';
+    }
+
+    var buyInner;
+    if (ev.sold_out && ev.waitlist_on) {
+      buyInner = waitlistFormHtml();
+    } else if (ev.sold_out) {
+      buyInner = '<div class="buy-price">Sold out</div>' +
+        '<p class="muted">There are no tickets left for this event.</p>';
+    } else {
+      buyInner =
+        (cheapest !== null ? '<div class="buy-price">' + (cheapest === 0 ? "Free" : "From " + money(cheapest)) + "</div>" : "") +
+        availLine(ev) +
+        (ev.payment_mode === "deposit"
+          ? '<div class="alert alert-info" style="margin-bottom:12px">Book with a deposit of ' + money(ev.deposit_pence) +
+            ' per ticket. The balance is due ' + ev.balance_days + ' days before the event.</div>' : "") +
+        (ev.min_per_order
+          ? '<div class="muted" style="margin-bottom:12px">Booked in groups of ' + ev.min_per_order + ' or more.</div>' : "") +
+        '<button class="btn-primary" id="buy-btn" style="margin-top:4px">' + esc(ev.buy_button_label || "Select tickets") + "</button>" +
+        '<div class="buy-note">Secure card payment powered by Stripe</div>';
+    }
+
+    app.innerHTML =
+      '<div class="layout">' +
+        '<div>' +
+          '<h1 class="event-title">' + esc(ev.name) + "</h1>" +
+          '<div class="event-when">' + esc(whenLine(ev)) + "</div>" +
+          '<div class="event-where">' + esc(ev.venue_name || "") +
+            (ev.venue_postcode ? ", " + esc(ev.venue_postcode) : "") + "</div>" +
+          '<div class="panel"><div class="event-body">' + (ev.description || "<p></p>") + "</div>" + mapHtml + "</div>" +
+        "</div>" +
+        '<div><div class="buy-panel">' + buyInner + "</div></div>" +
+      "</div>";
+
+    var btn = document.getElementById("buy-btn");
+    if (btn) btn.addEventListener("click", function () { step = 1; errorMsg = ""; render(); window.scrollTo(0, 0); });
+    wireWaitlist();
+  }
+
+  // ── Waitlist ───────────────────────────────────────────────────────────────
+  function waitlistFormHtml() {
+    if (waitlistDone) {
+      return '<div class="alert alert-ok" style="margin:0">' + esc(ev.waitlist_confirmation || "Thank you — you're on the list.") + "</div>";
+    }
+    return '<div class="buy-price">Sold out</div>' +
+      '<p class="muted" style="margin-bottom:14px">' + esc(ev.waitlist_text || "") + "</p>" +
+      '<div class="form-field" style="margin-bottom:9px"><input id="wl-name" placeholder="Your name"></div>' +
+      '<div class="form-field" style="margin-bottom:9px"><input id="wl-email" placeholder="Email address" type="email"></div>' +
+      '<div class="form-field"><input id="wl-qty" placeholder="How many tickets?" type="number" min="1" value="2"></div>' +
+      '<div id="wl-msg"></div>' +
+      '<button class="btn-primary" id="wl-go">' + esc(ev.waitlist_cta || "Join the waitlist") + "</button>";
+  }
+
+  function wireWaitlist() {
+    var go = document.getElementById("wl-go");
+    if (!go) return;
+    go.addEventListener("click", function () {
+      var email = (document.getElementById("wl-email").value || "").trim();
+      var msg = document.getElementById("wl-msg");
+      if (!isEmail(email)) { msg.innerHTML = '<div class="alert alert-error">Please enter a valid email address.</div>'; return; }
+      go.disabled = true; go.textContent = "Adding…";
+      rpc("box_join_waitlist", {
+        p_slug: slug,
+        p_name: (document.getElementById("wl-name").value || "").trim(),
+        p_email: email,
+        p_qty: parseInt(document.getElementById("wl-qty").value, 10) || 1
+      }).then(function (r) {
+        if (r && r.ok) { waitlistDone = true; render(); }
+        else { msg.innerHTML = '<div class="alert alert-error">Sorry — that didn\'t work. Please try again.</div>'; go.disabled = false; go.textContent = ev.waitlist_cta || "Join the waitlist"; }
+      });
+    });
+  }
+
+  // ── Checkout ───────────────────────────────────────────────────────────────
+  function summaryHtml() {
+    var lines = (ev.ticket_types || []).filter(function (t) { return qty[t.id]; }).map(function (t) {
+      return '<div class="sum-row"><span>' + qty[t.id] + " × " + esc(t.name) + "</span><span>" +
+        money(qty[t.id] * t.price_pence) + "</span></div>";
+    }).join("");
+
+    var dep = depositPence();
+    var disc = discountPence();
+    var totals =
+      (disc > 0
+        ? '<div class="sum-row"><span>Subtotal</span><span>' + money(subtotalPence()) + "</span></div>" +
+          '<div class="sum-row disc"><span>' + esc(applied.code) + " (" + esc(applied.label) + ")</span><span>−" +
+            money(disc) + "</span></div>"
+        : "") +
+      '<div class="sum-row tot"><span>Total</span><span>' + money(totalPence()) + "</span></div>" +
+      (dep > 0
+        ? '<div class="sum-row dep"><span>Due today (deposit)</span><span>' + money(dep) + "</span></div>" +
+          '<div class="sum-row bal"><span>Balance later</span><span>' + money(totalPence() - dep) + "</span></div>"
+        : "");
+
+    return '<div class="buy-panel">' +
+      '<h3 style="font-family:\'Cormorant Garamond\',serif;font-size:20px;margin-bottom:4px">' + esc(ev.name) + "</h3>" +
+      '<p class="muted" style="margin-bottom:14px">' + esc(whenLine(ev)) + "<br>" + esc(ev.venue_name || "") + "</p>" +
+      '<hr class="divider" style="margin:12px 0">' +
+      (lines || '<p class="muted">No tickets selected yet.</p>') +
+      totals +
+      "</div>";
+  }
+
+  function stepsHtml() {
+    var names = ["Tickets", "Details", "Payment"];
+    return '<div class="steps">' + names.map(function (n, i) {
+      var idx = i + 1;
+      var cls = step === idx ? "step active" : (step > idx ? "step done" : "step");
+      return '<div class="' + cls + '">' + (step > idx ? "✓ " : "") + n + "</div>";
+    }).join("") + "</div>";
+  }
+
+  function renderCheckout() {
+    var inner = step === 1 ? stepTickets() : step === 2 ? stepDetails() : stepPayment();
+    app.innerHTML =
+      stepsHtml() +
+      '<div class="layout">' +
+        '<div><div class="panel">' + (errorMsg ? '<div class="alert alert-error">' + esc(errorMsg) + "</div>" : "") + inner + "</div></div>" +
+        "<div>" + summaryHtml() + "</div>" +
+      "</div>";
+    wireCheckout();
+  }
+
+  function stepTickets() {
+    var rows = (ev.ticket_types || []).map(function (t) {
+      var n = qty[t.id] || 0;
+      var max = t.remaining;
+      if (t.max_per_order) max = Math.min(max, t.max_per_order);
+      return '<div class="t-row">' +
+        '<div class="t-info">' +
+          '<div class="t-name">' + esc(t.name) + "</div>" +
+          (t.description ? '<div class="t-desc">' + esc(t.description) + "</div>" : "") +
+          (t.avail_label ? '<div class="t-avail">' + esc(t.avail_label) + "</div>" : "") +
+          (t.remaining <= 0 ? '<div class="t-avail">Sold out</div>' : "") +
+        "</div>" +
+        '<div class="t-price">' + (t.price_pence === 0 ? "Free" : money(t.price_pence)) + "</div>" +
+        '<div class="stepper">' +
+          '<button data-minus="' + t.id + '"' + (n <= 0 ? " disabled" : "") + ">−</button>" +
+          '<span class="n">' + n + "</span>" +
+          '<button data-plus="' + t.id + '"' + (n >= max ? " disabled" : "") + ">+</button>" +
+        "</div>" +
+      "</div>";
+    }).join("");
+
+    // The minimum explains itself rather than simply refusing — six to a table
+    // is a house rule, not a malfunction.
+    var minWarn = "";
+    if (ev.min_per_order && totalQty() > 0 && totalQty() < ev.min_per_order) {
+      minWarn = '<div class="alert alert-warn">This event is booked in groups of at least ' + ev.min_per_order +
+        ". Please add " + (ev.min_per_order - totalQty()) + " more.</div>";
+    }
+
+    var discountBlock = discountShown
+      ? '<div style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap">' +
+          '<div class="form-field" style="flex:1;min-width:180px"><label>Discount code</label>' +
+            '<input id="disc" value="' + esc(discountCode) + '" placeholder="Code" style="text-transform:uppercase"></div>' +
+          '<button class="btn-ghost" id="apply-disc" style="height:41px">Apply</button>' +
+        "</div>" +
+        (discountMsg ? '<div class="muted" style="margin-top:7px">' + esc(discountMsg) + "</div>" : "")
+      : '<button class="btn-link" id="show-disc">Got a discount code?</button>';
+
+    return "<h3>Choose your tickets</h3>" + rows + minWarn +
+      '<hr class="divider">' + discountBlock +
+      '<button class="btn-primary" id="to-details"' +
+        (totalQty() === 0 || (ev.min_per_order && totalQty() < ev.min_per_order) ? " disabled" : "") + ">Continue</button>" +
+      '<div style="text-align:center;margin-top:12px"><button class="btn-link" id="back-event">← Back to the event</button></div>';
+  }
+
+  function stepDetails() {
+    return "<h3>Your details</h3>" +
+      '<p class="muted" style="margin-bottom:16px">We\'ll send your tickets to this address, so do check it carefully.</p>' +
+      '<div class="form-grid">' +
+        '<div class="form-field"><label>First name</label><input id="d-first" value="' + esc(details.firstName) + '" autocomplete="given-name"></div>' +
+        '<div class="form-field"><label>Last name</label><input id="d-last" value="' + esc(details.lastName) + '" autocomplete="family-name"></div>' +
+        '<div class="form-field"><label>Email</label><input id="d-email" type="email" value="' + esc(details.email) + '" autocomplete="email"></div>' +
+        '<div class="form-field"><label>Repeat email</label><input id="d-email2" type="email" value="' + esc(details.email2) + '" autocomplete="off"></div>' +
+        '<div class="form-field full"><label>Phone</label><input id="d-phone" type="tel" value="' + esc(details.phone) + '" autocomplete="tel"></div>' +
+      "</div>" +
+      '<label class="terms-accept' + (termsOk ? " on" : "") + '" id="terms-box">' +
+        '<input type="checkbox" id="d-terms"' + (termsOk ? " checked" : "") + ">" +
+        // Linked only once ticket terms have actually been written. Until then
+        // the box still has to be ticked, but it doesn't send anyone off to
+        // the cottage terms, which are not these terms.
+        (ticketTerms
+          ? "<span>I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>"
+          : "<span>I accept that tickets are non-transferable and that refunds are at Hawthbush Farm's discretion.</span>") +
+      "</label>" +
+      '<button class="btn-primary" id="to-payment">Continue to payment</button>' +
+      '<div style="text-align:center;margin-top:12px"><button class="btn-link" id="back-tickets">← Back to tickets</button></div>';
+  }
+
+  function stepPayment() {
+    var dep = depositPence();
+    var payNow = dep > 0 ? dep : totalPence();
+    return "<h3>Payment</h3>" +
+      (dep > 0
+        ? '<div class="alert alert-info"><strong>' + money(dep) + " today</strong>, and " +
+          money(totalPence() - dep) + " due " + ev.balance_days + " days before the event. " +
+          "We'll email you a link nearer the time — your tickets are issued once the balance is settled.</div>"
+        : "") +
+      '<p class="muted" style="margin-bottom:6px">You\'ll be taken to Stripe to pay ' +
+        "<strong>" + money(payNow) + "</strong> by card. Nothing is charged until you confirm there.</p>" +
+      '<p class="muted">Tickets for ' + esc(details.firstName + " " + details.lastName) + " · " + esc(details.email) + "</p>" +
+      '<button class="btn-primary" id="go-stripe"' + (busy ? " disabled" : "") + ">" +
+        (busy ? "Opening Stripe…" : "Pay " + money(payNow)) + "</button>" +
+      '<div class="stripe-note">Secure card payment powered by Stripe</div>' +
+      '<div style="text-align:center;margin-top:12px"><button class="btn-link" id="back-details">← Back</button></div>';
+  }
+
+  function wireCheckout() {
+    function on(id, fn) { var el = document.getElementById(id); if (el) el.addEventListener("click", fn); }
+
+    // A percentage code is worth a different amount once the basket changes,
+    // so it is re-checked rather than left showing yesterday's saving.
+    function changed() { if (applied) applyDiscount(); else render(); }
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-plus]"), function (b) {
+      b.addEventListener("click", function () {
+        var id = b.getAttribute("data-plus");
+        qty[id] = (qty[id] || 0) + 1;
+        changed();
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-minus]"), function (b) {
+      b.addEventListener("click", function () {
+        var id = b.getAttribute("data-minus");
+        qty[id] = Math.max((qty[id] || 0) - 1, 0);
+        changed();
+      });
+    });
+
+    on("show-disc", function () { discountShown = true; render(); });
+    var disc = document.getElementById("disc");
+    if (disc) {
+      disc.addEventListener("input", function () { discountCode = disc.value.trim().toUpperCase(); });
+      disc.addEventListener("keydown", function (e) { if (e.key === "Enter") applyDiscount(); });
+    }
+    on("apply-disc", applyDiscount);
+
+    on("back-event", function () { step = 0; errorMsg = ""; render(); });
+    on("back-tickets", function () { keepDetails(); step = 1; errorMsg = ""; render(); });
+    on("back-details", function () { step = 2; errorMsg = ""; render(); });
+
+    var termsBox = document.getElementById("d-terms");
+    if (termsBox) termsBox.addEventListener("change", function () {
+      termsOk = termsBox.checked;
+      document.getElementById("terms-box").className = "terms-accept" + (termsOk ? " on" : "");
+    });
+
+    on("to-details", function () { step = 2; errorMsg = ""; render(); window.scrollTo(0, 0); });
+
+    on("to-payment", function () {
+      keepDetails();
+      if (!details.firstName || !details.lastName) { errorMsg = "Please give us your first and last name."; return render(); }
+      if (!isEmail(details.email)) { errorMsg = "That email address doesn't look right."; return render(); }
+      if (details.email.trim().toLowerCase() !== details.email2.trim().toLowerCase()) {
+        errorMsg = "The two email addresses don't match."; return render();
+      }
+      if (!termsOk) { errorMsg = "Please accept the ticket terms and conditions."; return render(); }
+      errorMsg = ""; step = 3; render(); window.scrollTo(0, 0);
+    });
+
+    on("go-stripe", startCheckout);
+  }
+
+  // Checked here so the saving appears in the summary before anyone commits.
+  // It is worked out again from scratch in Postgres before Stripe is asked for
+  // anything, so this is a courtesy, not the price.
+  function applyDiscount() {
+    if (!discountCode) { applied = null; discountMsg = ""; return render(); }
+    discountMsg = "Checking…"; render();
+    rpc("box_check_discount", { p_slug: slug, p_code: discountCode, p_subtotal_pence: subtotalPence() })
+      .then(function (r) {
+        if (r && r.ok) {
+          applied = { code: r.code, discount_pence: r.discount_pence, label: r.label };
+          discountMsg = "Code applied.";
+        } else {
+          applied = null;
+          discountMsg = (r && r.message) || "That code isn't recognised.";
+        }
+        render();
+      })
+      .catch(function () { applied = null; discountMsg = "We couldn't check that code."; render(); });
+  }
+
+  function keepDetails() {
+    function v(id) { var el = document.getElementById(id); return el ? el.value : ""; }
+    if (document.getElementById("d-first")) {
+      details.firstName = v("d-first").trim();
+      details.lastName  = v("d-last").trim();
+      details.email     = v("d-email").trim();
+      details.email2    = v("d-email2").trim();
+      details.phone     = v("d-phone").trim();
+    }
+  }
+
+  function startCheckout() {
+    if (busy) return;
+    busy = true; errorMsg = ""; render();
+
+    var lines = (ev.ticket_types || []).filter(function (t) { return qty[t.id]; })
+      .map(function (t) { return { ticket_type_id: t.id, qty: qty[t.id] }; });
+
+    fetch(CHECKOUT_FN, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: slug,
+        accessCode: accessCode,
+        firstName: details.firstName,
+        lastName: details.lastName,
+        email: details.email,
+        phone: details.phone,
+        lines: lines,
+        discountCode: applied ? applied.code : discountCode,
+        termsAcceptedAt: new Date().toISOString()
+      })
+    }).then(function (r) {
+      return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+    }).then(function (res) {
+      if (res.ok && res.body.url) { window.location.href = res.body.url; return; }
+      busy = false;
+      errorMsg = res.body.error || "Something went wrong. Please try again.";
+      // A refusal is nearly always "somebody else got there first", so the
+      // counts are reloaded rather than left showing tickets that have gone.
+      if (res.body.code === "sold_out" || res.body.code === "bad_ticket_type") {
+        step = 1;
+        load(true);
+      } else {
+        render();
+      }
+    }).catch(function () {
+      busy = false;
+      errorMsg = "We couldn't reach the payment page. Please check your connection and try again.";
+      render();
+    });
+  }
+
+  // ── Confirmation ───────────────────────────────────────────────────────────
+  // Back from Stripe. The webhook may not have run yet, so the page waits for
+  // the booking to flip rather than claiming success it can't see.
+  function renderDone() {
+    heroEl.innerHTML = "";
+    var ref = params.get("ref");
+    var token = params.get("t");
+
+    app.innerHTML =
+      '<div class="done-panel">' +
+        '<div class="done-tick">✓</div>' +
+        '<h2 style="font-family:\'Cormorant Garamond\',serif;font-size:28px;font-weight:600">Order complete</h2>' +
+        '<p class="muted" style="margin-top:6px">Thank you — a confirmation is on its way to your inbox.</p>' +
+        '<div class="done-ref">' + esc(ref) + "</div>" +
+        '<p class="muted">' + esc(ev.name) + "<br>" + esc(whenLine(ev)) + "</p>" +
+        '<div id="done-state" class="muted" style="margin-top:14px">Confirming your payment…</div>' +
+        '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px">' +
+          '<a class="btn-primary" style="width:auto;margin:0;text-decoration:none;display:inline-block" href="/my-ticket/' + esc(token) + '">View your tickets</a>' +
+          '<button class="btn-ghost" id="add-cal">Add to calendar</button>' +
+        "</div>" +
+      "</div>";
+
+    document.getElementById("add-cal").addEventListener("click", downloadIcs);
+
+    var tries = 0;
+    (function poll() {
+      tries++;
+      rpc("box_my_ticket", { p_token: token }).then(function (t) {
+        var el = document.getElementById("done-state");
+        if (!el) return;
+        if (t && t.ok && t.status !== "pending") {
+          el.innerHTML = t.tickets_issued
+            ? "Payment confirmed — your tickets are in your inbox."
+            : "Deposit received — we've emailed you the balance details.";
+          return;
+        }
+        if (tries < 12) return setTimeout(poll, 2000);
+        el.innerHTML = "Your payment is still being confirmed. Your reference is safe — if the email hasn't arrived in a few minutes, do get in touch.";
+      });
+    })();
+  }
+
+  // A plain .ics built here rather than fetched: it's four lines of text and
+  // one fewer thing that has to be up for someone to save the date.
+  function downloadIcs() {
+    function z(ts) { return new Date(ts).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); }
+    var end = ev.ends_at || new Date(new Date(ev.starts_at).getTime() + 3 * 3600000).toISOString();
+    var ics = [
+      "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Hawthbush Farm//Box Office//EN",
+      "BEGIN:VEVENT",
+      "UID:" + slug + "-" + Date.now() + "@hawthbushfarm.co.uk",
+      "DTSTAMP:" + z(new Date().toISOString()),
+      "DTSTART:" + z(ev.starts_at),
+      "DTEND:" + z(end),
+      "SUMMARY:" + ev.name.replace(/[,;]/g, " "),
+      "LOCATION:" + [ev.venue_name, ev.venue_postcode].filter(Boolean).join(" ").replace(/[,;]/g, " "),
+      "END:VEVENT", "END:VCALENDAR"
+    ].join("\r\n");
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
+    a.download = slug + ".ics";
+    a.click();
+  }
+
+  // ── Load ───────────────────────────────────────────────────────────────────
+  function load(keepStep) {
+    // Cheap and non-blocking: the checkout links to the ticket terms only if
+    // somebody has written them.
+    fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq.hbf_ticket_terms_v1&select=value", {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+    }).then(function (r) { return r.json(); })
+      .then(function (rows) {
+        var v = rows && rows[0] && rows[0].value;
+        ticketTerms = !!(v && String(v.text || "").trim());
+      })
+      .catch(function () {});
+
+    rpc("box_public_event", { p_slug: slug, p_code: accessCode })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          heroEl.innerHTML = "";
+          app.innerHTML = '<div class="panel" style="text-align:center">' +
+            '<h3>We couldn\'t find that event</h3>' +
+            '<p class="muted">It may have finished, or the link may be wrong. ' +
+            '<a href="/whats-on" style="color:#2d2a25">See what\'s on</a>.</p></div>';
+          return;
+        }
+        ev = data;
+        if (!keepStep && !params.get("ref")) step = 0;
+        // Anything already in the basket that has since sold is trimmed back
+        // rather than left to fail at the till.
+        (ev.ticket_types || []).forEach(function (t) {
+          if (qty[t.id] > t.remaining) qty[t.id] = t.remaining;
+        });
+        document.title = ev.name ? ev.name + " | Hawthbush Farm" : "Tickets | Hawthbush Farm";
+        // A private event that search engines have indexed isn't private.
+        if (ev.gated || ev.listed === false) {
+          var m = document.createElement("meta");
+          m.name = "robots"; m.content = "noindex,nofollow";
+          document.head.appendChild(m);
+        }
+        render();
+      })
+      .catch(function () {
+        app.innerHTML = '<div class="alert alert-error">We couldn\'t load this page. Please refresh and try again.</div>';
+      });
+  }
+
+  if (!slug) {
+    app.innerHTML = '<div class="panel"><h3>No event chosen</h3><p class="muted"><a href="/whats-on" style="color:#2d2a25">See what\'s on</a>.</p></div>';
+  } else {
+    load();
+  }
+})();
+</script>
+</body>
+</html>
