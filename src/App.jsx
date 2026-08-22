@@ -1781,7 +1781,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-13d";
+const APP_BUILD = "2026-08-21a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6135,6 +6135,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
           saveEnquiries={async(e)=>{ setEnquiries(e); await sbSet(ENQUIRIES_STORAGE,e); }}
           patchBooking={patchBooking}
           onSelectEnquiry={goToEnquiry}/>}
+        {view==="boxoffice"  && <BoxOfficeView bookings={bookings}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties}/>}
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
       </div>
@@ -6153,6 +6154,8 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
     {id:"enquiries",label:"Enquiries"},
     {id:"viewings",label:"Viewings"},
     {id:"bar",label:"Bar"},
+    // Not "Events" — that has always meant weddings in this app.
+    {id:"boxoffice",label:"Box Office"},
     {id:"reports",label:"Reports"},
     {id:"settings",label:"Settings"},
   ];
@@ -10136,6 +10139,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
             : "Couldn’t read unpaid invoices from Xero (" + xeroInvErr + ")."}
         </div>
       )}
+
+      {/* Ticketed nights — sales at a glance, and anything owing */}
+      <BoxOfficeDashboardCard setView={setView}/>
 
       {/* Overdue money — unpaid raised invoices, and unpaid accommodation */}
       <NewLettings bookings={accomBookings} properties={accomProperties} onOpen={onOpenAccom}
@@ -15200,5 +15206,2261 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── BOX OFFICE ───────────────────────────────────────────────────────────────
+// Ticketed public events in the Grain Store — comedy nights, supper clubs,
+// the Christmas parties. This is the tab that replaces Ticket Tailor.
+//
+// Note the name. "Events" in this app has always meant weddings, so the
+// ticketing tab is called Box Office and nothing here touches the wedding
+// diary except to warn when a ticketed night lands on top of one.
+//
+// Two things work differently from the rest of the app, both on purpose:
+//
+//  1. The data lives in real Postgres tables (box_events, box_orders, …), not
+//     in an app_data blob. Every other feature is edited by one person at a
+//     time, so read-edit-write-whole is safe. Ticket sales are not like that:
+//     twenty people can press Buy in the same second, and last-write-wins
+//     would silently oversell the barn.
+//
+//  2. Those tables have RLS on with no policies, so the anon key in this
+//     bundle cannot read them. Everything below goes through box-admin.js,
+//     which holds the service key. The token for it is asked for once per
+//     device and kept in localStorage — deliberately not in this file, since
+//     anything in here is readable by every visitor via View Source.
+//
+// Email templates and their timings DO stay in app_data (hbf_box_templates_v1):
+// one person edits them occasionally, so the blob really is the right tool.
+
+const BOX_TEMPLATES_STORAGE = "hbf_box_templates_v1";
+// Tickets get their own terms. Refunds and cancellation for a night out are
+// nothing like the terms for a week in a cottage, and the checkout links to
+// these or to nothing at all.
+const BOX_TERMS_STORAGE = "hbf_ticket_terms_v1";
+const BOX_KEY_LS = "hbf_box_admin_key";
+
+// Mirrors DEFAULT_TEMPLATES in netlify/functions/send-ticket-email.js. If you
+// change the wording in one, change it in the other — this copy seeds the
+// editor, that copy is what actually goes out until the editor is saved once.
+const DEFAULT_BOX_TEMPLATES = [
+  { id: "booking_confirmed", label: "Booking confirmed", when: "Sent the moment an order is paid in full. Carries the QR code.", triggerDays: null,
+    subject: "Your tickets — {{eventName}} — {{orderRef}}",
+    body: "Hello {{firstName}},\n\nThank you — your tickets for {{eventName}} are confirmed.\n\n{{eventDate}} at {{eventTime}}\n{{venue}}\n\nTickets: {{qty}}\nOrder reference: {{orderRef}}\nTotal paid: £{{totalAmount}}\n\nYour QR code is below. One code covers the whole booking — bring it on your phone or print it, and we'll scan it once for everyone arriving with you.\n\nYou can also open your tickets any time here: {{ticketsLink}}\n\nWe look forward to seeing you.\n\nHawthbush Farm" },
+
+  { id: "table_reserved", label: "Table reserved", when: "Sent when a deposit is paid. States the balance and its date. Deliberately carries no QR.", triggerDays: null,
+    subject: "Table reserved — {{eventName}} — {{orderRef}}",
+    body: "Hello {{firstName}},\n\nThank you — we've received your deposit of £{{depositAmount}} and your table at {{eventName}} is reserved.\n\n{{eventDate}} at {{eventTime}}\n{{venue}}\n\nPlaces held: {{qty}}\nOrder reference: {{orderRef}}\nBalance outstanding: £{{balanceAmount}}, due by {{balanceDueDate}}\n\nWe'll email you nearer the time with a link to pay the balance — or you can pay it whenever suits you here: {{ticketsLink}}\n\nYour tickets are issued once the balance is settled.\n\nHawthbush Farm" },
+
+  { id: "balance_due", label: "Balance due", when: "Sent automatically on the balance due date, with a payment link.", triggerDays: 30,
+    subject: "Balance due — {{eventName}} — {{orderRef}}",
+    body: "Hello {{firstName}},\n\nThe balance for your booking at {{eventName}} is now due.\n\n{{eventDate}} at {{eventTime}}\n{{venue}}\n\nPlaces held: {{qty}}\nOrder reference: {{orderRef}}\nBalance outstanding: £{{balanceAmount}}\nDue by: {{balanceDueDate}}\n\nYou can pay securely here: {{payLink}}\n\nYour tickets are issued as soon as the balance clears.\n\nHawthbush Farm" },
+
+  { id: "balance_overdue", label: "Balance overdue", when: "The single chase, this many days after the due date. Nothing is ever auto-cancelled.", triggerDays: 3,
+    subject: "Your balance for {{eventName}} — {{orderRef}}",
+    body: "Hello {{firstName}},\n\nWe haven't yet received the balance for your booking at {{eventName}}, which was due on {{balanceDueDate}}.\n\nBalance outstanding: £{{balanceAmount}}\nOrder reference: {{orderRef}}\n\nYou can pay here: {{payLink}}\n\nYour table is still held. If something has changed, or if there's a problem, do just reply to this email and we'll sort it out.\n\nHawthbush Farm" },
+
+  { id: "tickets_issued", label: "Tickets issued", when: "Sent when a balance clears — this is the email that finally carries the QR.", triggerDays: null,
+    subject: "Here are your tickets — {{eventName}} — {{orderRef}}",
+    body: "Hello {{firstName}},\n\nThank you — your balance is settled and your tickets for {{eventName}} are attached below.\n\n{{eventDate}} at {{eventTime}}\n{{venue}}\n\nTickets: {{qty}}\nOrder reference: {{orderRef}}\n\nOne QR code covers the whole booking. Bring it on your phone or print it, and we'll scan it once for everyone with you.\n\nYou can open your tickets any time here: {{ticketsLink}}\n\nWe look forward to seeing you.\n\nHawthbush Farm" },
+
+  { id: "event_reminder", label: "Event reminder", when: "This many days before the event. Tickets again, parking, doors.", triggerDays: 2,
+    subject: "{{eventName}} is on {{eventDate}}",
+    body: "Hello {{firstName}},\n\nJust a reminder that {{eventName}} is on {{eventDate}}.\n\nDoors and start: {{eventTime}}\n{{venue}}\n\nTickets: {{qty}}\nOrder reference: {{orderRef}}\n\nThere's plenty of parking in the field by the barn — follow the signs from the lane. Your QR code is below, and it's also here if you need it on the night: {{ticketsLink}}\n\nSee you soon.\n\nHawthbush Farm" },
+
+  { id: "tickets_released", label: "Tickets released", when: "Sent to the whole waitlist at once when you press Email the waitlist. First come, first served.", triggerDays: null,
+    subject: "Tickets released — {{eventName}}",
+    body: "Hello {{firstName}},\n\nYou asked to be told if more tickets became available for {{eventName}} — some have just been released.\n\n{{eventDate}} at {{eventTime}}\n{{venue}}\n\nThey're first come, first served, so do book quickly: {{ticketsLink}}\n\nHawthbush Farm" },
+
+  { id: "booking_cancelled", label: "Booking cancelled", when: "Sent when an order is cancelled in the app.", triggerDays: null,
+    subject: "Booking cancelled — {{eventName}} — {{orderRef}}",
+    body: "Hello {{firstName}},\n\nYour booking for {{eventName}} ({{orderRef}}, {{qty}} tickets) has been cancelled and the tickets are no longer valid.\n\nAny refund due will be returned to the card you paid with and usually reaches your account within a few working days.\n\nIf this is a surprise, please reply to this email and we'll put it right.\n\nHawthbush Farm" },
+];
+
+const BOX_TOKENS = ["firstName","eventName","eventDate","eventTime","venue","orderRef","qty",
+  "totalAmount","depositAmount","balanceAmount","balanceDueDate","payLink","ticketsLink"];
+
+// ── Talking to box-admin.js ──────────────────────────────────────────────────
+function boxKey() {
+  try { return localStorage.getItem(BOX_KEY_LS) || ""; } catch (e) { return ""; }
+}
+
+async function boxAdmin(action, payload) {
+  const res = await fetch("/.netlify/functions/box-admin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-admin-token": boxKey() },
+    body: JSON.stringify(Object.assign({ action }, payload || {}))
+  });
+  let body = {};
+  try { body = await res.json(); } catch (e) { body = {}; }
+  if (!res.ok) {
+    const err = new Error(body.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
+// ── Europe/London, always ────────────────────────────────────────────────────
+// There is no timezone picker in this feature and there must never be one. The
+// database stores instants; these two turn them into the wall-clock time the
+// farm actually runs on, whatever machine the app happens to be open on.
+function londonOffsetMinutes(date) {
+  const dtf = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const p = {};
+  dtf.formatToParts(date).forEach(function(x) { p[x.type] = x.value; });
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute, +p.second);
+  return (asUTC - date.getTime()) / 60000;
+}
+
+// "2026-12-19T19:30" (as typed, in London) → the matching UTC instant.
+// Two passes because the offset itself depends on the answer — one pass gets
+// the hour of a clock change wrong.
+function londonToIso(local) {
+  if (!local) return null;
+  const [datePart, timePart] = String(local).split("T");
+  const [Y, M, D] = datePart.split("-").map(Number);
+  const [h, m] = String(timePart || "00:00").split(":").map(Number);
+  const naive = Date.UTC(Y, M - 1, D, h || 0, m || 0);
+  let guess = naive;
+  for (let i = 0; i < 2; i++) guess = naive - londonOffsetMinutes(new Date(guess)) * 60000;
+  return new Date(guess).toISOString();
+}
+
+function isoToLondonLocal(iso) {
+  if (!iso) return "";
+  const dtf = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const p = {};
+  dtf.formatToParts(new Date(iso)).forEach(function(x) { p[x.type] = x.value; });
+  return `${p.year}-${p.month}-${p.day}T${p.hour === "24" ? "00" : p.hour}:${p.minute}`;
+}
+
+function boxDate(iso, opts) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-GB", Object.assign({ timeZone: "Europe/London", day: "numeric", month: "short", year: "numeric" }, opts || {}));
+}
+function boxTime(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" });
+}
+function boxWhen(iso) {
+  if (!iso) return "Date not set";
+  return boxDate(iso, { weekday: "short" }) + " · " + boxTime(iso);
+}
+function boxMoney(pence) {
+  const p = Math.round(Number(pence) || 0);
+  return "£" + (p / 100).toFixed(2);
+}
+function poundsToPence(v) { return Math.round((parseFloat(String(v).replace(/[^0-9.\-]/g, "")) || 0) * 100); }
+function penceToPounds(p) { return ((Number(p) || 0) / 100).toFixed(2); }
+
+const BOX_STATUS = {
+  pending:      { label: "Pending",   bg: "#f1f5f9", fg: "#64748b" },
+  deposit_paid: { label: "Deposit paid", bg: T.amberBg, fg: T.amber },
+  paid:         { label: "Paid",      bg: T.greenBg, fg: T.green },
+  cancelled:    { label: "Cancelled", bg: T.redBg,   fg: T.red },
+  refunded:     { label: "Refunded",  bg: T.redBg,   fg: T.red },
+};
+
+// ── Small shared pieces ──────────────────────────────────────────────────────
+function BoxCard({ title, children, right, style }) {
+  return (
+    <div style={Object.assign({ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 }, style || {})}>
+      {(title || right) && (
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14, flexWrap:"wrap" }}>
+          <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>{title}</div>
+          {right}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+function BoxField({ label, children, hint, width }) {
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:5, width: width || "auto" }}>
+      <label style={{ fontSize:11, fontWeight:700, color:T.textLight, textTransform:"uppercase", letterSpacing:.6 }}>{label}</label>
+      {children}
+      {hint && <div style={{ fontSize:11.5, color:T.textLight, lineHeight:1.5 }}>{hint}</div>}
+    </div>
+  );
+}
+
+const boxInput = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text,
+  fontFamily:"inherit", fontSize:13.5, padding:"9px 11px", outline:"none", width:"100%" };
+
+function BoxInput({ value, onChange, type="text", placeholder="", style, min, max, step, disabled }) {
+  return <input type={type} value={value == null ? "" : value} placeholder={placeholder} min={min} max={max} step={step} disabled={disabled}
+    onChange={e=>onChange(e.target.value)} style={Object.assign({}, boxInput, disabled ? { opacity:.6 } : {}, style || {})}/>;
+}
+
+function BoxCheck({ checked, onChange, label, hint }) {
+  return (
+    <label style={{ display:"flex", alignItems:"flex-start", gap:9, cursor:"pointer", fontSize:13.5, color:T.text, lineHeight:1.5 }}>
+      <input type="checkbox" checked={!!checked} onChange={e=>onChange(e.target.checked)}
+        style={{ width:16, height:16, marginTop:2, accentColor:T.accent, cursor:"pointer", flexShrink:0 }}/>
+      <span>{label}{hint && <span style={{ display:"block", fontSize:11.5, color:T.textLight }}>{hint}</span>}</span>
+    </label>
+  );
+}
+
+function BoxBtn({ children, onClick, tone="primary", disabled, style, title }) {
+  const tones = {
+    primary: { background:T.accent, color:"#fff", border:"none" },
+    dark:    { background:T.midBlue, color:"#fff", border:"none" },
+    ghost:   { background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}` },
+    danger:  { background:"#fff", color:T.red, border:`1.5px solid #fca5a5` },
+    green:   { background:T.green, color:"#fff", border:"none" },
+  };
+  return (
+    <button onClick={onClick} disabled={disabled} title={title}
+      style={Object.assign({ padding:"9px 17px", borderRadius:7, cursor: disabled ? "not-allowed" : "pointer",
+        fontFamily:"inherit", fontSize:13, fontWeight:600, opacity: disabled ? .55 : 1, whiteSpace:"nowrap" },
+        tones[tone], style || {})}>
+      {children}
+    </button>
+  );
+}
+
+function BoxPill({ children, bg, fg }) {
+  return <span style={{ display:"inline-block", background:bg || T.midBlueBg, color:fg || T.midBlue,
+    fontSize:11, fontWeight:700, letterSpacing:.4, textTransform:"uppercase", padding:"3px 9px", borderRadius:999 }}>{children}</span>;
+}
+
+function BoxStat({ label, value, sub, tone }) {
+  return (
+    <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:9, padding:"12px 14px", flex:"1 1 130px", minWidth:120 }}>
+      <div style={{ fontSize:11, color:T.textLight, textTransform:"uppercase", letterSpacing:.7, fontWeight:700 }}>{label}</div>
+      <div style={{ fontSize:22, fontWeight:700, color: tone || T.midBlue, marginTop:3 }}>{value}</div>
+      {sub && <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ── The admin key ────────────────────────────────────────────────────────────
+// Asked for once per device and kept in localStorage. It is not in the bundle
+// because the bundle is public: putting it here would hand every visitor the
+// key to the buyer list, which is the exact thing these tables were set up to
+// prevent.
+function BoxKeyGate({ onDone }) {
+  const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function save() {
+    setBusy(true); setErr("");
+    try {
+      localStorage.setItem(BOX_KEY_LS, val.trim());
+      await boxAdmin("ping", {});
+      onDone();
+    } catch (e) {
+      localStorage.removeItem(BOX_KEY_LS);
+      setErr(e.status === 401 ? "That key wasn't accepted." : e.message);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div style={{ maxWidth:520, margin:"40px auto" }}>
+      <BoxTicketTermsEditor/>
+
+      <BoxCard title="Box office key">
+        <p style={{ fontSize:13.5, color:T.textMid, lineHeight:1.65, margin:"0 0 6px" }}>
+          The box office holds the names, emails and phone numbers of everyone who has bought a ticket, so it sits
+          behind a key rather than behind the app's password alone.
+        </p>
+        <p style={{ fontSize:12.5, color:T.textLight, lineHeight:1.6, margin:"0 0 16px" }}>
+          Paste the <code>HBF_ADMIN_TOKEN</code> from the Netlify environment settings. It's stored on this device only —
+          you'll need it once on each computer or phone you use.
+        </p>
+        <BoxInput value={val} onChange={setVal} type="password" placeholder="HBF_ADMIN_TOKEN"/>
+        {err && <div style={{ marginTop:10, background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:13 }}>{err}</div>}
+        <div style={{ marginTop:14 }}>
+          <BoxBtn onClick={save} disabled={busy || !val.trim()}>{busy ? "Checking…" : "Unlock the box office"}</BoxBtn>
+        </div>
+      </BoxCard>
+    </div>
+  );
+}
+
+// ── The tab itself ───────────────────────────────────────────────────────────
+function BoxOfficeView({ bookings }) {
+  const [hasKey, setHasKey] = useState(()=>!!boxKey());
+  const [tab, setTab]       = useState("events");
+  const [openEventId, setOpenEventId] = useState(null);
+
+  const tabs = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
+
+  if (!hasKey) return <BoxKeyGate onDone={()=>setHasKey(true)}/>;
+
+  return (
+    <div style={{ paddingTop:24 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:16, flexWrap:"wrap" }}>
+        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Box Office</h2>
+        <div style={{ fontSize:12, color:T.textLight }}>Ticketed events in the Grain Store</div>
+      </div>
+
+      <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+        {tabs.map(function([id, label]) {
+          return (
+            <button key={id} onClick={function() { setTab(id); if (id !== "events") setOpenEventId(null); }}
+              style={{ background:"none", border:"none", borderBottom: tab===id ? `3px solid ${T.midBlue}` : "3px solid transparent",
+                color: tab===id ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13, fontWeight: tab===id ? 700 : 500,
+                padding:"6px 16px 10px", cursor:"pointer" }}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "events" && (openEventId
+        ? <BoxEventEditor eventId={openEventId} weddings={bookings} onBack={()=>setOpenEventId(null)}/>
+        : <BoxEventsScreen onOpen={setOpenEventId}/>)}
+      {tab === "orders"   && <BoxOrdersScreen onOpenEvent={function(id) { setOpenEventId(id); setTab("events"); }}/>}
+      {tab === "door"     && <BoxDoorScreen/>}
+      {tab === "settings" && <BoxSettingsScreen onForgetKey={()=>setHasKey(false)}/>}
+    </div>
+  );
+}
+
+// ── Events list ──────────────────────────────────────────────────────────────
+function BoxEventsScreen({ onOpen }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  async function load() {
+    setLoading(true); setErr("");
+    try { const r = await boxAdmin("events.list"); setEvents(r.events || []); }
+    catch (e) { setErr(e.message); }
+    setLoading(false);
+  }
+  useEffect(function() { load(); }, []);
+
+  async function createEvent() {
+    setCreating(true);
+    try {
+      // A new event starts as a draft with nothing on sale, so there is
+      // nothing a customer can trip over while it's being written.
+      const r = await boxAdmin("events.save", { event: { name: "New event", status: "draft" } });
+      if (r.event) onOpen(r.event.id);
+    } catch (e) { setErr(e.message); }
+    setCreating(false);
+  }
+
+  const today = new Date().toISOString();
+  const upcoming = events.filter(function(e) { return !e.starts_at || e.starts_at >= today; });
+  const past     = events.filter(function(e) { return e.starts_at && e.starts_at < today; });
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
+        <div style={{ fontSize:13, color:T.textMid }}>
+          {loading ? "Loading…" : `${events.length} event${events.length === 1 ? "" : "s"}`}
+        </div>
+        <BoxBtn tone="dark" onClick={createEvent} disabled={creating}>{creating ? "Creating…" : "+ New event"}</BoxBtn>
+      </div>
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:8, padding:"11px 14px", fontSize:13, marginBottom:16 }}>{err}</div>}
+
+      {!loading && !events.length && (
+        <BoxCard>
+          <div style={{ textAlign:"center", padding:"24px 10px", color:T.textLight, fontSize:14, lineHeight:1.7 }}>
+            No events yet.<br/>Press <strong>New event</strong> to set up your first ticketed night in the Grain Store.
+          </div>
+        </BoxCard>
+      )}
+
+      {[["Upcoming", upcoming], ["Past", past]].map(function([label, rows]) {
+        if (!rows.length) return null;
+        return (
+          <div key={label} style={{ marginBottom:26 }}>
+            <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>{label}</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {rows.map(function(e) { return <BoxEventRow key={e.id} ev={e} onOpen={onOpen}/>; })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BoxEventRow({ ev, onOpen }) {
+  const pct = ev.stat_capacity ? Math.round((ev.stat_sold / ev.stat_capacity) * 100) : 0;
+  const statusPill = ev.status === "published"
+    ? <BoxPill bg={T.greenBg} fg={T.green}>Published</BoxPill>
+    : ev.status === "hidden"
+      ? <BoxPill bg="#f1f5f9" fg="#64748b">Hidden</BoxPill>
+      : <BoxPill bg={T.amberBg} fg={T.amber}>Draft</BoxPill>;
+
+  return (
+    <div onClick={()=>onOpen(ev.id)}
+      style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 18px",
+        boxShadow:"0 2px 8px rgba(37,99,235,.06)", cursor:"pointer", display:"flex", gap:16, alignItems:"center", flexWrap:"wrap" }}>
+      <div style={{ flex:"1 1 220px", minWidth:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+          <span style={{ fontSize:16, fontWeight:700, color:T.text }}>{ev.name}</span>
+          {statusPill}
+          {ev.access_code && <BoxPill bg="#f3e8ff" fg="#6b21a8">Private</BoxPill>}
+          {ev.payment_mode === "deposit" && <BoxPill bg={T.amberBg} fg={T.amber}>Deposit</BoxPill>}
+        </div>
+        <div style={{ fontSize:12.5, color:T.textLight, marginTop:4 }}>
+          {boxWhen(ev.starts_at)} · {ev.venue_name}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:22, alignItems:"center", flexWrap:"wrap" }}>
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontSize:17, fontWeight:700, color:T.midBlue }}>
+            {ev.stat_sold}{ev.stat_capacity ? ` / ${ev.stat_capacity}` : ""}
+          </div>
+          <div style={{ fontSize:11, color:T.textLight }}>tickets{ev.stat_capacity ? ` · ${pct}%` : ""}</div>
+        </div>
+        <div style={{ textAlign:"right", minWidth:80 }}>
+          <div style={{ fontSize:17, fontWeight:700, color:T.green }}>{boxMoney(ev.stat_revenue)}</div>
+          <div style={{ fontSize:11, color:T.textLight }}>taken</div>
+        </div>
+        <span style={{ color:T.textLight, fontSize:18 }}>›</span>
+      </div>
+    </div>
+  );
+}
+
+// ── One event ────────────────────────────────────────────────────────────────
+function BoxEventEditor({ eventId, weddings, onBack }) {
+  const [data, setData]       = useState(null);
+  const [form, setForm]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving]   = useState(false);
+  const [flash, setFlash]     = useState("");
+  const [err, setErr]         = useState("");
+  const [dirty, setDirty]     = useState(false);
+  const [pane, setPane]       = useState("details");
+  const [copied, setCopied]   = useState(false);
+  const [askDelete, setAskDelete] = useState(false);
+
+  async function load() {
+    setLoading(true); setErr("");
+    try {
+      const r = await boxAdmin("events.get", { id: eventId });
+      setData(r);
+      setForm(Object.assign({}, r.event, {
+        starts_local: isoToLondonLocal(r.event.starts_at),
+        ends_local:   isoToLondonLocal(r.event.ends_at),
+        deposit_pounds: penceToPounds(r.event.deposit_pence),
+      }));
+      setDirty(false);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  }
+  useEffect(function() { load(); }, [eventId]);
+
+  function update(k, v) { setForm(function(f) { return Object.assign({}, f, { [k]: v }); }); setDirty(true); }
+
+  async function save(extra) {
+    setSaving(true); setErr("");
+    try {
+      const payload = Object.assign({}, form, extra || {}, {
+        id: eventId,
+        starts_at: londonToIso((extra && extra.starts_local) || form.starts_local),
+        ends_at:   londonToIso((extra && extra.ends_local) || form.ends_local),
+        deposit_pence: poundsToPence((extra && extra.deposit_pounds) || form.deposit_pounds),
+        capacity:      form.capacity === "" || form.capacity == null ? null : Number(form.capacity),
+        min_per_order: form.min_per_order === "" || form.min_per_order == null ? null : Number(form.min_per_order),
+        access_code:   String(form.access_code || "").trim() || null,
+      });
+      await boxAdmin("events.save", { event: payload });
+      setFlash("Saved"); setTimeout(()=>setFlash(""), 1600);
+      setDirty(false);
+      await load();
+    } catch (e) { setErr(e.message); }
+    setSaving(false);
+  }
+
+  async function setStatus(status) {
+    if (status === "published") {
+      if (!form.starts_at && !form.starts_local) { setErr("Give the event a date and time before publishing it."); return; }
+      if (!(data.ticket_types || []).length) { setErr("Add at least one ticket type before publishing."); return; }
+    }
+    await save({ status });
+  }
+
+  async function removeEvent() {
+    setSaving(true);
+    try { await boxAdmin("events.delete", { id: eventId }); onBack(); }
+    catch (e) { setErr(e.message); setAskDelete(false); }
+    setSaving(false);
+  }
+
+  if (loading || !form) {
+    return <div style={{ padding:"30px 0", color:T.textLight, fontSize:14 }}>Loading event…</div>;
+  }
+
+  const publicUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/tickets/" + form.slug +
+    (form.access_code ? "?code=" + encodeURIComponent(form.access_code) : "");
+
+  const issued    = (data.ticket_types || []).filter(t=>!t.hidden).reduce((a,t)=>a + (t.quantity || 0), 0);
+  const sold      = (data.ticket_types || []).reduce((a,t)=>a + (t.sold || 0), 0);
+  const capacity  = form.capacity ? Number(form.capacity) : issued;
+  const remaining = Math.max(capacity - sold, 0);
+
+  // The wedding diary is the thing this must never quietly collide with — a
+  // comedy night on the evening of somebody's wedding is not a small mistake.
+  const startDay = form.starts_local ? form.starts_local.slice(0, 10) : null;
+  const endDay   = form.ends_local ? form.ends_local.slice(0, 10) : startDay;
+  const clashes  = startDay ? overlappingEvents(weddings || [], startDay, endDay) : [];
+
+  const panes = [["details","Details"],["tickets","Tickets"],["settings","Settings"],
+                 ["orders",`Orders (${(data.orders || []).filter(o=>o.status!=="cancelled"&&o.status!=="pending").length})`],
+                 ["waitlist",`Waitlist (${(data.waitlist || []).filter(w=>!w.converted).length})`]];
+
+  return (
+    <div>
+      {askDelete && (
+        <ConfirmDialog
+          message={`Delete "${form.name}"?`}
+          subMessage="This removes the event, its ticket types and its discount codes. It refuses if anyone has bought a ticket."
+          confirmLabel="Delete event"
+          onConfirm={removeEvent}
+          onCancel={()=>setAskDelete(false)}
+        />
+      )}
+
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
+        <BoxBtn tone="ghost" onClick={onBack}>← All events</BoxBtn>
+        <div style={{ flex:1, minWidth:140 }}>
+          <div style={{ fontSize:18, fontWeight:700, color:T.text }}>{form.name}</div>
+          <div style={{ fontSize:12, color:T.textLight }}>{boxWhen(form.starts_at)}</div>
+        </div>
+        {flash && <span style={{ fontSize:12, color:T.green, fontWeight:700 }}>{flash}</span>}
+        {dirty && <span style={{ fontSize:12, color:T.amber, fontWeight:600 }}>Unsaved changes</span>}
+        <BoxBtn onClick={()=>save()} disabled={saving}>{saving ? "Saving…" : "Save"}</BoxBtn>
+      </div>
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:8, padding:"11px 14px", fontSize:13, marginBottom:16 }}>{err}</div>}
+
+      {/* Status and the shareable link */}
+      <BoxCard>
+        <div style={{ display:"flex", gap:14, alignItems:"center", flexWrap:"wrap" }}>
+          <div style={{ display:"flex", gap:6 }}>
+            {[["draft","Draft"],["published","Published"],["hidden","Hidden"]].map(function([v, l]) {
+              const on = form.status === v;
+              return (
+                <button key={v} onClick={()=>setStatus(v)} disabled={saving}
+                  style={{ background: on ? T.midBlue : "#fff", color: on ? "#fff" : T.textMid,
+                    border:`1.5px solid ${on ? T.midBlue : T.border}`, borderRadius:7, padding:"8px 15px",
+                    fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>{l}</button>
+              );
+            })}
+          </div>
+          <div style={{ flex:1, minWidth:200 }}>
+            {form.status === "published" ? (
+              <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"7px 11px", fontSize:11.5, color:T.text, wordBreak:"break-all", flex:1, minWidth:180 }}>{publicUrl}</code>
+                <BoxBtn tone={copied ? "green" : "ghost"} onClick={function() {
+                  try { navigator.clipboard.writeText(publicUrl); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch (e) {}
+                }}>{copied ? "✓ Copied" : "Copy link"}</BoxBtn>
+                <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize:12.5, color:T.accent, fontWeight:600 }}>Open ↗</a>
+              </div>
+            ) : (
+              <div style={{ fontSize:12.5, color:T.textLight }}>
+                {form.status === "draft"
+                  ? "Nothing is on sale while this is a draft — the public page returns “not found”."
+                  : "Hidden: the page still works for anyone holding the link, but it's out of What's On and nothing new can be bought."}
+              </div>
+            )}
+          </div>
+        </div>
+      </BoxCard>
+
+      {clashes.length > 0 && (
+        <div style={{ background:T.amberBg, border:`1px solid #fcd34d`, borderRadius:9, padding:"13px 16px", marginBottom:18 }}>
+          <div style={{ fontSize:13.5, fontWeight:700, color:"#92400e", marginBottom:4 }}>
+            There {clashes.length === 1 ? "is a wedding" : `are ${clashes.length} weddings`} in the diary on that date
+          </div>
+          <div style={{ fontSize:12.5, color:"#92400e", lineHeight:1.6 }}>
+            {clashes.map(function(c) { return (c.couple || "Unnamed") + " (" + fmtDate(c.date) + ")"; }).join(" · ")}
+            {" — check the barn is actually free before you publish."}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:2, marginBottom:18, borderBottom:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+        {panes.map(function([id, label]) {
+          return (
+            <button key={id} onClick={()=>setPane(id)}
+              style={{ background:"none", border:"none", borderBottom: pane===id ? `3px solid ${T.accent}` : "3px solid transparent",
+                color: pane===id ? T.accent : T.navInactive, fontFamily:"inherit", fontSize:12.5, fontWeight: pane===id ? 700 : 500,
+                padding:"5px 14px 9px", cursor:"pointer" }}>{label}</button>
+          );
+        })}
+      </div>
+
+      {pane === "details" && <BoxEventDetails form={form} update={update}/>}
+
+      {pane === "tickets" && (
+        <div>
+          <BoxCard title="Capacity">
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+              <BoxStat label="Issued" value={sold} sub="tickets sold or held"/>
+              <BoxStat label="Remaining" value={remaining} tone={remaining <= 0 ? T.red : T.midBlue}/>
+              <BoxStat label="% issued" value={capacity ? Math.round((sold / capacity) * 100) + "%" : "—"}/>
+              <BoxStat label="Total capacity" value={capacity || "—"} sub={form.capacity ? "capped for the event" : "sum of ticket types"}/>
+            </div>
+          </BoxCard>
+          <BoxTicketTypesPanel eventId={eventId} types={data.ticket_types || []} onReload={load}/>
+          <BoxDiscountCodesPanel eventId={eventId} codes={data.discount_codes || []} onReload={load}/>
+        </div>
+      )}
+
+      {pane === "settings" && <BoxEventSettings form={form} update={update} onSave={save}/>}
+
+      {pane === "orders" && (
+        <BoxEventOrders event={data.event} types={data.ticket_types || []} orders={data.orders || []}
+          lines={data.order_lines || []} onReload={load}/>
+      )}
+
+      {pane === "waitlist" && (
+        <BoxWaitlistPanel eventId={eventId} waitlist={data.waitlist || []} onReload={load} waitlistOn={form.waitlist_on}/>
+      )}
+
+      <div style={{ marginTop:26, paddingTop:18, borderTop:`1px solid ${T.border}` }}>
+        <BoxBtn tone="danger" onClick={()=>setAskDelete(true)}>Delete this event</BoxBtn>
+        <span style={{ fontSize:12, color:T.textLight, marginLeft:12 }}>
+          Refused once anyone has bought a ticket — set it to hidden instead.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function BoxEventDetails({ form, update }) {
+  return (
+    <div>
+      <BoxCard title="The event">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <div style={{ gridColumn:"1/-1" }}>
+            <BoxField label="Event name"><BoxInput value={form.name} onChange={v=>update("name", v)}/></BoxField>
+          </div>
+          <BoxField label="Starts" hint="Date and time, Europe/London — there is no timezone setting anywhere in this app.">
+            <BoxInput type="datetime-local" value={form.starts_local} onChange={v=>update("starts_local", v)}/>
+          </BoxField>
+          <BoxField label="Ends">
+            <BoxInput type="datetime-local" value={form.ends_local} onChange={v=>update("ends_local", v)}/>
+          </BoxField>
+          <BoxField label="Venue name"><BoxInput value={form.venue_name} onChange={v=>update("venue_name", v)}/></BoxField>
+          <BoxField label="Postcode"><BoxInput value={form.venue_postcode} onChange={v=>update("venue_postcode", v)}/></BoxField>
+          <div style={{ gridColumn:"1/-1" }}>
+            <BoxField label="Web address" hint={`hawthbushfarm.co.uk/tickets/${form.slug || ""}`}>
+              <BoxInput value={form.slug} onChange={v=>update("slug", v)}/>
+            </BoxField>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <BoxField label="Description" hint="Simple HTML is fine — paragraphs, links, bold. It's shown on the public page as written.">
+              <textarea value={form.description || ""} onChange={e=>update("description", e.target.value)} rows={8}
+                style={Object.assign({}, boxInput, { resize:"vertical", lineHeight:1.6, fontSize:13 })}/>
+            </BoxField>
+          </div>
+        </div>
+      </BoxCard>
+
+      <BoxCard title="Pictures">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <BoxField label="Header image URL" hint="Wide banner across the top of the event page.">
+            <BoxInput value={form.header_image} onChange={v=>update("header_image", v)} placeholder="https://…"/>
+          </BoxField>
+          <BoxField label="Listing image URL" hint="The card on What's On.">
+            <BoxInput value={form.page_image} onChange={v=>update("page_image", v)} placeholder="https://…"/>
+          </BoxField>
+        </div>
+        <div style={{ display:"flex", gap:12, marginTop:14, flexWrap:"wrap" }}>
+          {form.header_image && <img src={form.header_image} alt="" style={{ height:80, borderRadius:8, border:`1px solid ${T.border}` }}/>}
+          {form.page_image && <img src={form.page_image} alt="" style={{ height:80, borderRadius:8, border:`1px solid ${T.border}` }}/>}
+        </div>
+      </BoxCard>
+
+      <BoxCard title="The page">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, alignItems:"end" }}>
+          <BoxField label="Buy button label">
+            <BoxInput value={form.buy_button_label} onChange={v=>update("buy_button_label", v)} placeholder="Select tickets"/>
+          </BoxField>
+          <div style={{ paddingBottom:8 }}>
+            <BoxCheck checked={form.hide_map} onChange={v=>update("hide_map", v)} label="Hide the map"/>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <BoxCheck checked={form.listed} onChange={v=>update("listed", v)}
+              label="Show on What's On"
+              hint="Off keeps it out of the public listing and tells search engines not to index it."/>
+          </div>
+        </div>
+      </BoxCard>
+    </div>
+  );
+}
+
+function BoxEventSettings({ form, update }) {
+  return (
+    <div>
+      <BoxCard title="Access code">
+        <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
+          Set a code and the page asks for it before showing any tickets — a wrong code shows only the event name and
+          date. It's checked again on the server when the order is placed, so the gate can't be walked round.
+        </p>
+        <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+          <BoxField label="Code" width={200}>
+            <BoxInput value={form.access_code || ""} placeholder="e.g. BARN26"
+              onChange={function(v) {
+                update("access_code", v);
+                // A private event that's still publicly listed isn't private,
+                // so the tickbox moves too — visibly, and you can put it back.
+                if (v.trim() && form.listed) update("listed", false);
+              }}/>
+          </BoxField>
+          <div style={{ fontSize:12, color:T.textLight, flex:1, minWidth:200, paddingBottom:8, lineHeight:1.6 }}>
+            Codes are case-insensitive and trimmed, because people type them off a poster.
+            {form.access_code ? " The Copy link button above hands out a link with the code already in it." : ""}
+          </div>
+        </div>
+      </BoxCard>
+
+      <BoxCard title="How many are left">
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 }}>
+          {[["hidden","Don't show"],["low","Only when it's low"],["exact","Exact numbers"]].map(function([v, l]) {
+            const on = form.show_remaining === v;
+            return (
+              <button key={v} onClick={()=>update("show_remaining", v)}
+                style={{ background: on ? T.accentLight : "#fff", color: on ? T.accent : T.textMid,
+                  border:`1.5px solid ${on ? T.accent : T.border}`, borderRadius:7, padding:"8px 15px",
+                  fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>{l}</button>
+            );
+          })}
+        </div>
+        {form.show_remaining === "low" && (
+          <BoxField label="Show below" width={160} hint={`e.g. "Only 8 left"`}>
+            <BoxInput type="number" min="1" value={form.low_threshold} onChange={v=>update("low_threshold", Number(v) || 0)}/>
+          </BoxField>
+        )}
+        <p style={{ fontSize:12, color:T.textLight, margin:"10px 0 0" }}>
+          This is what the public page shows. The numbers on this screen are always the real ones.
+        </p>
+      </BoxCard>
+
+      <BoxCard title="Minimum booking size">
+        <div style={{ display:"flex", gap:14, alignItems:"flex-end", flexWrap:"wrap" }}>
+          <BoxCheck checked={!!form.min_per_order} onChange={v=>update("min_per_order", v ? 6 : null)}
+            label="This event is booked in groups"/>
+          {!!form.min_per_order && (
+            <BoxField label="At least" width={130}>
+              <BoxInput type="number" min="2" value={form.min_per_order} onChange={v=>update("min_per_order", Number(v) || 2)}/>
+            </BoxField>
+          )}
+        </div>
+        <p style={{ fontSize:12, color:T.textLight, margin:"10px 0 0", lineHeight:1.6 }}>
+          Counted across the whole order — four adults and two children make a table of six. The public page explains
+          why it can't continue rather than simply refusing.
+        </p>
+      </BoxCard>
+
+      <BoxCard title="Overall capacity">
+        <BoxField label="Cap across all ticket types" width={180}
+          hint="Leave blank to let the ticket type quantities decide.">
+          <BoxInput type="number" min="0" value={form.capacity == null ? "" : form.capacity}
+            onChange={v=>update("capacity", v === "" ? null : Number(v))}/>
+        </BoxField>
+      </BoxCard>
+
+      <BoxCard title="Payment">
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+          {[["full","Pay in full"],["deposit","Deposit now, balance later"]].map(function([v, l]) {
+            const on = form.payment_mode === v;
+            return (
+              <button key={v} onClick={()=>update("payment_mode", v)}
+                style={{ background: on ? T.accentLight : "#fff", color: on ? T.accent : T.textMid,
+                  border:`1.5px solid ${on ? T.accent : T.border}`, borderRadius:7, padding:"8px 15px",
+                  fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>{l}</button>
+            );
+          })}
+        </div>
+        {form.payment_mode === "deposit" && (
+          <div>
+            <div style={{ display:"flex", gap:14, flexWrap:"wrap" }}>
+              <BoxField label="Deposit per ticket (£)" width={170}>
+                <BoxInput value={form.deposit_pounds} onChange={v=>update("deposit_pounds", v)} placeholder="20.00"/>
+              </BoxField>
+              <BoxField label="Balance due (days before)" width={190}>
+                <BoxInput type="number" min="0" value={form.balance_days} onChange={v=>update("balance_days", Number(v) || 0)}/>
+              </BoxField>
+            </div>
+            <div style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", marginTop:14, fontSize:12.5, color:T.textMid, lineHeight:1.7 }}>
+              <strong style={{ color:T.midBlue }}>The deposit is per ticket.</strong> A table of six on a £75 ticket with a
+              £20 deposit pays <strong>{boxMoney(poundsToPence(form.deposit_pounds) * 6)} now</strong> and owes the rest,
+              due {form.balance_days} days before the event.
+              <br/>No QR code is issued until the balance is settled — a half-paid table has nothing to scan on the door.
+              Nothing is ever cancelled automatically.
+            </div>
+          </div>
+        )}
+      </BoxCard>
+
+      <BoxCard title="Waitlist">
+        <BoxCheck checked={form.waitlist_on} onChange={v=>update("waitlist_on", v)}
+          label="Collect names when it's sold out"
+          hint="The ticket picker is replaced by a short form. Release tickets from the Waitlist tab."/>
+        {form.waitlist_on && (
+          <div style={{ display:"grid", gap:12, marginTop:14 }}>
+            <BoxField label="Button label"><BoxInput value={form.waitlist_cta || ""} onChange={v=>update("waitlist_cta", v)}/></BoxField>
+            <BoxField label="What it says">
+              <textarea value={form.waitlist_text || ""} onChange={e=>update("waitlist_text", e.target.value)} rows={2}
+                style={Object.assign({}, boxInput, { resize:"vertical" })}/>
+            </BoxField>
+            <BoxField label="Thank-you message">
+              <textarea value={form.waitlist_confirmation || ""} onChange={e=>update("waitlist_confirmation", e.target.value)} rows={2}
+                style={Object.assign({}, boxInput, { resize:"vertical" })}/>
+            </BoxField>
+          </div>
+        )}
+      </BoxCard>
+    </div>
+  );
+}
+
+// ── Ticket types ─────────────────────────────────────────────────────────────
+function BoxTicketTypesPanel({ eventId, types, onReload }) {
+  const [editing, setEditing] = useState(null);   // a type object, or {} for new
+  const [err, setErr] = useState("");
+
+  async function removeType(t) {
+    setErr("");
+    try { await boxAdmin("types.delete", { id: t.id }); await onReload(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  return (
+    <BoxCard title="Ticket types" right={<BoxBtn onClick={()=>setEditing({})}>+ Add ticket type</BoxBtn>}>
+      {editing && (
+        <BoxTicketTypeModal eventId={eventId} type={editing} allTypes={types}
+          onClose={()=>setEditing(null)}
+          onSaved={async function() { setEditing(null); await onReload(); }}/>
+      )}
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{err}</div>}
+
+      {!types.length && <div style={{ fontSize:13, color:T.textLight, padding:"10px 0" }}>No ticket types yet.</div>}
+
+      {types.map(function(t) {
+        return (
+          <div key={t.id} style={{ display:"flex", gap:14, alignItems:"center", padding:"12px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+            <div style={{ flex:"1 1 200px", minWidth:0 }}>
+              <div style={{ fontSize:14.5, fontWeight:600, color:T.text }}>
+                {t.name} {t.hidden && <BoxPill bg="#f1f5f9" fg="#64748b">Hidden</BoxPill>}
+              </div>
+              {t.description && <div style={{ fontSize:12, color:T.textLight, marginTop:2 }}>{t.description}</div>}
+              {(t.min_per_order || t.max_per_order) && (
+                <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>
+                  {t.min_per_order ? `min ${t.min_per_order}` : ""}{t.min_per_order && t.max_per_order ? " · " : ""}
+                  {t.max_per_order ? `max ${t.max_per_order}` : ""} per order
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize:14, fontWeight:700, color:T.text, minWidth:70, textAlign:"right" }}>
+              {t.price_pence === 0 ? "Free" : boxMoney(t.price_pence)}
+            </div>
+            <div style={{ minWidth:110, textAlign:"right" }}>
+              <div style={{ fontSize:14, fontWeight:700, color: t.remaining <= 0 ? T.red : T.midBlue }}>
+                {t.sold} / {t.quantity}
+              </div>
+              <div style={{ fontSize:11, color:T.textLight }}>{t.remaining} left</div>
+            </div>
+            <div style={{ display:"flex", gap:7 }}>
+              <BoxBtn tone="ghost" onClick={()=>setEditing(t)}>Edit</BoxBtn>
+              {!t.sold && <BoxBtn tone="danger" onClick={()=>removeType(t)}>Delete</BoxBtn>}
+            </div>
+          </div>
+        );
+      })}
+    </BoxCard>
+  );
+}
+
+function BoxTicketTypeModal({ eventId, type, allTypes, onClose, onSaved }) {
+  const isNew = !type.id;
+  const [f, setF] = useState({
+    name: type.name || "",
+    description: type.description || "",
+    quantity: type.quantity == null ? 50 : type.quantity,
+    price_pounds: penceToPounds(type.price_pence || 0),
+    min_per_order: type.min_per_order || "",
+    max_per_order: type.max_per_order || "",
+    hidden: !!type.hidden,
+    sort_order: type.sort_order || (allTypes || []).length,
+  });
+  const [more, setMore] = useState(!!(type.description || type.min_per_order || type.max_per_order));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  function up(k, v) { setF(function(p) { return Object.assign({}, p, { [k]: v }); }); }
+
+  // The live readout from the Ticket Tailor screenshot: what this type adds to
+  // the total the barn is being sold.
+  const otherTotal = (allTypes || []).filter(t=>t.id !== type.id && !t.hidden).reduce((a,t)=>a + (t.quantity || 0), 0);
+  const grandTotal = otherTotal + (Number(f.quantity) || 0);
+
+  async function save() {
+    if (!f.name.trim()) { setErr("Give the ticket type a name."); return; }
+    setBusy(true); setErr("");
+    try {
+      await boxAdmin("types.save", {
+        type: {
+          id: type.id,
+          event_id: eventId,
+          name: f.name.trim(),
+          description: f.description,
+          quantity: Number(f.quantity) || 0,
+          price_pence: poundsToPence(f.price_pounds),
+          min_per_order: f.min_per_order === "" ? null : Number(f.min_per_order),
+          max_per_order: f.max_per_order === "" ? null : Number(f.max_per_order),
+          hidden: f.hidden,
+          sort_order: Number(f.sort_order) || 0,
+        }
+      });
+      await onSaved();
+    } catch (e) { setErr(e.message); setBusy(false); }
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div style={{ background:"#fff", borderRadius:12, width:"min(520px,100%)", maxHeight:"88vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,.3)" }}>
+        <div style={{ padding:"18px 24px", borderBottom:`1px solid ${T.border}` }}>
+          <h3 style={{ margin:0, fontSize:17, fontWeight:800, color:T.midBlue }}>{isNew ? "Add a ticket type" : "Edit ticket type"}</h3>
+        </div>
+        <div style={{ padding:"20px 24px", display:"grid", gap:14 }}>
+          <BoxField label="Ticket name"><BoxInput value={f.name} onChange={v=>up("name", v)} placeholder="General admission"/></BoxField>
+
+          <BoxField label="Quantity" hint={`Total quantity across all ticket types: ${grandTotal}`}>
+            <BoxInput type="number" min="0" value={f.quantity} onChange={v=>up("quantity", v)}/>
+          </BoxField>
+
+          <BoxField label="Ticket price">
+            <div style={{ display:"flex", alignItems:"center", gap:0 }}>
+              <span style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRight:"none",
+                borderRadius:"7px 0 0 7px", padding:"9px 12px", fontSize:14, color:T.textMid }}>£</span>
+              <BoxInput value={f.price_pounds} onChange={v=>up("price_pounds", v)} placeholder="0.00"
+                style={{ borderRadius:"0 7px 7px 0" }}/>
+            </div>
+          </BoxField>
+
+          {!more && (
+            <button onClick={()=>setMore(true)}
+              style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer", textAlign:"left", padding:0 }}>
+              + More options
+            </button>
+          )}
+
+          {more && (
+            <div style={{ display:"grid", gap:14, borderTop:`1px solid ${T.border}`, paddingTop:14 }}>
+              <BoxField label="Description" hint="Shown under the ticket name on the public page.">
+                <textarea value={f.description} onChange={e=>up("description", e.target.value)} rows={2}
+                  style={Object.assign({}, boxInput, { resize:"vertical" })}/>
+              </BoxField>
+              <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
+                <BoxField label="Min per order" width={140}>
+                  <BoxInput type="number" min="0" value={f.min_per_order} onChange={v=>up("min_per_order", v)} placeholder="—"/>
+                </BoxField>
+                <BoxField label="Max per order" width={140}>
+                  <BoxInput type="number" min="0" value={f.max_per_order} onChange={v=>up("max_per_order", v)} placeholder="—"/>
+                </BoxField>
+              </div>
+              <BoxCheck checked={f.hidden} onChange={v=>up("hidden", v)}
+                label="Hide this type" hint="Keeps it off the public page without deleting what's already been sold."/>
+            </div>
+          )}
+
+          {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5 }}>{err}</div>}
+        </div>
+        <div style={{ padding:"14px 24px", borderTop:`1px solid ${T.border}`, display:"flex", gap:9, justifyContent:"flex-end" }}>
+          <BoxBtn tone="ghost" onClick={onClose}>Cancel</BoxBtn>
+          <BoxBtn onClick={save} disabled={busy}>{busy ? "Saving…" : isNew ? "Add ticket type" : "Save"}</BoxBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Discount codes ───────────────────────────────────────────────────────────
+function BoxDiscountCodesPanel({ eventId, codes, onReload }) {
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState({ code:"", kind:"percent", value:"" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function add() {
+    if (!f.code.trim()) return;
+    setBusy(true); setErr("");
+    try {
+      await boxAdmin("codes.save", { code: { event_id: eventId, code: f.code.trim(), kind: f.kind, value: Number(f.value) || 0 } });
+      setF({ code:"", kind:"percent", value:"" }); setAdding(false); await onReload();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  async function remove(c) {
+    try { await boxAdmin("codes.delete", { id: c.id }); await onReload(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  return (
+    <BoxCard title="Discount codes" right={!adding && <BoxBtn tone="ghost" onClick={()=>setAdding(true)}>+ Add code</BoxBtn>}>
+      <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 12px", lineHeight:1.6 }}>
+        Per event, a percentage or an amount off. That's all there is — no expiry dates, no usage caps, nothing
+        that spans events. The saving is worked out again on the server before Stripe is asked for anything.
+      </p>
+
+      {adding && (
+        <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", marginBottom:12 }}>
+          <BoxField label="Code" width={150}>
+            <BoxInput value={f.code} onChange={v=>setF(Object.assign({}, f, { code: v.toUpperCase() }))} placeholder="EARLYBIRD"/>
+          </BoxField>
+          <BoxField label="Type" width={140}>
+            <select value={f.kind} onChange={e=>setF(Object.assign({}, f, { kind: e.target.value }))} style={boxInput}>
+              <option value="percent">Percentage off</option>
+              <option value="fixed">Amount off</option>
+            </select>
+          </BoxField>
+          <BoxField label={f.kind === "percent" ? "Percent" : "Pounds"} width={110}>
+            <BoxInput value={f.value} onChange={v=>setF(Object.assign({}, f, { value: v }))} placeholder={f.kind === "percent" ? "10" : "5.00"}/>
+          </BoxField>
+          <BoxBtn onClick={add} disabled={busy}>Add</BoxBtn>
+          <BoxBtn tone="ghost" onClick={()=>setAdding(false)}>Cancel</BoxBtn>
+        </div>
+      )}
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
+
+      {!codes.length && !adding && <div style={{ fontSize:13, color:T.textLight }}>No codes for this event.</div>}
+
+      {codes.map(function(c) {
+        return (
+          <div key={c.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"9px 0", borderTop:`1px solid ${T.border}` }}>
+            <code style={{ fontSize:13.5, fontWeight:700, color:T.text, letterSpacing:1 }}>{c.code}</code>
+            <span style={{ fontSize:13, color:T.textMid, flex:1 }}>
+              {c.kind === "percent" ? `${c.value}% off` : `${boxMoney(Math.round(c.value * 100))} off`}
+            </span>
+            <BoxBtn tone="danger" onClick={()=>remove(c)}>Delete</BoxBtn>
+          </div>
+        );
+      })}
+    </BoxCard>
+  );
+}
+
+// ── Waitlist ─────────────────────────────────────────────────────────────────
+function BoxWaitlistPanel({ eventId, waitlist, onReload, waitlistOn }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  const waiting  = waitlist.filter(function(w) { return !w.converted; });
+  const unnotified = waiting.filter(function(w) { return !w.notified_at; });
+
+  async function release() {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const r = await boxAdmin("waitlist.release", { eventId });
+      setMsg(`Emailed ${r.sent} of ${r.total}.`);
+      await onReload();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <BoxCard title={`Waitlist — ${waiting.length} waiting`}
+      right={<BoxBtn onClick={release} disabled={busy || !unnotified.length}>
+        {busy ? "Sending…" : `Email the waitlist (${unnotified.length})`}
+      </BoxBtn>}>
+      {!waitlistOn && (
+        <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>
+          The waitlist is switched off for this event, so nothing new is being collected. Turn it on under Settings.
+        </div>
+      )}
+      <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 12px", lineHeight:1.6 }}>
+        To release tickets: raise a ticket type's quantity, then press the button. Everyone gets the same message with
+        the same link at the same moment — who actually ends up with the tickets is settled fairly by whoever books first.
+      </p>
+      {msg && <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{msg}</div>}
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
+
+      {!waiting.length && <div style={{ fontSize:13, color:T.textLight }}>Nobody is waiting.</div>}
+
+      {waiting.map(function(w) {
+        return (
+          <div key={w.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"9px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+            <div style={{ flex:"1 1 200px" }}>
+              <div style={{ fontSize:13.5, fontWeight:600, color:T.text }}>{w.name || "—"}</div>
+              <div style={{ fontSize:12, color:T.textLight }}>{w.email}</div>
+            </div>
+            <span style={{ fontSize:12.5, color:T.textMid }}>wants {w.qty_wanted}</span>
+            {w.notified_at
+              ? <BoxPill bg={T.greenBg} fg={T.green}>Emailed {boxDate(w.notified_at)}</BoxPill>
+              : <BoxPill bg={T.amberBg} fg={T.amber}>Waiting</BoxPill>}
+            <span style={{ fontSize:11.5, color:T.textLight }}>added {boxDate(w.created_at)}</span>
+          </div>
+        );
+      })}
+    </BoxCard>
+  );
+}
+
+// ── Orders on one event ──────────────────────────────────────────────────────
+function BoxEventOrders({ event, types, orders, lines, onReload }) {
+  const [adding, setAdding]   = useState(false);
+  const [cancelling, setCancelling] = useState(null);
+  const [busy, setBusy]       = useState(false);
+  const [err, setErr]         = useState("");
+  const [msg, setMsg]         = useState("");
+  const [search, setSearch]   = useState("");
+  const [showCancelled, setShowCancelled] = useState(false);
+
+  const typeName = {};
+  (types || []).forEach(function(t) { typeName[t.id] = t.name; });
+
+  function linesFor(orderId) {
+    return (lines || []).filter(function(l) { return l.order_id === orderId; })
+      .map(function(l) { return l.qty + " × " + (typeName[l.ticket_type_id] || "Ticket"); }).join(", ");
+  }
+
+  const rows = (orders || [])
+    .filter(function(o) { return o.status !== "pending"; })
+    .filter(function(o) { return showCancelled || (o.status !== "cancelled" && o.status !== "refunded"); })
+    .filter(function(o) {
+      if (!search.trim()) return true;
+      const s = search.toLowerCase();
+      return [o.first_name, o.last_name, o.email, o.order_ref].join(" ").toLowerCase().indexOf(s) !== -1;
+    });
+
+  async function doCancel(order, notify) {
+    setBusy(true); setErr("");
+    try {
+      await boxAdmin("orders.cancel", { id: order.id, notify: notify });
+      setCancelling(null);
+      setMsg(`${order.order_ref} cancelled — the tickets are void and the stock is back.`);
+      setTimeout(()=>setMsg(""), 5000);
+      await onReload();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  async function markPaid(order) {
+    setBusy(true); setErr("");
+    try { await boxAdmin("orders.markPaid", { id: order.id, method: "taken by hand" }); await onReload(); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  async function resend(order) {
+    setBusy(true); setErr("");
+    try {
+      await boxAdmin("orders.resend", { id: order.id, kind: order.tickets_issued_at ? "booking_confirmed" : "table_reserved" });
+      setMsg("Sent again to " + order.email); setTimeout(()=>setMsg(""), 4000);
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      {adding && (
+        <BoxManualOrderModal event={event} types={types}
+          onClose={()=>setAdding(false)}
+          onSaved={async function() { setAdding(false); await onReload(); }}/>
+      )}
+
+      {cancelling && (
+        <ConfirmDialog
+          message={`Cancel ${cancelling.order_ref}?`}
+          subMessage={`${cancelling.first_name} ${cancelling.last_name} · ${cancelling.total_qty} tickets. This voids the tickets and returns the stock. The refund is done in Stripe — there's a link to the payment on the row.`}
+          confirmLabel={busy ? "Cancelling…" : "Cancel booking"}
+          onConfirm={()=>doCancel(cancelling, true)}
+          onCancel={()=>setCancelling(null)}
+        />
+      )}
+
+      <BoxCard title={`Orders (${rows.length})`} right={
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <BoxInput value={search} onChange={setSearch} placeholder="Search name, email or reference" style={{ width:230 }}/>
+          <BoxBtn tone="dark" onClick={()=>setAdding(true)}>+ Add order by hand</BoxBtn>
+        </div>
+      }>
+        {msg && <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{msg}</div>}
+        {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
+
+        {!rows.length && <div style={{ fontSize:13, color:T.textLight, padding:"8px 0" }}>No orders yet.</div>}
+
+        {rows.map(function(o) {
+          const st = BOX_STATUS[o.status] || BOX_STATUS.pending;
+          return (
+            <div key={o.id} style={{ padding:"13px 0", borderTop:`1px solid ${T.border}`, display:"flex", gap:14, alignItems:"flex-start", flexWrap:"wrap" }}>
+              <div style={{ flex:"1 1 210px", minWidth:0 }}>
+                <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                  <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{o.first_name} {o.last_name}</span>
+                  <BoxPill bg={st.bg} fg={st.fg}>{st.label}</BoxPill>
+                  {o.source !== "stripe" && <BoxPill bg="#e0e7ff" fg="#3730a3">{o.source}</BoxPill>}
+                  {!o.tickets_issued_at && o.status !== "cancelled" && <BoxPill bg={T.amberBg} fg={T.amber}>No ticket issued</BoxPill>}
+                </div>
+                <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>
+                  {o.email}{o.phone ? " · " + o.phone : ""}
+                </div>
+                <div style={{ fontSize:12.5, color:T.textMid, marginTop:3 }}>
+                  <code style={{ fontWeight:700, letterSpacing:.6 }}>{o.order_ref}</code> · {linesFor(o.id) || o.total_qty + " tickets"}
+                </div>
+                {o.notes && <div style={{ fontSize:11.5, color:T.textLight, marginTop:3, whiteSpace:"pre-wrap" }}>{o.notes}</div>}
+              </div>
+
+              <div style={{ minWidth:110, textAlign:"right" }}>
+                <div style={{ fontSize:14.5, fontWeight:700, color:T.text }}>{boxMoney(o.total_pence)}</div>
+                {o.balance_pence > 0 && (
+                  <div style={{ fontSize:12, color:T.amber, fontWeight:600 }}>
+                    {boxMoney(o.balance_pence)} due {o.balance_due_on ? boxDate(o.balance_due_on) : ""}
+                  </div>
+                )}
+                <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>
+                  {o.admitted ? `${o.admitted} / ${o.total_qty} in` : `${o.total_qty} tickets`}
+                </div>
+              </div>
+
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                {o.email && o.status !== "cancelled" && <BoxBtn tone="ghost" onClick={()=>resend(o)} disabled={busy}>Resend</BoxBtn>}
+                {o.balance_pence > 0 && o.status === "deposit_paid" && (
+                  <BoxBtn tone="green" onClick={()=>markPaid(o)} disabled={busy} title="Record the balance as taken by cash or transfer — this issues the tickets">
+                    Mark balance paid
+                  </BoxBtn>
+                )}
+                {o.stripe_session_id && (
+                  <a href={"https://dashboard.stripe.com/search?query=" + encodeURIComponent(o.stripe_session_id)}
+                    target="_blank" rel="noreferrer"
+                    style={{ padding:"9px 15px", borderRadius:7, border:`1.5px solid ${T.border}`, color:"#635bff",
+                      fontSize:13, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>Stripe ↗</a>
+                )}
+                {o.status !== "cancelled" && o.status !== "refunded" && (
+                  <BoxBtn tone="danger" onClick={()=>setCancelling(o)} disabled={busy}>Cancel</BoxBtn>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <div style={{ marginTop:14, paddingTop:12, borderTop:`1px solid ${T.border}` }}>
+          <BoxCheck checked={showCancelled} onChange={setShowCancelled} label="Show cancelled orders"/>
+        </div>
+      </BoxCard>
+
+      <BoxEventSummary eventId={event.id}/>
+    </div>
+  );
+}
+
+// ── Add an order by hand ─────────────────────────────────────────────────────
+// Cash on the door, a bank transfer, the band's guest list. These are real
+// tickets: they go through the same reserve function as a card sale, count
+// against capacity, and get a QR emailed if there's an address to send it to.
+function BoxManualOrderModal({ event, types, onClose, onSaved }) {
+  const [qty, setQty]   = useState({});
+  const [f, setF]       = useState({ first_name:"", last_name:"", email:"", phone:"", source:"cash", notes:"", notify:true });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr]   = useState("");
+
+  function up(k, v) { setF(function(p) { return Object.assign({}, p, { [k]: v }); }); }
+
+  const total = (types || []).reduce(function(a, t) { return a + (qty[t.id] || 0) * t.price_pence; }, 0);
+  const count = Object.keys(qty).reduce(function(a, k) { return a + (qty[k] || 0); }, 0);
+
+  async function save() {
+    if (!count) { setErr("Choose at least one ticket."); return; }
+    if (!f.first_name.trim()) { setErr("A name is needed — it's what shows on the door list."); return; }
+    setBusy(true); setErr("");
+    try {
+      await boxAdmin("orders.manual", {
+        eventId: event.id,
+        first_name: f.first_name.trim(),
+        last_name: f.last_name.trim(),
+        email: f.email.trim(),
+        phone: f.phone.trim(),
+        source: f.source,
+        notes: f.notes,
+        notify: f.notify && !!f.email.trim(),
+        lines: Object.keys(qty).filter(k=>qty[k] > 0).map(function(k) { return { ticket_type_id: k, qty: qty[k] }; })
+      });
+      await onSaved();
+    } catch (e) { setErr(e.message); setBusy(false); }
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div style={{ background:"#fff", borderRadius:12, width:"min(560px,100%)", maxHeight:"88vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,.3)" }}>
+        <div style={{ padding:"18px 24px", borderBottom:`1px solid ${T.border}` }}>
+          <h3 style={{ margin:0, fontSize:17, fontWeight:800, color:T.midBlue }}>Add an order by hand</h3>
+          <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>{event.name}</div>
+        </div>
+
+        <div style={{ padding:"20px 24px", display:"grid", gap:15 }}>
+          <div>
+            {(types || []).map(function(t) {
+              const n = qty[t.id] || 0;
+              const max = t.remaining;
+              return (
+                <div key={t.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"9px 0", borderTop:`1px solid ${T.border}` }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:13.5, fontWeight:600 }}>{t.name}</div>
+                    <div style={{ fontSize:11.5, color:T.textLight }}>{t.remaining} left · {t.price_pence === 0 ? "Free" : boxMoney(t.price_pence)}</div>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+                    <BoxBtn tone="ghost" disabled={n <= 0} onClick={()=>setQty(Object.assign({}, qty, { [t.id]: Math.max(n - 1, 0) }))} style={{ padding:"6px 12px" }}>−</BoxBtn>
+                    <span style={{ width:30, textAlign:"center", fontSize:15, fontWeight:700 }}>{n}</span>
+                    <BoxBtn tone="ghost" disabled={n >= max} onClick={()=>setQty(Object.assign({}, qty, { [t.id]: n + 1 }))} style={{ padding:"6px 12px" }}>+</BoxBtn>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ display:"flex", justifyContent:"space-between", paddingTop:11, borderTop:`1px solid ${T.border}`, fontSize:15, fontWeight:700 }}>
+              <span>{count} ticket{count === 1 ? "" : "s"}</span>
+              <span>{boxMoney(total)}</span>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <BoxField label="First name"><BoxInput value={f.first_name} onChange={v=>up("first_name", v)}/></BoxField>
+            <BoxField label="Last name"><BoxInput value={f.last_name} onChange={v=>up("last_name", v)}/></BoxField>
+            <BoxField label="Email" hint="Optional — but without it there's nothing to send the QR to.">
+              <BoxInput type="email" value={f.email} onChange={v=>up("email", v)}/>
+            </BoxField>
+            <BoxField label="Phone"><BoxInput value={f.phone} onChange={v=>up("phone", v)}/></BoxField>
+          </div>
+
+          <BoxField label="How it was paid">
+            <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+              {[["cash","Cash"],["transfer","Bank transfer"],["comp","Complimentary"]].map(function([v, l]) {
+                const on = f.source === v;
+                return (
+                  <button key={v} onClick={()=>up("source", v)}
+                    style={{ background: on ? T.accentLight : "#fff", color: on ? T.accent : T.textMid,
+                      border:`1.5px solid ${on ? T.accent : T.border}`, borderRadius:7, padding:"8px 14px",
+                      fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>{l}</button>
+                );
+              })}
+            </div>
+          </BoxField>
+
+          <BoxField label="Note" hint="Only ever seen in here — e.g. “paid Tom on the door”, “band guest list”.">
+            <BoxInput value={f.notes} onChange={v=>up("notes", v)}/>
+          </BoxField>
+
+          <BoxCheck checked={f.notify} onChange={v=>up("notify", v)}
+            label="Email the tickets now" hint="Needs an email address. The QR is issued either way."/>
+
+          {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5 }}>{err}</div>}
+        </div>
+
+        <div style={{ padding:"14px 24px", borderTop:`1px solid ${T.border}`, display:"flex", gap:9, justifyContent:"flex-end" }}>
+          <BoxBtn tone="ghost" onClick={onClose}>Cancel</BoxBtn>
+          <BoxBtn onClick={save} disabled={busy}>{busy ? "Issuing…" : "Issue tickets"}</BoxBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Sales summary ────────────────────────────────────────────────────────────
+function BoxEventSummary({ eventId }) {
+  const [s, setS] = useState(null);
+  useEffect(function() {
+    let live = true;
+    boxAdmin("summary", { eventId }).then(function(r) { if (live) setS(r); }).catch(function() {});
+    return function() { live = false; };
+  }, [eventId]);
+
+  if (!s) return null;
+
+  return (
+    <BoxCard title="Sales summary">
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:16 }}>
+        <BoxStat label="Tickets" value={s.tickets} sub={`${s.orders} orders`}/>
+        <BoxStat label="Taken" value={boxMoney(s.taken_pence)} tone={T.green}/>
+        <BoxStat label="Still due" value={boxMoney(s.due_pence)} tone={s.due_pence ? T.amber : T.midBlue}/>
+        <BoxStat label="Discounts" value={boxMoney(s.discount_pence)}/>
+        <BoxStat label="Checked in" value={s.admitted} sub={`of ${s.tickets}`}/>
+      </div>
+
+      {!!(s.by_type || []).length && (
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:11.5, color:T.textLight, fontWeight:700, textTransform:"uppercase", letterSpacing:.7, marginBottom:6 }}>By ticket type</div>
+          {s.by_type.map(function(r) {
+            return (
+              <div key={r.name} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"5px 0", borderTop:`1px solid ${T.border}` }}>
+                <span>{r.qty} × {r.name}</span>
+                <span style={{ fontWeight:600 }}>{boxMoney(r.gross_pence)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div>
+        <div style={{ fontSize:11.5, color:T.textLight, fontWeight:700, textTransform:"uppercase", letterSpacing:.7, marginBottom:6 }}>How they were sold</div>
+        {(s.by_source || []).filter(function(r) { return r.orders; }).map(function(r) {
+          return (
+            <div key={r.source} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"5px 0", borderTop:`1px solid ${T.border}` }}>
+              <span style={{ textTransform:"capitalize" }}>{r.source === "stripe" ? "Online (card)" : r.source}</span>
+              <span style={{ fontWeight:600 }}>{r.tickets} tickets · {r.orders} orders</span>
+            </div>
+          );
+        })}
+      </div>
+    </BoxCard>
+  );
+}
+
+// ── All orders, across every event ───────────────────────────────────────────
+function BoxOrdersScreen({ onOpenEvent }) {
+  const [orders, setOrders] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+
+  async function load() {
+    setLoading(true); setErr("");
+    try {
+      const [all, bal] = await Promise.all([
+        boxAdmin("orders.list", {}),
+        boxAdmin("balances.due", {})
+      ]);
+      setOrders(all.orders || []);
+      setEvents(bal.events || []);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  }
+  useEffect(function() { load(); }, []);
+
+  const eventName = {};
+  events.forEach(function(e) { eventName[e.id] = e.name; });
+
+  const today = new Date().toISOString().slice(0, 10);
+  // Deposit taken, balance still outstanding, the chase already gone out and
+  // the due date behind us. Nothing here is ever cancelled by the software —
+  // this list exists so a person deals with it.
+  const overdue = orders.filter(function(o) {
+    return o.status === "deposit_paid" && o.balance_pence > 0 && o.chased_at &&
+      o.balance_due_on && String(o.balance_due_on).slice(0, 10) < today;
+  });
+
+  const rows = orders
+    .filter(function(o) { return o.status !== "pending"; })
+    .filter(function(o) {
+      if (filter === "owing") return o.status === "deposit_paid" && o.balance_pence > 0;
+      if (filter === "paid") return o.status === "paid";
+      if (filter === "cancelled") return o.status === "cancelled" || o.status === "refunded";
+      return o.status !== "cancelled" && o.status !== "refunded";
+    })
+    .filter(function(o) {
+      if (!search.trim()) return true;
+      const s = search.toLowerCase();
+      return [o.first_name, o.last_name, o.email, o.order_ref, eventName[o.event_id]].join(" ").toLowerCase().indexOf(s) !== -1;
+    })
+    .slice(0, 300);
+
+  return (
+    <div>
+      {!!overdue.length && (
+        <div style={{ background:T.redBg, border:`1px solid #fca5a5`, borderRadius:10, padding:"16px 18px", marginBottom:20 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:T.red, marginBottom:8 }}>
+            Balance overdue — {overdue.length} booking{overdue.length === 1 ? "" : "s"}
+          </div>
+          <div style={{ fontSize:12.5, color:T.red, marginBottom:10, lineHeight:1.6 }}>
+            Chased once and still unpaid. Nothing has been cancelled — give them a ring.
+          </div>
+          {overdue.map(function(o) {
+            return (
+              <div key={o.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"7px 0", borderTop:"1px solid #fecaca", flexWrap:"wrap" }}>
+                <span style={{ fontSize:13.5, fontWeight:700, color:T.text, flex:"1 1 180px" }}>
+                  {o.first_name} {o.last_name} <span style={{ fontWeight:400, color:T.textLight }}>· {eventName[o.event_id] || ""}</span>
+                </span>
+                <span style={{ fontSize:12.5, color:T.textMid }}>{o.email}{o.phone ? " · " + o.phone : ""}</span>
+                <span style={{ fontSize:13.5, fontWeight:700, color:T.red }}>{boxMoney(o.balance_pence)}</span>
+                <span style={{ fontSize:11.5, color:T.textLight }}>due {boxDate(o.balance_due_on)}</span>
+                <BoxBtn tone="ghost" onClick={()=>onOpenEvent(o.event_id)}>Open event</BoxBtn>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <BoxCard title="All orders" right={
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <BoxInput value={search} onChange={setSearch} placeholder="Search anything" style={{ width:220 }}/>
+          <select value={filter} onChange={e=>setFilter(e.target.value)} style={Object.assign({}, boxInput, { width:170 })}>
+            <option value="all">Live orders</option>
+            <option value="paid">Paid in full</option>
+            <option value="owing">Balance outstanding</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+      }>
+        {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
+        {loading && <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>}
+        {!loading && !rows.length && <div style={{ fontSize:13, color:T.textLight }}>Nothing to show.</div>}
+
+        {rows.map(function(o) {
+          const st = BOX_STATUS[o.status] || BOX_STATUS.pending;
+          return (
+            <div key={o.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"11px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+              <div style={{ flex:"1 1 200px", minWidth:0 }}>
+                <div style={{ fontSize:13.5, fontWeight:700, color:T.text }}>
+                  {o.first_name} {o.last_name} <code style={{ fontWeight:400, color:T.textLight, fontSize:12 }}>{o.order_ref}</code>
+                </div>
+                <div style={{ fontSize:12, color:T.textLight }}>{eventName[o.event_id] || "—"} · {o.email}</div>
+              </div>
+              <BoxPill bg={st.bg} fg={st.fg}>{st.label}</BoxPill>
+              <span style={{ fontSize:12.5, color:T.textMid, minWidth:60, textAlign:"right" }}>{o.total_qty} tix</span>
+              <span style={{ fontSize:13.5, fontWeight:700, minWidth:80, textAlign:"right" }}>{boxMoney(o.total_pence)}</span>
+              <BoxBtn tone="ghost" onClick={()=>onOpenEvent(o.event_id)}>Open</BoxBtn>
+            </div>
+          );
+        })}
+      </BoxCard>
+    </div>
+  );
+}
+
+// ── The door ─────────────────────────────────────────────────────────────────
+// Everything here assumes the barn wifi will drop, because it does. The whole
+// guest list is pulled into the page when the event is opened, so lookups and
+// the running count keep working with no signal at all; check-ins that can't
+// reach the server queue up locally and go through when it comes back.
+const BOX_DOOR_CACHE = "hbf_door_cache_";
+const BOX_DOOR_QUEUE = "hbf_door_queue_v1";
+
+function doorQueueRead() {
+  try { return JSON.parse(localStorage.getItem(BOX_DOOR_QUEUE) || "[]"); } catch (e) { return []; }
+}
+function doorQueueWrite(q) {
+  try { localStorage.setItem(BOX_DOOR_QUEUE, JSON.stringify(q)); } catch (e) {}
+}
+
+// The token is scanned as a /my-ticket/<token> URL so an ordinary phone camera
+// does something useful with a printed ticket. The door only wants the token.
+function tokenFromScan(text) {
+  const s = String(text || "").trim();
+  const i = s.indexOf("/my-ticket/");
+  return (i === -1 ? s : s.slice(i + "/my-ticket/".length)).replace(/[?#].*$/, "").replace(/\/$/, "");
+}
+
+function BoxDoorScreen() {
+  const [events, setEvents]   = useState([]);
+  const [eventId, setEventId] = useState(null);
+  const [door, setDoor]       = useState(null);       // { event, orders, lines, checkins }
+  const [loading, setLoading] = useState(false);
+  const [err, setErr]         = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [result, setResult]   = useState(null);       // { tone, order, message }
+  const [search, setSearch]   = useState("");
+  const [queueLen, setQueueLen] = useState(()=>doorQueueRead().length);
+  const [online, setOnline]   = useState(()=> typeof navigator === "undefined" ? true : navigator.onLine);
+
+  useEffect(function() {
+    boxAdmin("events.list").then(function(r) {
+      setEvents((r.events || []).filter(function(e) { return e.status !== "draft"; }));
+    }).catch(function(e) { setErr(e.message); });
+  }, []);
+
+  useEffect(function() {
+    function on() { setOnline(true); }
+    function off() { setOnline(false); }
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return function() { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+
+  async function openEvent(id) {
+    setEventId(id); setLoading(true); setErr(""); setResult(null);
+    // Show whatever was cached first, so the list is usable the instant the
+    // screen opens even if the network is being slow or absent.
+    try {
+      const cached = JSON.parse(localStorage.getItem(BOX_DOOR_CACHE + id) || "null");
+      if (cached) setDoor(cached);
+    } catch (e) {}
+    try {
+      const r = await boxAdmin("door.list", { eventId: id });
+      setDoor(r);
+      try { localStorage.setItem(BOX_DOOR_CACHE + id, JSON.stringify(r)); } catch (e) {}
+    } catch (e) {
+      setErr("Working from the copy saved on this device — " + e.message);
+    }
+    setLoading(false);
+  }
+
+  // Send anything that piled up while the signal was gone.
+  const flushQueue = useCallback(async function() {
+    let q = doorQueueRead();
+    if (!q.length) return;
+    const left = [];
+    for (let i = 0; i < q.length; i++) {
+      try { await boxAdmin("door.admit", q[i]); }
+      catch (e) { left.push(q[i]); }
+    }
+    doorQueueWrite(left);
+    setQueueLen(left.length);
+    if (left.length < q.length && eventId) {
+      try {
+        const r = await boxAdmin("door.list", { eventId });
+        setDoor(r);
+        try { localStorage.setItem(BOX_DOOR_CACHE + eventId, JSON.stringify(r)); } catch (e) {}
+      } catch (e) {}
+    }
+  }, [eventId]);
+
+  useEffect(function() {
+    if (!online) return;
+    flushQueue();
+    const t = setInterval(flushQueue, 30000);
+    return function() { clearInterval(t); };
+  }, [online, flushQueue]);
+
+  const orders = (door && door.orders) || [];
+  const totalTickets = orders.reduce(function(a, o) { return a + (o.total_qty || 0); }, 0);
+  const totalIn      = orders.reduce(function(a, o) { return a + (o.admitted || 0); }, 0);
+
+  const typeNames = {};
+  ((door && door.lines) || []).forEach(function(l) {
+    const name = (l.box_ticket_types && l.box_ticket_types.name) || "Ticket";
+    typeNames[l.order_id] = (typeNames[l.order_id] ? typeNames[l.order_id] + ", " : "") + l.qty + " × " + name;
+  });
+
+  const lastScan = {};
+  ((door && door.checkins) || []).forEach(function(c) {
+    if (!lastScan[c.order_id] || c.checked_at > lastScan[c.order_id]) lastScan[c.order_id] = c.checked_at;
+  });
+
+  // Looked up in the list already in the page, not on the server — which is
+  // why a scan still tells you who somebody is with no signal.
+  function lookup(token) {
+    const t = tokenFromScan(token);
+    const order = orders.find(function(o) { return o.qr_token === t; });
+    if (!order) return setResult({ tone: "red", message: "Not valid for this event" });
+    if (!order.tickets_issued_at) {
+      return setResult({ tone: "amber", order,
+        message: `Balance unpaid · ${boxMoney(order.balance_pence)} · no ticket issued` });
+    }
+    if ((order.admitted || 0) >= (order.total_qty || 0)) {
+      return setResult({ tone: "amber", order,
+        message: `All ${order.total_qty} already in${lastScan[order.id] ? " — last scanned " + boxTime(lastScan[order.id]) : ""}` });
+    }
+    setResult({ tone: "green", order });
+  }
+
+  async function admit(order, count) {
+    const payload = { orderId: order.id, eventId: eventId, count: count, by: "" };
+    // The tally moves on screen straight away; the server is told when it can
+    // be. A queued check-in is not a lost one.
+    setDoor(function(d) {
+      if (!d) return d;
+      return Object.assign({}, d, {
+        orders: d.orders.map(function(o) {
+          return o.id === order.id ? Object.assign({}, o, { admitted: (o.admitted || 0) + count }) : o;
+        })
+      });
+    });
+    setResult(null);
+    try {
+      await boxAdmin("door.admit", payload);
+    } catch (e) {
+      const q = doorQueueRead(); q.push(payload); doorQueueWrite(q); setQueueLen(q.length);
+    }
+  }
+
+  if (!eventId) {
+    return (
+      <div>
+        {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:8, padding:"11px 14px", fontSize:13, marginBottom:16 }}>{err}</div>}
+        <BoxCard title="Which event?">
+          {!events.length && <div style={{ fontSize:13, color:T.textLight }}>No published events yet.</div>}
+          {events.map(function(e) {
+            return (
+              <div key={e.id} onClick={()=>openEvent(e.id)}
+                style={{ display:"flex", gap:14, alignItems:"center", padding:"13px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
+                <div style={{ flex:"1 1 200px" }}>
+                  <div style={{ fontSize:15, fontWeight:700, color:T.text }}>{e.name}</div>
+                  <div style={{ fontSize:12, color:T.textLight }}>{boxWhen(e.starts_at)}</div>
+                </div>
+                <div style={{ fontSize:13, color:T.textMid }}>{e.stat_sold} sold</div>
+                <span style={{ color:T.textLight, fontSize:18 }}>›</span>
+              </div>
+            );
+          })}
+        </BoxCard>
+      </div>
+    );
+  }
+
+  const matches = search.trim()
+    ? orders.filter(function(o) {
+        const s = search.toLowerCase();
+        return [o.first_name, o.last_name, o.email, o.order_ref].join(" ").toLowerCase().indexOf(s) !== -1;
+      }).slice(0, 40)
+    : [];
+
+  return (
+    <div>
+      {/* The running count, pinned. On the door this is the number that
+          matters and it should never need scrolling to. */}
+      <div style={{ position:"sticky", top:0, zIndex:40, background:T.midBlue, color:"#fff", borderRadius:10,
+        padding:"14px 18px", marginBottom:16, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap",
+        boxShadow:"0 4px 14px rgba(30,77,140,.3)" }}>
+        <div style={{ fontSize:30, fontWeight:800, lineHeight:1 }}>{totalIn} / {totalTickets}</div>
+        <div style={{ fontSize:12.5, opacity:.9, flex:1, minWidth:140 }}>
+          in · {(door && door.event && door.event.name) || ""}
+          {!online && <span style={{ display:"block", fontWeight:700 }}>Offline — check-ins are being saved on this phone</span>}
+          {!!queueLen && <span style={{ display:"block" }}>{queueLen} waiting to sync</span>}
+        </div>
+        <BoxBtn tone="ghost" onClick={function() { setEventId(null); setDoor(null); setScanning(false); }}
+          style={{ background:"rgba(255,255,255,.15)", color:"#fff", border:"1.5px solid rgba(255,255,255,.4)" }}>Change event</BoxBtn>
+      </div>
+
+      {err && <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:8, padding:"11px 14px", fontSize:12.5, marginBottom:14 }}>{err}</div>}
+
+      {/* Result banner */}
+      {result && <BoxScanResult result={result} lines={typeNames[result.order && result.order.id]} onAdmit={admit} onClear={()=>setResult(null)}/>}
+
+      {scanning
+        ? <BoxScanner onCode={function(text) { lookup(text); }} onClose={()=>setScanning(false)}/>
+        : (
+          <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap" }}>
+            <BoxBtn tone="dark" onClick={()=>setScanning(true)} style={{ padding:"14px 26px", fontSize:15 }}>Scan tickets</BoxBtn>
+            <BoxBtn tone="ghost" onClick={function() { printDoorList(door, typeNames); }} style={{ padding:"14px 22px" }}>Print the list</BoxBtn>
+            <BoxBtn tone="ghost" onClick={()=>openEvent(eventId)} disabled={loading} style={{ padding:"14px 22px" }}>
+              {loading ? "Refreshing…" : "Refresh"}
+            </BoxBtn>
+          </div>
+        )}
+
+      <BoxCard title="Find someone">
+        <BoxInput value={search} onChange={setSearch} placeholder="Name, email or reference"/>
+        {!!matches.length && (
+          <div style={{ marginTop:12 }}>
+            {matches.map(function(o) {
+              const left = Math.max((o.total_qty || 0) - (o.admitted || 0), 0);
+              return (
+                <div key={o.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"11px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+                  <div style={{ flex:"1 1 180px", minWidth:0 }}>
+                    <div style={{ fontSize:14.5, fontWeight:700 }}>{o.last_name}, {o.first_name}</div>
+                    <div style={{ fontSize:12, color:T.textLight }}>{typeNames[o.id] || o.total_qty + " tickets"} · {o.order_ref}</div>
+                  </div>
+                  {!o.tickets_issued_at
+                    ? <BoxPill bg={T.amberBg} fg={T.amber}>{boxMoney(o.balance_pence)} unpaid · no ticket</BoxPill>
+                    : left === 0
+                      ? <BoxPill bg={T.greenBg} fg={T.green}>All {o.total_qty} in</BoxPill>
+                      : <BoxBtn tone="green" onClick={()=>admit(o, left)}>Admit {left}</BoxBtn>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {search.trim() && !matches.length && <div style={{ fontSize:13, color:T.textLight, marginTop:10 }}>Nobody by that name.</div>}
+      </BoxCard>
+    </div>
+  );
+}
+
+function BoxScanResult({ result, lines, onAdmit, onClear }) {
+  const [n, setN] = useState(0);
+  const order = result.order;
+  const left = order ? Math.max((order.total_qty || 0) - (order.admitted || 0), 0) : 0;
+
+  useEffect(function() { setN(left); }, [order && order.id, left]);
+
+  const tones = {
+    green: { bg:T.greenBg, border:"#86efac", fg:"#14532d" },
+    amber: { bg:T.amberBg, border:"#fcd34d", fg:"#92400e" },
+    red:   { bg:T.redBg,   border:"#fca5a5", fg:"#7f1d1d" },
+  };
+  const tone = tones[result.tone] || tones.red;
+
+  return (
+    <div style={{ background:tone.bg, border:`2px solid ${tone.border}`, borderRadius:12, padding:"18px 20px", marginBottom:16 }}>
+      <div style={{ display:"flex", gap:14, alignItems:"center", flexWrap:"wrap" }}>
+        <div style={{ flex:"1 1 200px", minWidth:0 }}>
+          <div style={{ fontSize:20, fontWeight:800, color:tone.fg }}>
+            {order ? `${order.first_name} ${order.last_name}` : result.message}
+          </div>
+          <div style={{ fontSize:13.5, color:tone.fg, opacity:.85, marginTop:3 }}>
+            {order ? (result.message || (lines || `${order.total_qty} tickets`) +
+              (order.admitted ? ` · ${order.admitted} already in` : "")) : ""}
+          </div>
+          {order && order.notes && <div style={{ fontSize:12, color:tone.fg, opacity:.7, marginTop:3 }}>{order.notes}</div>}
+        </div>
+
+        {result.tone === "green" && (
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+            <BoxBtn tone="ghost" onClick={()=>setN(Math.max(n - 1, 1))} disabled={n <= 1} style={{ padding:"12px 16px", fontSize:17 }}>−</BoxBtn>
+            <span style={{ fontSize:22, fontWeight:800, width:38, textAlign:"center", color:tone.fg }}>{n}</span>
+            <BoxBtn tone="ghost" onClick={()=>setN(Math.min(n + 1, left))} disabled={n >= left} style={{ padding:"12px 16px", fontSize:17 }}>+</BoxBtn>
+            <BoxBtn tone="green" onClick={()=>onAdmit(order, n)} style={{ padding:"14px 24px", fontSize:16 }}>
+              {n === left ? `Admit all ${n}` : `Admit ${n}`}
+            </BoxBtn>
+          </div>
+        )}
+        <BoxBtn tone="ghost" onClick={onClear}>Clear</BoxBtn>
+      </div>
+    </div>
+  );
+}
+
+// ── The camera ───────────────────────────────────────────────────────────────
+// BarcodeDetector where the browser has it (Android Chrome), jsQR on a canvas
+// where it doesn't (iOS Safari). Both need HTTPS and camera permission, which
+// Netlify and a phone give us.
+function BoxScanner({ onCode, onClose }) {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [err, setErr] = useState("");
+  const [engine, setEngine] = useState("");
+  const lastRef = useRef({ text: "", at: 0 });
+
+  // The handler is held in a ref rather than named as a dependency below. It
+  // arrives as a fresh arrow function on every render, and depending on it
+  // would tear the camera down and start it again several times a second.
+  const onCodeRef = useRef(onCode);
+  onCodeRef.current = onCode;
+
+  useEffect(function() {
+    let stream = null;
+    let raf = null;
+    let stopped = false;
+    let detector = null;
+    let jsQR = null;
+
+    function handle(text) {
+      if (!text) return;
+      const now = Date.now();
+      // The same code stays in front of the lens for a second or two; one
+      // scan should not become thirty.
+      if (text === lastRef.current.text && now - lastRef.current.at < 2500) return;
+      lastRef.current = { text, at: now };
+      try { if (navigator.vibrate) navigator.vibrate(60); } catch (e) {}
+      onCodeRef.current(text);
+    }
+
+    async function tick() {
+      if (stopped) return;
+      const video = videoRef.current;
+      if (video && video.readyState === 4) {
+        try {
+          if (detector) {
+            const codes = await detector.detect(video);
+            if (codes && codes.length) handle(codes[0].rawValue);
+          } else if (jsQR) {
+            const canvas = canvasRef.current;
+            const w = video.videoWidth, h = video.videoHeight;
+            if (w && h) {
+              canvas.width = w; canvas.height = h;
+              const ctx = canvas.getContext("2d", { willReadFrequently: true });
+              ctx.drawImage(video, 0, 0, w, h);
+              const img = ctx.getImageData(0, 0, w, h);
+              const found = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+              if (found) handle(found.data);
+            }
+          }
+        } catch (e) { /* a bad frame is not worth stopping the camera for */ }
+      }
+      raf = requestAnimationFrame(tick);
+    }
+
+    (async function start() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        if (stopped) { stream.getTracks().forEach(t=>t.stop()); return; }
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        if (typeof window !== "undefined" && "BarcodeDetector" in window) {
+          detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+          setEngine("BarcodeDetector");
+        } else {
+          const mod = await import("jsqr");
+          jsQR = mod.default || mod;
+          setEngine("jsQR");
+        }
+        tick();
+      } catch (e) {
+        setErr(e && e.name === "NotAllowedError"
+          ? "The camera was blocked. Allow camera access for this site in your browser settings, then try again."
+          : "Couldn't start the camera: " + (e.message || e));
+      }
+    })();
+
+    return function() {
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+      if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
+    };
+  }, []);
+
+  return (
+    <div style={{ marginBottom:16 }}>
+      <div style={{ position:"relative", background:"#000", borderRadius:12, overflow:"hidden" }}>
+        <video ref={videoRef} playsInline muted style={{ width:"100%", maxHeight:"58vh", objectFit:"cover", display:"block" }}/>
+        <canvas ref={canvasRef} style={{ display:"none" }}/>
+        {/* A target to aim at — people hold a phone screen much closer than
+            they hold a printed ticket. */}
+        <div style={{ position:"absolute", inset:"50% 50%", width:200, height:200, margin:"-100px 0 0 -100px",
+          border:"3px solid rgba(255,255,255,.75)", borderRadius:16, pointerEvents:"none" }}/>
+        <button onClick={onClose}
+          style={{ position:"absolute", top:12, right:12, background:"rgba(0,0,0,.55)", color:"#fff",
+            border:"1.5px solid rgba(255,255,255,.5)", borderRadius:8, padding:"8px 14px",
+            fontFamily:"inherit", fontSize:13, fontWeight:600, cursor:"pointer" }}>Stop</button>
+      </div>
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:8, padding:"11px 14px", fontSize:13, marginTop:10 }}>{err}</div>}
+      {engine && !err && <div style={{ fontSize:11.5, color:T.textLight, marginTop:6 }}>Scanning with {engine}. Hold the code in the square.</div>}
+    </div>
+  );
+}
+
+// ── The printed list ─────────────────────────────────────────────────────────
+// A4, alphabetical by surname, with a box per head to tick. Deliberately its
+// own window rather than a print stylesheet fighting the app's chrome.
+function printDoorList(door, typeNames) {
+  if (!door) return;
+  const ev = door.event || {};
+  const rows = (door.orders || []).slice().sort(function(a, b) {
+    return String(a.last_name || "").localeCompare(String(b.last_name || "")) ||
+           String(a.first_name || "").localeCompare(String(b.first_name || ""));
+  });
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  const body = rows.map(function(o) {
+    const boxes = Array.from({ length: Math.min(o.total_qty || 0, 12) })
+      .map(function() { return '<span class="tick"></span>'; }).join("");
+    return "<tr>" +
+      "<td><strong>" + esc(o.last_name) + "</strong>, " + esc(o.first_name) +
+        (!o.tickets_issued_at ? ' <span class="warn">balance unpaid</span>' : "") + "</td>" +
+      "<td class=\"sm\">" + esc(o.email) + "</td>" +
+      "<td class=\"sm\">" + esc(typeNames[o.id] || "") + "</td>" +
+      "<td class=\"mid\">" + (o.total_qty || 0) + "</td>" +
+      "<td class=\"sm\">" + esc(o.order_ref) + "</td>" +
+      "<td>" + boxes + "</td>" +
+      "</tr>";
+  }).join("");
+
+  const totalTickets = rows.reduce(function(a, o) { return a + (o.total_qty || 0); }, 0);
+
+  const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + esc(ev.name) + " — door list</title><style>" +
+    "@page { size: A4; margin: 14mm; }" +
+    "body { font-family: -apple-system, system-ui, sans-serif; color:#111; font-size:11px; }" +
+    "h1 { font-size:17px; margin:0 0 2px; } .sub { color:#666; font-size:11px; margin-bottom:12px; }" +
+    "table { width:100%; border-collapse:collapse; }" +
+    "th { text-align:left; font-size:9px; text-transform:uppercase; letter-spacing:.6px; color:#666; border-bottom:1.5px solid #333; padding:5px 6px; }" +
+    "td { padding:7px 6px; border-bottom:1px solid #ddd; vertical-align:top; }" +
+    "td.sm { font-size:10px; color:#444; } td.mid { text-align:center; font-weight:700; }" +
+    ".tick { display:inline-block; width:11px; height:11px; border:1px solid #333; margin-right:3px; border-radius:2px; }" +
+    ".warn { color:#b45309; font-size:9px; text-transform:uppercase; letter-spacing:.4px; }" +
+    "tr { page-break-inside: avoid; }" +
+    "</style></head><body>" +
+    "<h1>" + esc(ev.name) + "</h1>" +
+    "<div class='sub'>" + esc(boxWhen(ev.starts_at)) + " · " + esc(ev.venue_name || "") + " · " +
+      rows.length + " bookings · " + totalTickets + " tickets</div>" +
+    "<table><thead><tr><th>Name</th><th>Email</th><th>Bought</th><th>Qty</th><th>Ref</th><th>In</th></tr></thead>" +
+    "<tbody>" + body + "</tbody></table></body></html>";
+
+  const w = window.open("", "_blank");
+  if (!w) return;
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(function() { w.print(); }, 400);
+}
+
+// ── Box office settings ──────────────────────────────────────────────────────
+function BoxSettingsScreen({ onForgetKey }) {
+  const [templates, setTemplates] = useState(DEFAULT_BOX_TEMPLATES);
+  const [loaded, setLoaded] = useState(false);
+  const [flash, setFlash] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(function() {
+    (async function() {
+      try {
+        const t = await sbGet(BOX_TEMPLATES_STORAGE);
+        if (t && t.length) {
+          // Merge rather than replace: a template added in a later build should
+          // appear for someone who saved this screen before it existed.
+          setTemplates(DEFAULT_BOX_TEMPLATES.map(function(d) {
+            const saved = t.find(function(x) { return x.id === d.id; });
+            return saved ? Object.assign({}, d, saved) : d;
+          }));
+        }
+      } catch (e) {}
+      setLoaded(true);
+    })();
+  }, []);
+
+  async function saveTemplates() {
+    try {
+      await sbSet(BOX_TEMPLATES_STORAGE, templates);
+      setFlash("Saved"); setTimeout(()=>setFlash(""), 1600);
+    } catch (e) { setFlash("Save failed"); }
+  }
+
+  const whatsOn = (typeof window !== "undefined" ? window.location.origin : "") + "/whats-on";
+
+  return (
+    <div style={{ maxWidth:880 }}>
+      <BoxCard title="What's On page">
+        <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
+          Every published event with “Show on What's On” ticked appears here. Link to it from the website, or embed it
+          with <code>?embed=1</code> the same way the cottage booking page is embedded.
+        </p>
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:6, padding:"8px 12px", fontSize:12, color:T.text }}>{whatsOn}</code>
+          <BoxBtn tone={copied ? "green" : "ghost"} onClick={function() {
+            try { navigator.clipboard.writeText(whatsOn); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch (e) {}
+          }}>{copied ? "✓ Copied" : "Copy"}</BoxBtn>
+          <a href={whatsOn} target="_blank" rel="noreferrer" style={{ fontSize:12.5, color:T.accent, fontWeight:600 }}>Open ↗</a>
+        </div>
+      </BoxCard>
+
+      <BoxCard title="Emails" right={<div style={{ display:"flex", gap:10, alignItems:"center" }}>
+        {flash && <span style={{ fontSize:12, color:T.green, fontWeight:700 }}>{flash}</span>}
+        <BoxBtn onClick={saveTemplates}>Save templates</BoxBtn>
+      </div>}>
+        {!loaded
+          ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>
+          : <BoxTemplatesEditor templates={templates} setTemplates={setTemplates}/>}
+      </BoxCard>
+
+      <BoxCard title="Box office key">
+        <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.65 }}>
+          This device is holding a key that unlocks the buyer list. Forget it if you're signing off a shared computer —
+          the app will simply ask for it again next time.
+        </p>
+        <BoxBtn tone="danger" onClick={function() {
+          try { localStorage.removeItem(BOX_KEY_LS); } catch (e) {}
+          onForgetKey();
+        }}>Forget the key on this device</BoxBtn>
+      </BoxCard>
+
+      <BoxCard title="What runs on its own">
+        <div style={{ fontSize:13, color:T.textMid, lineHeight:1.85 }}>
+          <div><strong>Every morning at 8am</strong> — balance emails go out on their due date, one chase goes out
+            after it, and event reminders go out before the event. Anything still unpaid after the chase turns up in
+            the red list on the Orders tab. Nothing is ever cancelled automatically.</div>
+          <div style={{ marginTop:8 }}><strong>Every hour</strong> — abandoned checkouts are cleared away. Seats
+            themselves release after fifteen minutes whether or not that ever runs.</div>
+        </div>
+      </BoxCard>
+    </div>
+  );
+}
+
+function BoxTemplatesEditor({ templates, setTemplates }) {
+  const [openId, setOpenId] = useState(null);
+
+  function update(id, key, value) {
+    setTemplates(function(list) {
+      return list.map(function(t) { return t.id === id ? Object.assign({}, t, { [key]: value }) : t; });
+    });
+  }
+
+  return (
+    <div>
+      <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"11px 14px", marginBottom:14 }}>
+        <div style={{ fontSize:11, fontWeight:700, color:T.textLight, textTransform:"uppercase", letterSpacing:.7, marginBottom:6 }}>Tokens you can use</div>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+          {BOX_TOKENS.map(function(tok) {
+            return <code key={tok} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:5, padding:"2px 7px", fontSize:11.5, color:T.textMid }}>{"{{" + tok + "}}"}</code>;
+          })}
+        </div>
+      </div>
+
+      {templates.map(function(t) {
+        const open = openId === t.id;
+        return (
+          <div key={t.id} style={{ borderTop:`1px solid ${T.border}` }}>
+            <div onClick={()=>setOpenId(open ? null : t.id)}
+              style={{ display:"flex", gap:12, alignItems:"center", padding:"13px 0", cursor:"pointer", flexWrap:"wrap" }}>
+              <div style={{ flex:"1 1 220px" }}>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{t.label}</div>
+                <div style={{ fontSize:12, color:T.textLight, marginTop:2 }}>{t.when}</div>
+              </div>
+              {t.triggerDays != null && (
+                <div onClick={e=>e.stopPropagation()} style={{ display:"flex", alignItems:"center", gap:7 }}>
+                  <BoxInput type="number" min="0" value={t.triggerDays} onChange={v=>update(t.id, "triggerDays", Number(v) || 0)} style={{ width:70 }}/>
+                  <span style={{ fontSize:12, color:T.textLight }}>days</span>
+                </div>
+              )}
+              <span style={{ color:T.textLight, fontSize:16 }}>{open ? "▾" : "›"}</span>
+            </div>
+
+            {open && (
+              <div style={{ paddingBottom:18, display:"grid", gap:12 }}>
+                {t.id === "balance_due" && (
+                  <div style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, borderRadius:7, padding:"9px 12px", fontSize:12, color:T.textMid, lineHeight:1.6 }}>
+                    This is the house default. Each event can override it with its own “balance due” setting.
+                  </div>
+                )}
+                <BoxField label="Subject">
+                  <BoxInput value={t.subject} onChange={v=>update(t.id, "subject", v)}/>
+                </BoxField>
+                <BoxField label="Message" hint="Plain text. Blank lines become paragraphs, and a payment link becomes a button.">
+                  <textarea value={t.body} onChange={e=>update(t.id, "body", e.target.value)} rows={12}
+                    style={Object.assign({}, boxInput, { resize:"vertical", lineHeight:1.65, fontSize:13 })}/>
+                </BoxField>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── On the home dashboard ────────────────────────────────────────────────────
+// Silent when there's nothing on sale, and silent on a device that hasn't been
+// given the box office key — the home page shouldn't nag about a key somebody
+// may not have.
+function BoxOfficeDashboardCard({ setView }) {
+  const [events, setEvents] = useState(null);
+  const [owing, setOwing]   = useState(0);
+
+  useEffect(function() {
+    if (!boxKey()) return;
+    let live = true;
+    (async function() {
+      try {
+        const r = await boxAdmin("events.list");
+        if (!live) return;
+        const now = new Date().toISOString();
+        setEvents((r.events || [])
+          .filter(function(e) { return e.status === "published" && e.starts_at && e.starts_at >= now; })
+          .sort(function(a, b) { return a.starts_at < b.starts_at ? -1 : 1; })
+          .slice(0, 4));
+      } catch (e) { if (live) setEvents([]); }
+      try {
+        const b = await boxAdmin("balances.due");
+        if (!live) return;
+        setOwing((b.orders || []).reduce(function(a, o) { return a + (o.balance_pence || 0); }, 0));
+      } catch (e) {}
+    })();
+    return function() { live = false; };
+  }, []);
+
+  if (!events || !events.length) return null;
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
+        <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Box Office</h3>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {owing > 0 && (
+            <span style={{ fontSize:12, fontWeight:700, color:T.amber, background:T.amberBg, padding:"2px 10px", borderRadius:8 }}>
+              {boxMoney(owing)} still owing
+            </span>
+          )}
+          <button onClick={()=>setView("boxoffice")}
+            style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer" }}>
+            Open ›
+          </button>
+        </div>
+      </div>
+      {events.map(function(e) {
+        const pct = e.stat_capacity ? Math.round((e.stat_sold / e.stat_capacity) * 100) : 0;
+        return (
+          <div key={e.id} onClick={()=>setView("boxoffice")}
+            style={{ display:"flex", gap:12, alignItems:"center", padding:"9px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
+            <div style={{ flex:"1 1 160px", minWidth:0 }}>
+              <div style={{ fontSize:13.5, fontWeight:700, color:T.text }}>{e.name}</div>
+              <div style={{ fontSize:11.5, color:T.textLight }}>{boxWhen(e.starts_at)}</div>
+            </div>
+            {/* A bar reads faster than a number when you're glancing at this
+                on the way past. */}
+            {!!e.stat_capacity && (
+              <div style={{ width:90, height:7, background:T.bgInput, borderRadius:99, overflow:"hidden" }}>
+                <div style={{ width: Math.min(pct, 100) + "%", height:"100%",
+                  background: pct >= 100 ? T.green : T.accent }}/>
+              </div>
+            )}
+            <div style={{ fontSize:12.5, color:T.textMid, minWidth:78, textAlign:"right" }}>
+              {e.stat_sold}{e.stat_capacity ? " / " + e.stat_capacity : ""} sold
+            </div>
+            <div style={{ fontSize:13, fontWeight:700, color:T.green, minWidth:70, textAlign:"right" }}>
+              {boxMoney(e.stat_revenue)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Ticket terms and conditions ──────────────────────────────────────────────
+// Still to be written at handover, and the checkout is honest about it: until
+// there is something here the buyer sees a one-line statement rather than a
+// link to the cottage terms, which cover something else entirely.
+function BoxTicketTermsEditor() {
+  const [text, setText] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [flash, setFlash] = useState("");
+
+  useEffect(function() {
+    (async function() {
+      try { const v = await sbGet(BOX_TERMS_STORAGE); if (v && v.text) setText(v.text); }
+      catch (e) {}
+      setLoaded(true);
+    })();
+  }, []);
+
+  async function save() {
+    try {
+      await sbSet(BOX_TERMS_STORAGE, { text: text, updatedAt: new Date().toISOString() });
+      setFlash("Saved"); setTimeout(()=>setFlash(""), 1600);
+    } catch (e) { setFlash("Save failed"); }
+  }
+
+  const empty = !text.trim();
+
+  return (
+    <BoxCard title="Ticket terms & conditions" right={
+      <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+        {flash && <span style={{ fontSize:12, color:T.green, fontWeight:700 }}>{flash}</span>}
+        <BoxBtn onClick={save} disabled={!loaded}>Save terms</BoxBtn>
+      </div>
+    }>
+      {empty && (
+        <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:8, padding:"11px 14px", fontSize:12.5, marginBottom:12, lineHeight:1.65 }}>
+          <strong>Not written yet.</strong> Until something is here, the checkout shows a single line rather than a
+          link, and nothing links buyers to the cottage terms. Worth writing before the first Christmas booking —
+          it needs to say plainly whether a deposit comes back if a table cancels.
+        </div>
+      )}
+      <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 10px", lineHeight:1.6 }}>
+        A short paragraph or two: refunds, cancellation, whether deposits are returnable, transferring a ticket to
+        somebody else. Shown at <code>/terms.html?tickets=1</code> and linked from the checkout and every ticket email.
+        Blank lines separate paragraphs; a short line with no full stop becomes a heading.
+      </p>
+      <textarea value={text} onChange={e=>setText(e.target.value)} rows={12}
+        placeholder={"Refunds\n\nTickets are non-refundable unless the event is cancelled…"}
+        style={Object.assign({}, boxInput, { resize:"vertical", lineHeight:1.65, fontSize:13 })}/>
+      {!empty && (
+        <div style={{ marginTop:10 }}>
+          <a href="/terms.html?tickets=1" target="_blank" rel="noreferrer"
+            style={{ fontSize:12.5, color:T.accent, fontWeight:600 }}>See how it reads ↗</a>
+        </div>
+      )}
+    </BoxCard>
   );
 }
