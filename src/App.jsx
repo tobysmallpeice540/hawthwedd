@@ -1792,7 +1792,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22a";
+const APP_BUILD = "2026-08-22b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -16907,6 +16907,8 @@ function BoxDoorScreen() {
   const [scanning, setScanning] = useState(false);
   const [result, setResult]   = useState(null);       // { tone, order, message }
   const [search, setSearch]   = useState("");
+  const [doorFilter, setDoorFilter] = useState("all");
+  const [rowBusy, setRowBusy] = useState(null);
   const [queueLen, setQueueLen] = useState(()=>doorQueueRead().length);
   const [online, setOnline]   = useState(()=> typeof navigator === "undefined" ? true : navigator.onLine);
 
@@ -17003,7 +17005,25 @@ function BoxDoorScreen() {
     setResult({ tone: "green", order });
   }
 
+  // Waved through by mistake. Logged as a negative check-in rather than quietly
+  // edited, so the scan log stays a true record of what happened.
+  async function unadmit(order, count) {
+    setRowBusy(order.id);
+    setDoor(function(d) {
+      if (!d) return d;
+      return Object.assign({}, d, {
+        orders: d.orders.map(function(o) {
+          return o.id === order.id ? Object.assign({}, o, { admitted: Math.max((o.admitted || 0) - count, 0) }) : o;
+        })
+      });
+    });
+    try { await boxAdmin("door.unadmit", { orderId: order.id, count: count }); }
+    catch (e) { setErr(e.message); }
+    setRowBusy(null);
+  }
+
   async function admit(order, count) {
+    setRowBusy(order.id);
     const payload = { orderId: order.id, eventId: eventId, count: count, by: "" };
     // The tally moves on screen straight away; the server is told when it can
     // be. A queued check-in is not a lost one.
@@ -17021,6 +17041,7 @@ function BoxDoorScreen() {
     } catch (e) {
       const q = doorQueueRead(); q.push(payload); doorQueueWrite(q); setQueueLen(q.length);
     }
+    setRowBusy(null);
   }
 
   if (!eventId) {
@@ -17047,12 +17068,25 @@ function BoxDoorScreen() {
     );
   }
 
-  const matches = search.trim()
-    ? orders.filter(function(o) {
-        const s = search.toLowerCase();
-        return [o.first_name, o.last_name, o.email, o.order_ref].join(" ").toLowerCase().indexOf(s) !== -1;
-      }).slice(0, 40)
-    : [];
+  // The whole list, alphabetical by surname — the same order as the printed
+  // sheet, so working from the screen and working from paper feel the same.
+  const listed = orders
+    .filter(function(o) {
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
+      return [o.first_name, o.last_name, o.email, o.order_ref].join(" ").toLowerCase().indexOf(q) !== -1;
+    })
+    .filter(function(o) {
+      const left = Math.max((o.total_qty || 0) - (o.admitted || 0), 0);
+      if (doorFilter === "waiting") return left > 0;
+      if (doorFilter === "in")      return (o.admitted || 0) > 0;
+      return true;
+    })
+    .slice()
+    .sort(function(a, b) {
+      return String(a.last_name || "").localeCompare(String(b.last_name || ""), "en", { sensitivity: "base" })
+          || String(a.first_name || "").localeCompare(String(b.first_name || ""), "en", { sensitivity: "base" });
+    });
 
   return (
     <div>
@@ -17088,30 +17122,121 @@ function BoxDoorScreen() {
           </div>
         )}
 
-      <BoxCard title="Find someone">
-        <BoxInput value={search} onChange={setSearch} placeholder="Name, email or reference"/>
-        {!!matches.length && (
-          <div style={{ marginTop:12 }}>
-            {matches.map(function(o) {
-              const left = Math.max((o.total_qty || 0) - (o.admitted || 0), 0);
-              return (
-                <div key={o.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"11px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-                  <div style={{ flex:"1 1 180px", minWidth:0 }}>
-                    <div style={{ fontSize:14.5, fontWeight:700 }}>{o.last_name}, {o.first_name}</div>
-                    <div style={{ fontSize:12, color:T.textLight }}>{typeNames[o.id] || o.total_qty + " tickets"} · {o.order_ref}</div>
-                  </div>
-                  {!o.tickets_issued_at
-                    ? <BoxPill bg={T.amberBg} fg={T.amber}>{boxMoney(o.balance_pence)} unpaid · no ticket</BoxPill>
-                    : left === 0
-                      ? <BoxPill bg={T.greenBg} fg={T.green}>All {o.total_qty} in</BoxPill>
-                      : <BoxBtn tone="green" onClick={()=>admit(o, left)}>Admit {left}</BoxBtn>}
-                </div>
-              );
-            })}
+      <BoxCard title={`Guest list — ${listed.length} booking${listed.length === 1 ? "" : "s"}`} right={
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+          {[["all","Everyone"],["waiting","Still to come"],["in","Arrived"]].map(function([v, l]) {
+            const on = doorFilter === v;
+            return (
+              <button key={v} onClick={()=>setDoorFilter(v)}
+                style={{ background: on ? T.midBlue : "#fff", color: on ? "#fff" : T.textMid,
+                  border:`1.5px solid ${on ? T.midBlue : T.border}`, borderRadius:7, padding:"7px 13px",
+                  fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer" }}>{l}</button>
+            );
+          })}
+        </div>
+      }>
+        <BoxInput value={search} onChange={setSearch} placeholder="Search name, email or reference"/>
+
+        {!listed.length && (
+          <div style={{ fontSize:13, color:T.textLight, marginTop:14 }}>
+            {search.trim() ? "Nobody by that name." : "Nobody on this list yet."}
           </div>
         )}
-        {search.trim() && !matches.length && <div style={{ fontSize:13, color:T.textLight, marginTop:10 }}>Nobody by that name.</div>}
+
+        <div style={{ marginTop:8 }}>
+          {listed.map(function(o, i) {
+            const letter = String(o.last_name || "?").charAt(0).toUpperCase();
+            const prev   = i > 0 ? String(listed[i-1].last_name || "?").charAt(0).toUpperCase() : null;
+            return (
+              <div key={o.id}>
+                {/* Letter dividers, so a long list can be thumbed through the
+                    way the printed sheet is. Only when not searching, where
+                    they would just be noise. */}
+                {!search.trim() && letter !== prev && (
+                  <div style={{ fontSize:11, fontWeight:800, color:T.textLight, letterSpacing:1.4,
+                    padding:"14px 0 4px", borderTop: i ? `1px solid ${T.border}` : "none" }}>{letter}</div>
+                )}
+                <BoxDoorRow order={o} lines={typeNames[o.id]} lastScan={lastScan[o.id]}
+                  onAdmit={admit} onUnadmit={unadmit} busy={rowBusy === o.id}/>
+              </div>
+            );
+          })}
+        </div>
       </BoxCard>
+    </div>
+  );
+}
+
+// One booking on the door list. A single ticket is one tap; a group gets a
+// stepper, because part of a party arriving is the normal case, not the
+// exception — ten bought, five here now, and the other five stay live.
+function BoxDoorRow({ order, lines, lastScan, onAdmit, onUnadmit, busy }) {
+  const total = order.total_qty || 0;
+  const inAlready = order.admitted || 0;
+  const left = Math.max(total - inAlready, 0);
+  const [n, setN] = useState(left);
+
+  // Keep the stepper honest when the tally moves underneath it — a second
+  // phone on the same door, or a queued scan syncing.
+  useEffect(function() { setN(left); }, [left]);
+
+  const rowStyle = { display:"flex", gap:12, alignItems:"center", padding:"12px 0",
+    borderTop:`1px solid ${T.border}`, flexWrap:"wrap", opacity: busy ? .55 : 1 };
+
+  // Nothing to scan and nothing to admit: the balance is still owed, so this
+  // is a conversation rather than a door decision.
+  if (!order.tickets_issued_at) {
+    return (
+      <div style={rowStyle}>
+        <div style={{ flex:"1 1 200px", minWidth:0 }}>
+          <div style={{ fontSize:15, fontWeight:700, color:T.text }}>{order.last_name}, {order.first_name}</div>
+          <div style={{ fontSize:12, color:T.textLight }}>{lines || total + " tickets"} · {order.order_ref}</div>
+        </div>
+        <BoxPill bg={T.amberBg} fg={T.amber}>
+          {boxMoney(order.balance_pence)} unpaid · no ticket issued
+        </BoxPill>
+      </div>
+    );
+  }
+
+  return (
+    <div style={rowStyle}>
+      <div style={{ flex:"1 1 200px", minWidth:0 }}>
+        <div style={{ fontSize:15, fontWeight:700, color:T.text }}>{order.last_name}, {order.first_name}</div>
+        <div style={{ fontSize:12, color:T.textLight }}>
+          {lines || total + " tickets"} · {order.order_ref}
+          {order.source !== "stripe" ? " · " + order.source : ""}
+        </div>
+        {inAlready > 0 && (
+          <div style={{ fontSize:12, color: left === 0 ? T.green : T.amber, fontWeight:600, marginTop:2 }}>
+            {inAlready} of {total} in{lastScan ? " · last scanned " + boxTime(lastScan) : ""}
+          </div>
+        )}
+      </div>
+
+      {left === 0 ? (
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <BoxPill bg={T.greenBg} fg={T.green}>All {total} in</BoxPill>
+          <BoxBtn tone="ghost" disabled={busy} onClick={()=>onUnadmit(order, 1)}
+            title="Let one back out — recorded, not silently undone">Undo one</BoxBtn>
+        </div>
+      ) : (
+        <div style={{ display:"flex", gap:7, alignItems:"center", flexWrap:"wrap" }}>
+          {left > 1 && (
+            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+              <BoxBtn tone="ghost" disabled={busy || n <= 1} onClick={()=>setN(n - 1)}
+                style={{ padding:"10px 14px", fontSize:16 }}>−</BoxBtn>
+              <span style={{ fontSize:18, fontWeight:800, width:30, textAlign:"center", color:T.text }}>{n}</span>
+              <BoxBtn tone="ghost" disabled={busy || n >= left} onClick={()=>setN(n + 1)}
+                style={{ padding:"10px 14px", fontSize:16 }}>+</BoxBtn>
+            </div>
+          )}
+          <BoxBtn tone="green" disabled={busy} onClick={()=>onAdmit(order, n)}
+            style={{ padding:"12px 20px", fontSize:15 }}>
+            {busy ? "…" : (n === total && inAlready === 0 && total > 1) ? `Admit all ${n}` : `Admit ${n}`}
+          </BoxBtn>
+        </div>
+      )}
     </div>
   );
 }
