@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23f";
+const APP_BUILD = "2026-08-23l";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -5973,6 +5973,30 @@ export default function App({ role = "admin", onSignOut } = {}) {
     });
   }, []);
 
+  // Add lettings bookings that came from somewhere other than the lettings
+  // screen — today, a signed contract. Appends against the server's current
+  // array rather than this tab's snapshot, for the same reason mutateBookings
+  // does: another tab may have added a booking since this one loaded.
+  const createAccomBookings = useCallback(async (records) => {
+    if (!records || !records.length) return [];
+    let server;
+    try { server = await sbGet(ACCOM_STORAGE); }
+    catch (e) {
+      console.error("Aborting — could not read current lettings bookings:", e);
+      throw new Error("Could not reach the database, so nothing was saved. Please try again.");
+    }
+    const base = Array.isArray(server) ? server : [];
+    const made = [];
+    const next = base.slice();
+    records.forEach(function(r) {
+      const rec = Object.assign({}, r, { id: newBookingRef(next, "A") });
+      next.push(rec); made.push(rec);
+    });
+    await sbSet(ACCOM_STORAGE, next);
+    setAccomBookings(next);
+    return made;
+  }, []);
+
   // createdAt is new on events; older records simply don't have one, which is
   // correct — they weren't created recently and shouldn't appear as new.
   const emptyBooking = ()=>({ createdAt: new Date().toISOString(), couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", email3:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{}, contacts:[], invoiceEmails:"" });
@@ -6219,7 +6243,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -7250,7 +7274,14 @@ const TEXT_FIELDS = [
   { key:"mealChildren",    label:"Children (meal)",       type:"number",   section:"guests" },
   { key:"mealBabies",      label:"Babies (meal)",         type:"number",   section:"guests" },
   { key:"eveGuests",       label:"Evening Guests (total)", type:"number",   section:"guests" },
+  // Client 1 and 2 are recorded separately as well as in `couple`. The signed
+  // contract returns them individually, and the combined name is a display
+  // convenience that can't be split back apart reliably.
+  { key:"client1Name",     label:"Client 1 Full Name",    type:"text",     section:"contact" },
+  { key:"client2Name",     label:"Client 2 Full Name",    type:"text",     section:"contact" },
   { key:"phone",           label:"Phone",                 type:"text",     section:"contact" },
+  { key:"phone2",          label:"2nd Phone",             type:"text",     section:"contact" },
+  { key:"address",         label:"Address",               type:"textarea", section:"contact" },
   { key:"email",           label:"Email",                 type:"email",    section:"contact" },
   { key:"email2",          label:"2nd Email",             type:"email",    section:"contact" },
   { key:"email3",          label:"3rd Email",             type:"email",    section:"contact" },
@@ -7968,7 +7999,7 @@ function EventClashWarning({ bookings, formData }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -8192,7 +8223,9 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="contract" && (
             <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-              <ContractSection formData={formData} update={update} onAutoSave={onAutoSave}/>
+              <ContractSection formData={formData} update={update} onAutoSave={onAutoSave}
+                accomProperties={accomProperties||[]}
+                accomBookings={accomBookings||[]} onCreateAccomBookings={onCreateAccomBookings}/>
             </div>
           )}
 
@@ -15610,7 +15643,7 @@ function BoxCard({ title, children, right, style }) {
 
 function BoxField({ label, children, hint, width }) {
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:5, width: width || "auto" }}>
+    <div style={{ display:"flex", flexDirection:"column", gap:5, width: width || "auto", minWidth:0 }}>
       <label style={{ fontSize:11, fontWeight:700, color:T.textLight, textTransform:"uppercase", letterSpacing:.6 }}>{label}</label>
       {children}
       {hint && <div style={{ fontSize:11.5, color:T.textLight, lineHeight:1.5 }}>{hint}</div>}
@@ -15618,8 +15651,10 @@ function BoxField({ label, children, hint, width }) {
   );
 }
 
+// border-box, or width:100% plus the padding makes every input 22px wider than
+// the grid column holding it and each one overlaps its neighbour.
 const boxInput = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text,
-  fontFamily:"inherit", fontSize:13.5, padding:"9px 11px", outline:"none", width:"100%" };
+  fontFamily:"inherit", fontSize:13.5, padding:"9px 11px", outline:"none", width:"100%", boxSizing:"border-box" };
 
 function BoxInput({ value, onChange, type="text", placeholder="", style, min, max, step, disabled }) {
   return <input type={type} value={value == null ? "" : value} placeholder={placeholder} min={min} max={max} step={step} disabled={disabled}
@@ -18563,6 +18598,9 @@ function buildContractDefaults(fd) {
     accessAfter:    CONTRACT_ACCESS.after,
     maxGuests:      "200",
     venueFee:       fd.venueFee || "",
+    // Ours to state, not the client's to fill in. Comes off Non-Standard /
+    // Extras at the top of Financials, and is editable here before sending.
+    nonStandard:    fd.nonStandard || "",
     amlyFrom:       from, amlyTo: to,   amlyFee:   fd.amlyFee || "",
     hamletFrom:     from, hamletTo: to, hamletFee:   fd.hamletFee || "",
     glampingFrom:   d.glampFrom,  glampingTo: to, glampingFeePd: fd.campingFee || "",
@@ -18576,7 +18614,141 @@ function buildContractDefaults(fd) {
   };
 }
 
-function ContractSection({ formData, update, onAutoSave }) {
+// ── Reading a signed contract back ───────────────────────────────────────────
+// SignWell returns dropdowns by their visible name — "Yes" / "No" / "Hold" —
+// not by option id, which matters because three of the four accommodation
+// dropdowns share the same option ids (SelectField_1_option_1 and friends).
+// Names are unambiguous, so that duplication never has to be untangled.
+//
+// Dates come back as DD/MM/YYYY regardless of what was sent.
+function fromUkDate(uk) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(uk || "").trim());
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : "";
+}
+
+function answerOf(v) {
+  const t = String(v == null ? "" : v).trim().toLowerCase();
+  if (t === "yes")  return "yes";
+  if (t === "hold") return "hold";
+  if (t === "no")   return "no";
+  return "";
+}
+
+// The five fields the clients fill in that belong on the event record.
+const CONTRACT_WRITEBACK = [
+  { api: "Client 1 Name",   key: "client1Name", label: "Client 1 full name" },
+  { api: "Client 2 Name",   key: "client2Name", label: "Client 2 full name" },
+  { api: "Client 1 Mobile", key: "phone",       label: "Phone" },
+  { api: "Client 2 Mobile", key: "phone2",      label: "2nd phone" },
+  { api: "Address",         key: "address",     label: "Address" },
+];
+
+// The Xero invoice addresses are a merge, not a copy: the couple's own two
+// addresses plus whatever the client typed into Email Invoiced, added to
+// anything already there. Nothing is ever dropped, so this is additive and
+// safe to tick by default — unlike the single-value fields, where a returning
+// contract can genuinely disagree with what somebody has typed.
+//
+// The template still carries the default api_id for that field; it is read
+// under either name so renaming it in SignWell won't quietly break this.
+function contractInvoiceEmails(values, fd) {
+  const out = [];
+  function push(e) {
+    const t = String(e || "").trim();
+    if (t.indexOf("@") > 0 && !out.some(function(x){ return x.toLowerCase() === t.toLowerCase(); })) out.push(t);
+  }
+  parseInvoiceEmails(fd).forEach(push);
+  push(fd.email);
+  push(fd.email2);
+  push((values || {})["Email Invoiced"] || (values || {})["TextField_1"]);
+  return out;
+}
+
+function contractWriteback(values, fd) {
+  const merged  = contractInvoiceEmails(values, fd);
+  const already = parseInvoiceEmails(fd);
+  const added   = merged.filter(function(e) {
+    return !already.some(function(c){ return c.toLowerCase() === e.toLowerCase(); });
+  });
+  const emailRow = added.length ? [{
+    key: "invoiceEmails", label: "Invoice email(s)",
+    incoming: merged.join(", "), current: already.join(", "),
+    added: added, state: "add",
+  }] : [];
+
+  return emailRow.concat(CONTRACT_WRITEBACK.map(function(w) {
+    const incoming = String((values || {})[w.api] || "").trim();
+    const current  = String(fd[w.key] || "").trim();
+    return {
+      key: w.key, label: w.label, incoming: incoming, current: current,
+      // Same value either way is nothing to decide about; an empty field is a
+      // straight fill. Only a genuine disagreement needs a human.
+      state: !incoming ? "none"
+           : current === incoming ? "same"
+           : !current ? "fill" : "conflict",
+    };
+  })).filter(function(r) { return r.state !== "none" && r.state !== "same"; });
+}
+
+// Which stays to create from the four dropdowns.
+//
+// Amly and Hamlet are independent: Yes books, Hold books provisionally, No
+// books nothing. Glamping is one choice offered as two rows — one night
+// arriving on the day, two nights arriving the day before — so only one of
+// them can result in a stay. The two-night answer wins unless it is a flat No,
+// and whichever wins is provisional if that answer was a Hold.
+function contractStays(values) {
+  const v = values || {};
+  const out = [];
+
+  function simple(name, answerKey, fromKey, toKey, feeKey, nights) {
+    const a = answerOf(v[answerKey]);
+    if (a !== "yes" && a !== "hold") return;
+    out.push({
+      match: name, label: name, answer: a, maybe: a === "hold",
+      checkIn: fromUkDate(v[fromKey]), checkOut: fromUkDate(v[toKey]),
+      value: Number(String(v[feeKey] || "").replace(/[^0-9.]/g, "")) || 0,
+      nights: nights,
+    });
+  }
+
+  simple("Amly",   "Amly",   "Amly From",   "Amly to",   "Amly Fee", null);
+  simple("Hamlet", "Hamlet", "Hamlet From", "Hamlet to", "Hamlet Fee", null);
+
+  const one = answerOf(v["Glamping"]);
+  const two = answerOf(v["Glamping 2 night"]);
+  if (two === "yes" || two === "hold") {
+    out.push({
+      match: "Glamping", label: "Glamping (2 nights)", answer: two, maybe: two === "hold",
+      checkIn: fromUkDate(v["Glamping 2 from"]), checkOut: fromUkDate(v["Glamping 2 to"]),
+      value: Number(String(v["Glamping 2 fee"] || "").replace(/[^0-9.]/g, "")) || 0,
+      nights: 2,
+    });
+  } else if (one === "yes" || one === "hold") {
+    out.push({
+      match: "Glamping", label: "Glamping (1 night)", answer: one, maybe: one === "hold",
+      checkIn: fromUkDate(v["Glamping from"]), checkOut: fromUkDate(v["Glamping to"]),
+      value: Number(String(v["Glamping fee pd"] || "").replace(/[^0-9.]/g, "")) || 0,
+      nights: 1,
+    });
+  }
+  return out;
+}
+
+// Best guess at which of the user's properties a contract row refers to.
+// Properties are theirs to name and rename, so this matches on the name rather
+// than on an id baked in here, and the answer stays editable in the panel.
+function guessProperty(match, properties) {
+  const want = match.toLowerCase();
+  const alts = want === "glamping" ? ["glamp", "camping", "camp"] : [want];
+  const hit = (properties || []).find(function(p) {
+    const n = String(p.name || "").toLowerCase();
+    return alts.some(function(a) { return n.indexOf(a) !== -1; });
+  });
+  return hit ? hit.id : "";
+}
+
+function ContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings }) {
   const saved = formData.contract || {};
   const [f, setF] = useState(function() {
     return Object.assign(buildContractDefaults(formData), saved.fields || {});
@@ -18586,6 +18758,10 @@ function ContractSection({ formData, update, onAutoSave }) {
   const [msg, setMsg]     = useState("");
   const [testMode, setTestMode] = useState(true);
   const [showRaw, setShowRaw]   = useState(false);
+  // Which returned values to accept, and which proposed stays to create.
+  // Both start from a sensible default and are the operator's to change.
+  const [accept, setAccept]     = useState(null);
+  const [rows, setRows]         = useState(null);
 
   function up(k, v) { setF(function(p) { return Object.assign({}, p, { [k]: v }); }); }
   function reset() { setF(buildContractDefaults(formData)); setMsg("Prefills restored."); }
@@ -18614,6 +18790,7 @@ function ContractSection({ formData, update, onAutoSave }) {
           { api_id: "Access Day After",  value: f.accessAfter },
           { api_id: "Max Guests",        value: f.maxGuests },
           { api_id: "Venue Fee",         value: f.venueFee },
+          { api_id: "Non Standard Terms", value: f.nonStandard },
           { api_id: "Amly From",         value: toUkDate(f.amlyFrom) },
           { api_id: "Amly to",           value: toUkDate(f.amlyTo) },
           { api_id: "Amly Fee",          value: f.amlyFee },
@@ -18653,7 +18830,98 @@ function ContractSection({ formData, update, onAutoSave }) {
       });
       update("contract", record);
       if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
+      buildReview(d.values);
       setMsg("Status: " + (d.status || "unknown"));
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  // Turn the returned values into two lists of proposals. Nothing is written
+  // yet — a contract coming back is not permission to overwrite what somebody
+  // has already typed into the event.
+  function buildReview(values) {
+    const wb = contractWriteback(values, formData);
+    const chosen = {};
+    // A blank field is filled without ceremony; a disagreement is left off
+    // until somebody looks at it.
+    wb.forEach(function(r) { chosen[r.key] = r.state === "fill" || r.state === "add"; });
+    setAccept({ list: wb, chosen: chosen });
+    setRows(contractStays(values).map(function(st) {
+      return Object.assign({}, st, {
+        include: true,
+        propertyId: guessProperty(st.match, accomProperties),
+      });
+    }));
+  }
+
+  // Pick the review back up on a contract that was already checked, so the
+  // panel survives leaving the tab and coming back — but not once it has been
+  // applied, or returning to the tab would offer to create the same lettings
+  // bookings all over again. A later check re-opens it, since that means
+  // something on the contract has moved on.
+  const applied = saved.appliedAt && (!saved.checkedAt || saved.appliedAt >= saved.checkedAt);
+  useEffect(function() {
+    if (saved.values && !accept && !applied) buildReview(saved.values);
+  }, [saved.checkedAt, saved.appliedAt]);
+
+  async function applyReview() {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const patch = {};
+      (accept ? accept.list : []).forEach(function(r) {
+        if (accept.chosen[r.key]) patch[r.key] = r.incoming;
+      });
+
+      const wanted = (rows || []).filter(function(r) { return r.include && r.propertyId; });
+      const missing = (rows || []).filter(function(r) { return r.include && !r.propertyId; });
+      if (missing.length) throw new Error(
+        "Choose a property for " + missing.map(function(r){ return r.label; }).join(" and ") + " first.");
+
+      let madeCount = 0;
+      if (wanted.length) {
+        const prop = function(id) { return (accomProperties || []).find(function(p){ return p.id === id; }); };
+        const made = await onCreateAccomBookings(wanted.map(function(r) {
+          const p = prop(r.propertyId);
+          const stay = {
+            propertyId: r.propertyId, propertyName: p ? p.name : "",
+            checkIn: r.checkIn, checkOut: r.checkOut,
+            nights: nightsBetween(r.checkIn, r.checkOut) || r.nights || null,
+            guestCount: "", value: r.value, maybe: r.maybe,
+          };
+          return {
+            propertyId: r.propertyId, propertyName: p ? p.name : "",
+            propertyIds: [r.propertyId],
+            guestName: patch.client1Name || formData.couple || "",
+            email: formData.email || "", phone: patch.phone || formData.phone || "",
+            checkIn: r.checkIn, checkOut: r.checkOut,
+            nights: stay.nights, guestCount: "",
+            source: "contract", status: "confirmed",
+            bookingType: /wedding/i.test(formData.eventType || "") ? "Wedding" : "",
+            linkedEventId: formData.id || null,
+            value: r.value, estimated: false,
+            extras: [], breakage: 0, breakageStripeId: "",
+            discountCode: "", discountAmount: 0, schedule: [],
+            notes: "From the signed contract — " + r.label + " answered \u201c" + r.answer + "\u201d.",
+            createdAt: new Date().toISOString().slice(0, 10),
+            stays: [stay],
+          };
+        }));
+        madeCount = made.length;
+      }
+
+      Object.keys(patch).forEach(function(k) { update(k, patch[k]); });
+      const rec = Object.assign({}, saved, { appliedAt: new Date().toISOString() });
+      update("contract", rec);
+      // One save covering the details and the applied stamp together — saving
+      // twice would leave a window where the event has the new details but
+      // still looks unapplied.
+      if (onAutoSave) await onAutoSave(Object.assign({}, formData, patch, { contract: rec }));
+
+      const bits = [];
+      if (Object.keys(patch).length) bits.push(Object.keys(patch).length + " detail" + (Object.keys(patch).length===1?"":"s") + " written to the event");
+      if (madeCount) bits.push(madeCount + " lettings booking" + (madeCount===1?"":"s") + " created");
+      setMsg(bits.length ? bits.join(", ") + "." : "Nothing selected, so nothing changed.");
+      setAccept(null); setRows(null);
     } catch (e) { setErr(e.message); }
     setBusy(false);
   }
@@ -18692,35 +18960,134 @@ function ContractSection({ formData, update, onAutoSave }) {
             <BoxBtn tone="ghost" onClick={refresh} disabled={busy}>{busy ? "Checking…" : "Check status"}</BoxBtn>
           </div>
 
-          {/* What the clients actually put in. Shown rather than only stored:
-              the whole point of checking is to read it. */}
+          {/* What the clients put in, and what the app proposes doing with it.
+              Two separate decisions: details that go onto the event record,
+              and stays that get booked in lettings. */}
+          {accept && (accept.list.length > 0 || (rows || []).length > 0) && (
+            <div style={{ marginTop:16, borderTop:`2px solid ${T.border}`, paddingTop:14 }}>
+              <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:4 }}>
+                Back from the clients
+              </div>
+              <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 12px", lineHeight:1.6 }}>
+                Nothing below has been saved yet. Anything that clashes with what the event already
+                holds is left unticked until you decide.
+              </p>
+
+              {accept.list.length > 0 && (
+                <div style={{ marginBottom:16 }}>
+                  {accept.list.map(function(r) {
+                    const on = !!accept.chosen[r.key];
+                    const clash = r.state === "conflict";
+                    return (
+                      <label key={r.key} style={{ display:"flex", gap:10, alignItems:"flex-start", padding:"9px 11px",
+                        borderRadius:7, marginBottom:6, cursor:"pointer",
+                        background: clash ? T.amberBg : T.bgInput,
+                        border:`1px solid ${clash ? "#fde68a" : T.border}` }}>
+                        <input type="checkbox" checked={on} style={{ marginTop:2, width:15, height:15, accentColor:T.accent, cursor:"pointer" }}
+                          onChange={function(e){
+                            const v = e.target.checked;
+                            setAccept(function(p){ return Object.assign({}, p, { chosen: Object.assign({}, p.chosen, { [r.key]: v }) }); });
+                          }}/>
+                        <div style={{ minWidth:0 }}>
+                          <div style={{ fontSize:12.5, fontWeight:700, color:T.text }}>
+                            {r.label}
+                            {clash && <span style={{ marginLeft:7, fontSize:10, fontWeight:700, letterSpacing:.5, textTransform:"uppercase", color:"#92400e" }}>already filled in</span>}
+                            {r.state === "add" && <span style={{ marginLeft:7, fontSize:10, fontWeight:700, letterSpacing:.5, textTransform:"uppercase", color:T.textLight }}>added to</span>}
+                          </div>
+                          <div style={{ fontSize:12.5, color:T.text, wordBreak:"break-word" }}>{r.incoming}</div>
+                          {clash && (
+                            <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>
+                              replaces <span style={{ textDecoration:"line-through" }}>{r.current}</span>
+                            </div>
+                          )}
+                          {/* Nothing is lost here, so say what is being gained
+                              rather than implying a replacement. */}
+                          {r.state === "add" && (
+                            <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>
+                              adds {r.added.join(", ")}
+                            </div>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              {(rows || []).length > 0 && (
+                <div style={{ marginBottom:14 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:T.textMid, marginBottom:7 }}>
+                    Accommodation they asked for
+                  </div>
+                  {rows.map(function(r, i) {
+                    return (
+                      <div key={i} style={{ padding:"10px 11px", borderRadius:7, marginBottom:6,
+                        background:T.bgInput, border:`1px solid ${T.border}` }}>
+                        <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+                          <input type="checkbox" checked={r.include} style={{ width:15, height:15, accentColor:T.accent, cursor:"pointer" }}
+                            onChange={function(e){
+                              const v = e.target.checked;
+                              setRows(function(p){ return p.map(function(x,j){ return j===i ? Object.assign({}, x, { include:v }) : x; }); });
+                            }}/>
+                          <span style={{ fontSize:13, fontWeight:700, color:T.text }}>{r.label}</span>
+                          {r.maybe && (
+                            <span style={{ fontSize:10, fontWeight:700, letterSpacing:.5, textTransform:"uppercase",
+                              background:T.amberBg, color:"#92400e", border:"1px solid #fde68a", borderRadius:4, padding:"1px 6px" }}>
+                              held — books as maybe
+                            </span>
+                          )}
+                          <span style={{ fontSize:12, color:T.textLight, marginLeft:"auto" }}>
+                            {r.checkIn && r.checkOut ? fmtDate(r.checkIn) + " – " + fmtDate(r.checkOut) : "dates missing"}
+                            {r.value ? " · \u00a3" + r.value : ""}
+                          </span>
+                        </div>
+                        <div style={{ marginTop:7, display:"flex", gap:8, alignItems:"center" }}>
+                          <span style={{ fontSize:11.5, color:T.textLight }}>Book into</span>
+                          <select value={r.propertyId}
+                            onChange={function(e){
+                              const v = e.target.value;
+                              setRows(function(p){ return p.map(function(x,j){ return j===i ? Object.assign({}, x, { propertyId:v }) : x; }); });
+                            }}
+                            style={{ background:"#fff", border:`1.5px solid ${r.propertyId ? T.border : T.red}`, borderRadius:6,
+                              color:T.text, fontFamily:"inherit", fontSize:12.5, padding:"5px 8px" }}>
+                            <option value="">Choose a property…</option>
+                            {(accomProperties || []).map(function(p) {
+                              return <option key={p.id} value={p.id}>{p.name}</option>;
+                            })}
+                          </select>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <BoxBtn onClick={applyReview} disabled={busy}>
+                {busy ? "Saving…" : "Apply to this event"}
+              </BoxBtn>
+            </div>
+          )}
+
           {saved.values && Object.keys(saved.values).length > 0 && (
             <div style={{ marginTop:14, borderTop:`1px solid ${T.border}`, paddingTop:12 }}>
-              <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>
-                Returned from the signed contract
-              </div>
-              {Object.keys(saved.values).sort().map(function(k) {
-                const v = saved.values[k];
-                if (v === "" || v == null) return null;
-                return (
-                  <div key={k} style={{ display:"flex", gap:12, padding:"4px 0", fontSize:12.5, borderTop:`1px solid ${T.border}` }}>
-                    <code style={{ color:T.textLight, minWidth:170 }}>{k}</code>
-                    <span style={{ color:T.text, fontWeight:600, wordBreak:"break-word" }}>{String(v)}</span>
-                  </div>
-                );
-              })}
-              <div style={{ marginTop:10 }}>
-                <button onClick={function(){ setShowRaw(!showRaw); }}
-                  style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer", padding:0 }}>
-                  {showRaw ? "Hide" : "Show"} everything SignWell sent back
-                </button>
-                {showRaw && (
-                  <textarea readOnly rows={14} onClick={function(e){ e.target.select(); }}
-                    value={JSON.stringify({ values: saved.values, recipients: saved.recipients, status: saved.status }, null, 2)}
-                    style={{ width:"100%", marginTop:8, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
-                      fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
-                )}
-              </div>
+              <button onClick={function(){ setShowRaw(!showRaw); }}
+                style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer", padding:0 }}>
+                {showRaw ? "Hide" : "Show"} every field on the contract
+              </button>
+              {showRaw && (
+                <div style={{ marginTop:8 }}>
+                  {Object.keys(saved.values).sort().map(function(k) {
+                    const v = saved.values[k];
+                    if (v === "" || v == null || /^data:image/.test(String(v))) return null;
+                    return (
+                      <div key={k} style={{ display:"flex", gap:12, padding:"4px 0", fontSize:12.5, borderTop:`1px solid ${T.border}` }}>
+                        <code style={{ color:T.textLight, minWidth:170 }}>{k}</code>
+                        <span style={{ color:T.text, fontWeight:600, wordBreak:"break-word" }}>{String(v)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -18737,7 +19104,16 @@ function ContractSection({ formData, update, onAutoSave }) {
         <F label="Venue fee" k="venueFee"/>
       </div>
 
-      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Access</div>
+      {/* Full width — these run to a few lines and are the one place the
+          standard terms get varied. */}
+      <BoxField label="Non standard terms"
+        hint="From Non-Standard / Extras on the Financials tab. Anything typed here goes on the contract without changing the event.">
+        <textarea value={f.nonStandard} rows={3}
+          onChange={function(e){ up("nonStandard", e.target.value); }}
+          style={Object.assign({}, boxInput, { resize:"vertical", lineHeight:1.5 })}/>
+      </BoxField>
+
+      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Grain Store Access</div>
       <div style={row}>
         <F label="Day before" k="accessBefore"/>
         <F label="Event day" k="accessDay"/>
