@@ -106,6 +106,40 @@ exports.handler = async function(event) {
         return ok({ count: items.length, templates: summary, raw: items });
       }
 
+      // The template is visibly there in the SignWell UI but did not come back
+      // from the endpoint I guessed. Rather than guess again, ask SignWell
+      // several plausible questions and report exactly what it says to each.
+      case "probe": {
+        var paths = [
+          "/document_templates/",
+          "/document_templates",
+          "/document_templates/?page=1",
+          "/document_templates/?archived=false",
+          "/templates/",
+          "/documents/?type=template",
+          "/documents/",
+          "/me"
+        ];
+        var out = [];
+        for (var i = 0; i < paths.length; i++) {
+          var r = await signwell(paths[i]);
+          var shape = "—";
+          if (r.body) {
+            if (Array.isArray(r.body)) shape = "array(" + r.body.length + ")";
+            else shape = "object{" + Object.keys(r.body).slice(0, 8).join(",") + "}";
+          }
+          out.push({
+            path: paths[i],
+            status: r.status,
+            shape: shape,
+            // First 400 characters is enough to recognise the answer without
+            // dragging a whole contract through the response.
+            sample: (r.text || "").slice(0, 400)
+          });
+        }
+        return ok({ probes: out });
+      }
+
       default:
         return bad("Unknown action: " + body.action);
     }
