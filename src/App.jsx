@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23e";
+const APP_BUILD = "2026-08-23f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7278,6 +7278,7 @@ const FORM_SECTIONS = {
   staffing:   { label:"Staffing" },
   vendors:    { label:"Vendors & Logistics" },
   viewings:   { label:"Viewings" },
+  contract:   { label:"Contract" },
   files:      { label:"Files" },
 };
 
@@ -8037,6 +8038,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
     if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
     if(s==="viewings") return (formData.viewings||[]).length;
     if(s==="files") return (formData.files||[]).length;
+    if(s==="contract") return (formData.contract||{}).documentId ? 1 : 0;
     if(s==="financials") return ["venueFee","deposit","corkage","barTakeGross","circaCommission","nonStandard","amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]&&formData[k]!=="undecided").length;
     return TEXT_FIELDS.filter(f=>f.section===s&&formData[f.key]).length;
   };
@@ -8044,6 +8046,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
     if(s==="staffing") return 1+STAFFING_FIELDS.length;
     if(s==="viewings") return (formData.viewings||[]).length || 1;
     if(s==="files") return (formData.files||[]).length || 1;
+    if(s==="contract") return 1;
     if(s==="financials") return 9;
     return TEXT_FIELDS.filter(f=>f.section===s).length;
   };
@@ -18340,6 +18343,17 @@ function SignWellPanel() {
   const [tpl, setTpl]     = useState(null);
   const [probe, setProbe] = useState(null);
   const [showRaw, setShowRaw] = useState(false);
+  const [docs, setDocs]   = useState(null);
+  const [pick, setPick]   = useState(null);
+
+  // Reading back a contract the app didn't send. Nothing links it to an event,
+  // so it is found by picking it out of the account rather than by id.
+  async function openDoc(id) {
+    setBusy("doc:" + id); setErr("");
+    try { setPick(await signWell("document", { documentId: id })); }
+    catch (e) { setErr(e.message); }
+    setBusy("");
+  }
 
   async function run(action, setter) {
     setBusy(action); setErr("");
@@ -18360,6 +18374,9 @@ function SignWellPanel() {
           </BoxBtn>
           <BoxBtn disabled={!!busy} onClick={()=>run("templates", setTpl)}>
             {busy === "templates" ? "Loading…" : "List templates"}
+          </BoxBtn>
+          <BoxBtn disabled={!!busy} onClick={()=>run("documents", setDocs)}>
+            {busy === "documents" ? "Loading…" : "Recent contracts"}
           </BoxBtn>
           <BoxBtn tone="ghost" disabled={!!busy} onClick={()=>run("probe", setProbe)}>
             {busy === "probe" ? "Probing…" : "Diagnose"}
@@ -18389,6 +18406,62 @@ function SignWellPanel() {
             value={(probe.probes || []).map(function(x) {
               return x.path + "  →  HTTP " + x.status + "  " + x.shape + "\n    " + x.sample;
             }).join("\n\n")}
+            style={{ width:"100%", background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
+              fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
+        </div>
+      )}
+
+      {docs && (
+        <div style={{ marginBottom:16 }}>
+          <div style={{ fontSize:13, color:T.textMid, marginBottom:8 }}>
+            {(docs.documents || []).length} contract{(docs.documents || []).length === 1 ? "" : "s"} in the account.
+            Open a completed one to see what the signers filled in.
+          </div>
+          {(docs.documents || []).map(function(d) {
+            const done = (d.status || "").toLowerCase() === "completed";
+            return (
+              <div key={d.id} style={{ borderTop:`1px solid ${T.border}`, padding:"9px 0", display:"flex",
+                alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+                <div>
+                  <div style={{ fontSize:13.5, fontWeight:600, color:T.text }}>
+                    {d.name || "Untitled"}
+                    <span style={{ marginLeft:8, fontSize:10.5, fontWeight:700, letterSpacing:.6, textTransform:"uppercase",
+                      background: done ? T.greenBg : T.bgInput, color: done ? T.green : T.textLight,
+                      border:`1px solid ${done ? "#86efac" : T.border}`, borderRadius:4, padding:"1px 6px" }}>{d.status}</span>
+                  </div>
+                  <div style={{ fontSize:11.5, color:T.textLight }}>
+                    {(d.recipients || []).map(r=>r.name || r.email).filter(Boolean).join(", ") || "no signers listed"}
+                  </div>
+                </div>
+                <BoxBtn tone="ghost" disabled={!!busy} onClick={function(){ openDoc(d.id); }}>
+                  {busy === "doc:" + d.id ? "Opening…" : "Open"}
+                </BoxBtn>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {pick && (
+        <div style={{ marginBottom:16, borderTop:`2px solid ${T.border}`, paddingTop:12 }}>
+          <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>
+            {pick.name || "Contract"} — {pick.status}
+          </div>
+          {Object.keys(pick.values || {}).sort().map(function(k) {
+            const v = pick.values[k];
+            if (v === "" || v == null) return null;
+            return (
+              <div key={k} style={{ display:"flex", gap:12, padding:"4px 0", fontSize:12.5, borderTop:`1px solid ${T.border}` }}>
+                <code style={{ color:T.textLight, minWidth:180 }}>{k}</code>
+                <span style={{ color:T.text, fontWeight:600, wordBreak:"break-word" }}>{String(v)}</span>
+              </div>
+            );
+          })}
+          <div style={{ fontSize:12.5, color:T.textMid, margin:"12px 0 6px" }}>
+            Everything SignWell holds for it — paste this back.
+          </div>
+          <textarea readOnly rows={16} onClick={e=>e.target.select()}
+            value={JSON.stringify({ status: pick.status, recipients: pick.recipients, values: pick.values, raw: pick.raw }, null, 2)}
             style={{ width:"100%", background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
               fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
         </div>
