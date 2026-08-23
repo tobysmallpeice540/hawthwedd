@@ -38,16 +38,20 @@
   schedule = "17 * * * *"
 
 # Top up the Brevo lists from ticket sales, weddings booked, event enquiries
-# and cottage bookings. Hourly, rather than wired into every save path: two of
-# those paths run in the browser, where an API key must never go. Brevo's
-# import upserts, so the first run is the backfill and every run after it
-# quietly picks up whoever is new.
+# and cottage bookings. Once a day is plenty: these are mailing lists, not
+# something anybody is waiting on, and the Sync now button in Settings covers
+# the moment you do want it immediately. Brevo's import upserts, so the first
+# run is the backfill and every run after picks up whoever is new.
+#
+# 02:40 UTC — clear of the cleaning summary at 02:00 and the backup at 03:00,
+# so the three do not compete. Netlify cron is UTC, so this lands at 03:40 in
+# London through the summer; nothing here cares which.
 #
 # The schedule sits on the shim, not on brevo-sync itself: Netlify returns 403
 # to any HTTP request aimed at a scheduled function, so scheduling the worker
 # directly would make it impossible to run on demand or to test.
 [functions."brevo-sync-cron"]
-  schedule = "23 * * * *"
+  schedule = "40 2 * * *"
 
 # Proxy Xero connections endpoint
 [[redirects]]
