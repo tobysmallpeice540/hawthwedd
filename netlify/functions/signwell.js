@@ -87,7 +87,22 @@ exports.handler = async function(event) {
         var list = await signwell("/document_templates/");
         if (!list.ok) return bad("Could not list templates: " + list.status + " " + list.text, 502);
 
-        var items = Array.isArray(list.body) ? list.body : (list.body && list.body.data) || [];
+        // SignWell answers { templates: [...], total_count, ... }. Both other
+        // shapes are kept as fallbacks rather than replaced, so a future
+        // change to their response doesn't empty this silently.
+        var items = (list.body && list.body.templates)
+                 || (Array.isArray(list.body) ? list.body : null)
+                 || (list.body && list.body.data)
+                 || [];
+
+        // The list does not carry the fields — those come from fetching each
+        // template. Rate limit is 5 requests per 30 seconds, so this is capped
+        // and sequential rather than fired off in parallel.
+        var details = [];
+        for (var d = 0; d < Math.min(items.length, 4); d++) {
+          var one = await signwell("/document_templates/" + items[d].id + "/");
+          details.push({ id: items[d].id, ok: one.ok, status: one.status, body: one.body || one.text });
+        }
         var summary = items.map(function(t) {
           var fields = [];
           // SignWell has moved this around between versions, so look in the
@@ -103,7 +118,27 @@ exports.handler = async function(event) {
           return { id: t.id, name: t.name, fields: fields, recipients: recipients };
         });
 
-        return ok({ count: items.length, templates: summary, raw: items });
+        // Fields live on the detail, so read them from there when we have it.
+        summary.forEach(function(t) {
+          var det = details.find(function(x) { return x.id === t.id; });
+          var b = det && det.body;
+          if (!b || typeof b !== "object") return;
+          ["fields", "template_fields", "placeholders"].forEach(function(k) {
+            var arr = b[k];
+            if (!Array.isArray(arr)) return;
+            // fields can be an array of arrays, one per page
+            var flat = arr.every(function(x) { return Array.isArray(x); }) ? [].concat.apply([], arr) : arr;
+            flat.forEach(function(f) {
+              if (!f || typeof f !== "object") return;
+              t.fields.push({ api_id: f.api_id || f.name || f.id, type: f.type, required: f.required });
+            });
+          });
+          if (Array.isArray(b.recipients) && !t.recipients.length) {
+            t.recipients = b.recipients.map(function(r) { return { id: r.id, name: r.name, email: r.email }; });
+          }
+        });
+
+        return ok({ count: items.length, templates: summary, raw: details.length ? details : items });
       }
 
       // The template is visibly there in the SignWell UI but did not come back
