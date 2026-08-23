@@ -17926,7 +17926,7 @@ function BoxTicketTermsEditor() {
 }
 
 // ── Brevo mailing lists ──────────────────────────────────────────────────────
-// The sync runs hourly on its own. This is here because the first run is the
+// The sync runs overnight on its own. This is here because the first run is the
 // backfill, and because "did that actually work?" is a fair question to want
 // answered without reading a log.
 function BoxBrevoPanel() {
@@ -17950,7 +17950,7 @@ function BoxBrevoPanel() {
       <BoxBtn onClick={run} disabled={busy}>{busy ? "Syncing…" : "Sync now"}</BoxBtn>
     }>
       <p style={{ fontSize:13, color:T.textMid, margin:"0 0 10px", lineHeight:1.65 }}>
-        Ticket buyers, weddings booked, event enquiries and cottage guests are pushed to their Brevo lists every hour.
+        Ticket buyers, weddings booked, event enquiries and cottage guests are pushed to their Brevo lists overnight.
         Each contact carries a <code>RECORD_DATE</code> of when they actually came in — their order, enquiry or booking
         date — not when the sync ran.
       </p>
