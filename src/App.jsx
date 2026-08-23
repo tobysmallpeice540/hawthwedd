@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23b";
+const APP_BUILD = "2026-08-23e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8185,6 +8185,12 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="viewings" && (
             <BookingViewingsSection formData={formData} update={update} onAutoSave={onAutoSave}/>
+          )}
+
+          {activeSection==="contract" && (
+            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <ContractSection formData={formData} update={update} onAutoSave={onAutoSave}/>
+            </div>
           )}
 
           {activeSection==="files" && (
@@ -18426,6 +18432,283 @@ function SignWellPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Contracts ────────────────────────────────────────────────────────────────
+// The booking form, sent through SignWell.
+//
+// Only the fields assigned to the Hawthbush Team placeholder appear here — the
+// clients fill in their own when they sign, and a handful of those come back
+// afterwards. Everything shown is prefilled from the event and then editable:
+// the prefills are a starting point, not a decision, which is why nothing is
+// computed at the point of sending.
+const SIGNWELL_TEMPLATE_ID = "65c6bae4-d261-437f-ab08-1b8d9d1c3b72";
+
+// Access times, as agreed. Held here rather than typed each time.
+const CONTRACT_ACCESS = {
+  before: "Midday to 4.30pm",
+  day:    "10am to Midnight",
+  after:  "10am to 11.30am",
+};
+
+function contractDates(fd) {
+  // Cottages run the day before the event to the day after the last day of it —
+  // endDate where a booking has one, otherwise the event date.
+  //
+  // Glamping is sold two ways and the dates are what separate them: one night
+  // arrives on the day of the event, two nights arrives the day before. Both
+  // leave the morning after. The client picks one; we set what each would be.
+  const start = isValidEventDate(fd.date) ? fd.date : null;
+  const last  = (isValidEventDate(fd.endDate) && fd.endDate > fd.date) ? fd.endDate : start;
+  const dayAfter = last ? addDaysIso(last, 1) : "";
+  return {
+    from:      start ? addDaysIso(start, -1) : "",
+    to:        dayAfter,
+    glampFrom: start || "",        // one night — arrives on the day
+    glamp2From: start ? addDaysIso(start, -1) : "",
+  };
+}
+
+// SignWell wants DD/MM/YYYY for its date fields; the app stores YYYY-MM-DD.
+function toUkDate(iso) {
+  if (!isValidEventDate(iso)) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function buildContractDefaults(fd) {
+  const d = contractDates(fd);
+  const from = d.from, to = d.to;
+  return {
+    eventName:      fd.couple || "",
+    eventType:      fd.eventType || "",
+    eventDate:      fd.date || "",
+    accessBefore:   CONTRACT_ACCESS.before,
+    accessDay:      CONTRACT_ACCESS.day,
+    accessAfter:    CONTRACT_ACCESS.after,
+    maxGuests:      "200",
+    venueFee:       fd.venueFee || "",
+    amlyFrom:       from, amlyTo: to,   amlyFee:   fd.amlyFee || "",
+    hamletFrom:     from, hamletTo: to, hamletFee:   fd.hamletFee || "",
+    glampingFrom:   d.glampFrom,  glampingTo: to, glampingFeePd: fd.campingFee || "",
+    // The two-night option has its own price, so it is not prefilled from the
+    // one-night fee — that would only ever be wrong.
+    glamping2From:  d.glamp2From, glamping2To: to, glamping2Fee: "",
+    client1Name:    fd.client1Name || "",
+    client1Email:   fd.email || "",
+    client2Name:    fd.client2Name || "",
+    client2Email:   fd.email2 || "",
+  };
+}
+
+function ContractSection({ formData, update, onAutoSave }) {
+  const saved = formData.contract || {};
+  const [f, setF] = useState(function() {
+    return Object.assign(buildContractDefaults(formData), saved.fields || {});
+  });
+  const [busy, setBusy]   = useState(false);
+  const [err, setErr]     = useState("");
+  const [msg, setMsg]     = useState("");
+  const [testMode, setTestMode] = useState(true);
+  const [showRaw, setShowRaw]   = useState(false);
+
+  function up(k, v) { setF(function(p) { return Object.assign({}, p, { [k]: v }); }); }
+  function reset() { setF(buildContractDefaults(formData)); setMsg("Prefills restored."); }
+
+  const sent = saved.documentId;
+
+  async function send() {
+    if (!f.client1Email) { setErr("Client 1 needs an email address to sign."); return; }
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const res = await signWell("create", {
+        templateId: SIGNWELL_TEMPLATE_ID,
+        testMode: testMode,
+        recipients: [
+          { placeholder_name: "Hawthbush Team", name: "Hawthbush Farm", email: "hello@hawthbushfarm.co.uk" },
+          { placeholder_name: "Client 1", name: f.client1Name, email: f.client1Email },
+          // Client 2 only if there is one — an empty recipient stalls the
+          // signing order and the contract never reaches anybody.
+        ].concat(f.client2Email ? [{ placeholder_name: "Client 2", name: f.client2Name, email: f.client2Email }] : []),
+        fields: [
+          { api_id: "Event Name",        value: f.eventName },
+          { api_id: "Event Type",        value: f.eventType },
+          { api_id: "Event Date",        value: toUkDate(f.eventDate) },
+          { api_id: "Access Day Before", value: f.accessBefore },
+          { api_id: "Access Event Day",  value: f.accessDay },
+          { api_id: "Access Day After",  value: f.accessAfter },
+          { api_id: "Max Guests",        value: f.maxGuests },
+          { api_id: "Venue Fee",         value: f.venueFee },
+          { api_id: "Amly From",         value: toUkDate(f.amlyFrom) },
+          { api_id: "Amly to",           value: toUkDate(f.amlyTo) },
+          { api_id: "Amly Fee",          value: f.amlyFee },
+          { api_id: "Hamlet From",       value: toUkDate(f.hamletFrom) },
+          { api_id: "Hamlet to",         value: toUkDate(f.hamletTo) },
+          { api_id: "Hamlet Fee",        value: f.hamletFee },
+          { api_id: "Glamping from",     value: toUkDate(f.glampingFrom) },
+          { api_id: "Glamping to",       value: toUkDate(f.glampingTo) },
+          { api_id: "Glamping fee pd",   value: f.glampingFeePd },
+          { api_id: "Glamping 2 from",   value: toUkDate(f.glamping2From) },
+          { api_id: "Glamping 2 to",     value: toUkDate(f.glamping2To) },
+          { api_id: "Glamping 2 fee",    value: f.glamping2Fee },
+        ],
+      });
+      const doc = res.document || {};
+      const record = {
+        documentId: doc.id,
+        status: doc.status || "sent",
+        testMode: testMode,
+        sentAt: new Date().toISOString(),
+        fields: f,
+      };
+      update("contract", record);
+      if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
+      setMsg(testMode ? "Test contract created — nothing was emailed to anyone." : "Contract sent.");
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  async function refresh() {
+    setBusy(true); setErr("");
+    try {
+      const d = await signWell("document", { documentId: saved.documentId });
+      const record = Object.assign({}, saved, {
+        status: d.status, values: d.values, recipients: d.recipients,
+        raw: d.raw, checkedAt: new Date().toISOString()
+      });
+      update("contract", record);
+      if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
+      setMsg("Status: " + (d.status || "unknown"));
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  const row = { display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 };
+  const F = function({ label, k, type, hint }) {
+    return (
+      <BoxField label={label} hint={hint}>
+        <BoxInput type={type || "text"} value={f[k]} onChange={function(v){ up(k, v); }}/>
+      </BoxField>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14, flexWrap:"wrap" }}>
+        <div>
+          <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Booking form</div>
+          <div style={{ fontSize:12.5, color:T.textLight, marginTop:3 }}>
+            Prefilled from the event. Change anything before sending — what is on screen is what goes out.
+          </div>
+        </div>
+        <BoxBtn tone="ghost" onClick={reset}>Restore prefills</BoxBtn>
+      </div>
+
+      {sent && (
+        <div style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, borderRadius:9, padding:"13px 15px", marginBottom:16 }}>
+          <div style={{ fontSize:13.5, fontWeight:700, color:T.midBlue }}>
+            {saved.testMode ? "Test contract" : "Contract"} {saved.status || "sent"}
+            {saved.sentAt ? " · " + fmtDate(saved.sentAt.slice(0,10)) : ""}
+          </div>
+          <div style={{ fontSize:12, color:T.textMid, marginTop:4 }}>
+            <code>{saved.documentId}</code>
+          </div>
+          <div style={{ marginTop:10, display:"flex", gap:8, flexWrap:"wrap" }}>
+            <BoxBtn tone="ghost" onClick={refresh} disabled={busy}>{busy ? "Checking…" : "Check status"}</BoxBtn>
+          </div>
+
+          {/* What the clients actually put in. Shown rather than only stored:
+              the whole point of checking is to read it. */}
+          {saved.values && Object.keys(saved.values).length > 0 && (
+            <div style={{ marginTop:14, borderTop:`1px solid ${T.border}`, paddingTop:12 }}>
+              <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>
+                Returned from the signed contract
+              </div>
+              {Object.keys(saved.values).sort().map(function(k) {
+                const v = saved.values[k];
+                if (v === "" || v == null) return null;
+                return (
+                  <div key={k} style={{ display:"flex", gap:12, padding:"4px 0", fontSize:12.5, borderTop:`1px solid ${T.border}` }}>
+                    <code style={{ color:T.textLight, minWidth:170 }}>{k}</code>
+                    <span style={{ color:T.text, fontWeight:600, wordBreak:"break-word" }}>{String(v)}</span>
+                  </div>
+                );
+              })}
+              <div style={{ marginTop:10 }}>
+                <button onClick={function(){ setShowRaw(!showRaw); }}
+                  style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer", padding:0 }}>
+                  {showRaw ? "Hide" : "Show"} everything SignWell sent back
+                </button>
+                {showRaw && (
+                  <textarea readOnly rows={14} onClick={function(e){ e.target.select(); }}
+                    value={JSON.stringify({ values: saved.values, recipients: saved.recipients, status: saved.status }, null, 2)}
+                    style={{ width:"100%", marginTop:8, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
+                      fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{err}</div>}
+      {msg && <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{msg}</div>}
+
+      <div style={row}>
+        <F label="Event name" k="eventName"/>
+        <F label="Event type" k="eventType"/>
+        <F label="Event date" k="eventDate" type="date"/>
+        <F label="Max guests" k="maxGuests"/>
+        <F label="Venue fee" k="venueFee"/>
+      </div>
+
+      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Access</div>
+      <div style={row}>
+        <F label="Day before" k="accessBefore"/>
+        <F label="Event day" k="accessDay"/>
+        <F label="Day after" k="accessAfter"/>
+      </div>
+
+      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Accommodation</div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
+        <F label="Amly from" k="amlyFrom" type="date"/>
+        <F label="Amly to" k="amlyTo" type="date"/>
+        <F label="Amly fee" k="amlyFee"/>
+        <F label="Hamlet from" k="hamletFrom" type="date"/>
+        <F label="Hamlet to" k="hamletTo" type="date"/>
+        <F label="Hamlet fee" k="hamletFee"/>
+        <F label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
+        <F label="Glamping, 1 night — to" k="glampingTo" type="date"/>
+        <F label="Glamping, 1 night — fee" k="glampingFeePd" hint="Per day."/>
+        <F label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
+        <F label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
+        <F label="Glamping, 2 nights — fee" k="glamping2Fee"/>
+      </div>
+      <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
+        All four choices — Amly, Hamlet, and the two glamping options — are the client's to make on the form.
+        The dates and fees above are ours, and are what they will be agreeing to. They should say yes to one
+        glamping option and no to the other; if they hold both, that is taken as two nights.
+      </div>
+
+      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Who signs</div>
+      <div style={row}>
+        <F label="Client 1 name" k="client1Name"/>
+        <F label="Client 1 email" k="client1Email"/>
+        <F label="Client 2 name" k="client2Name" hint="Leave blank if there is only one signer."/>
+        <F label="Client 2 email" k="client2Email"/>
+      </div>
+
+      <div style={{ borderTop:`1px solid ${T.border}`, marginTop:18, paddingTop:16, display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+        <BoxCheck checked={testMode} onChange={setTestMode}
+          label="Test mode"
+          hint="Creates the contract in SignWell without emailing anyone, and without using one of the 25 a month."/>
+        <div style={{ flex:1 }}/>
+        <BoxBtn tone={testMode ? "ghost" : "primary"} onClick={send} disabled={busy}>
+          {busy ? "Sending…" : testMode ? "Create test contract" : "Send contract for signing"}
+        </BoxBtn>
+      </div>
     </div>
   );
 }
