@@ -24,6 +24,11 @@ const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const RESEND_KEY   = process.env.RESEND_API_KEY;
 const FROM_EMAIL   = "hello@hawthbushfarm.co.uk";
+// What the recipient sees in their inbox. Without a display name, mail clients
+// fall back to the local part of the address — so everything arrived from
+// "hello", which tells nobody anything. FROM_EMAIL itself stays a bare address
+// because the footer uses it for a mailto: link.
+const FROM_HEADER  = "Hawthbush Farm <" + FROM_EMAIL + ">";
 
 const CONFIG_KEY   = "hbf_cleaning_email_v1";
 const ACCOM_KEY    = "hbf_accom_v1";
@@ -282,7 +287,7 @@ exports.handler = async function(event) {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: FROM_EMAIL, to: recipients, subject: subject, html: html })
+      body: JSON.stringify({ from: FROM_HEADER, to: recipients, subject: subject, html: html })
     });
     if (!res.ok) return jsonResponse(502, { error: "Resend failed: " + await res.text() });
 

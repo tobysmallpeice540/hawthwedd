@@ -10,6 +10,11 @@ const RESEND_KEY  = process.env.RESEND_API_KEY;
 const STORAGE_KEY = "hbf_viewing_requests_v1";
 const EMAIL_LOG_KEY = "hbf_email_log_v1";
 const FROM_EMAIL  = "hello@hawthbushfarm.co.uk";
+// What the recipient sees in their inbox. Without a display name, mail clients
+// fall back to the local part of the address — so everything arrived from
+// "hello", which tells nobody anything. FROM_EMAIL itself stays a bare address
+// because the footer uses it for a mailto: link.
+const FROM_HEADER  = "Hawthbush Farm <" + FROM_EMAIL + ">";
 const TERMS_KEY   = "hbf_terms_v1";
 const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
 
@@ -297,7 +302,7 @@ exports.handler = async (event) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: FROM_EMAIL,
+          from: FROM_HEADER,
           to: req.email,
           subject: subject,
           html: emailBody,

@@ -30,6 +30,11 @@ const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const ADMIN_TOKEN    = process.env.HBF_ADMIN_TOKEN;
 const RESEND_KEY     = process.env.RESEND_API_KEY;
 const FROM_EMAIL     = "hello@hawthbushfarm.co.uk";
+// What the recipient sees in their inbox. Without a display name, mail clients
+// fall back to the local part of the address — so everything arrived from
+// "hello", which tells nobody anything. FROM_EMAIL itself stays a bare address
+// because the footer uses it for a mailto: link.
+const FROM_HEADER  = "Hawthbush Farm <" + FROM_EMAIL + ">";
 const SITE_ORIGIN    = "https://hawthbushfarm.netlify.app";
 const TEMPLATES_KEY  = "hbf_box_templates_v1";
 const EMAIL_LOG_KEY  = "hbf_email_log_v1";
@@ -287,7 +292,7 @@ async function sendViaResend(to, subject, html) {
   var res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: FROM_EMAIL, to: to, subject: subject, html: html })
+    body: JSON.stringify({ from: FROM_HEADER, to: to, subject: subject, html: html })
   });
   if (!res.ok) return { ok: false, error: "Resend failed: " + await res.text() };
   return { ok: true };

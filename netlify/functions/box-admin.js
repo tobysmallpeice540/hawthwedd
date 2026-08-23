@@ -123,6 +123,33 @@ function allowedFor(role, action) {
   return false;   // cleaner has no business in the box office at all
 }
 
+// Verified sessions, held briefly in memory.
+//
+// Without this, every single call pays two Supabase round-trips before any
+// work begins — verify the token, then read the profile. On the door that is
+// per scan, with a queue of people waiting, which is the worst possible place
+// to spend it. A warm function instance now answers repeat scans immediately.
+//
+// Keyed on the token itself, so an expired or forged one can never hit a warm
+// entry belonging to somebody else. The trade is that switching an account off
+// takes up to a minute to bite — short enough not to matter, and the cache is
+// dropped whenever the instance is recycled anyway.
+var CALLER_TTL_MS = 60 * 1000;
+var callerCache = new Map();
+
+function cacheGet(jwt) {
+  var hit = callerCache.get(jwt);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CALLER_TTL_MS) { callerCache.delete(jwt); return null; }
+  return hit.caller;
+}
+
+function cachePut(jwt, caller) {
+  // A long-lived instance shouldn't accumulate tokens without limit.
+  if (callerCache.size > 200) callerCache.clear();
+  callerCache.set(jwt, { caller: caller, at: Date.now() });
+}
+
 // Who is asking. The office key means admin. A session is verified with
 // Supabase — a JWT the browser invented gets rejected here, not trusted — and
 // the role comes from the profiles table rather than from anything the client
@@ -137,6 +164,9 @@ async function resolveCaller(event) {
   var jwt = auth.replace(/^Bearer\s+/i, "").trim();
   if (!jwt) return null;
 
+  var cached = cacheGet(jwt);
+  if (cached) return cached;
+
   var res = await fetch(SUPABASE_URL + "/auth/v1/user", {
     headers: { "apikey": SERVICE_KEY, "Authorization": "Bearer " + jwt }
   });
@@ -149,7 +179,9 @@ async function resolveCaller(event) {
   // A revoked account keeps its password working at Supabase but stops here.
   if (!p || p.active === false) return null;
 
-  return { role: p.role, userId: user.id, who: p.name || p.email || "signed in" };
+  var caller = { role: p.role, userId: user.id, who: p.name || p.email || "signed in" };
+  cachePut(jwt, caller);
+  return caller;
 }
 
 exports.handler = async function(event) {

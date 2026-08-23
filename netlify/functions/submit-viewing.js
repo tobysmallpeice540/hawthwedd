@@ -10,6 +10,11 @@ const RESEND_KEY   = process.env.RESEND_API_KEY;
 const STORAGE_KEY  = "hbf_viewing_requests_v1";
 const NOTIFY_EMAIL = "hello@hawthbushfarm.co.uk";
 const FROM_EMAIL   = "hello@hawthbushfarm.co.uk";
+// What the recipient sees in their inbox. Without a display name, mail clients
+// fall back to the local part of the address — so everything arrived from
+// "hello", which tells nobody anything. FROM_EMAIL itself stays a bare address
+// because the footer uses it for a mailto: link.
+const FROM_HEADER  = "Hawthbush Farm <" + FROM_EMAIL + ">";
 
 const cors = {
   "Access-Control-Allow-Origin":  "*",
@@ -82,7 +87,7 @@ exports.handler = async (event) => {
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: FROM_EMAIL,
+        from: FROM_HEADER,
         to: NOTIFY_EMAIL,
         subject: `New Viewing Request - ${name} - ${date} at ${time}`,
         html: `<h2>New Viewing Request</h2>
