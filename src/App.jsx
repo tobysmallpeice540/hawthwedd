@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23a";
+const APP_BUILD = "2026-08-23b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18332,6 +18332,7 @@ function SignWellPanel() {
   const [err, setErr]     = useState("");
   const [info, setInfo]   = useState(null);
   const [tpl, setTpl]     = useState(null);
+  const [probe, setProbe] = useState(null);
   const [showRaw, setShowRaw] = useState(false);
 
   async function run(action, setter) {
@@ -18354,6 +18355,9 @@ function SignWellPanel() {
           <BoxBtn disabled={!!busy} onClick={()=>run("templates", setTpl)}>
             {busy === "templates" ? "Loading…" : "List templates"}
           </BoxBtn>
+          <BoxBtn tone="ghost" disabled={!!busy} onClick={()=>run("probe", setProbe)}>
+            {busy === "probe" ? "Probing…" : "Diagnose"}
+          </BoxBtn>
         </div>
       </div>
 
@@ -18367,6 +18371,20 @@ function SignWellPanel() {
       {info && (
         <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>
           Connected{info.account && info.account.email ? " as " + info.account.email : ""}.
+        </div>
+      )}
+
+      {probe && (
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:12.5, color:T.textMid, marginBottom:8 }}>
+            What SignWell answers to each candidate endpoint. Paste this back.
+          </div>
+          <textarea readOnly rows={14} onClick={e=>e.target.select()}
+            value={(probe.probes || []).map(function(x) {
+              return x.path + "  →  HTTP " + x.status + "  " + x.shape + "\n    " + x.sample;
+            }).join("\n\n")}
+            style={{ width:"100%", background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
+              fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
         </div>
       )}
 
