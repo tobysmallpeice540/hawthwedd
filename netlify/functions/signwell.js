@@ -181,6 +181,61 @@ exports.handler = async function(event) {
       // Recent documents, whether or not the app created them. A contract sent
       // straight from SignWell has no id stored against any event, so without
       // this there is no way to look at what came back.
+      // Which date format the API actually accepts. It rejects DD/MM/YYYY and
+      // plain YYYY-MM-DD alike with the same "must be in Iso8601 format"
+      // message, and the published docs don't pin it down — so ask the API
+      // rather than guess again. Everything here is draft + test_mode, and any
+      // draft that does get created is deleted before returning.
+      case "probe_dates": {
+        if (!body.templateId) return bad("No template chosen.");
+        var formats = [
+          "2026-09-05",
+          "2026-09-05T00:00:00Z",
+          "2026-09-05T00:00:00+00:00",
+          "2026-09-05T00:00:00.000Z",
+          "2026-09-05T00:00:00",
+          "05/09/2026",
+          "09/05/2026"
+        ];
+        var results = [];
+        for (var i = 0; i < formats.length; i++) {
+          var attempt = await signwell("/document_templates/documents/", {
+            method: "POST",
+            body: {
+              test_mode: true, draft: true, template_id: body.templateId,
+              recipients: [
+                { id: "1", placeholder_name: "Hawthbush Team", name: "Probe", email: "hello@hawthbushfarm.co.uk" },
+                { id: "2", placeholder_name: "Client 1", name: "Probe", email: "hello@hawthbushfarm.co.uk" },
+                { id: "3", placeholder_name: "Client 2", name: "Probe", email: "hello@hawthbushfarm.co.uk" }
+              ],
+              template_fields: [{ api_id: "Event Date", value: formats[i] }]
+            }
+          });
+          var note = "";
+          if (attempt.ok && attempt.body && attempt.body.id) {
+            // Accepted. Read back what it stored, then remove the draft.
+            var back = await signwell("/documents/" + attempt.body.id + "/");
+            var stored = "";
+            try {
+              var flat = [];
+              (back.body.fields || []).forEach(function(pg) {
+                (Array.isArray(pg) ? pg : [pg]).forEach(function(fl) { flat.push(fl); });
+              });
+              flat.forEach(function(fl) { if (fl && fl.api_id === "Event Date") stored = fl.value; });
+            } catch (e) {}
+            note = "ACCEPTED — stored as " + JSON.stringify(stored);
+            await signwell("/documents/" + attempt.body.id + "/", { method: "DELETE" });
+            note += " (draft deleted)";
+          } else {
+            var msg = attempt.text || "";
+            var m = /"Event Date":\{"([a-z_]+)":"([^"]+)"/.exec(msg);
+            note = "refused " + attempt.status + " — " + (m ? m[2] : msg.slice(0, 160));
+          }
+          results.push({ sent: formats[i], result: note });
+        }
+        return ok({ results: results });
+      }
+
       case "documents": {
         var ds = await signwell("/documents/");
         if (!ds.ok) return bad("Could not list documents: " + ds.status + " " + ds.text, 502);
