@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23o";
+const APP_BUILD = "2026-08-23r";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -5999,7 +5999,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   // createdAt is new on events; older records simply don't have one, which is
   // correct — they weren't created recently and shouldn't appear as new.
-  const emptyBooking = ()=>({ createdAt: new Date().toISOString(), couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", email3:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{}, contacts:[], invoiceEmails:"" });
+  const emptyBooking = ()=>({ createdAt: new Date().toISOString(), couple:"", date:"", endDate:"", status:"Confirmed", eventType:"Wedding (Peak)", setup:[], dayManager:[], dayStaff:[], barSupervisor:[], sunday:[], bar:[], dayHandy:[], eveHandy:[], mealGuests:"", mealChildren:"", mealBabies:"", eveGuests:"", phone:"", email:"", email2:"", email3:"", ceremony:"", guestArrivalTime:"", caterers:"", foodTruck:"", eveFood:"", otherVendors:"", amlyBooked:"undecided", amlyFee:"", amly50Paid:false, amly100Paid:false, hamletBooked:"undecided", hamletFee:"", hamlet50Paid:false, hamlet100Paid:false, campingBooked:"undecided", campingFee:"", glamping2Fee:"", camping50Paid:false, camping100Paid:false, nonStandard:"", venueFee:"", deposit:"", depositPaid:false, xeroContactId:"", payment2:"", finalPayment:"", extras:"", corkage:"", corkageTotal:"", pets:"", barTakeGross:"", circaCommission:"", hairdresser:"", makeup:"", florist:"", band:"", paSystem:"", notes:"", hoursWorked:{}, contacts:[], invoiceEmails:"" });
 
   const safeArr = v => Array.isArray(v) ? v : [];
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -18632,9 +18632,9 @@ function buildContractDefaults(fd) {
     amlyFrom:       from, amlyTo: to,   amlyFee:   fd.amlyFee || "",
     hamletFrom:     from, hamletTo: to, hamletFee:   fd.hamletFee || "",
     glampingFrom:   d.glampFrom,  glampingTo: to, glampingFeePd: fd.campingFee || "",
-    // The two-night option has its own price, so it is not prefilled from the
-    // one-night fee — that would only ever be wrong.
-    glamping2From:  d.glamp2From, glamping2To: to, glamping2Fee: "",
+    // The two-night option has its own price and its own field — prefilling it
+    // from the one-night fee would only ever be wrong.
+    glamping2From:  d.glamp2From, glamping2To: to, glamping2Fee: fd.glamping2Fee || "",
     client1Name:    fd.client1Name || "",
     client1Email:   fd.email || "",
     client2Name:    fd.client2Name || "",
@@ -18662,13 +18662,32 @@ function answerOf(v) {
   return "";
 }
 
-// The five fields the clients fill in that belong on the event record.
+// Everything on a signed contract that has a home on the event record.
+//
+// Two directions meet here. The client fields are inbound only. The Hawthbush
+// ones are also sent — but anything left blank is offered to us to fill while
+// signing, and a value can be corrected there too, so they have to come back
+// as well or that edit is lost. Same review either way: a blank field is
+// filled, a changed one is flagged and left for a human.
+//
+// `parse` converts a returned value to how the event stores it; `only` refuses
+// anything outside a fixed list, so free text can't corrupt a dropdown.
 const CONTRACT_WRITEBACK = [
   { api: "Client 1 Name",   key: "client1Name", label: "Client 1 full name" },
   { api: "Client 2 Name",   key: "client2Name", label: "Client 2 full name" },
   { api: "Client 1 Mobile", key: "phone",       label: "Phone" },
   { api: "Client 2 Mobile", key: "phone2",      label: "2nd phone" },
   { api: "Address",         key: "address",     label: "Address" },
+
+  { api: "Event Name",         key: "couple",      label: "Event name" },
+  { api: "Event Type",         key: "eventType",   label: "Event type", only: EVENT_TYPES },
+  { api: "Event Date",         key: "date",        label: "Event date", parse: fromUkDate, date: true },
+  { api: "Venue Fee",          key: "venueFee",    label: "Venue fee",  money: true },
+  { api: "Non Standard Terms", key: "nonStandard", label: "Non standard terms" },
+  { api: "Amly Fee",           key: "amlyFee",     label: "Amly fee",   money: true },
+  { api: "Hamlet Fee",         key: "hamletFee",   label: "Hamlet fee", money: true },
+  { api: "Glamping fee pd",    key: "campingFee",  label: "Glamping fee (1 night)",  money: true },
+  { api: "Glamping 2 fee",     key: "glamping2Fee", label: "Glamping fee (2 nights)", money: true },
 ];
 
 // The Xero invoice addresses are a merge, not a copy: the couple's own two
@@ -18705,10 +18724,15 @@ function contractWriteback(values, fd) {
   }] : [];
 
   return emailRow.concat(CONTRACT_WRITEBACK.map(function(w) {
-    const incoming = String((values || {})[w.api] || "").trim();
-    const current  = String(fd[w.key] || "").trim();
+    let incoming = String((values || {})[w.api] || "").trim();
+    if (incoming && w.parse) incoming = w.parse(incoming);
+    // A dropdown value that isn't one of the options would break the field, so
+    // it is treated as though nothing came back at all.
+    if (incoming && w.only && w.only.indexOf(incoming) === -1) incoming = "";
+    const current = String(fd[w.key] || "").trim();
     return {
       key: w.key, label: w.label, incoming: incoming, current: current,
+      date: !!w.date, money: !!w.money,
       // Same value either way is nothing to decide about; an empty field is a
       // straight fill. Only a genuine disagreement needs a human.
       state: !incoming ? "none"
@@ -18774,6 +18798,14 @@ function guessProperty(match, properties) {
     return alts.some(function(a) { return n.indexOf(a) !== -1; });
   });
   return hit ? hit.id : "";
+}
+
+// A returned value as a person reads it, rather than as it is stored.
+function showVal(row, v) {
+  if (!v) return "";
+  if (row.date)  return fmtDate(v);
+  if (row.money) return "\u00a3" + v;
+  return v;
 }
 
 function ContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings }) {
@@ -18880,6 +18912,34 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
     setBusy(false);
   }
 
+  // Keep a copy of the signed contract with the event. Filed as an Event
+  // Booking Form, which is also what turns the EBF square green on the list —
+  // that square reads the attached files, so nothing else has to be told.
+  async function attachPdf(record) {
+    const doc = record || saved;
+    if (!doc.documentId) return null;
+    const res = await signWell("pdf", { documentId: doc.documentId });
+
+    // atob gives one character per byte; Blob needs the bytes themselves.
+    const bin = atob(res.pdf);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: "application/pdf" });
+
+    const id = formData.id || "unknown";
+    const name = "Booking form — " + (formData.couple || "event") + " (signed).pdf";
+    const path = `bookings/${id}/${Date.now()}_signed-booking-form.pdf`;
+    const url = await sbUploadFile(path, blob);
+
+    return {
+      name: name, url: url, path: path, type: "application/pdf",
+      docType: "Event Booking Form",
+      uploadedAt: new Date().toISOString().slice(0, 10),
+      // Stamped so a second check doesn't file a second copy.
+      signwellDocumentId: doc.documentId,
+    };
+  }
+
   // Turn the returned values into two lists of proposals. Nothing is written
   // yet — a contract coming back is not permission to overwrite what somebody
   // has already typed into the event.
@@ -18904,6 +18964,10 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
   // bookings all over again. A later check re-opens it, since that means
   // something on the contract has moved on.
   const applied = saved.appliedAt && (!saved.checkedAt || saved.appliedAt >= saved.checkedAt);
+  // A signed contract with no copy filed yet is itself a reason to show the
+  // panel, even when every value came back unchanged.
+  const pdfPending = String(saved.status || "").toLowerCase() === "completed"
+    && !(formData.files || []).some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
   useEffect(function() {
     if (saved.values && !accept && !applied) buildReview(saved.values);
   }, [saved.checkedAt, saved.appliedAt]);
@@ -18953,6 +19017,23 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         madeCount = made.length;
       }
 
+      // The PDF only exists once everybody has signed.
+      let files = formData.files || [];
+      let filed = false;
+      const done = String(saved.status || "").toLowerCase() === "completed";
+      const already = files.some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
+      let pdfProblem = "";
+      if (done && !already) {
+        try {
+          const made = await attachPdf(saved);
+          if (made) { files = files.concat([made]); patch.files = files; filed = true; }
+        } catch (e) {
+          // The details and the bookings are the valuable part; losing them
+          // because a PDF wouldn't download would be the wrong trade.
+          pdfProblem = e.message || String(e);
+        }
+      }
+
       Object.keys(patch).forEach(function(k) { update(k, patch[k]); });
       const rec = Object.assign({}, saved, { appliedAt: new Date().toISOString() });
       update("contract", rec);
@@ -18964,6 +19045,8 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       const bits = [];
       if (Object.keys(patch).length) bits.push(Object.keys(patch).length + " detail" + (Object.keys(patch).length===1?"":"s") + " written to the event");
       if (madeCount) bits.push(madeCount + " lettings booking" + (madeCount===1?"":"s") + " created");
+      if (filed) bits.push("signed PDF filed against the event");
+      if (pdfProblem) setErr("Saved, but the signed PDF could not be filed: " + pdfProblem);
       setMsg(bits.length ? bits.join(", ") + "." : "Nothing selected, so nothing changed.");
       setAccept(null); setRows(null);
     } catch (e) { setErr(e.message); }
@@ -19007,7 +19090,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
           {/* What the clients put in, and what the app proposes doing with it.
               Two separate decisions: details that go onto the event record,
               and stays that get booked in lettings. */}
-          {accept && (accept.list.length > 0 || (rows || []).length > 0) && (
+          {accept && (accept.list.length > 0 || (rows || []).length > 0 || pdfPending) && (
             <div style={{ marginTop:16, borderTop:`2px solid ${T.border}`, paddingTop:14 }}>
               <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:4 }}>
                 Back from the clients
@@ -19038,10 +19121,10 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
                             {clash && <span style={{ marginLeft:7, fontSize:10, fontWeight:700, letterSpacing:.5, textTransform:"uppercase", color:"#92400e" }}>already filled in</span>}
                             {r.state === "add" && <span style={{ marginLeft:7, fontSize:10, fontWeight:700, letterSpacing:.5, textTransform:"uppercase", color:T.textLight }}>added to</span>}
                           </div>
-                          <div style={{ fontSize:12.5, color:T.text, wordBreak:"break-word" }}>{r.incoming}</div>
+                          <div style={{ fontSize:12.5, color:T.text, wordBreak:"break-word" }}>{showVal(r, r.incoming)}</div>
                           {clash && (
                             <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>
-                              replaces <span style={{ textDecoration:"line-through" }}>{r.current}</span>
+                              replaces <span style={{ textDecoration:"line-through" }}>{showVal(r, r.current)}</span>
                             </div>
                           )}
                           {/* Nothing is lost here, so say what is being gained
@@ -19106,6 +19189,13 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
                 </div>
               )}
 
+              {pdfPending && (
+                <div style={{ fontSize:12.5, color:T.textMid, marginBottom:10, padding:"9px 11px",
+                  background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7 }}>
+                  A copy of the signed contract will be filed against this event as its
+                  Event Booking Form.
+                </div>
+              )}
               <BoxBtn onClick={applyReview} disabled={busy}>
                 {busy ? "Saving…" : "Apply to this event"}
               </BoxBtn>
@@ -19174,10 +19264,10 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         <F label="Hamlet fee" k="hamletFee"/>
         <F label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
         <F label="Glamping, 1 night — to" k="glampingTo" type="date"/>
-        <F label="Glamping, 1 night — fee" k="glampingFeePd" hint="Per day."/>
+        <F label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night."/>
         <F label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
         <F label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
-        <F label="Glamping, 2 nights — fee" k="glamping2Fee"/>
+        <F label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights."/>
       </div>
       <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
         All four choices — Amly, Hamlet, and the two glamping options — are the client's to make on the form.
