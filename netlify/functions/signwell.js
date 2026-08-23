@@ -194,6 +194,7 @@ exports.handler = async function(event) {
           "2026-09-05T00:00:00+00:00",
           "2026-09-05T00:00:00.000Z",
           "2026-09-05T00:00:00",
+          "2026-09-05T12:00:00Z",
           "05/09/2026",
           "09/05/2026"
         ];
@@ -203,10 +204,13 @@ exports.handler = async function(event) {
             method: "POST",
             body: {
               test_mode: true, draft: true, template_id: body.templateId,
+              // Distinct addresses: SignWell refuses duplicates, and a probe
+              // that trips a different rule tells you nothing about the one
+              // you are testing.
               recipients: [
                 { id: "1", placeholder_name: "Hawthbush Team", name: "Probe", email: "hello@hawthbushfarm.co.uk" },
-                { id: "2", placeholder_name: "Client 1", name: "Probe", email: "hello@hawthbushfarm.co.uk" },
-                { id: "3", placeholder_name: "Client 2", name: "Probe", email: "hello@hawthbushfarm.co.uk" }
+                { id: "2", placeholder_name: "Client 1", name: "Probe One", email: "probe1@hawthbushfarm.co.uk" },
+                { id: "3", placeholder_name: "Client 2", name: "Probe Two", email: "probe2@hawthbushfarm.co.uk" }
               ],
               template_fields: [{ api_id: "Event Date", value: formats[i] }]
             }
