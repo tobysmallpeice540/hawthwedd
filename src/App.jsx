@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23n";
+const APP_BUILD = "2026-08-23o";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18602,12 +18602,16 @@ function contractDates(fd) {
   };
 }
 
-// The API is asymmetric, and it is not a mistake to double-check this: date
-// fields must be SENT as ISO8601 (YYYY-MM-DD), but come BACK in the template's
-// display format, DD/MM/YYYY. So outbound is a pass-through of what the app
-// already stores, and only the return leg converts (see fromUkDate).
+// The API is asymmetric, and both halves were established by probing it:
+// date fields must be SENT as a full ISO8601 timestamp — a plain YYYY-MM-DD is
+// refused as "must be in Iso8601 format" — but come BACK in the template's
+// display format, DD/MM/YYYY. Only the return leg converts (see fromUkDate).
+//
+// Midday rather than midnight, deliberately. Midnight UTC is the previous day
+// anywhere behind Greenwich, and a contract that says the cottage is booked
+// from the 4th when we meant the 5th is a bad way to find that out.
 function toIsoDate(iso) {
-  return isValidEventDate(iso) ? iso : "";
+  return isValidEventDate(iso) ? iso + "T12:00:00Z" : "";
 }
 
 function buildContractDefaults(fd) {
@@ -18793,23 +18797,33 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
   const sent = saved.documentId;
 
   async function send() {
-    if (!f.client1Email) { setErr("Client 1 needs an email address to sign."); return; }
+    const e1 = (f.client1Email || "").trim().toLowerCase();
+    const e2 = (f.client2Email || "").trim().toLowerCase();
+    if (!e1) { setErr("Client 1 needs an email address to sign."); return; }
+    if (!e2) {
+      setErr("Client 2 needs an email address too. The template has three signers and SignWell "
+           + "will not accept it with one missing, or with the same address used twice.");
+      return;
+    }
+    if (e1 === e2 || e1 === "hello@hawthbushfarm.co.uk" || e2 === "hello@hawthbushfarm.co.uk") {
+      setErr("Each signer needs a different email address — SignWell refuses a contract that "
+           + "repeats one.");
+      return;
+    }
     setBusy(true); setErr(""); setMsg("");
     try {
       const res = await signWell("create", {
         templateId: SIGNWELL_TEMPLATE_ID,
         testMode: testMode,
-        // All three placeholders on the template must be assigned — leaving
-        // Client 2 off is refused outright (422 missing_placeholder_names),
-        // not treated as a one-signer contract. Where there is no second
-        // client, Client 1 signs both parts, which is what the template's
-        // signing order does with a repeated address.
+        // All three placeholders must be assigned (422 missing_placeholder_names
+        // otherwise) AND every address must be different (422 duplicated_emails).
+        // Between them those rules mean this template cannot produce a
+        // one-signer contract — hence the check in send() rather than a
+        // fallback here.
         recipients: [
           { placeholder_name: "Hawthbush Team", name: "Hawthbush Farm", email: "hello@hawthbushfarm.co.uk" },
           { placeholder_name: "Client 1", name: f.client1Name || "Client 1", email: f.client1Email },
-          { placeholder_name: "Client 2",
-            name:  f.client2Name  || f.client1Name || "Client 2",
-            email: f.client2Email || f.client1Email },
+          { placeholder_name: "Client 2", name: f.client2Name || "Client 2", email: f.client2Email },
         ],
         fields: [
           { api_id: "Event Name",        value: f.eventName },
@@ -18845,9 +18859,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       };
       update("contract", record);
       if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
-      const solo = !f.client2Email;
-      setMsg((testMode ? "Test contract created — nothing was emailed to anyone." : "Contract sent.")
-        + (solo ? " No Client 2 email, so Client 1 signs both parts." : ""));
+      setMsg(testMode ? "Test contract created — nothing was emailed to anyone." : "Contract sent.");
     } catch (e) { setErr(e.message); }
     setBusy(false);
   }
@@ -19179,7 +19191,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         <F label="Client 1 email" k="client1Email"/>
         <F label="Client 2 name" k="client2Name"/>
         <F label="Client 2 email" k="client2Email"
-           hint="Leave blank if there is only one client — Client 1 will be asked to sign both parts."/>
+           hint="Required, and must differ from Client 1 — the template has three signers and SignWell rejects a repeated address."/>
       </div>
 
       <div style={{ borderTop:`1px solid ${T.border}`, marginTop:18, paddingTop:16, display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
