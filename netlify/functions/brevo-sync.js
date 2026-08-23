@@ -22,7 +22,7 @@
 // Netlify refuses HTTP requests to any function carrying a `schedule`, which
 // makes a scheduled function impossible to run on demand or to test. So this
 // is a plain HTTP function behind HBF_ADMIN_TOKEN, and brevo-sync-cron.js is
-// the scheduled shim that calls it hourly. The app's Box Office → Settings
+// the scheduled shim that calls it nightly. The app's Settings screen
 // screen calls it the same way, through box-admin.js.
 //
 // Required env vars: BREVO_API_KEY · SUPABASE_SERVICE_KEY · HBF_ADMIN_TOKEN
