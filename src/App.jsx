@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23m";
+const APP_BUILD = "2026-08-23n";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18380,6 +18380,14 @@ function SignWellPanel() {
   const [showRaw, setShowRaw] = useState(false);
   const [docs, setDocs]   = useState(null);
   const [pick, setPick]   = useState(null);
+  const [dates, setDates] = useState(null);
+
+  async function probeDates() {
+    setBusy("dates"); setErr("");
+    try { setDates(await signWell("probe_dates", { templateId: SIGNWELL_TEMPLATE_ID })); }
+    catch (e) { setErr(e.message); }
+    setBusy("");
+  }
 
   // Reading back a contract the app didn't send. Nothing links it to an event,
   // so it is found by picking it out of the account rather than by id.
@@ -18413,6 +18421,9 @@ function SignWellPanel() {
           <BoxBtn disabled={!!busy} onClick={()=>run("documents", setDocs)}>
             {busy === "documents" ? "Loading…" : "Recent contracts"}
           </BoxBtn>
+          <BoxBtn tone="ghost" disabled={!!busy} onClick={probeDates}>
+            {busy === "dates" ? "Testing…" : "Test date formats"}
+          </BoxBtn>
           <BoxBtn tone="ghost" disabled={!!busy} onClick={()=>run("probe", setProbe)}>
             {busy === "probe" ? "Probing…" : "Diagnose"}
           </BoxBtn>
@@ -18441,6 +18452,18 @@ function SignWellPanel() {
             value={(probe.probes || []).map(function(x) {
               return x.path + "  →  HTTP " + x.status + "  " + x.shape + "\n    " + x.sample;
             }).join("\n\n")}
+            style={{ width:"100%", background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
+              fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
+        </div>
+      )}
+
+      {dates && (
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:12.5, color:T.textMid, marginBottom:8 }}>
+            Which date format SignWell accepts. Drafts are test mode and deleted again. Paste this back.
+          </div>
+          <textarea readOnly rows={9} onClick={e=>e.target.select()}
+            value={(dates.results || []).map(function(x){ return x.sent + "\n    " + x.result; }).join("\n\n")}
             style={{ width:"100%", background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
               fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
         </div>
