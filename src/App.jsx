@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-22j";
+const APP_BUILD = "2026-08-23a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -14819,6 +14819,9 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
         </div>
       </div>
 
+      {/* Contracts */}
+      <SignWellPanel/>
+
       {/* Who changed what, and when */}
       <ActivityLogPanel/>
 
@@ -18302,6 +18305,109 @@ function DataFailureBanner() {
       <button onClick={function(){ setFault(null); }}
         style={{ background:"none", color:"#fff", border:"1px solid rgba(255,255,255,.6)", padding:"7px 12px",
           borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12.5 }}>Dismiss</button>
+    </div>
+  );
+}
+
+// ── Contracts (SignWell) ─────────────────────────────────────────────────────
+// Step one of the contract work: find out what the template actually expects.
+// Prepopulating means writing to named fields, and a field name guessed wrong
+// produces a contract that looks right and says something else — so the names
+// get read out of the account rather than assumed.
+async function signWell(action, payload) {
+  const headers = { "Content-Type": "application/json" };
+  if (SESSION_TOKEN) headers["Authorization"] = "Bearer " + SESSION_TOKEN;
+  const res = await fetch("/.netlify/functions/signwell", {
+    method: "POST", headers: headers,
+    body: JSON.stringify(Object.assign({ action }, payload || {}))
+  });
+  let body = {};
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok) { const err = new Error(body.error || `Request failed (${res.status})`); err.status = res.status; throw err; }
+  return body;
+}
+
+function SignWellPanel() {
+  const [busy, setBusy]   = useState("");
+  const [err, setErr]     = useState("");
+  const [info, setInfo]   = useState(null);
+  const [tpl, setTpl]     = useState(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  async function run(action, setter) {
+    setBusy(action); setErr("");
+    try { setter(await signWell(action)); }
+    catch (e) { setErr(e.message); }
+    setBusy("");
+  }
+
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
+
+  return (
+    <div style={card}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:10, flexWrap:"wrap" }}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Contracts — SignWell</div>
+        <div style={{ display:"flex", gap:8 }}>
+          <BoxBtn tone="ghost" disabled={!!busy} onClick={()=>run("ping", setInfo)}>
+            {busy === "ping" ? "Checking…" : "Check connection"}
+          </BoxBtn>
+          <BoxBtn disabled={!!busy} onClick={()=>run("templates", setTpl)}>
+            {busy === "templates" ? "Loading…" : "List templates"}
+          </BoxBtn>
+        </div>
+      </div>
+
+      <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 12px", lineHeight:1.6 }}>
+        Before a contract can be prepopulated from an event, the app has to know what the template asks for.
+        <strong> List templates</strong> reads those names straight out of your SignWell account.
+      </p>
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
+
+      {info && (
+        <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>
+          Connected{info.account && info.account.email ? " as " + info.account.email : ""}.
+        </div>
+      )}
+
+      {tpl && (
+        <div>
+          <div style={{ fontSize:13, color:T.textMid, marginBottom:10 }}>
+            {tpl.count} template{tpl.count === 1 ? "" : "s"} in the account.
+          </div>
+          {(tpl.templates || []).map(function(t) {
+            return (
+              <div key={t.id} style={{ borderTop:`1px solid ${T.border}`, padding:"11px 0" }}>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{t.name}</div>
+                <div style={{ fontSize:11.5, color:T.textLight, marginBottom:6 }}>
+                  <code>{t.id}</code>
+                  {t.recipients && t.recipients.length ? " · signers: " + t.recipients.map(r=>r.name||r.id).join(", ") : ""}
+                </div>
+                {t.fields && t.fields.length ? (
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                    {t.fields.map(function(f, i) {
+                      return <code key={i} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:5,
+                        padding:"2px 7px", fontSize:11.5, color:T.textMid }}>{f.api_id}{f.required ? " *" : ""}</code>;
+                    })}
+                  </div>
+                ) : <div style={{ fontSize:12, color:T.textLight }}>No named fields reported — see the raw output below.</div>}
+              </div>
+            );
+          })}
+          <div style={{ marginTop:12 }}>
+            <button onClick={()=>setShowRaw(!showRaw)}
+              style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer", padding:0 }}>
+              {showRaw ? "Hide" : "Show"} the raw response
+            </button>
+            {showRaw && (
+              <textarea readOnly value={JSON.stringify(tpl.raw, null, 2)} rows={16}
+                onClick={e=>e.target.select()}
+                style={{ width:"100%", marginTop:8, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
+                  fontFamily:"ui-monospace,monospace", fontSize:11.5, padding:"10px 12px", color:T.text }}/>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
