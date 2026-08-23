@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23l";
+const APP_BUILD = "2026-08-23m";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18579,11 +18579,12 @@ function contractDates(fd) {
   };
 }
 
-// SignWell wants DD/MM/YYYY for its date fields; the app stores YYYY-MM-DD.
-function toUkDate(iso) {
-  if (!isValidEventDate(iso)) return "";
-  const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${y}`;
+// The API is asymmetric, and it is not a mistake to double-check this: date
+// fields must be SENT as ISO8601 (YYYY-MM-DD), but come BACK in the template's
+// display format, DD/MM/YYYY. So outbound is a pass-through of what the app
+// already stores, and only the return leg converts (see fromUkDate).
+function toIsoDate(iso) {
+  return isValidEventDate(iso) ? iso : "";
 }
 
 function buildContractDefaults(fd) {
@@ -18775,33 +18776,39 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       const res = await signWell("create", {
         templateId: SIGNWELL_TEMPLATE_ID,
         testMode: testMode,
+        // All three placeholders on the template must be assigned — leaving
+        // Client 2 off is refused outright (422 missing_placeholder_names),
+        // not treated as a one-signer contract. Where there is no second
+        // client, Client 1 signs both parts, which is what the template's
+        // signing order does with a repeated address.
         recipients: [
           { placeholder_name: "Hawthbush Team", name: "Hawthbush Farm", email: "hello@hawthbushfarm.co.uk" },
-          { placeholder_name: "Client 1", name: f.client1Name, email: f.client1Email },
-          // Client 2 only if there is one — an empty recipient stalls the
-          // signing order and the contract never reaches anybody.
-        ].concat(f.client2Email ? [{ placeholder_name: "Client 2", name: f.client2Name, email: f.client2Email }] : []),
+          { placeholder_name: "Client 1", name: f.client1Name || "Client 1", email: f.client1Email },
+          { placeholder_name: "Client 2",
+            name:  f.client2Name  || f.client1Name || "Client 2",
+            email: f.client2Email || f.client1Email },
+        ],
         fields: [
           { api_id: "Event Name",        value: f.eventName },
           { api_id: "Event Type",        value: f.eventType },
-          { api_id: "Event Date",        value: toUkDate(f.eventDate) },
+          { api_id: "Event Date",        value: toIsoDate(f.eventDate) },
           { api_id: "Access Day Before", value: f.accessBefore },
           { api_id: "Access Event Day",  value: f.accessDay },
           { api_id: "Access Day After",  value: f.accessAfter },
           { api_id: "Max Guests",        value: f.maxGuests },
           { api_id: "Venue Fee",         value: f.venueFee },
           { api_id: "Non Standard Terms", value: f.nonStandard },
-          { api_id: "Amly From",         value: toUkDate(f.amlyFrom) },
-          { api_id: "Amly to",           value: toUkDate(f.amlyTo) },
+          { api_id: "Amly From",         value: toIsoDate(f.amlyFrom) },
+          { api_id: "Amly to",           value: toIsoDate(f.amlyTo) },
           { api_id: "Amly Fee",          value: f.amlyFee },
-          { api_id: "Hamlet From",       value: toUkDate(f.hamletFrom) },
-          { api_id: "Hamlet to",         value: toUkDate(f.hamletTo) },
+          { api_id: "Hamlet From",       value: toIsoDate(f.hamletFrom) },
+          { api_id: "Hamlet to",         value: toIsoDate(f.hamletTo) },
           { api_id: "Hamlet Fee",        value: f.hamletFee },
-          { api_id: "Glamping from",     value: toUkDate(f.glampingFrom) },
-          { api_id: "Glamping to",       value: toUkDate(f.glampingTo) },
+          { api_id: "Glamping from",     value: toIsoDate(f.glampingFrom) },
+          { api_id: "Glamping to",       value: toIsoDate(f.glampingTo) },
           { api_id: "Glamping fee pd",   value: f.glampingFeePd },
-          { api_id: "Glamping 2 from",   value: toUkDate(f.glamping2From) },
-          { api_id: "Glamping 2 to",     value: toUkDate(f.glamping2To) },
+          { api_id: "Glamping 2 from",   value: toIsoDate(f.glamping2From) },
+          { api_id: "Glamping 2 to",     value: toIsoDate(f.glamping2To) },
           { api_id: "Glamping 2 fee",    value: f.glamping2Fee },
         ],
       });
@@ -18815,7 +18822,9 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       };
       update("contract", record);
       if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
-      setMsg(testMode ? "Test contract created — nothing was emailed to anyone." : "Contract sent.");
+      const solo = !f.client2Email;
+      setMsg((testMode ? "Test contract created — nothing was emailed to anyone." : "Contract sent.")
+        + (solo ? " No Client 2 email, so Client 1 signs both parts." : ""));
     } catch (e) { setErr(e.message); }
     setBusy(false);
   }
@@ -19145,8 +19154,9 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       <div style={row}>
         <F label="Client 1 name" k="client1Name"/>
         <F label="Client 1 email" k="client1Email"/>
-        <F label="Client 2 name" k="client2Name" hint="Leave blank if there is only one signer."/>
-        <F label="Client 2 email" k="client2Email"/>
+        <F label="Client 2 name" k="client2Name"/>
+        <F label="Client 2 email" k="client2Email"
+           hint="Leave blank if there is only one client — Client 1 will be asked to sign both parts."/>
       </div>
 
       <div style={{ borderTop:`1px solid ${T.border}`, marginTop:18, paddingTop:16, display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
