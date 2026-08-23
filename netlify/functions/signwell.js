@@ -141,6 +141,89 @@ exports.handler = async function(event) {
         return ok({ count: items.length, templates: summary, raw: details.length ? details : items });
       }
 
+      // Send the contract. The field values arrive from the Contract tab, where
+      // they were prefilled and then whatever the office changed. Nothing is
+      // computed here — this posts what a person approved on screen.
+      case "create": {
+        if (!body.templateId) return bad("No template chosen.");
+        var recips = (body.recipients || []).filter(function(r) { return r && r.email; });
+        if (!recips.length) return bad("A contract needs at least one recipient.");
+
+        var payload = {
+          test_mode: !!body.testMode,
+          template_id: body.templateId,
+          // draft leaves it in SignWell unsent, for a look before it goes.
+          draft: !!body.draft,
+          subject: body.subject || undefined,
+          message: body.message || undefined,
+          recipients: recips.map(function(r, i) {
+            return {
+              id: String(i + 1),
+              placeholder_name: r.placeholder_name,
+              name: r.name || "",
+              email: r.email
+            };
+          }),
+          // Only fields with something in them. Sending an empty value would
+          // overwrite whatever default the template carries.
+          template_fields: (body.fields || [])
+            .filter(function(f) { return f && f.api_id && f.value !== "" && f.value != null; })
+            .map(function(f) { return { api_id: f.api_id, value: f.value }; })
+        };
+
+        var made = await signwell("/document_templates/documents/", { method: "POST", body: payload });
+        if (!made.ok) return bad("SignWell refused the document: " + made.status + " " + made.text, 502);
+        return ok({ document: made.body });
+      }
+
+      // Where a sent contract has got to, and — once signed — what the clients
+      // put in their own fields.
+      // Recent documents, whether or not the app created them. A contract sent
+      // straight from SignWell has no id stored against any event, so without
+      // this there is no way to look at what came back.
+      case "documents": {
+        var ds = await signwell("/documents/");
+        if (!ds.ok) return bad("Could not list documents: " + ds.status + " " + ds.text, 502);
+        var arr = ds.body && (ds.body.documents || ds.body.data || ds.body);
+        if (!Array.isArray(arr)) arr = [];
+        return ok({
+          documents: arr.slice(0, 40).map(function(d) {
+            return {
+              id: d.id, name: d.name, status: d.status,
+              created: d.created_at || d.created,
+              recipients: (d.recipients || []).map(function(r) {
+                return { name: r.name, email: r.email, status: r.status };
+              })
+            };
+          })
+        });
+      }
+
+      case "document": {
+        if (!body.documentId) return bad("No document id.");
+        var doc = await signwell("/documents/" + body.documentId + "/");
+        if (!doc.ok) return bad("Could not read that document: " + doc.status + " " + doc.text, 502);
+
+        // Field values come back nested per page, same as the template.
+        var flat = [];
+        var raw = (doc.body && doc.body.fields) || [];
+        (Array.isArray(raw) ? raw : []).forEach(function(pageOrField) {
+          if (Array.isArray(pageOrField)) pageOrField.forEach(function(f) { flat.push(f); });
+          else flat.push(pageOrField);
+        });
+        var values = {};
+        flat.forEach(function(f) { if (f && f.api_id) values[f.api_id] = f.value; });
+
+        return ok({
+          id: doc.body && doc.body.id,
+          status: doc.body && doc.body.status,
+          name: doc.body && doc.body.name,
+          recipients: (doc.body && doc.body.recipients) || [],
+          values: values,
+          raw: doc.body
+        });
+      }
+
       // The template is visibly there in the SignWell UI but did not come back
       // from the endpoint I guessed. Rather than guess again, ask SignWell
       // several plausible questions and report exactly what it says to each.
