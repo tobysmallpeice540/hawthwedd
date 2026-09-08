@@ -1871,7 +1871,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-08-23r";
+const APP_BUILD = "2026-09-08a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -16317,6 +16317,11 @@ function BoxTicketTypesPanel({ eventId, types, onReload }) {
                   {t.max_per_order ? `max ${t.max_per_order}` : ""} per order
                 </div>
               )}
+              {t.notes_enabled && (
+                <div style={{ fontSize:11.5, color:T.textLight, marginTop:3, fontStyle:"italic" }}>
+                  Asks{t.notes_required ? " (required)" : ""}: “{t.notes_label || "Anything we should know about this booking?"}”
+                </div>
+              )}
             </div>
             <div style={{ fontSize:14, fontWeight:700, color:T.text, minWidth:70, textAlign:"right" }}>
               {t.price_pence === 0 ? "Free" : boxMoney(t.price_pence)}
@@ -16349,8 +16354,11 @@ function BoxTicketTypeModal({ eventId, type, allTypes, onClose, onSaved }) {
     max_per_order: type.max_per_order || "",
     hidden: !!type.hidden,
     sort_order: type.sort_order || (allTypes || []).length,
+    notes_enabled: !!type.notes_enabled,
+    notes_label: type.notes_label || "",
+    notes_required: !!type.notes_required,
   });
-  const [more, setMore] = useState(!!(type.description || type.min_per_order || type.max_per_order));
+  const [more, setMore] = useState(!!(type.description || type.min_per_order || type.max_per_order || type.notes_enabled));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -16377,6 +16385,11 @@ function BoxTicketTypeModal({ eventId, type, allTypes, onClose, onSaved }) {
           max_per_order: f.max_per_order === "" ? null : Number(f.max_per_order),
           hidden: f.hidden,
           sort_order: Number(f.sort_order) || 0,
+          notes_enabled: f.notes_enabled,
+          // Blank rather than empty string, so the public page falls back to
+          // its own wording instead of showing a question with nothing in it.
+          notes_label: f.notes_enabled ? (f.notes_label.trim() || null) : null,
+          notes_required: f.notes_enabled ? f.notes_required : false,
         }
       });
       await onSaved();
@@ -16428,6 +16441,28 @@ function BoxTicketTypeModal({ eventId, type, allTypes, onClose, onSaved }) {
               </div>
               <BoxCheck checked={f.hidden} onChange={v=>up("hidden", v)}
                 label="Hide this type" hint="Keeps it off the public page without deleting what's already been sold."/>
+
+              {/* The optional question. Asked on the details step of the
+                  checkout, only when this type is actually in the basket, and
+                  carried through to the order and the door list. */}
+              <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:14 }}>
+                <BoxCheck checked={f.notes_enabled} onChange={v=>up("notes_enabled", v)}
+                  label="Ask the buyer a question"
+                  hint="A free-text box on the checkout — seating requests, dietary notes, who they'd like to sit with."/>
+                {f.notes_enabled && (
+                  <div style={{ display:"grid", gap:12, marginTop:12, paddingLeft:2 }}>
+                    <BoxField label="The question"
+                      hint="Shown above the box, in your words. Left blank, it asks 'Anything we should know about this booking?'">
+                      <textarea value={f.notes_label} onChange={e=>up("notes_label", e.target.value)} rows={2}
+                        placeholder="If you would like to be seated with a group, please leave us their surname here."
+                        style={Object.assign({}, boxInput, { resize:"vertical" })}/>
+                    </BoxField>
+                    <BoxCheck checked={f.notes_required} onChange={v=>up("notes_required", v)}
+                      label="An answer is required"
+                      hint="Off by default. Turning this on stops a booking going through until the box is filled in — worth it for a question you genuinely can't run the night without."/>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -16585,6 +16620,14 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
       .map(function(l) { return l.qty + " × " + (typeName[l.ticket_type_id] || "Ticket"); }).join(", ");
   }
 
+  // What the buyer typed into the checkout question, if this event asks one.
+  // Kept separate from o.notes, which is ours — terms acceptance and anything
+  // typed in by hand — so the two are never confused for one another.
+  function notesFor(orderId) {
+    return (lines || []).filter(function(l) { return l.order_id === orderId && l.customer_note; })
+      .map(function(l) { return { type: typeName[l.ticket_type_id] || "Ticket", note: l.customer_note }; });
+  }
+
   // A checkout that was started and abandoned is noise, so pending orders are
   // normally hidden. But one that is still pending long after the 15-minute
   // hold has lapsed is not noise — it is a payment that may have gone through
@@ -16724,6 +16767,14 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
                   <code style={{ fontWeight:700, letterSpacing:.6 }}>{o.order_ref}</code> · {linesFor(o.id) || o.total_qty + " tickets"}
                 </div>
                 {o.notes && <div style={{ fontSize:11.5, color:T.textLight, marginTop:3, whiteSpace:"pre-wrap" }}>{o.notes}</div>}
+                {notesFor(o.id).map(function(n, i) {
+                  return (
+                    <div key={i} style={{ marginTop:5, background:T.amberBg, border:`1px solid #fcd34d`,
+                      borderRadius:6, padding:"6px 9px", fontSize:12, color:"#78350f", whiteSpace:"pre-wrap" }}>
+                      <span style={{ fontWeight:700 }}>{n.type}:</span> {n.note}
+                    </div>
+                  );
+                })}
               </div>
 
               <div style={{ minWidth:110, textAlign:"right" }}>
@@ -17220,6 +17271,16 @@ function BoxDoorScreen() {
     typeNames[l.order_id] = (typeNames[l.order_id] ? typeNames[l.order_id] + ", " : "") + l.qty + " × " + name;
   });
 
+  // Whatever the buyer answered at checkout. It is on the door list because a
+  // seating request nobody sees until the morning after is the same as never
+  // having asked — and it is cached with the rest of the list, so it is still
+  // there when the barn wifi isn't.
+  const doorNotes = {};
+  ((door && door.lines) || []).forEach(function(l) {
+    if (!l.customer_note) return;
+    doorNotes[l.order_id] = (doorNotes[l.order_id] ? doorNotes[l.order_id] + " · " : "") + l.customer_note;
+  });
+
   const lastScan = {};
   ((door && door.checkins) || []).forEach(function(c) {
     if (!lastScan[c.order_id] || c.checked_at > lastScan[c.order_id]) lastScan[c.order_id] = c.checked_at;
@@ -17345,7 +17406,8 @@ function BoxDoorScreen() {
       {err && <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:8, padding:"11px 14px", fontSize:12.5, marginBottom:14 }}>{err}</div>}
 
       {/* Result banner */}
-      {result && <BoxScanResult result={result} lines={typeNames[result.order && result.order.id]} onAdmit={admit} onClear={()=>setResult(null)}/>}
+      {result && <BoxScanResult result={result} lines={typeNames[result.order && result.order.id]}
+        note={doorNotes[result.order && result.order.id]} onAdmit={admit} onClear={()=>setResult(null)}/>}
 
       <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
         {[["scan","Scan"],["manual","Manual list"]].map(function([v, l]) {
@@ -17358,7 +17420,7 @@ function BoxDoorScreen() {
           );
         })}
         <div style={{ flex:1 }}/>
-        <BoxBtn tone="ghost" onClick={function() { printDoorList(door, typeNames); }} style={{ padding:"13px 20px" }}>Print</BoxBtn>
+        <BoxBtn tone="ghost" onClick={function() { printDoorList(door, typeNames, doorNotes); }} style={{ padding:"13px 20px" }}>Print</BoxBtn>
         <BoxBtn tone="ghost" onClick={()=>openEvent(eventId)} disabled={loading} style={{ padding:"13px 20px" }}>
           {loading ? "Refreshing…" : "Refresh"}
         </BoxBtn>
@@ -17405,7 +17467,7 @@ function BoxDoorScreen() {
                   <div style={{ fontSize:11, fontWeight:800, color:T.textLight, letterSpacing:1.4,
                     padding:"14px 0 4px", borderTop: i ? `1px solid ${T.border}` : "none" }}>{letter}</div>
                 )}
-                <BoxDoorRow order={o} lines={typeNames[o.id]} lastScan={lastScan[o.id]}
+                <BoxDoorRow order={o} lines={typeNames[o.id]} note={doorNotes[o.id]} lastScan={lastScan[o.id]}
                   onAdmit={admit} onUnadmit={unadmit} busy={rowBusy === o.id}/>
               </div>
             );
@@ -17420,7 +17482,7 @@ function BoxDoorScreen() {
 // One booking on the door list. A single ticket is one tap; a group gets a
 // stepper, because part of a party arriving is the normal case, not the
 // exception — ten bought, five here now, and the other five stay live.
-function BoxDoorRow({ order, lines, lastScan, onAdmit, onUnadmit, busy }) {
+function BoxDoorRow({ order, lines, note, lastScan, onAdmit, onUnadmit, busy }) {
   const total = order.total_qty || 0;
   const inAlready = order.admitted || 0;
   const left = Math.max(total - inAlready, 0);
@@ -17441,6 +17503,8 @@ function BoxDoorRow({ order, lines, lastScan, onAdmit, onUnadmit, busy }) {
         <div style={{ flex:"1 1 200px", minWidth:0 }}>
           <div style={{ fontSize:15, fontWeight:700, color:T.text }}>{order.last_name}, {order.first_name}</div>
           <div style={{ fontSize:12, color:T.textLight }}>{lines || total + " tickets"} · {order.order_ref}</div>
+          {note && <div style={{ marginTop:4, background:T.amberBg, border:"1px solid #fcd34d", borderRadius:6,
+            padding:"5px 8px", fontSize:12, color:"#78350f", whiteSpace:"pre-wrap" }}>{note}</div>}
         </div>
         <BoxPill bg={T.amberBg} fg={T.amber}>
           {boxMoney(order.balance_pence)} unpaid · no ticket issued
@@ -17462,6 +17526,8 @@ function BoxDoorRow({ order, lines, lastScan, onAdmit, onUnadmit, busy }) {
             {inAlready} of {total} in{lastScan ? " · last scanned " + boxTime(lastScan) : ""}
           </div>
         )}
+        {note && <div style={{ marginTop:4, background:T.amberBg, border:"1px solid #fcd34d", borderRadius:6,
+            padding:"5px 8px", fontSize:12, color:"#78350f", whiteSpace:"pre-wrap" }}>{note}</div>}
       </div>
 
       {left === 0 ? (
@@ -17491,7 +17557,7 @@ function BoxDoorRow({ order, lines, lastScan, onAdmit, onUnadmit, busy }) {
   );
 }
 
-function BoxScanResult({ result, lines, onAdmit, onClear }) {
+function BoxScanResult({ result, lines, note, onAdmit, onClear }) {
   const [n, setN] = useState(0);
   const order = result.order;
   const left = order ? Math.max((order.total_qty || 0) - (order.admitted || 0), 0) : 0;
@@ -17517,6 +17583,12 @@ function BoxScanResult({ result, lines, onAdmit, onClear }) {
               (order.admitted ? ` · ${order.admitted} already in` : "")) : ""}
           </div>
           {order && order.notes && <div style={{ fontSize:12, color:tone.fg, opacity:.7, marginTop:3 }}>{order.notes}</div>}
+          {order && note && (
+            <div style={{ marginTop:6, background:"rgba(255,255,255,.65)", border:"1px solid rgba(0,0,0,.12)",
+              borderRadius:7, padding:"7px 10px", fontSize:13.5, fontWeight:600, color:tone.fg, whiteSpace:"pre-wrap" }}>
+              {note}
+            </div>
+          )}
         </div>
 
         {result.tone === "green" && (
@@ -17649,7 +17721,7 @@ function BoxScanner({ onCode, onClose }) {
 // ── The printed list ─────────────────────────────────────────────────────────
 // A4, alphabetical by surname, with a box per head to tick. Deliberately its
 // own window rather than a print stylesheet fighting the app's chrome.
-function printDoorList(door, typeNames) {
+function printDoorList(door, typeNames, doorNotes) {
   if (!door) return;
   const ev = door.event || {};
   const rows = (door.orders || []).slice().sort(function(a, b) {
@@ -17661,6 +17733,10 @@ function printDoorList(door, typeNames) {
     return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // The checkout answers only earn a column when somebody actually gave one —
+  // an empty column on every sheet for an event that asks nothing is waste.
+  const anyNotes = rows.some(function(o) { return (doorNotes || {})[o.id]; });
+
   const body = rows.map(function(o) {
     const boxes = Array.from({ length: Math.min(o.total_qty || 0, 12) })
       .map(function() { return '<span class="tick"></span>'; }).join("");
@@ -17669,6 +17745,7 @@ function printDoorList(door, typeNames) {
         (!o.tickets_issued_at ? ' <span class="warn">balance unpaid</span>' : "") + "</td>" +
       "<td class=\"sm\">" + esc(o.email) + "</td>" +
       "<td class=\"sm\">" + esc(typeNames[o.id] || "") + "</td>" +
+      (anyNotes ? "<td class=\"sm note\">" + esc((doorNotes || {})[o.id] || "") + "</td>" : "") +
       "<td class=\"mid\">" + (o.total_qty || 0) + "</td>" +
       "<td class=\"sm\">" + esc(o.order_ref) + "</td>" +
       "<td>" + boxes + "</td>" +
@@ -17687,12 +17764,15 @@ function printDoorList(door, typeNames) {
     "td.sm { font-size:10px; color:#444; } td.mid { text-align:center; font-weight:700; }" +
     ".tick { display:inline-block; width:11px; height:11px; border:1px solid #333; margin-right:3px; border-radius:2px; }" +
     ".warn { color:#b45309; font-size:9px; text-transform:uppercase; letter-spacing:.4px; }" +
+    "td.note { color:#78350f; max-width:150px; }" +
     "tr { page-break-inside: avoid; }" +
     "</style></head><body>" +
     "<h1>" + esc(ev.name) + "</h1>" +
     "<div class='sub'>" + esc(boxWhen(ev.starts_at)) + " · " + esc(ev.venue_name || "") + " · " +
       rows.length + " bookings · " + totalTickets + " tickets</div>" +
-    "<table><thead><tr><th>Name</th><th>Email</th><th>Bought</th><th>Qty</th><th>Ref</th><th>In</th></tr></thead>" +
+    "<table><thead><tr><th>Name</th><th>Email</th><th>Bought</th>" +
+      (anyNotes ? "<th>Notes</th>" : "") +
+      "<th>Qty</th><th>Ref</th><th>In</th></tr></thead>" +
     "<tbody>" + body + "</tbody></table></body></html>";
 
   const w = window.open("", "_blank");
