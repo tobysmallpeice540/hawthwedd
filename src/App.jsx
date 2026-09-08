@@ -28,9 +28,21 @@ function MobileGlobalStyles() {
       @media (max-width: ${MOBILE_BREAKPOINT}px) {
         html, body, #root { overflow-x: hidden; }
         .app-shell { padding-left: 10px !important; padding-right: 10px !important; }
+        /* minmax(0, 1fr), not 1fr. A bare 1fr track is minmax(auto, 1fr), and
+           that auto minimum means the track can never be narrower than its
+           widest item's min-content — so a single long word, a wide select or
+           a row of checkboxes would push the column past the screen and the
+           page got clipped. minmax(0, …) lets the track shrink and the
+           contents wrap instead. */
         [style*="grid-template-columns"]:not([style*="repeat(7"]) {
-          grid-template-columns: 1fr !important;
+          grid-template-columns: minmax(0, 1fr) !important;
         }
+        /* Same trap one level down: a flex item's default min-width is auto,
+           so a long unbroken string stops its row from ever shrinking. */
+        [style*="display:flex"] > *, [style*="display: flex"] > * { min-width: 0; }
+        /* Long emails, URLs and guest names have no break opportunity, so they
+           would otherwise set the minimum width of whatever holds them. */
+        input, select, textarea { max-width: 100%; }
         [style*="display:flex"]:not([style*="flex-wrap"]),
         [style*="display: flex"]:not([style*="flex-wrap"]) {
           flex-wrap: wrap !important;
@@ -1902,7 +1914,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-09-08b";
+const APP_BUILD = "2026-09-08c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2534,8 +2546,164 @@ const ACCOM_SOURCE_META = {
   Blocked: { bg:"#f1f5f9", text:"#64748b" },
 };
 
+// How many of a booking's scheduled payments have been taken.
+function accomPaidState(b) {
+  if (!b.schedule || !b.schedule.length) return b.value>0 ? "—" : "n/a";
+  const paid = b.schedule.filter(s=>s.paid).length;
+  return paid===b.schedule.length ? "Paid" : String(paid)+"/"+String(b.schedule.length);
+}
+
+// Which property IDs a booking occupies.
+function bookedPropIds(b) {
+  var ids = new Set();
+  if (b.stays && b.stays.length) {
+    b.stays.forEach(function(s){ if (s.propertyId) ids.add(s.propertyId); });
+  } else if (b.propertyId) {
+    ids.add(b.propertyId);
+  }
+  return ids;
+}
+
+// The guest label, which varies by what kind of booking it is.
+function accomGuestLabel(b) {
+  return b.guestName
+    || (b.bookingType==="Blocked" ? "Not available"
+      : b.source==="airbnb" ? "Airbnb block"
+      : "(no name)");
+}
+
+// The money cell, shared between the desktop row and the mobile card.
+function AccomValueCell({ b, properties }) {
+  const v = lettingValue(b, properties);
+  if (!(v.value > 0)) return <span>—</span>;
+  return (
+    <span title={v.estimated ? "Estimated from our own calendar rate for these dates, plus " + AIRBNB_UPLIFT_PCT + "%" : ""}>
+      {String(fmtMoney(v.value))}
+      {v.estimated && <span style={{ marginLeft:5, fontSize:10, color:T.amber, fontWeight:700 }}>(est)</span>}
+    </span>
+  );
+}
+
+// Kept at module scope, not nested inside AccomList — a component defined
+// inside another is a new component type on every render, so React throws away
+// and rebuilds every row's DOM each time the filters change. Same rule as
+// AccomBadgeList, and the same one that cost the contract form its focus.
+function AccomListHeader({ properties, gridTemplate }) {
+  return (
+    <div style={{ display:"grid", gridTemplateColumns:gridTemplate, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
+      <div style={{ padding:"10px 12px" }}>Guest</div>
+      {properties.map(p=>(
+        <div key={p.id} style={{ padding:"10px 4px", textAlign:"center" }}>
+          <span title={p.name} style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11 }}>
+            <span style={{ width:8, height:8, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
+            {shortPropLabel(p)}
+          </span>
+        </div>
+      ))}
+      <div style={{ padding:"10px 12px" }}>Dates</div>
+      <div style={{ padding:"10px 12px" }}>Source</div>
+      <div style={{ padding:"10px 12px" }}>Type</div>
+      <div style={{ padding:"10px 12px" }}>Status</div>
+      <div style={{ padding:"10px 12px" }}>Value</div>
+      <div style={{ padding:"10px 12px" }}>Paid</div>
+    </div>
+  );
+}
+
+function AccomListRow({ b, primary, properties, gridTemplate, onOpen }) {
+  const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
+  const bProps = bookedPropIds(b);
+  const srcLabel = accomSourceLabel(b);
+  const srcMeta = ACCOM_SOURCE_META[srcLabel] || ACCOM_SOURCE_META.Manual;
+  return (
+    <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:gridTemplate, borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
+      <div style={{ padding:"11px 12px", fontWeight:600 }}>
+        {accomGuestLabel(b)}
+        {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
+      </div>
+      {properties.map(p=>(
+        <div key={p.id} style={{ padding:"8px 4px", textAlign:"center" }}>
+          {bProps.has(p.id)
+            ? <span style={{ width:14, height:14, borderRadius:3, background: b.bookingType==="Blocked" ? "#94a3b8" : p.colour, display:"inline-block", boxShadow:"0 1px 3px "+(b.bookingType==="Blocked"?"#94a3b8":p.colour)+"66" }} title={p.name}/>
+            : <span style={{ width:14, height:14, borderRadius:3, border:`1.5px solid #e2e8f0`, display:"inline-block", background:"transparent" }}/>
+          }
+        </div>
+      ))}
+      <div style={{ padding:"11px 12px", fontSize:12 }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
+      <div style={{ padding:"11px 12px" }}>
+        <span style={{ fontSize:11, fontWeight:700, color:srcMeta.text, background:srcMeta.bg, padding:"2px 7px", borderRadius:8 }}>{srcLabel}</span>
+      </div>
+      <div style={{ padding:"11px 12px" }}>
+        {b.bookingType
+          ? <span style={{ fontSize:11, fontWeight:700, color: b.bookingType==="Blocked" ? "#64748b" : T.accent, background: b.bookingType==="Blocked" ? "#f1f5f9" : T.accentLight, padding:"2px 7px", borderRadius:8 }}>{b.bookingType}</span>
+          : <span style={{ color:T.textLight, fontSize:11 }}>Let</span>}
+      </div>
+      <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
+      <div style={{ padding:"11px 12px" }}><AccomValueCell b={b} properties={properties}/></div>
+      <div style={{ padding:"11px 12px" }}>{accomPaidState(b)}</div>
+    </div>
+  );
+}
+
+// The phone layout. The desktop row is a ten-column grid, and the global
+// mobile stylesheet collapses any multi-column grid to one column — which
+// turned every booking into ten unlabelled stacked cells, and the header into
+// ten stacked words. A card says the same things in the order they matter:
+// who, when, where, and whether the money has come in.
+function AccomListCard({ b, primary, properties, onOpen }) {
+  const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
+  const bProps = bookedPropIds(b);
+  const srcLabel = accomSourceLabel(b);
+  const srcMeta = ACCOM_SOURCE_META[srcLabel] || ACCOM_SOURCE_META.Manual;
+  const props = properties.filter(function(p){ return bProps.has(p.id); });
+  return (
+    <div onClick={()=>onOpen(b)}
+      style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:"0 2px 8px rgba(37,99,235,.06)", padding:"12px 14px", cursor:"pointer" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10, marginBottom:6 }}>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontWeight:700, color:T.text, fontSize:15, wordBreak:"break-word" }}>{accomGuestLabel(b)}</div>
+          <div style={{ fontSize:12.5, color:T.accent, fontWeight:600, marginTop:2 }}>
+            {fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}
+          </div>
+        </div>
+        <span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8, whiteSpace:"nowrap", flexShrink:0 }}>{meta.label}</span>
+      </div>
+
+      {/* Properties as named chips — the desktop tick-per-column doesn't
+          survive without its header row to say which column is which. */}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
+        {props.length ? props.map(function(p) {
+          return (
+            <span key={p.id} style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600,
+              background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"2px 8px", color:T.textMid }}>
+              <span style={{ width:8, height:8, borderRadius:"50%", flexShrink:0,
+                background: b.bookingType==="Blocked" ? "#94a3b8" : p.colour, display:"inline-block" }}/>
+              {p.name}
+            </span>
+          );
+        }) : <span style={{ fontSize:11, color:T.textLight }}>No property set</span>}
+      </div>
+
+      <div style={{ display:"flex", alignItems:"center", flexWrap:"wrap", gap:"6px 10px", paddingTop:8, borderTop:`1px solid ${T.border}`, fontSize:12, color:T.textMid }}>
+        <span style={{ fontSize:11, fontWeight:700, color:srcMeta.text, background:srcMeta.bg, padding:"2px 7px", borderRadius:8 }}>{srcLabel}</span>
+        {/* On the desktop grid Source and Type are separate labelled columns,
+            so "Blocked / Blocked" reads as two facts. Stacked on a card with
+            no headers it just looks like a stutter, so drop the repeat. */}
+        {b.bookingType && b.bookingType !== srcLabel && (
+          <span style={{ fontSize:11, fontWeight:700, color: b.bookingType==="Blocked" ? "#64748b" : T.accent, background: b.bookingType==="Blocked" ? "#f1f5f9" : T.accentLight, padding:"2px 7px", borderRadius:8 }}>{b.bookingType}</span>
+        )}
+        <span style={{ marginLeft:"auto", fontWeight:700, color:T.text }}>
+          <AccomValueCell b={b} properties={properties}/>
+        </span>
+        <span style={{ color:T.textLight }}>· {accomPaidState(b)}</span>
+      </div>
+    </div>
+  );
+}
+
 function AccomList({ properties, bookings, filterProp, setFilterProp, filterStatus, setFilterStatus, onOpen }) {
   const [showPast, setShowPast] = useState(false);
+  const isMobile = useIsMobile();
   const today = new Date().toISOString().slice(0,10);
 
   const propName = (id) => (properties.find(p=>p.id===id)||{}).name || id;
@@ -2560,92 +2728,9 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
   const pastRows = filtered.filter(x => !isCurrent(x))
     .sort((a,z)=> (z.primary.checkIn||"").localeCompare(a.primary.checkIn||"")); // most recent first
 
-  const paidState = (b) => {
-    if (!b.schedule || !b.schedule.length) return b.value>0 ? "—" : "n/a";
-    const paid = b.schedule.filter(s=>s.paid).length;
-    return paid===b.schedule.length ? "Paid" : String(paid)+"/"+String(b.schedule.length);
-  };
-
-  // Which property IDs are booked in this booking
-  const bookedPropIds = (b) => {
-    var ids = new Set();
-    if (b.stays && b.stays.length) {
-      b.stays.forEach(function(s){ if (s.propertyId) ids.add(s.propertyId); });
-    } else if (b.propertyId) {
-      ids.add(b.propertyId);
-    }
-    return ids;
-  };
-
   // Build dynamic grid: Guest | per-property | Dates | Source | Event | Status | Value | Paid
   const propCols = properties.map(function(){ return "0.55fr"; }).join(" ");
   const gridTemplate = "1.5fr " + propCols + " 1.1fr 0.7fr 0.75fr 0.75fr 0.75fr 0.75fr";
-
-  const TableHeader = () => (
-    <div style={{ display:"grid", gridTemplateColumns:gridTemplate, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
-      <div style={{ padding:"10px 12px" }}>Guest</div>
-      {properties.map(p=>(
-        <div key={p.id} style={{ padding:"10px 4px", textAlign:"center" }}>
-          <span title={p.name} style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11 }}>
-            <span style={{ width:8, height:8, borderRadius:"50%", background:p.colour, display:"inline-block" }}/>
-            {shortPropLabel(p)}
-          </span>
-        </div>
-      ))}
-      <div style={{ padding:"10px 12px" }}>Dates</div>
-      <div style={{ padding:"10px 12px" }}>Source</div>
-      <div style={{ padding:"10px 12px" }}>Type</div>
-      <div style={{ padding:"10px 12px" }}>Status</div>
-      <div style={{ padding:"10px 12px" }}>Value</div>
-      <div style={{ padding:"10px 12px" }}>Paid</div>
-    </div>
-  );
-
-  const Row = ({ b, primary }) => {
-    const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
-    const bProps = bookedPropIds(b);
-    const srcLabel = accomSourceLabel(b);
-    const srcMeta = ACCOM_SOURCE_META[srcLabel] || ACCOM_SOURCE_META.Manual;
-    return (
-      <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:gridTemplate, borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
-        <div style={{ padding:"11px 12px", fontWeight:600 }}>
-          {b.guestName || (b.bookingType==="Blocked" ? "Not available" : b.source==="airbnb" ? "Airbnb block" : "(no name)")}
-          {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
-        </div>
-        {properties.map(p=>(
-          <div key={p.id} style={{ padding:"8px 4px", textAlign:"center" }}>
-            {bProps.has(p.id)
-              ? <span style={{ width:14, height:14, borderRadius:3, background: b.bookingType==="Blocked" ? "#94a3b8" : p.colour, display:"inline-block", boxShadow:"0 1px 3px "+(b.bookingType==="Blocked"?"#94a3b8":p.colour)+"66" }} title={p.name}/>
-              : <span style={{ width:14, height:14, borderRadius:3, border:`1.5px solid #e2e8f0`, display:"inline-block", background:"transparent" }}/>
-            }
-          </div>
-        ))}
-        <div style={{ padding:"11px 12px", fontSize:12 }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
-        <div style={{ padding:"11px 12px" }}>
-          <span style={{ fontSize:11, fontWeight:700, color:srcMeta.text, background:srcMeta.bg, padding:"2px 7px", borderRadius:8 }}>{srcLabel}</span>
-        </div>
-        <div style={{ padding:"11px 12px" }}>
-          {b.bookingType
-            ? <span style={{ fontSize:11, fontWeight:700, color: b.bookingType==="Blocked" ? "#64748b" : T.accent, background: b.bookingType==="Blocked" ? "#f1f5f9" : T.accentLight, padding:"2px 7px", borderRadius:8 }}>{b.bookingType}</span>
-            : <span style={{ color:T.textLight, fontSize:11 }}>Let</span>}
-        </div>
-        <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
-        <div style={{ padding:"11px 12px" }}>
-          {(function() {
-            const v = lettingValue(b, properties);
-            if (!(v.value > 0)) return "—";
-            return (
-              <span title={v.estimated ? "Estimated from our own calendar rate for these dates, plus " + AIRBNB_UPLIFT_PCT + "%" : ""}>
-                {String(fmtMoney(v.value))}
-                {v.estimated && <span style={{ marginLeft:5, fontSize:10, color:T.amber, fontWeight:700 }}>(est)</span>}
-              </span>
-            );
-          })()}
-        </div>
-        <div style={{ padding:"11px 12px" }}>{paidState(b)}</div>
-      </div>
-    );
-  };
 
   return (
     <div>
@@ -2664,11 +2749,18 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
         <span style={{ alignSelf:"center", fontSize:13, color:T.textMid }}>{currentRows.length} upcoming · {pastRows.length} past</span>
       </div>
 
-      <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff" }}>
-        <TableHeader/>
-        {currentRows.map(({ b, primary }) => <Row key={b.id} b={b} primary={primary}/>)}
-        {!currentRows.length && <div style={{ padding:"22px", textAlign:"center", color:T.textLight, fontSize:13 }}>No upcoming bookings match.</div>}
-      </div>
+      {isMobile ? (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {currentRows.map(({ b, primary }) => <AccomListCard key={b.id} b={b} primary={primary} properties={properties} onOpen={onOpen}/>)}
+          {!currentRows.length && <div style={{ padding:"22px", textAlign:"center", color:T.textLight, fontSize:13, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10 }}>No upcoming bookings match.</div>}
+        </div>
+      ) : (
+        <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff" }}>
+          <AccomListHeader properties={properties} gridTemplate={gridTemplate}/>
+          {currentRows.map(({ b, primary }) => <AccomListRow key={b.id} b={b} primary={primary} properties={properties} gridTemplate={gridTemplate} onOpen={onOpen}/>)}
+          {!currentRows.length && <div style={{ padding:"22px", textAlign:"center", color:T.textLight, fontSize:13 }}>No upcoming bookings match.</div>}
+        </div>
+      )}
 
       <div style={{ marginTop:14, textAlign:"center" }}>
         <button onClick={()=>setShowPast(v=>!v)}
@@ -2678,13 +2770,22 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
       </div>
 
       {showPast && pastRows.length > 0 && (
+        isMobile ? (
+          <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:10, opacity:.85 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4 }}>
+              Past bookings (most recent first)
+            </div>
+            {pastRows.map(({ b, primary }) => <AccomListCard key={b.id} b={b} primary={primary} properties={properties} onOpen={onOpen}/>)}
+          </div>
+        ) : (
         <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff", marginTop:10, opacity:.85 }}>
           <div style={{ padding:"8px 14px", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4 }}>
             Past bookings (most recent first)
           </div>
-          <TableHeader/>
-          {pastRows.map(({ b, primary }) => <Row key={b.id} b={b} primary={primary}/>)}
+          <AccomListHeader properties={properties} gridTemplate={gridTemplate}/>
+          {pastRows.map(({ b, primary }) => <AccomListRow key={b.id} b={b} primary={primary} properties={properties} gridTemplate={gridTemplate} onOpen={onOpen}/>)}
         </div>
+        )
       )}
     </div>
   );
@@ -2734,6 +2835,7 @@ function StayTimeField({ booking, stay, prop, which, onChange }) {
 }
 
 function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent }) {
+  const isMobile = useIsMobile();
   var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
   var selPropIds = formStays.map(function(s){ return s.propertyId; });
   var totalValue = formStays.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
@@ -2888,13 +2990,84 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
 
       {/* Per-property stays grid */}
       <div style={{ border:`1px solid ${T.border}`, borderRadius:9, overflow:"hidden", marginBottom:16 }}>
+        {/* The header only means anything beside its columns. On a phone the
+            grid collapses to one column, which left seven stacked words at the
+            top and then a column of unlabelled inputs underneath — so on
+            mobile each stay carries its own labels instead. */}
+        {!isMobile && (
         <div style={{ display:"grid", gridTemplateColumns:"1.7fr 52px 1fr 1fr 44px 54px 1.4fr", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.5 }}>
           {["Property","Maybe","Check-in","Check-out","Nights","Guests","Price (£)"].map(function(h){ return <div key={h} style={{ padding:"9px 12px" }}>{h}</div>; })}
         </div>
+        )}
         {formStays.map(function(s, idx) {
           var p = properties.find(function(pp){ return pp.id===s.propertyId; });
           var nights = nightsBetween(s.checkIn, s.checkOut);
           var q = (p && p.baseRate && s.checkIn && s.checkOut) ? quoteStay(p, s.checkIn, s.checkOut) : null;
+
+          if (isMobile) {
+            var fieldLabel = { fontSize:11, fontWeight:700, color:T.textLight, textTransform:"uppercase", letterSpacing:.5, marginBottom:3, display:"block" };
+            return (
+              <div key={s.propertyId} style={{ borderBottom: idx < formStays.length-1 ? `1px solid ${T.border}` : "none", background:"#fff", padding:"12px 12px 14px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:7, fontSize:14, fontWeight:700, marginBottom:10 }}>
+                  {p && <span style={{ width:10, height:10, borderRadius:"50%", background:p.colour, display:"inline-block", flexShrink:0 }}/>}
+                  <span>{p ? p.name : s.propertyId}</span>
+                  {idx > 0 && (
+                    <button type="button" onClick={function(){ copyDatesFromAbove(idx); }}
+                      title="Copy check-in/check-out dates from the property above"
+                      style={{ ...smallBtn, padding:"4px 8px", fontSize:11, whiteSpace:"nowrap", flexShrink:0, marginLeft:"auto" }}>
+                      ⧉ Copy dates
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>
+                  <div style={{ flex:"1 1 140px", minWidth:0 }}>
+                    <span style={fieldLabel}>Check-in</span>
+                    <input type="date" value={s.checkIn||""} onChange={function(e){ updStay(idx,"checkIn",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                    <StayTimeField booking={form} stay={s} prop={p} which="in"
+                      onChange={function(v){ updStay(idx,"checkInTime",v); }}/>
+                  </div>
+                  <div style={{ flex:"1 1 140px", minWidth:0 }}>
+                    <span style={fieldLabel}>Check-out</span>
+                    <input type="date" value={s.checkOut||""} onChange={function(e){ updStay(idx,"checkOut",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                    <StayTimeField booking={form} stay={s} prop={p} which="out"
+                      onChange={function(v){ updStay(idx,"checkOutTime",v); }}/>
+                  </div>
+                </div>
+
+                <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end" }}>
+                  <div style={{ flex:"0 0 auto" }}>
+                    <span style={fieldLabel}>Nights</span>
+                    <div style={{ fontSize:14, color:T.textMid, fontWeight:600, padding:"6px 0" }}>{nights||"—"}</div>
+                  </div>
+                  <div style={{ flex:"1 1 70px", minWidth:0 }}>
+                    <span style={fieldLabel}>Guests</span>
+                    <input type="number" value={s.guestCount||""} placeholder="—" onChange={function(e){ updStay(idx,"guestCount",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                  </div>
+                  <div style={{ flex:"1 1 110px", minWidth:0 }}>
+                    <span style={fieldLabel}>Price (£)</span>
+                    <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                      <input type="number" value={s.value||""} placeholder="0" onChange={function(e){ updStay(idx,"value",e.target.value); }} style={{ ...inlineInput, flex:1, minWidth:0 }}/>
+                      {q && (
+                        <button type="button" onClick={function(){ updStay(idx,"value",q.total); }}
+                          title={"Pricing estimate: "+fmtMoney(q.total)}
+                          style={{ ...smallBtn, padding:"5px 9px", fontSize:11, whiteSpace:"nowrap", flexShrink:0 }}>
+                          {fmtMoney(q.total)}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <label style={{ display:"flex", alignItems:"center", gap:8, marginTop:12, fontSize:13, color:T.textMid, cursor:"pointer" }}>
+                  <input type="checkbox" checked={!!s.maybe} onChange={function(e){ updStay(idx,"maybe",e.target.checked); }}
+                    style={{ width:16, height:16, accentColor:T.amber, cursor:"pointer", flexShrink:0 }}/>
+                  Provisional — not confirmed
+                </label>
+              </div>
+            );
+          }
+
           return (
             <div key={s.propertyId} style={{ display:"grid", gridTemplateColumns:"1.7fr 52px 1fr 1fr 44px 54px 1.4fr", borderBottom: idx < formStays.length-1 ? `1px solid ${T.border}` : "none", background:"#fff", alignItems:"center" }}>
               <div style={{ padding:"10px 12px", display:"flex", alignItems:"center", gap:7, fontSize:13, fontWeight:600 }}>
@@ -3439,6 +3612,7 @@ function AccomImport({ onImported, saveBookings, bookings }) {
 
 // ── Lettings Revenue Report ───────────────────────────────────────────────────
 function AccomReport({ properties, bookings }) {
+  const isMobile = useIsMobile();
   const allYears = [...new Set(
     bookings.flatMap(b => {
       const stays = (b.stays && b.stays.length) ? b.stays : [b];
@@ -3499,19 +3673,45 @@ function AccomReport({ properties, bookings }) {
   const prevYear = allYears[allYears.indexOf(year)-1];
   const nextYear = allYears[allYears.indexOf(year)+1];
 
+  // One bar in the revenue chart.
+  //
+  // On a phone the desktop layout leaves almost nothing for the bar itself —
+  // a 160px label plus two right-hand columns eats the whole width — so the
+  // amount printed inside the bar got sliced in half ("£2,50"). The value is
+  // already spelled out beside the bar, so on mobile the label goes above and
+  // the bar gets the full width, with nothing written inside it.
   const srcRow = (label, arr, colour) => {
     const val = sumVal(arr);
+    const pct = totalAll>0 ? `${Math.min(100,(val/totalAll)*100)}%` : "0%";
+    const count = arr.length + " bkg" + (arr.length===1?"":"s");
+
+    if (isMobile) {
+      return (
+        <div key={label} style={{ marginBottom:12 }}>
+          <div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:8, marginBottom:4 }}>
+            <span style={{ color:T.textMid, fontSize:13 }}>{label}</span>
+            <span style={{ fontSize:13, fontWeight:700, color:T.text, whiteSpace:"nowrap" }}>
+              {fmtMoney(val)} <span style={{ fontSize:11, fontWeight:500, color:T.textLight }}>· {count}</span>
+            </span>
+          </div>
+          <div style={{ background:"#f0f6ff", borderRadius:4, height:10, overflow:"hidden" }}>
+            <div style={{ width:pct, minWidth:val>0?4:0, height:"100%", background:colour, borderRadius:4 }}/>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div key={label} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
         <span style={{ width:160, color:T.textMid, fontSize:13 }}>{label}</span>
         <div style={{ flex:1, background:"#f0f6ff", borderRadius:4, height:24, overflow:"hidden" }}>
-          <div style={{ width:totalAll>0?`${Math.min(100,(val/totalAll)*100)}%`:"0%", minWidth:val>0?40:0, height:"100%",
+          <div style={{ width:pct, minWidth:val>0?40:0, height:"100%",
             background:colour, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
             {val>0 && <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{fmtMoney(val)}</span>}
           </div>
         </div>
         <span style={{ fontSize:13, fontWeight:600, color:T.text, minWidth:80, textAlign:"right" }}>{fmtMoney(val)}</span>
-        <span style={{ fontSize:12, color:T.textLight, minWidth:40, textAlign:"right" }}>{arr.length} bkg{arr.length===1?"":"s"}</span>
+        <span style={{ fontSize:12, color:T.textLight, minWidth:40, textAlign:"right" }}>{count}</span>
       </div>
     );
   };

@@ -238,20 +238,50 @@ function Root() {
 
   useEffect(() => {
     let live = true
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!live) return
-      setSession(data.session)
-      await loadRole(data.session)
-      setReady(true)
-    })
+    let settled = false
+    const done = () => { if (live && !settled) { settled = true; setReady(true) } }
+
+    // getSession() had no catch and no timeout, and setReady(true) lived only
+    // inside its .then(). So if the call rejected — or simply never came back,
+    // which is what a phone dropping between wifi and 4G looks like — the app
+    // sat on "Loading…" for ever and the only way out was to reload. That is
+    // the "I have to refresh before it loads" on mobile.
+    //
+    // Three changes: catch the rejection, put a watchdog on the hang, and let
+    // onAuthStateChange finish the job if the session turns up late. It fires
+    // an INITIAL_SESSION event on start-up, so an unauthenticated visitor
+    // still resolves and gets the login screen rather than a dead splash.
+    supabase.auth.getSession()
+      .then(async ({ data }) => {
+        if (!live) return
+        setSession(data.session)
+        await loadRole(data.session)
+        done()
+      })
+      .catch(() => {
+        if (!live) return
+        setProblem('Could not reach the server. Check your connection and try again.')
+        done()
+      })
+
+    // Long enough not to fire on a slow-but-working connection, short enough
+    // that nobody sits looking at a blank screen wondering.
+    const watchdog = setTimeout(() => {
+      if (!live || settled) return
+      setProblem('Taking longer than usual to reach the server — check your connection.')
+      done()
+    }, 8000)
+
     // Fires on sign-in, sign-out and every silent token refresh, so the token
     // App.jsx sends never goes stale.
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, sess) => {
       if (!live) return
       setSession(sess)
       await loadRole(sess)
+      // A session arriving after the watchdog gave up still gets us in.
+      done()
     })
-    return () => { live = false; sub?.subscription?.unsubscribe() }
+    return () => { live = false; clearTimeout(watchdog); sub?.subscription?.unsubscribe() }
   }, [])
 
   const signOut = async () => {

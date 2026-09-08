@@ -142,6 +142,37 @@ console.log("\n— the shipped code follows those rules —");
      !/const F = function\(\{ label, k, type, hint \}\)/.test(SRC));
 }
 
+console.log("\n— mobile layout and start-up (2026-09-08c) —");
+{
+  const MAIN = fs.readFileSync(path.join(__dirname, "..", "src", "main.jsx"), "utf8");
+
+  // The blank-until-refresh bug: setReady lived only inside getSession's
+  // .then(), so a rejected or hung call left the app on "Loading…" for ever.
+  ok("getSession failure is caught", /getSession\(\)[\s\S]{0,600}?\.catch\(/.test(MAIN));
+  ok("a watchdog breaks the hang", /setTimeout\(/.test(MAIN) && /watchdog/.test(MAIN));
+  ok("the watchdog is cleared on unmount", /clearTimeout\(watchdog\)/.test(MAIN));
+  ok("onAuthStateChange can still finish start-up late", /onAuthStateChange\([\s\S]{0,400}?done\(\)/.test(MAIN));
+
+  // A bare 1fr track cannot shrink below its content's min-content width,
+  // which is what pushed rows off the side of the screen.
+  ok("collapsed grid tracks use minmax(0, 1fr), not a bare 1fr",
+     /grid-template-columns: minmax\(0, 1fr\) !important/.test(SRC));
+  ok("the 7-column calendar grids are still exempt",
+     /:not\(\[style\*="repeat\(7"\]\)/.test(SRC));
+  ok("flex children get min-width:0", /> \*, \[style\*="display: flex"\] > \* \{ min-width: 0; \}/.test(SRC));
+
+  // The lettings list is a grid, not a table, so the collapse rule turned it
+  // into unlabelled stacked cells. It needs its own phone layout.
+  ok("the lettings list has a mobile card layout", /function AccomListCard\(/.test(SRC));
+  ok("and chooses it on a phone", /isMobile \? \([\s\S]{0,300}?AccomListCard/.test(SRC));
+  ok("its row and header are module-scope, not nested",
+     /^function AccomListRow\(/m.test(SRC) && /^function AccomListHeader\(/m.test(SRC));
+  ok("the stays editor hides its column header on mobile",
+     /\{!isMobile && \(\s*<div style=\{\{ display:"grid", gridTemplateColumns:"1\.7fr/.test(SRC));
+  ok("the revenue bars stop printing the amount inside a 30px bar",
+     /if \(isMobile\) \{[\s\S]{0,900}?background:colour, borderRadius:4 \}\}\/>/.test(SRC));
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed\n");
 process.exit(fail ? 1 : 0);
 })();
