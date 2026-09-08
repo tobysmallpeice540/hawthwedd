@@ -27,7 +27,8 @@ wedding, opened on contract signature, hung off this app.
 | Lock date | **Warns, never refuses** — same call as double bookings. |
 | Pinterest | **A dashboard field**, not a tab. |
 | Guest numbers | **Numbers before names.** Seated day and evening extras as counts on day one; names later, in two separate lists. |
-| Schedule span | **Multiple days** — day before and day after — with the days and the venue limits set **per event type**. |
+| Schedule span | **Per event type.** A wedding gets the day before and the day after; **a party gets the event day only** — no access either side. |
+| Tables | **Rectangular, six seats, three a side.** Seats belong to the table and move with it. A per-table **one side only** tick gives three seats on one side for the top table. |
 
 ---
 
@@ -155,7 +156,14 @@ curfew. So four rule sets: Wedding, Party, Wake, Other.
 Each carries:
 
 - **Which days the schedule offers** — day before, event day, day after.
+  **Wedding: all three. Party: event day only, no access either side.** Wake and
+  Other still to be decided.
 - **Per day: access/arrival time, music end, bar close, carriages, vacate time.**
+
+A party being single-day has a knock-on worth building in rather than discovering:
+with no day-before access, setup happens on the morning, so the party template
+opens with setup and supplier-arrival blocks rather than starting at guest arrival.
+A wedding's template can assume the room was dressed yesterday; a party's cannot.
 
 These become the locked rows in the timeline. A party gets different limits from a
 wedding weekend with nothing hardcoded. Per-event override is allowed but flagged —
@@ -179,6 +187,18 @@ down once, and the run sheet and staff rota could read it later.
 | **Timeline** | Vertical blocks — time, duration, title, linked supplier, note — dragged to reorder, later blocks shifting, with a pin for the ones that cannot move. Seeded from a Hawthbush template, which is the real value: it steers people off a 4pm ceremony without the conversation. Venue-fixed rows locked. Printable run sheet plus the tokenised share link. | 6 |
 | **Layout** | Indicative, not authoritative — **no millimetre accuracy and no fire-gangway checking, which removes the riskiest part of the build.** One room only. Admin editor draws it once: outline, bar, stage, doors, pillars, no-go zones. Clients place tables from a short palette, grid snap, 90° rotation, refused in no-go zones. Seating is a panel, not chair-dragging: click a table, get a seat list, assign from a searchable list of unassigned guests. Desktop only, said out loud; read-only on phones. Every export footered *"indicative layout — confirm with the venue"*. | 10 |
 
+### The layout behaviour that earns an assertion
+
+**What happens to a seated guest when the table changes.** Ticking "one side only"
+destroys seats four to six — those guests must return to the unassigned list,
+visibly, and never silently vanish. Rotation must not reshuffle anybody: seats keep
+their index, only their drawn position moves.
+
+This is the same family as the four record-loss incidents. Pin it with assertions,
+not with care.
+
+---
+
 ## Not building
 
 Website/RSVP (accept a CSV out of Joy); budget tracker; in-app messaging;
@@ -201,10 +221,10 @@ table from a group" gets 90% of it); 3D walkthrough; live collaborative editing
 | 05 | Suppliers — public page (after consent emails) | 2 |
 | 06 | Timeline: multi-day, event-type rules config + admin editor, share links, run sheet | 8 |
 | 07 | Layout — the one room template | 2 |
-| 08 | Layout — tables, seating, exports | 8 |
+| 08 | Layout — one table type with derived seats, snap, rotation, the one-side tick and its guest eviction, seat panel, tables-needed count, exports | 6.5 |
 | 09 | Admin views, 07:00 digest, lock-date warnings, purge job | 4 |
 
-**≈49.5 hours all in.** Phases 00–02 ≈16.5 hours is the smallest thing worth
+**≈48 hours all in.** Phases 00–02 ≈16.5 hours is the smallest thing worth
 logging into. Box office was ≈11 hours, for scale.
 
 Phase 03 is worth doing early even though it is the largest single phase,
