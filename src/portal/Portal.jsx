@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { supabase, rpc } from './supabase.js'
 import Guests from './Guests.jsx'
 import Checklist from './Checklist.jsx'
+import VenueForm from './VenueForm.jsx'
+import Contract from './Contract.jsx'
 
 // The eight tabs from the build spec. Only Overview is built; the rest declare
 // themselves honestly rather than pretending. Order matches the order a couple
@@ -14,7 +16,8 @@ const TABS = [
   { key: 'suppliers', label: 'Suppliers',     ready: false },
   { key: 'layout',    label: 'Table plan',    ready: false },
   { key: 'money',     label: 'Payments',      ready: false },
-  { key: 'contract',  label: 'Contract',      ready: false },
+  { key: 'details',   label: 'Details',       ready: true  },
+  { key: 'contract',  label: 'Contract',      ready: true  },
 ]
 
 function fmtDate(iso) {
@@ -157,7 +160,9 @@ export default function Portal({ session }) {
         {tab === 'overview' && <Overview event={event} days={days} />}
         {tab === 'guests'    && <Guests />}
         {tab === 'checklist' && <Checklist />}
-        {!['overview', 'guests', 'checklist'].includes(tab) && <Soon label={active.label} />}
+        {tab === 'details'   && <VenueForm />}
+        {tab === 'contract'  && <Contract />}
+        {!['overview', 'guests', 'checklist', 'details', 'contract'].includes(tab) && <Soon label={active.label} />}
       </main>
     </>
   )
