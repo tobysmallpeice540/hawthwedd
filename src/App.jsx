@@ -1914,7 +1914,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-09-08c";
+const APP_BUILD = "2026-09-08d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6326,12 +6326,116 @@ export default function App({ role = "admin", onSignOut } = {}) {
     }
   }, []);
 
+  // Patch one lettings booking. Re-reads the server's array first: this used
+  // to build the new array from React state and fire the write without
+  // awaiting it, so linking a booking to an event silently deleted anything
+  // created since the tab loaded, and a failed write only reached the console.
   const saveAccomBooking = useCallback(async (bookingId, patch) => {
-    setAccomBookings(function(prev) {
-      var next = prev.map(function(b) { return b.id===bookingId ? Object.assign({}, b, patch) : b; });
-      sbSet(ACCOM_STORAGE, next).catch(function(e){ console.error(e); });
-      return next;
+    let server;
+    try { server = await sbGet(ACCOM_STORAGE); }
+    catch (e) {
+      console.error("Aborting — could not read current lettings bookings:", e);
+      throw new Error("Could not reach the database, so nothing was saved. Please try again.");
+    }
+    const base = Array.isArray(server) ? server.map(normalizeAccom) : [];
+    const next = base.map(function(b) {
+      return String(b.id) === String(bookingId) ? Object.assign({}, b, patch) : b;
     });
+    await sbSet(ACCOM_STORAGE, next);
+    setAccomBookings(next);
+    return next;
+  }, []);
+
+  // Apply a signed contract's dates and fees to lettings bookings this event
+  // already has, instead of creating second copies of them.
+  //
+  // Each update names the booking and the property whose stay it applies to,
+  // so a multi-property booking has only the relevant stay rewritten. The
+  // booking's headline fields (primary dates, total value, property list) are
+  // recomputed from its stays afterwards, exactly as the lettings form does.
+  const updateAccomBookings = useCallback(async (updates) => {
+    if (!updates || !updates.length) return [];
+    let server;
+    try { server = await sbGet(ACCOM_STORAGE); }
+    catch (e) {
+      console.error("Aborting — could not read current lettings bookings:", e);
+      throw new Error("Could not reach the database, so nothing was saved. Please try again.");
+    }
+    const base = Array.isArray(server) ? server.map(normalizeAccom) : [];
+
+    const byId = {};
+    updates.forEach(function(u) {
+      const k = String(u.id);
+      byId[k] = (byId[k] || []).concat([u]);
+    });
+
+    const applied = [];
+    const next = base.map(function(b) {
+      const mine = byId[String(b.id)];
+      if (!mine) return b;
+
+      let stays = (b.stays && b.stays.length) ? b.stays.slice() : [Object.assign({}, b)];
+      const notes = [];
+      mine.forEach(function(u) {
+        let hit = false, moved = false;
+        stays = stays.map(function(s) {
+          if (hit || !s || s.propertyId !== u.propertyId) return s;
+          hit = true;
+          // A row that already agrees with the contract is left exactly as it
+          // is. Without this, applying the same contract twice — which happens
+          // whenever a later check re-opens the panel — stacks up a fresh
+          // "updated from the signed contract" line on the booking each time.
+          moved = String(s.checkIn||"") !== String(u.checkIn||"")
+               || String(s.checkOut||"") !== String(u.checkOut||"")
+               || Number(s.value||0) !== Number(u.value||0)
+               || !!s.maybe !== !!u.maybe;
+          if (!moved) return s;
+          return Object.assign({}, s, {
+            checkIn: u.checkIn, checkOut: u.checkOut,
+            nights: nightsBetween(u.checkIn, u.checkOut),
+            value: u.value, maybe: u.maybe
+          });
+        });
+        // The booking is linked to the event but has no stay for this property
+        // — the contract has added one. Better to extend the existing booking
+        // than to start a second one beside it.
+        if (!hit) {
+          stays = stays.concat([{
+            propertyId: u.propertyId, propertyName: u.propertyName || "",
+            checkIn: u.checkIn, checkOut: u.checkOut,
+            nights: nightsBetween(u.checkIn, u.checkOut),
+            guestCount: "", value: u.value, maybe: u.maybe
+          }]);
+        }
+        if (moved || !hit) {
+          notes.push((hit ? "Updated" : "Added") + " " + (u.label || u.propertyName || u.propertyId)
+            + " from the signed contract on " + new Date().toISOString().slice(0, 10)
+            + (u.answer ? " — answered “" + u.answer + "”" : "") + ".");
+          applied.push(u);
+        }
+      });
+
+      const primary = stays[0] || {};
+      return Object.assign({}, b, {
+        stays: stays,
+        propertyIds: stays.map(function(s) { return s.propertyId; }),
+        propertyId: primary.propertyId || b.propertyId,
+        propertyName: primary.propertyName || b.propertyName,
+        checkIn: primary.checkIn || "",
+        checkOut: primary.checkOut || "",
+        nights: primary.nights || null,
+        value: stays.reduce(function(sum, s) { return sum + (Number(s.value) || 0); }, 0),
+        notes: [b.notes, notes.join("\n")].filter(Boolean).join("\n")
+      });
+    });
+
+    // A patch must never change how many bookings exist.
+    if (next.length !== base.length) {
+      throw new Error("Save cancelled — the booking count changed unexpectedly. Nothing was written.");
+    }
+    await sbSet(ACCOM_STORAGE, next);
+    setAccomBookings(next);
+    return applied;
   }, []);
 
   // Add lettings bookings that came from somewhere other than the lettings
@@ -6731,7 +6835,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -6947,6 +7051,24 @@ function outstandingContracts(bookings, today) {
   });
   // Longest outstanding first — that's the one to chase today.
   return out.sort(function(a, b) { return b.days - a.days; });
+}
+
+// Contracts that have come back signed but have no copy filed against the
+// event yet.
+//
+// This is what the nightly check-contracts job is for. It records the status
+// but deliberately does not file the PDF — that needs an upload and an edit to
+// the event's files list, which is a bigger write than a background job should
+// make. So the job makes the fact visible here, and opening the event's
+// Contract tab files it. Without this banner a contract could sign overnight
+// and sit unfiled until somebody happened to open that event.
+function signedUnfiledContracts(bookings) {
+  return (bookings || []).filter(function(b) {
+    const c = b && b.contract;
+    if (!c || !c.documentId || c.testMode) return false;
+    if (String(c.status || "").toLowerCase() !== "completed") return false;
+    return !(b.files || []).some(function(fl) { return fl.signwellDocumentId === c.documentId; });
+  });
 }
 
 // Events that share one or more days with the given date range.
@@ -7509,6 +7631,7 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
   const accountedFor = upcoming.length + past.length + problem.length;
   const orphans = findOrphanedEventLinks(bookings, accomBookings);
   const chase = outstandingContracts(bookings, today);
+  const unfiled = signedUnfiledContracts(bookings);
   // Only clashes that haven't happened yet — a past one can't be fixed and
   // would sit on the front page forever.
   const accomClashes = findAllAccomClashes(accomBookings)
@@ -7624,6 +7747,33 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
             The same property is let to two parties on overlapping nights. An Airbnb block imported overnight
             can land on top of an existing booking, and an override made here does the same — either way it
             needs sorting out before both parties arrive.
+          </div>
+        </div>
+      )}
+
+      {/* Signed overnight, PDF not filed yet — see signedUnfiledContracts */}
+      {unfiled.length > 0 && !search && (
+        <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#166534", marginBottom:5 }}>
+            {unfiled.length} booking form{unfiled.length!==1?"s":""} signed and waiting to be filed
+          </div>
+          <div style={{ fontSize:12, color:"#166534", lineHeight:1.8 }}>
+            {unfiled.map(function(b) {
+              return (
+                <div key={String(b.id)}>
+                  <strong>{b.couple || "(no name)"}</strong>
+                  {b.date ? " \u2014 " + fmtDate(b.date) : ""}
+                  <button onClick={function(){ onEdit(b.id); }}
+                    style={{ marginLeft:8, background:"none", border:"1px solid #86efac", color:"#166534", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                    Open
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:"#15803d", marginTop:6, lineHeight:1.6 }}>
+            Everybody has signed. Open the event\u2019s Contract tab and the signed copy files itself as the
+            Event Booking Form, turning the EBF square green.
           </div>
         </div>
       )}
@@ -8662,7 +8812,7 @@ function EventClashWarning({ bookings, formData }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onUpdateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -8888,7 +9038,8 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
               <ContractSection formData={formData} update={update} onAutoSave={onAutoSave}
                 accomProperties={accomProperties||[]}
-                accomBookings={accomBookings||[]} onCreateAccomBookings={onCreateAccomBookings}/>
+                accomBookings={accomBookings||[]} onCreateAccomBookings={onCreateAccomBookings}
+                onUpdateAccomBookings={onUpdateAccomBookings}/>
             </div>
           )}
 
@@ -19543,6 +19694,55 @@ function guessProperty(match, properties) {
   return hit ? hit.id : "";
 }
 
+// What to do with one accommodation row that has come back on a signed
+// contract: update a booking this event already has, create a new one, or
+// speak up because somebody else has those nights.
+//
+// Accommodation on a contract is nearly always accommodation the event has
+// already got pencilled in — a hold made when the date was first agreed, or a
+// booking from an earlier version of the contract. Offering to create a second
+// one on top is how the diary ends up holding two of everything, each with a
+// different fee. So:
+//
+//   · a live booking LINKED to this event, for the same property, is the one
+//     to update — the contract's dates, fee and provisional flag win, because
+//     the contract is the thing both sides have now signed;
+//   · a booking for the same nights that is NOT linked to this event belongs
+//     to somebody else, and that is worth saying out loud rather than quietly
+//     booking on top of;
+//   · anything else is genuinely new.
+//
+// Matching a linked booking is deliberately NOT limited to overlapping dates.
+// A contract that moves Amly by a week should move the existing booking, not
+// leave the old nights sitting there and add a second booking beside them.
+function matchContractStay(row, propertyId, eventId, accomBookings) {
+  const out = { target: null, targetStay: null, clashes: [] };
+  if (!propertyId) return out;
+
+  const staysOf = function(b) { return (b.stays && b.stays.length) ? b.stays : [b]; };
+  const overlaps = function(s) {
+    if (!s || !s.checkIn || !s.checkOut || !row.checkIn || !row.checkOut) return false;
+    // Half-open, same as everywhere else: a changeover is not a clash.
+    return row.checkIn < s.checkOut && row.checkOut > s.checkIn;
+  };
+
+  const linked = [];
+  (accomBookings || []).forEach(function(b) {
+    if (!b || b.status === "cancelled") return;
+    const isLinked = eventId != null && b.linkedEventId != null
+      && String(b.linkedEventId) === String(eventId);
+    staysOf(b).forEach(function(s) {
+      if (!s || s.propertyId !== propertyId) return;
+      if (isLinked) linked.push({ booking: b, stay: s });
+      else if (overlaps(s)) out.clashes.push({ booking: b, stay: s });
+    });
+  });
+
+  const best = linked.find(function(x) { return overlaps(x.stay); }) || linked[0] || null;
+  if (best) { out.target = best.booking; out.targetStay = best.stay; }
+  return out;
+}
+
 // A returned value as a person reads it, rather than as it is stored.
 function showVal(row, v) {
   if (!v) return "";
@@ -19568,7 +19768,7 @@ function CField({ label, k, type, hint, f, up }) {
   );
 }
 
-function ContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings }) {
+function ContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings, onUpdateAccomBookings }) {
   const saved = formData.contract || {};
   const [f, setF] = useState(function() {
     return Object.assign(buildContractDefaults(formData), saved.fields || {});
@@ -19770,11 +19970,23 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
     wb.forEach(function(r) { chosen[r.key] = r.state === "fill" || r.state === "add"; });
     setAccept({ list: wb, chosen: chosen });
     setRows(contractStays(values).map(function(st) {
-      return Object.assign({}, st, {
-        include: true,
-        propertyId: guessProperty(st.match, accomProperties),
-      });
+      const propertyId = guessProperty(st.match, accomProperties);
+      return Object.assign({}, st, { include: true, propertyId: propertyId },
+        matchContractStay(st, propertyId, formData.id, accomBookings));
     }));
+  }
+
+  // The property is the operator's to change, and changing it changes the
+  // answer to "is this already booked?" — so re-match rather than leaving a
+  // stale target attached to a different property's booking.
+  function setRowProperty(i, propertyId) {
+    setRows(function(prev) {
+      return prev.map(function(r, j) {
+        if (j !== i) return r;
+        return Object.assign({}, r, { propertyId: propertyId },
+          matchContractStay(r, propertyId, formData.id, accomBookings));
+      });
+    });
   }
 
   // Pick the review back up on a contract that was already checked, so the
@@ -19804,10 +20016,18 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       if (missing.length) throw new Error(
         "Choose a property for " + missing.map(function(r){ return r.label; }).join(" and ") + " first.");
 
+      const prop = function(id) { return (accomProperties || []).find(function(p){ return p.id === id; }); };
+
+      // Rows that already have a booking on this event get that booking
+      // brought into line with the contract. Only the genuinely new ones are
+      // created, which is what stops a second Amly appearing every time a
+      // contract is applied.
+      const toUpdate = wanted.filter(function(r) { return r.target; });
+      const toCreate = wanted.filter(function(r) { return !r.target; });
+
       let madeCount = 0;
-      if (wanted.length) {
-        const prop = function(id) { return (accomProperties || []).find(function(p){ return p.id === id; }); };
-        const made = await onCreateAccomBookings(wanted.map(function(r) {
+      if (toCreate.length) {
+        const made = await onCreateAccomBookings(toCreate.map(function(r) {
           const p = prop(r.propertyId);
           const stay = {
             propertyId: r.propertyId, propertyName: p ? p.name : "",
@@ -19834,6 +20054,20 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
           };
         }), forceAccom);
         madeCount = made.length;
+      }
+
+      let updatedCount = 0;
+      if (toUpdate.length) {
+        const p2 = function(r) { const p = prop(r.propertyId); return p ? p.name : ""; };
+        const done2 = await onUpdateAccomBookings(toUpdate.map(function(r) {
+          return {
+            id: r.target.id, propertyId: r.propertyId, propertyName: p2(r),
+            checkIn: r.checkIn, checkOut: r.checkOut,
+            value: r.value, maybe: r.maybe,
+            label: r.label, answer: r.answer
+          };
+        }));
+        updatedCount = done2.length;
       }
 
       // The PDF only exists once everybody has signed.
@@ -19863,6 +20097,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
 
       const bits = [];
       if (Object.keys(patch).length) bits.push(Object.keys(patch).length + " detail" + (Object.keys(patch).length===1?"":"s") + " written to the event");
+      if (updatedCount) bits.push(updatedCount + " existing lettings booking" + (updatedCount===1?"":"s") + " updated");
       if (madeCount) bits.push(madeCount + " lettings booking" + (madeCount===1?"":"s") + " created");
       if (filed) bits.push("signed PDF filed against the event");
       if (pdfProblem) setErr("Saved, but the signed PDF could not be filed: " + pdfProblem);
@@ -19989,10 +20224,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
                         <div style={{ marginTop:7, display:"flex", gap:8, alignItems:"center" }}>
                           <span style={{ fontSize:11.5, color:T.textLight }}>Book into</span>
                           <select value={r.propertyId}
-                            onChange={function(e){
-                              const v = e.target.value;
-                              setRows(function(p){ return p.map(function(x,j){ return j===i ? Object.assign({}, x, { propertyId:v }) : x; }); });
-                            }}
+                            onChange={function(e){ setRowProperty(i, e.target.value); }}
                             style={{ background:"#fff", border:`1.5px solid ${r.propertyId ? T.border : T.red}`, borderRadius:6,
                               color:T.text, fontFamily:"inherit", fontSize:12.5, padding:"5px 8px" }}>
                             <option value="">Choose a property…</option>
@@ -20001,6 +20233,73 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
                             })}
                           </select>
                         </div>
+
+                        {/* What this row is actually going to do. An event
+                            almost always has its accommodation pencilled in
+                            already, so "update the one you have" is the normal
+                            case and "create a new booking" is the exception —
+                            say which, and show what changes. */}
+                        {r.propertyId && (r.target ? (
+                          <div style={{ marginTop:8, paddingTop:8, borderTop:`1px dashed ${T.border}`, fontSize:12, color:T.textMid }}>
+                            <div style={{ fontWeight:700, color:T.midBlue, marginBottom:3 }}>
+                              Updates this event’s existing booking
+                              <span style={{ fontWeight:500, color:T.textLight }}>
+                                {" — " + (r.target.guestName || "no name") + " (" + r.target.id + ")"}
+                              </span>
+                            </div>
+                            {(function() {
+                              const s = r.targetStay || {};
+                              const changes = [];
+                              const wasDates = (s.checkIn && s.checkOut) ? fmtDate(s.checkIn) + " – " + fmtDate(s.checkOut) : "no dates";
+                              const nowDates = (r.checkIn && r.checkOut) ? fmtDate(r.checkIn) + " – " + fmtDate(r.checkOut) : "no dates";
+                              if (wasDates !== nowDates) changes.push({ what:"Dates", was:wasDates, now:nowDates });
+                              if (Number(s.value||0) !== Number(r.value||0)) {
+                                changes.push({ what:"Fee", was:fmtMoney(Number(s.value)||0), now:fmtMoney(Number(r.value)||0) });
+                              }
+                              if (!!s.maybe !== !!r.maybe) {
+                                changes.push({ what:"Provisional", was: s.maybe ? "yes" : "no", now: r.maybe ? "yes" : "no" });
+                              }
+                              if (!changes.length) {
+                                return <div style={{ color:T.textLight }}>Already matches the contract — nothing would change.</div>;
+                              }
+                              return changes.map(function(c, k) {
+                                return (
+                                  <div key={k} style={{ lineHeight:1.7 }}>
+                                    {c.what}: <span style={{ textDecoration:"line-through", color:T.textLight }}>{c.was}</span>
+                                    {" → "}<strong style={{ color:T.text }}>{c.now}</strong>
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                        ) : (
+                          <div style={{ marginTop:8, paddingTop:8, borderTop:`1px dashed ${T.border}`, fontSize:12, color:T.textMid }}>
+                            <span style={{ fontWeight:700, color:T.green }}>Creates a new lettings booking</span>
+                            <span style={{ color:T.textLight }}> — this event has nothing booked at that property yet.</span>
+                          </div>
+                        ))}
+
+                        {/* Somebody else's nights. Worth saying plainly; not
+                            worth blocking, because the contract is signed and
+                            a human has to decide which booking gives way. */}
+                        {(r.clashes || []).length > 0 && (
+                          <div style={{ marginTop:8, padding:"8px 10px", borderRadius:6,
+                            background:T.amberBg, border:"1px solid #fde68a", fontSize:12, color:"#92400e", lineHeight:1.7 }}>
+                            <strong>Already let to somebody else on these nights.</strong>
+                            {r.clashes.map(function(c, k) {
+                              return (
+                                <div key={k}>
+                                  {(c.booking.guestName || "(no name)")}
+                                  {" (" + accomSourceLabel(c.booking) + ")"}
+                                  {" · " + fmtDate(c.stay.checkIn) + " – " + fmtDate(c.stay.checkOut)}
+                                </div>
+                              );
+                            })}
+                            <div style={{ marginTop:3 }}>
+                              Not linked to this event, so it is not touched — sort out which booking gives way before applying.
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

@@ -24,7 +24,8 @@ function lift(name) {
 
 const NAMES = ["findAccomClashes", "findAllAccomClashes", "outstandingContracts",
                "daysSince", "overlappingEvents", "eventEndDate", "isValidEventDate",
-               "nextBookingId", "findAllEventClashes"];
+               "nextBookingId", "findAllEventClashes", "matchContractStay",
+               "signedUnfiledContracts"];
 const ctx = {};
 eval(NAMES.map(lift).join("\n\n") + "\n" +
      NAMES.map(n => "ctx." + n + " = " + n + ";").join("\n"));
@@ -170,6 +171,176 @@ console.log("\n— outstandingContracts: chasing unsigned booking forms —");
   ], today);
   eq("longest outstanding is listed first", many[0].booking.id, 2);
   eq("and the day count is reported", many[0].days, 90);
+}
+
+console.log("\n— matchContractStay: update, create, or warn —");
+{
+  const EV = 42;
+  const linked  = (id, prop, ci, co, extra) => Object.assign(
+    { id, guestName:"Wedding party", status:"confirmed", linkedEventId: EV,
+      stays:[{ propertyId:prop, checkIn:ci, checkOut:co, value:800 }] }, extra||{});
+  const other   = (id, prop, ci, co, extra) => Object.assign(
+    { id, guestName:"Someone else", status:"confirmed", linkedEventId:null,
+      stays:[{ propertyId:prop, checkIn:ci, checkOut:co, value:600 }] }, extra||{});
+  const row = (ci, co) => ({ checkIn:ci, checkOut:co, value:950, maybe:false });
+
+  // The case Toby asked for: the event already holds this property, so update.
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV,
+      [linked("A1","amly","2027-06-04","2027-06-07")]);
+    ok("an existing linked booking is the update target", m.target && m.target.id === "A1");
+    eq("and it is not reported as a clash", m.clashes.length, 0);
+  }
+
+  // A contract that moves the dates must move THAT booking, not add a second.
+  {
+    const m = ctx.matchContractStay(row("2027-06-11","2027-06-14"), "amly", EV,
+      [linked("A1","amly","2027-06-04","2027-06-07")]);
+    ok("a linked booking still matches when the contract moves the dates",
+       m.target && m.target.id === "A1");
+  }
+
+  // Somebody else's nights.
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV,
+      [other("B1","amly","2027-06-05","2027-06-08")]);
+    ok("an unlinked overlapping booking is not updated", m.target === null);
+    eq("it is reported as a clash", m.clashes.length, 1);
+    ok("and named", m.clashes[0].booking.id === "B1");
+  }
+
+  // Nothing there at all.
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV, []);
+    ok("an empty diary means create", m.target === null);
+    eq("with nothing to warn about", m.clashes.length, 0);
+  }
+
+  // Both at once: ours to update, theirs to warn about.
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV,
+      [linked("A1","amly","2027-06-04","2027-06-07"), other("B1","amly","2027-06-05","2027-06-08")]);
+    ok("updates ours", m.target && m.target.id === "A1");
+    eq("and still warns about theirs", m.clashes.length, 1);
+  }
+
+  // Precision checks — the ways this could quietly do the wrong thing.
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV,
+      [linked("A1","hamlet","2027-06-04","2027-06-07")]);
+    ok("a linked booking for a DIFFERENT property is not the target", m.target === null);
+  }
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV,
+      [linked("A1","amly","2027-06-04","2027-06-07",{ status:"cancelled" })]);
+    ok("a cancelled linked booking is not updated", m.target === null);
+  }
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV,
+      [other("B1","amly","2027-06-07","2027-06-10")]);
+    eq("a changeover on the same day is not a clash", m.clashes.length, 0);
+  }
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", 99,
+      [linked("A1","amly","2027-06-04","2027-06-07")]);
+    ok("a booking linked to a DIFFERENT event is not ours to update", m.target === null);
+    eq("it is somebody else's clash instead", m.clashes.length, 1);
+  }
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "", EV,
+      [linked("A1","amly","2027-06-04","2027-06-07")]);
+    ok("no property chosen yet means no target", m.target === null);
+    eq("and nothing to warn about", m.clashes.length, 0);
+  }
+  // Two linked bookings for one property: prefer the one that actually overlaps.
+  {
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV,
+      [linked("A1","amly","2027-01-01","2027-01-03"), linked("A2","amly","2027-06-04","2027-06-07")]);
+    ok("the overlapping linked booking wins over an unrelated one",
+       m.target && m.target.id === "A2");
+  }
+  // A booking with no stays array at all (legacy shape).
+  {
+    const legacy = { id:"L1", status:"confirmed", linkedEventId:EV,
+                     propertyId:"amly", checkIn:"2027-06-04", checkOut:"2027-06-07" };
+    const m = ctx.matchContractStay(row("2027-06-04","2027-06-07"), "amly", EV, [legacy]);
+    ok("a legacy booking with no stays array still matches", m.target && m.target.id === "L1");
+  }
+}
+
+console.log("\n— signedUnfiledContracts: what the nightly job surfaces —");
+{
+  const ev = (id, contract, files) => ({ id, couple:"C"+id, contract, files: files||[] });
+  eq("signed with no copy filed is flagged",
+     ctx.signedUnfiledContracts([ev(1,{documentId:"d1",status:"completed"})]).length, 1);
+  eq("signed and already filed is not",
+     ctx.signedUnfiledContracts([ev(1,{documentId:"d1",status:"completed"},
+       [{signwellDocumentId:"d1"}])]).length, 0);
+  eq("a file from a DIFFERENT contract doesn't count as filed",
+     ctx.signedUnfiledContracts([ev(1,{documentId:"d1",status:"completed"},
+       [{signwellDocumentId:"d0"}])]).length, 1);
+  eq("still out for signature is not flagged here",
+     ctx.signedUnfiledContracts([ev(1,{documentId:"d1",status:"sent"})]).length, 0);
+  eq("a test contract is never flagged",
+     ctx.signedUnfiledContracts([ev(1,{documentId:"d1",status:"completed",testMode:true})]).length, 0);
+  eq("case-insensitive on status",
+     ctx.signedUnfiledContracts([ev(1,{documentId:"d1",status:"Completed"})]).length, 1);
+  eq("no contract, nothing to say", ctx.signedUnfiledContracts([ev(1,null)]).length, 0);
+}
+
+console.log("\n— the nightly job (netlify/functions/check-contracts.js) —");
+{
+  const JOB = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "check-contracts.js"), "utf8");
+  const jobCtx = {};
+  const grab = (name) => {
+    const st = JOB.indexOf("function " + name + "(");
+    let i = JOB.indexOf("{", st), d = 0, e = -1;
+    for (; i < JOB.length; i++) { if (JOB[i]==="{") d++; else if (JOB[i]==="}") { d--; if(!d){e=i+1;break;} } }
+    return JOB.slice(st, e);
+  };
+  const SETTLED = JOB.match(/const SETTLED = (\[[^\]]*\])/)[1];
+  (0, eval)("const SETTLED = " + SETTLED + ";\n" + grab("isSettled") + "\n" + grab("outstanding") +
+            "\nglobalThis.__job = { isSettled, outstanding };");
+  Object.assign(jobCtx, globalThis.__job);
+
+  ok("completed counts as settled", jobCtx.isSettled("completed"));
+  ok("declined counts as settled", jobCtx.isSettled("Declined"));
+  ok("both spellings of cancelled are settled",
+     jobCtx.isSettled("canceled") && jobCtx.isSettled("cancelled"));
+  ok("sent is not settled", !jobCtx.isSettled("sent"));
+  ok("an empty status is not settled", !jobCtx.isSettled(""));
+
+  const mk = (c) => ({ id:1, contract:c });
+  eq("an outstanding contract is picked up",
+     jobCtx.outstanding([mk({documentId:"d",sentAt:"2026-01-01",status:"sent"})]).length, 1);
+  eq("a signed one is left alone",
+     jobCtx.outstanding([mk({documentId:"d",sentAt:"2026-01-01",status:"completed"})]).length, 0);
+  eq("a test contract is never polled — it would burn API calls for nothing",
+     jobCtx.outstanding([mk({documentId:"d",sentAt:"2026-01-01",status:"sent",testMode:true})]).length, 0);
+  eq("a contract that was never sent is skipped",
+     jobCtx.outstanding([mk({documentId:"d",status:"sent"})]).length, 0);
+  eq("an event with no contract is skipped", jobCtx.outstanding([{id:1}]).length, 0);
+  eq("a missing status still counts as outstanding",
+     jobCtx.outstanding([mk({documentId:"d",sentAt:"2026-01-01"})]).length, 1);
+
+  // The job must agree with the app about what "still out" means, or the home
+  // page chases contracts the job has stopped polling (or the reverse).
+  const iso = d => new Date(Date.now() - d*86400000).toISOString();
+  const today = new Date().toISOString().slice(0,10);
+  ["sent","Sent",""].forEach(function(st) {
+    const appSays = ctx.outstandingContracts(
+      [{ id:1, couple:"x", contract:{ documentId:"d", sentAt:iso(30), status:st } }], today).length > 0;
+    const jobSays = jobCtx.outstanding(
+      [{ id:1, contract:{ documentId:"d", sentAt:iso(30), status:st } }]).length > 0;
+    ok("app and job agree that status \"" + st + "\" is still outstanding", appSays === jobSays);
+  });
+  ["completed","declined","voided","expired"].forEach(function(st) {
+    const appSays = ctx.outstandingContracts(
+      [{ id:1, couple:"x", contract:{ documentId:"d", sentAt:iso(30), status:st } }], today).length > 0;
+    const jobSays = jobCtx.outstanding(
+      [{ id:1, contract:{ documentId:"d", sentAt:iso(30), status:st } }]).length > 0;
+    ok("app and job agree that status \"" + st + "\" is settled", appSays === false && jobSays === false);
+  });
 }
 
 console.log("\n— the Airbnb overlap check (netlify/functions/sync-property-ical.js) —");

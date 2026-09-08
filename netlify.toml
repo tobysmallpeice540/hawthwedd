@@ -53,6 +53,15 @@
 [functions."brevo-sync-cron"]
   schedule = "40 2 * * *"
 
+# Ask SignWell what has happened to every contract still out for signature, so
+# the home page is truthful without anyone opening an event and pressing
+# "Check status". 04:00 UTC: after the 03:00 backup — so there is always a
+# snapshot from before the sweep — and at an hour when nobody is in the app,
+# which is what makes a background write to the events array acceptable here
+# when a webhook still is not. See the header of check-contracts.js.
+[functions."check-contracts"]
+  schedule = "0 4 * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"

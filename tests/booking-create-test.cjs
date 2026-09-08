@@ -173,6 +173,49 @@ console.log("\n— mobile layout and start-up (2026-09-08c) —");
      /if \(isMobile\) \{[\s\S]{0,900}?background:colour, borderRadius:4 \}\}\/>/.test(SRC));
 }
 
+console.log("\n— the contract writeback wiring (2026-09-08d) —");
+{
+  const TOML = fs.readFileSync(path.join(__dirname, "..", "netlify.toml"), "utf8");
+  ok("the nightly contract check is scheduled",
+     /\[functions\."check-contracts"\]\s*\n\s*schedule = "0 4 \* \* \*"/.test(TOML));
+
+  const JOB = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "check-contracts.js"), "utf8");
+  ok("the job re-reads the array immediately before writing",
+     /Re-read immediately before writing/.test(JOB) && (JOB.match(/await sbGet\(BOOKING_KEY\)/g)||[]).length === 2);
+  ok("it refuses to write if the event count changed",
+     /next\.length !== latest\.length/.test(JOB));
+  ok("it refuses to write from a non-array read",
+     /did not come back as an array/.test(JOB));
+  ok("it writes only the contract sub-object, never a whole event",
+     /Object\.assign\(\{\}, b, \{\s*contract:/.test(JOB));
+  ok("it uses the service key, not the anon key",
+     /process\.env\.SUPABASE_SERVICE_KEY/.test(JOB) && !/anon/i.test(JOB));
+
+  // A contract coming back must update the event's own booking rather than
+  // creating a second one beside it.
+  ok("matchContractStay exists at module scope", /^function matchContractStay\(/m.test(SRC));
+  ok("rows are classified when the review is built",
+     /matchContractStay\(st, propertyId, formData\.id, accomBookings\)/.test(SRC));
+  ok("and re-classified when the property is changed",
+     /function setRowProperty\(/.test(SRC) &&
+     /matchContractStay\(r, propertyId, formData\.id, accomBookings\)/.test(SRC));
+  ok("rows with an existing linked booking are updated, not created",
+     /const toUpdate = wanted\.filter\(function\(r\) \{ return r\.target; \}\)/.test(SRC) &&
+     /const toCreate = wanted\.filter\(function\(r\) \{ return !r\.target; \}\)/.test(SRC));
+  ok("creates run before updates, so a refused create writes nothing at all",
+     SRC.indexOf("let madeCount = 0;") < SRC.indexOf("let updatedCount = 0;"));
+  ok("an update that changes nothing leaves no note behind",
+     /if \(moved \|\| !hit\) \{/.test(SRC));
+  ok("updateAccomBookings re-reads the server rather than trusting tab state",
+     /const updateAccomBookings = useCallback\(async \(updates\) => \{[\s\S]{0,400}?await sbGet\(ACCOM_STORAGE\)/.test(SRC));
+  ok("it recomputes the booking total from its stays",
+     /value: stays\.reduce\(function\(sum, s\) \{ return sum \+ \(Number\(s\.value\) \|\| 0\); \}, 0\)/.test(SRC));
+  ok("saveAccomBooking no longer writes the whole array from tab state",
+     !/setAccomBookings\(function\(prev\) \{[\s\S]{0,200}?sbSet\(ACCOM_STORAGE, next\)\.catch/.test(SRC));
+  ok("a signed-but-unfiled contract is surfaced on the home page",
+     /^function signedUnfiledContracts\(/m.test(SRC) && /signedUnfiledContracts\(bookings\)/.test(SRC));
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed\n");
 process.exit(fail ? 1 : 0);
 })();
