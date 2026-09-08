@@ -50,83 +50,76 @@ Auth: Supabase magic link (`signInWithOtp`), no passwords, two users per event.
 
 ## Money — the Xero integration
 
-Toby's call, and it is the right one: **the Xero invoices are king.** A generated
-payment plan would be wrong constantly, because the schedule moves with which
-accommodation is taken and corkage moves with final numbers. A figure the portal
-invents and a figure Xero holds will disagree, and Xero is the one the client
-has actually received.
+Toby's call and the right one: **the Xero invoices are king.** A generated plan
+would be wrong constantly — the schedule moves with which accommodation is taken
+and corkage moves with final numbers. Xero is the figure the client received.
 
-### What already exists
+### What already exists — more than first credited
 
-- `netlify/functions/xero-invoice.js` — pushes an event invoice into Xero as a
-  DRAFT, finds or creates the contact, resolves the branding theme, reads the
-  invoice back to verify totals. Good error surfacing of Xero's own validation
-  messages. 289 lines, and its helpers are largely liftable.
-- `netlify/functions/xero-proxy.js` — forwards GETs to the Xero API.
-- `src/App.jsx` — a browser-side PKCE OAuth flow. Client ID at line 486, scopes
-  at 503 (`accounting.invoices`, `accounting.contacts`, `accounting.settings`,
-  `offline_access`), token stored in `sessionStorage` (line 535).
+- **`xeroContactId` is a field on every event** (`emptyBooking`, App.jsx 6512).
+  There is no contact picker to build and no matching problem to solve.
+- **`XeroInvoicesPanel`** (App.jsx 8575) renders an invoice list for a contact.
+- Aggregate amount-due across bookings (App.jsx ~7994–8001) and an overdue
+  chasing view (~11193) already exist. The display rules are worked out.
+- The query is settled: `Invoices?ContactIDs=…&order=Date DESC`.
+- `netlify/functions/xero-invoice.js` pushes invoices as DRAFT and resolves the
+  contact; helpers reusable.
 
-### Why none of it can be reused for the portal
+Mirroring this into the portal is largely a restyle of components that work.
 
-**The Xero access token lives in the browser, and `xero-proxy.js` will forward
-any path to Xero for anyone who presents one**, under
-`Access-Control-Allow-Origin: *`, with no check on who is calling.
-`xero-invoice.js` checks nothing either.
+### What does not carry over: the transport
 
-That is tolerable while only staff can sign in — the token is the credential and
-only staff obtain one. It is not tolerable the moment a wedding client has a
-login. A token that can read `Invoices` can equally read `Contacts`,
-`BankTransactions` and `Reports/ProfitAndLoss`. There is no version of this
-design where a couple's browser holds a key to the Hawthbush ledger.
+`/api/xero-api/*` is **not a function** — it is a bare Netlify redirect
+(`netlify.toml` line 74) straight to `api.xero.com/api.xro/2.0/:splat`. The
+browser supplies the token, held in `sessionStorage` with the refresh token
+alongside it (App.jsx 535, 566). **There is no server-side layer in that path to
+extend**, and the token it carries reads `Contacts`, `BankTransactions` and
+`Reports/ProfitAndLoss` as happily as `Invoices`.
 
-The interactive flow is also useless for a nightly sync: the token dies with the
-tab.
+That is fine while only staff can sign in — the token is the credential and only
+staff obtain one. It is not fine once a wedding client has a login.
 
-### What to build instead
+### What to build
 
-A **Xero Custom Connection** — machine-to-machine `client_credentials`, no user
-consent step, no refresh token to keep alive, secret in Netlify env vars, token
-never leaves the server. One connection serves one organisation, which is
-exactly the shape here. Available in the UK. Access tokens last 30 minutes and
-are re-minted from the credentials automatically.
+A **Xero Custom Connection**: machine-to-machine `client_credentials`, no consent
+step, no refresh token to keep alive, secret in Netlify env vars, token never
+leaving the server. One connection per organisation, which is the shape here;
+available in the UK; access tokens last 30 minutes and are re-minted
+automatically.
 
-- A new function returns **only** the invoices belonging to one event. It never
-  proxies an arbitrary path, and the portal never speaks to Xero directly.
-- **Cache into a `wp_invoices` table.** Sync nightly plus an on-demand refresh,
-  and show a last-synced time. The portal reads the table, never Xero. That
-  keeps the tab working when Xero is down, keeps well inside the rate limit, and
-  lets the 07:00 digest say "invoice 1043 went overdue".
-- **Match by Xero ContactID stored on the event.** `xero-invoice.js` already
-  does find-or-create-contact on push, so capture the `ContactID` there — the
-  link mostly falls out of existing code. Add a per-invoice show/hide toggle in
-  the admin view for the case where a couple's contact also carries an unrelated
-  cottage booking.
-- **Only AUTHORISED and PAID invoices are ever shown. Never DRAFT, never
+One function, given an event, resolves that event's `xeroContactId`
+**server-side** and returns only its invoices, slimmed to what the portal shows.
+
+**The single most important line in the implementation: the function must never
+accept a contact id from the caller.** If it does, a couple can pass another
+wedding's id and read their invoices. Take the event from the session, look the
+contact up behind the function, and the hole does not exist.
+
+Other rules:
+
+- **Only AUTHORISED and PAID invoices are ever returned. Never DRAFT, never
   VOIDED.** `xero-invoice.js` pushes drafts; showing a client a draft invoice is
   a bad afternoon.
-- Each invoice links out via the online invoice URL
-  (`GET /Invoices/{id}/OnlineInvoice`) so the client can view and, if online
-  payments are on, pay. Serve the PDF as a fallback. Confirm both against the
-  live org before building on them — the diagnostic-first pattern from the
-  SignWell work.
-- Overdue = AUTHORISED, `DueDate` in the past, `AmountDue > 0`.
+- Overdue = AUTHORISED, `DueDate` past, `AmountDue > 0`.
+- Link out via the online invoice URL (`GET /Invoices/{id}/OnlineInvoice`) so the
+  client can view and, if online payments are on, pay. PDF as fallback. Confirm
+  both against the live org first.
+- **A cache table is optional and deferred.** Live fetch behind the function is
+  fine for the number of active weddings here. Add `wp_invoices` plus a nightly
+  sync only when the 07:00 digest should spot an invoice going overdue by itself
+  (+2h).
 
-### Two things to check before starting
+### Check before starting
 
-1. **What a Custom Connection costs now.** Xero moved to usage-based tiers on
-   2 March 2026 — Starter is free with 5 connections and 1,000 API calls per day
-   per org, which is ample here, but the Custom Connections FAQ still describes
-   them as a premium option without naming a price. Confirm with Xero. If it is
-   chargeable and unwanted, the fallback is to keep the existing standard OAuth
-   app but move the token server-side, storing the refresh token in Supabase —
-   more work, and it brings back the refresh-token fragility a Custom Connection
-   avoids.
-2. **`xero-proxy.js` should be locked down regardless** — require an
-   authenticated admin session and allowlist the paths it will forward. Roughly
-   an hour, worth doing whether or not the portal happens.
-
----
+1. **What a Custom Connection costs now.** Xero moved to usage tiers on 2 March
+   2026 — Starter is free with 5 connections and 1,000 calls/day/org, ample here,
+   but the Custom Connections FAQ still calls them premium without naming a price.
+   Confirm with Xero. Fallback if unwanted: move the existing token server-side
+   with the refresh token in Supabase — more work, and it reintroduces the
+   refresh-token fragility a Custom Connection avoids.
+2. **The admin path is worth tightening too**, separately: `xero-proxy.js` and the
+   `/api/xero-api/*` redirect forward anything, to anyone holding a token, under a
+   wildcard CORS header. ~1h, and the portal's function is the pattern to copy.
 
 ## The eight tabs
 
@@ -158,7 +151,7 @@ table from a group" gets 90% of it); 3D walkthrough; live collaborative editing
 | 00 | Foundations: tables, functions, magic-link auth (two users/event), shell, invite on signature | 5 |
 | 01 | Guests + accommodation allocation + counts + import | 5 |
 | 02 | Checklist, venue-must-know form, contract tab, Pinterest field | 5.5 |
-| 03 | Money: Xero Custom Connection, cache table, sync, portal tab | 10 |
+| 03 | Money: Xero Custom Connection, server-side route, portal tab | 6 |
 | 04 | Suppliers — portal directory + selections | 3 |
 | 05 | Suppliers — public page (after consent emails) | 2 |
 | 06 | Timeline + tokenised share links + run sheet | 6 |
@@ -166,7 +159,7 @@ table from a group" gets 90% of it); 3D walkthrough; live collaborative editing
 | 08 | Layout — tables, seating, exports | 8 |
 | 09 | Admin views, 07:00 digest, lock-date warnings, purge job | 4 |
 
-**≈50.5 hours all in.** Phases 00–02 ≈15.5 hours is the smallest thing worth
+**≈46.5 hours all in.** Phases 00–02 ≈15.5 hours is the smallest thing worth
 logging into. Box office was ≈11 hours, for scale.
 
 Phase 03 is worth doing early even though it is the largest single phase,
