@@ -112,6 +112,23 @@
   to = "/whats-on.html"
   status = 200
 
+# ── Client portal ────────────────────────────────────────────────────────────
+# Its own Vite entry (portal.html), so the bundle a wedding client downloads
+# contains none of the staff app. Must stay above the /* catch-all, like the
+# box office pages above, or /portal serves the admin app instead.
+#
+# The magic link comes back to /portal with the token in the URL fragment, so
+# this has to answer that exact path.
+[[redirects]]
+  from = "/portal"
+  to = "/portal.html"
+  status = 200
+
+[[redirects]]
+  from = "/portal/*"
+  to = "/portal.html"
+  status = 200
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

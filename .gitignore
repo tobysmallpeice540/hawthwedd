@@ -7,6 +7,10 @@ dist/
 # Dependencies. 66MB, fully reproducible from package-lock.json.
 node_modules/
 
+# Vite writes a transient config bundle next to vite.config.js while building
+# a multi-entry project. It is regenerated every run and must never be tracked.
+vite.config.js.timestamp-*
+
 # Secrets. Nothing in this repo should ever carry a key: the Netlify functions
 # read theirs from the environment at deploy time, and SECRETS_SCAN_OMIT_KEYS
 # in netlify.toml exists precisely so that stays true.

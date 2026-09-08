@@ -17,6 +17,7 @@ Almost all UI lives in one file: `src/App.jsx` — ~19,000 lines, 1.2MB.
 | --- | --- |
 | `src/App.jsx` | Everything. Inline-styled React. |
 | `src/main.jsx` | Entry point, plus the global stylesheet (the whole mobile layer). |
+| `portal.html` + `src/portal/` | The client portal — a **second Vite entry**, its own bundle. A wedding client downloads none of the staff app; verified at build time by checking `dist/portal.html` never references `main-*.js`. |
 | `netlify/functions/` | 30 functions — Stripe, SignWell, Brevo, Xero, box office, iCal, backups. |
 | `supabase/` | Box office schema, the seven security-phase migrations, their `.mjs` test suites. |
 | `tests/` | Node suites (`.cjs`) run against a real Postgres and real pages. |
@@ -109,6 +110,10 @@ own header.
   sign in; it must not be extended to any client-facing feature. See
   `claude/scope-client-portal.md`.
 - The two array-write paths named above.
+- The portal's Supabase client needs `detectSessionInUrl: true` (a magic link
+  arrives in the URL fragment) and its **own `storageKey`** — the staff app and
+  the portal share an origin, so on the default key signing into one silently
+  signs you out of the other.
 - `role` is enforced **only in the browser**. No database function checks it;
   authorisation is execute grants plus the `app_data` RLS policy. Portal
   functions therefore do their own gating (`is_staff()`) rather than assuming a
