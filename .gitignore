@@ -1,0 +1,27 @@
+# Build output. Netlify runs `vite build` itself on every deploy, so a
+# committed dist/ is never the one that gets served — it is just a large,
+# permanently stale copy that makes every diff unreadable.
+dist/
+.netlify/
+
+# Dependencies. 66MB, fully reproducible from package-lock.json.
+node_modules/
+
+# Secrets. Nothing in this repo should ever carry a key: the Netlify functions
+# read theirs from the environment at deploy time, and SECRETS_SCAN_OMIT_KEYS
+# in netlify.toml exists precisely so that stays true.
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+*.log
