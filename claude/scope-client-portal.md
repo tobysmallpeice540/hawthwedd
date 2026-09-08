@@ -26,6 +26,8 @@ wedding, opened on contract signature, hung off this app.
 | Supplier directory | **Public** as well as portal — a recommended-suppliers page on the website. |
 | Lock date | **Warns, never refuses** — same call as double bookings. |
 | Pinterest | **A dashboard field**, not a tab. |
+| Guest numbers | **Numbers before names.** Seated day and evening extras as counts on day one; names later, in two separate lists. |
+| Schedule span | **Multiple days** — day before and day after — with the days and the venue limits set **per event type**. |
 
 ---
 
@@ -121,6 +123,49 @@ Other rules:
    `/api/xero-api/*` redirect forward anything, to anyone holding a token, under a
    wildcard CORS header. ~1h, and the portal's function is the pattern to copy.
 
+## A trap in the guest numbers: `eveGuests` means the total, not the extras
+
+From the live bookings: one wedding has 90 seated / 25 evening, another 106 / 225,
+another 100 / 0. The field is being used as the **total** evening headcount in
+some records and as something closer to extras in others — 25 against 90 seated
+must mean 25 arriving in the evening; 225 against 106 must mean everyone.
+
+Toby wants an evening **extras** list, which is the more useful thing to collect:
+a couple knows who is coming for the evening only, and does not reliably know a
+combined total.
+
+**Decision unless overridden: the portal stores extras; the app's `eveGuests`
+keeps meaning the total; the portal writes the sum when numbers are applied to the
+event.** Decide this once and convert on the way in — left alone, the portal and
+the diary will disagree about how many people are on site, which is the number the
+bar and the fire figure both depend on.
+
+---
+
+## The event-type rules config
+
+The app already has `EVENT_TYPES = ["Wedding (Peak)","Wedding (Off Peak)","Party",
+"Wake","Other"]` (App.jsx 8124) and `eventTypeLabel()` (636), which strips the
+peak suffix.
+
+**Hang the rules off the label, not the variant.** Peak is a pricing distinction,
+not an operational one — a peak wedding and an off-peak wedding keep the same
+curfew. So four rule sets: Wedding, Party, Wake, Other.
+
+Each carries:
+
+- **Which days the schedule offers** — day before, event day, day after.
+- **Per day: access/arrival time, music end, bar close, carriages, vacate time.**
+
+These become the locked rows in the timeline. A party gets different limits from a
+wedding weekend with nothing hardcoded. Per-event override is allowed but flagged —
+warn, never refuse, same as double bookings.
+
+Worth noting this config is useful beyond the portal: it is the house rules written
+down once, and the run sheet and staff rota could read it later.
+
+---
+
 ## The eight tabs
 
 | Tab | Build | Hours |
@@ -149,17 +194,17 @@ table from a group" gets 90% of it); 3D walkthrough; live collaborative editing
 | | Phase | Hours |
 | --- | --- | --- |
 | 00 | Foundations: tables, functions, magic-link auth (two users/event), shell, invite on signature | 5 |
-| 01 | Guests + accommodation allocation + counts + import | 5 |
+| 01 | Guests: numbers panel, two name lists, import, reconciliation, accommodation allocation | 6 |
 | 02 | Checklist, venue-must-know form, contract tab, Pinterest field | 5.5 |
 | 03 | Money: Xero Custom Connection, server-side route, portal tab | 6 |
 | 04 | Suppliers — portal directory + selections | 3 |
 | 05 | Suppliers — public page (after consent emails) | 2 |
-| 06 | Timeline + tokenised share links + run sheet | 6 |
+| 06 | Timeline: multi-day, event-type rules config + admin editor, share links, run sheet | 8 |
 | 07 | Layout — the one room template | 2 |
 | 08 | Layout — tables, seating, exports | 8 |
 | 09 | Admin views, 07:00 digest, lock-date warnings, purge job | 4 |
 
-**≈46.5 hours all in.** Phases 00–02 ≈15.5 hours is the smallest thing worth
+**≈49.5 hours all in.** Phases 00–02 ≈16.5 hours is the smallest thing worth
 logging into. Box office was ≈11 hours, for scale.
 
 Phase 03 is worth doing early even though it is the largest single phase,
@@ -176,9 +221,9 @@ Separately, and not part of the portal: **harden `xero-proxy.js`** (~1h).
 1. **Does the payment picture need anything Xero does not hold?** The assumption
    is that every figure a client should see is on an invoice. If deposits taken
    by Stripe are not invoiced in Xero, the tab will look incomplete.
-2. **Who chases supplier consent for the public page?** One batch email before
+3. **Who chases supplier consent for the public page?** One batch email before
    phase 05.
-3. **Retention:** default is portal access for a month after the wedding, guest
+4. **Retention:** default is portal access for a month after the wedding, guest
    rows purged at three, timeline and layout kept indefinitely (useful, almost
    no personal data). Confirm or change.
 
