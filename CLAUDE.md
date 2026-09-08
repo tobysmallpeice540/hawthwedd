@@ -54,6 +54,19 @@ own header.
   whitespace.
 - Pin existing behaviour with assertions that pass **before and after** the
   change. That is the point of them.
+- **Supabase grants EXECUTE on every new function in `public` to `anon` AND
+  `authenticated`** via ALTER DEFAULT PRIVILEGES. The default is open, not
+  closed, and revoking from `PUBLIC` is not enough — `authenticated` holds its
+  own explicit grant and must be revoked by name. Every new function: revoke
+  from public, anon and authenticated, then grant back only where wanted. This
+  was found the hard way in the portal phase 00 migration, where it left an
+  internal logging helper callable by any signed-in client.
+- **No client-facing function takes an id that selects whose data it returns.**
+  The portal resolves the event from the signed-in user (`wp_my_event_id()`).
+  If a caller can name the record, they can name somebody else's.
+- **Payloads to non-staff are built as an allowlist, field by field** — never
+  the whole record minus a few fields. A column added later must not leak by
+  default. See `wp_my_event()`.
 
 ### React
 
@@ -90,10 +103,16 @@ own header.
 - `netlify/functions/xero-proxy.js` forwards **any** GET path to Xero with a
   token supplied by the caller, under `Access-Control-Allow-Origin: *`, with no
   authorisation check. `xero-invoice.js` likewise checks nothing about who is
-  calling. The Xero access token lives in the browser's `sessionStorage`. This
-  is workable while only staff can sign in; it must not be extended to any
-  client-facing feature. See `claude/scope-client-portal.md`.
+  calling, and `/api/xero-api/*` in `netlify.toml` is a bare redirect straight to
+  `api.xero.com` — there is no server-side layer there at all. The Xero access
+  token lives in the browser's `sessionStorage`. Workable while only staff can
+  sign in; it must not be extended to any client-facing feature. See
+  `claude/scope-client-portal.md`.
 - The two array-write paths named above.
+- `role` is enforced **only in the browser**. No database function checks it;
+  authorisation is execute grants plus the `app_data` RLS policy. Portal
+  functions therefore do their own gating (`is_staff()`) rather than assuming a
+  caller was filtered upstream.
 
 ## Where the rest of the context lives
 
