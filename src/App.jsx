@@ -1914,7 +1914,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-09-08e";
+const APP_BUILD = "2026-09-08f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2897,7 +2897,15 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
   };
   const updSched = (i, k, v) => setForm(f=>{
     const s = f.schedule.map((row,idx)=> idx===i ? { ...row, [k]:v } : row);
-    return { ...f, schedule: s };
+    // Ticking a payment as paid on a booking that is still pending confirms
+    // it, the same rule the Stripe webhook follows. Taking money and leaving
+    // the booking pending is never what anybody means, and a booking that
+    // silently stays pending shows as unconfirmed in the diary while the
+    // deposit sits in the bank — which is exactly how W15032 went unnoticed.
+    // Only ever promotes FROM pending: a completed booking taking a late
+    // payment must not be dragged backwards.
+    const nowPaid = k === "paid" && v && f.status === "pending";
+    return { ...f, schedule: s, status: nowPaid ? "confirmed" : f.status };
   });
   const addExtra = () => setForm(f=>({ ...f, extras: f.extras.concat([{ desc:"", amount:0 }]) }));
   const updExtra = (i,k,v)=> setForm(f=>({ ...f, extras: f.extras.map((e,idx)=> idx===i ? { ...e, [k]:v } : e) }));
@@ -7071,6 +7079,21 @@ function signedUnfiledContracts(bookings) {
   });
 }
 
+// Lettings bookings still marked pending that have taken money.
+//
+// A pending booking is one where the guest started a checkout and never
+// finished — it should hold no payments. If one does, the two have come apart:
+// the money arrived by a route that didn't promote the status, and the booking
+// reads as unconfirmed in the diary while the deposit sits in the bank. Both
+// routes that could do that are fixed, but the state is worth watching for,
+// because it is silent and it is about money.
+function pendingButPaid(accomBookings) {
+  return (accomBookings || []).filter(function(b) {
+    if (!b || b.status !== "pending") return false;
+    return (b.schedule || []).some(function(s) { return s && s.paid; });
+  });
+}
+
 // Events that share one or more days with the given date range.
 // Used to warn (never block) when double-booking the venue.
 function overlappingEvents(bookings, date, endDate, ignoreId) {
@@ -7632,6 +7655,7 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
   const orphans = findOrphanedEventLinks(bookings, accomBookings);
   const chase = outstandingContracts(bookings, today);
   const unfiled = signedUnfiledContracts(bookings);
+  const paidPending = pendingButPaid(accomBookings);
   // Only clashes that haven't happened yet — a past one can't be fixed and
   // would sit on the front page forever.
   const accomClashes = findAllAccomClashes(accomBookings)
@@ -7747,6 +7771,38 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
             The same property is let to two parties on overlapping nights. An Airbnb block imported overnight
             can land on top of an existing booking, and an override made here does the same — either way it
             needs sorting out before both parties arrive.
+          </div>
+        </div>
+      )}
+
+      {/* Money taken but the booking still reads pending — see pendingButPaid */}
+      {paidPending.length > 0 && !search && (
+        <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#dc2626", marginBottom:5 }}>
+            {paidPending.length} lettings booking{paidPending.length!==1?"s":""} pending but already paid
+          </div>
+          <div style={{ fontSize:12, color:"#dc2626", lineHeight:1.8 }}>
+            {paidPending.map(function(b) {
+              const paid = (b.schedule||[]).filter(function(s){ return s && s.paid; });
+              const total = paid.reduce(function(a,s){ return a + (Number(s.paidAmount||s.amount)||0); }, 0);
+              return (
+                <div key={String(b.id)}>
+                  <strong>{b.guestName || "(no name)"}</strong>
+                  {" (" + b.id + ")"}
+                  {total > 0 ? " \u2014 " + fmtMoney(total) + " received" : " \u2014 payment recorded"}
+                  {onOpenAccom && (
+                    <button onClick={function(){ onOpenAccom(b.id); }}
+                      style={{ marginLeft:8, background:"none", border:"1px solid #fecaca", color:"#dc2626", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                      Open
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:"#b91c1c", marginTop:6, lineHeight:1.6 }}>
+            Money has been taken but the booking still reads as pending, so it shows as unconfirmed in the
+            diary. Open it and set the status to Confirmed.
           </div>
         </div>
       )}

@@ -26,7 +26,7 @@ const NAMES = ["findAccomClashes", "findAllAccomClashes", "outstandingContracts"
                "daysSince", "overlappingEvents", "eventEndDate", "isValidEventDate",
                "nextBookingId", "findAllEventClashes", "matchContractStay",
                "signedUnfiledContracts", "lastContactFrom", "countByEventType",
-               "eventTypeColour", "parseMoney"];
+               "eventTypeColour", "parseMoney", "pendingButPaid"];
 // Constants the lifted functions close over, taken from the same source rather
 // than restated here — a colour or a type list retyped into the test would let
 // the two drift apart silently.
@@ -184,6 +184,34 @@ console.log("\n— outstandingContracts: chasing unsigned booking forms —");
   ], today);
   eq("longest outstanding is listed first", many[0].booking.id, 2);
   eq("and the day count is reported", many[0].days, 90);
+}
+
+console.log("\n— pendingButPaid: money taken on a booking that still reads pending —");
+{
+  const bk = (id, status, schedule) => ({ id, guestName:"G", status, schedule });
+  eq("a pending booking with a paid deposit is flagged",
+     ctx.pendingButPaid([bk("W1","pending",[{label:"Deposit",paid:true},{label:"Balance",paid:false}])]).length, 1);
+  eq("a pending booking with nothing paid is left alone — that is a real abandoned checkout",
+     ctx.pendingButPaid([bk("W2","pending",[{label:"Deposit",paid:false},{label:"Balance",paid:false}])]).length, 0);
+  eq("a confirmed booking is not flagged",
+     ctx.pendingButPaid([bk("W3","confirmed",[{label:"Deposit",paid:true}])]).length, 0);
+  eq("a cancelled booking that once took money is not flagged",
+     ctx.pendingButPaid([bk("W4","cancelled",[{label:"Deposit",paid:true}])]).length, 0);
+  eq("a completed booking is not flagged",
+     ctx.pendingButPaid([bk("W5","completed",[{label:"Deposit",paid:true}])]).length, 0);
+  eq("a pending booking with no schedule at all is fine",
+     ctx.pendingButPaid([bk("W6","pending",undefined)]).length, 0);
+  eq("an empty diary is quiet", ctx.pendingButPaid([]).length, 0);
+
+  // The shape of the real record, as read out of production.
+  const W15032 = { id:"W15032", status:"pending", guestName:"Emily Light",
+    schedule:[{ label:"Deposit", paid:true, paidAmount:1170 }, { label:"Balance", paid:false }] };
+  eq("the booking that prompted this is caught", ctx.pendingButPaid([W15032]).length, 1);
+  // ...and the three that were genuinely pending are not.
+  const genuinelyPending = ["a197","a207","a209"].map(id =>
+    bk(id, "pending", [{label:"Deposit",paid:false},{label:"Balance",paid:false}]));
+  eq("the three genuinely-unpaid pending bookings stay quiet",
+     ctx.pendingButPaid(genuinelyPending).length, 0);
 }
 
 console.log("\n— lastContactFrom: what counts as being in touch —");

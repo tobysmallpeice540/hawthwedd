@@ -433,6 +433,24 @@ exports.handler = async function(event) {
       booking.schedule = schedule2;
     }
 
+    // Money received on a pending booking confirms it, however it arrived.
+    //
+    // This used to happen only in the accom_deposit branch above — the Stripe
+    // session created by the public checkout page. But a deposit is very often
+    // paid against a different session: the guest abandons the original
+    // checkout, somebody sends a deposit request from the app, and that
+    // payment arrives here as a scheduled payment and takes the else branch.
+    // It marked the schedule entry paid, sent the confirmation email, and left
+    // the booking pending for ever. Booking W15032 sat like that with £1,170
+    // banked and its confirmation email sent.
+    //
+    // Deliberately only promotes FROM pending: a completed or cancelled
+    // booking taking a late payment must not be dragged back to confirmed.
+    if (booking.status === "pending" && (booking.schedule || []).some(function(s) { return s && s.paid; })) {
+      console.log("Promoting booking " + booking.id + " from pending to confirmed — payment received");
+      booking.status = "confirmed";
+    }
+
     if (!alreadyPaid) {
       booking = await sendPaymentEmails(booking, amountPence, templates, properties, {
         sendBookingConfirmed: metaType === "accom_deposit",
