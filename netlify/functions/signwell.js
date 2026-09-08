@@ -240,6 +240,49 @@ exports.handler = async function(event) {
         return ok({ results: results });
       }
 
+      // The signed PDF, so a copy lives with the event rather than only in
+      // SignWell. The exact endpoint is not something to guess at, so several
+      // are tried and the one that worked is reported back with the file.
+      case "pdf": {
+        if (!body.documentId) return bad("No document id.");
+        var base = "/documents/" + body.documentId;
+        var tries = [
+          base + "/completed_pdf/?url_only=true",
+          base + "/completed_pdf?url_only=true",
+          base + "/completed_pdf/",
+          base + "/completed_pdf"
+        ];
+        var notes = [];
+        for (var i = 0; i < tries.length; i++) {
+          var r = await signwell(tries[i]);
+          if (!r.ok) { notes.push(tries[i] + " → " + r.status); continue; }
+
+          // Either a JSON envelope carrying a link, or the PDF itself.
+          var link = r.body && (r.body.file_url || r.body.url || r.body.pdf_url);
+          var b64 = null, via = tries[i];
+          if (link) {
+            var got = await fetch(link);
+            if (!got.ok) { notes.push(tries[i] + " → link " + got.status); continue; }
+            b64 = Buffer.from(await got.arrayBuffer()).toString("base64");
+            via += " → " + link.split("?")[0];
+          } else if (r.text && r.text.slice(0, 4) === "%PDF") {
+            b64 = Buffer.from(r.text, "binary").toString("base64");
+          } else {
+            notes.push(tries[i] + " → 200 but no pdf or link");
+            continue;
+          }
+
+          // Netlify caps a function response at 6MB; base64 is a third bigger
+          // than the file. Say so plainly rather than returning a truncated PDF.
+          if (b64.length > 5200000) {
+            return bad("The signed PDF is too large to pass through (" +
+              Math.round(b64.length / 1400000) + "MB). Download it from SignWell instead.", 502);
+          }
+          return ok({ pdf: b64, via: via });
+        }
+        return bad("Could not fetch the signed PDF. Tried: " + notes.join("; "), 502);
+      }
+
       case "documents": {
         var ds = await signwell("/documents/");
         if (!ds.ok) return bad("Could not list documents: " + ds.status + " " + ds.text, 502);

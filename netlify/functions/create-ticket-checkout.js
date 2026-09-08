@@ -83,6 +83,7 @@ async function sbRpc(fn, args) {
 
 function money(pence) { return (Math.round(Number(pence) || 0) / 100).toFixed(2); }
 
+
 function fmtDateLondon(ts) {
   if (!ts) return "";
   var d = new Date(ts);
@@ -113,9 +114,22 @@ exports.handler = async function(event) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please check your name and email address." }) };
   }
 
-  // Whatever the browser sent, only the ids and counts are carried forward.
+  // Whatever the browser sent, only the ids, the counts and the answer to the
+  // checkout question are carried forward. The note goes in with the line
+  // rather than being written afterwards, so it lands in the same transaction
+  // as the order; box_reserve_order() reads it only at the point of inserting
+  // the line, and it takes no part in any decision the function makes.
+  //
+  // Capped at 500 characters here as well as in the browser, because the
+  // browser's maxlength is a courtesy to the buyer, not a control.
   var cleanLines = lines
-    .map(function(l) { return { ticket_type_id: String(l.ticket_type_id || ""), qty: Math.max(0, parseInt(l.qty, 10) || 0) }; })
+    .map(function(l) {
+      return {
+        ticket_type_id: String(l.ticket_type_id || ""),
+        qty: Math.max(0, parseInt(l.qty, 10) || 0),
+        note: String(l.note == null ? "" : l.note).trim().slice(0, 500)
+      };
+    })
     .filter(function(l) { return l.ticket_type_id && l.qty > 0; });
 
   if (!cleanLines.length) {

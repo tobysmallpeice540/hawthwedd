@@ -44,7 +44,10 @@ const EVENT_COLS = [
 ];
 const TYPE_COLS = [
   "event_id","name","description","quantity","price_pence",
-  "min_per_order","max_per_order","sort_order","hidden"
+  "min_per_order","max_per_order","sort_order","hidden",
+  // The optional checkout question: whether to ask it, the wording, and
+  // whether an answer is compulsory.
+  "notes_enabled","notes_label","notes_required"
 ];
 const CODE_COLS = ["event_id","code","kind","value"];
 
@@ -252,7 +255,7 @@ exports.handler = async function(event) {
         // Filtered through the join rather than by listing every order id in
         // the query string — a long-running event would otherwise build a URL
         // longer than anything in the chain is willing to accept.
-        var lines = await sbRest("box_order_lines?select=order_id,ticket_type_id,qty,unit_price_pence," +
+        var lines = await sbRest("box_order_lines?select=order_id,ticket_type_id,qty,unit_price_pence,customer_note," +
           "box_orders!inner(event_id)&box_orders.event_id=eq." + ev.id);
 
         var sold = {};
@@ -365,7 +368,7 @@ exports.handler = async function(event) {
         var ord = oRows && oRows[0];
         if (!ord) return bad("Order not found", 404);
         var oLines = await sbRest("box_order_lines?order_id=eq." + ord.id +
-          "&select=qty,unit_price_pence,ticket_type_id,box_ticket_types(name)");
+          "&select=qty,unit_price_pence,ticket_type_id,customer_note,box_ticket_types(name)");
         var checkins = await sbRest("box_checkins?order_id=eq." + ord.id + "&select=*&order=checked_at.desc");
         return ok({ order: ord, lines: oLines || [], checkins: checkins || [] });
       }
@@ -509,7 +512,7 @@ exports.handler = async function(event) {
         var dOrders = await sbRest("box_orders?event_id=eq." + body.eventId +
           "&status=in.(paid,deposit_paid)&select=id,order_ref,first_name,last_name,email,phone,qr_token," +
           "status,total_qty,admitted,tickets_issued_at,balance_pence,source,notes&order=last_name.asc");
-        var dLines = await sbRest("box_order_lines?select=order_id,qty,ticket_type_id,box_ticket_types(name)," +
+        var dLines = await sbRest("box_order_lines?select=order_id,qty,ticket_type_id,customer_note,box_ticket_types(name)," +
           "box_orders!inner(event_id)&box_orders.event_id=eq." + body.eventId);
         var lastScan = await sbRest("box_checkins?select=order_id,checked_at,count," +
           "box_orders!inner(event_id)&box_orders.event_id=eq." + body.eventId + "&order=checked_at.desc");
