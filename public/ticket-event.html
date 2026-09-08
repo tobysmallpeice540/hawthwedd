@@ -110,6 +110,17 @@
       font-family: 'Jost', sans-serif; font-size: 14px; padding: 10px 13px; outline: none; transition: border-color .15s;
     }
     .form-field input:focus { border-color: #b8a88a; box-shadow: 0 0 0 3px #f0e8d840; }
+    .form-field textarea {
+      background: #fafaf8; border: 1.5px solid #e0d9ce; border-radius: 8px; color: #2d2a25;
+      font-family: 'Jost', sans-serif; font-size: 14px; padding: 10px 13px; outline: none;
+      transition: border-color .15s; resize: vertical; min-height: 66px;
+    }
+    .form-field textarea:focus { border-color: #b8a88a; box-shadow: 0 0 0 3px #f0e8d840; }
+    /* The question is the label, so it is a sentence rather than a shouted
+       field name — it needs to read as something asked, not as a form. */
+    .note-ask label { text-transform: none; letter-spacing: 0; font-size: 13.5px; font-weight: 500; color: #2d2a25; line-height: 1.45; }
+    .note-ask .note-for { font-size: 11px; font-weight: 600; color: #7a7060; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 2px; }
+    .note-ask .note-opt { color: #9b9182; font-weight: 400; text-transform: none; letter-spacing: 0; }
 
     .btn-primary { display: block; width: 100%; padding: 14px 24px; background: #2d2a25; color: #fff; border: none; border-radius: 10px; font-family: 'Jost', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; transition: background .15s; letter-spacing: .2px; }
     .btn-primary:hover:not(:disabled) { background: #4a4540; }
@@ -198,6 +209,7 @@
   var qty = {};                 // ticket_type_id -> n
   var step = 0;                 // 0 = event page, 1 = tickets, 2 = details, 3 = payment
   var details = { firstName: "", lastName: "", email: "", email2: "", phone: "" };
+  var notes = {};               // ticket_type_id -> what they typed in the notes box
   var discountCode = "";
   var discountMsg = "";
   var discountShown = false;     // whether the "Got a discount code?" field is open
@@ -511,6 +523,38 @@
         : '<div style="text-align:center;margin-top:12px"><button class="btn-link" id="back-event">← Back to the event</button></div>');
   }
 
+  // ── The optional question ──────────────────────────────────────────────────
+  // Switched on per ticket type, so it is only ever asked about tickets that
+  // are actually in the basket. Asked on the details step rather than beside
+  // the steppers: at that point the party is settled, and a text box between
+  // the +/− buttons gets in the way of the one thing that step is for.
+  function askingTypes() {
+    return (ev && ev.ticket_types || []).filter(function (t) {
+      return t.notes_enabled && qty[t.id];
+    });
+  }
+
+  function notesHtml() {
+    var asks = askingTypes();
+    if (!asks.length) return "";
+
+    var only = (ev.ticket_types || []).filter(function (t) { return qty[t.id]; }).length === 1;
+
+    return '<hr class="divider" style="margin:18px 0 16px">' +
+      asks.map(function (t) {
+        var label = String(t.notes_label || "").trim() ||
+          "Anything we should know about this booking?";
+        return '<div class="form-field note-ask" style="margin-bottom:14px">' +
+          // Which tickets the question is about — dropped when there is only
+          // one kind in the basket, where it would just repeat the summary.
+          (only ? "" : '<div class="note-for">' + esc(qty[t.id] + " × " + t.name) + "</div>") +
+          '<label for="note-' + esc(t.id) + '">' + esc(label) +
+            (t.notes_required ? "" : ' <span class="note-opt">(optional)</span>') + "</label>" +
+          '<textarea id="note-' + esc(t.id) + '" maxlength="500" rows="2">' + esc(notes[t.id] || "") + "</textarea>" +
+        "</div>";
+      }).join("");
+  }
+
   function stepDetails() {
     return "<h3>Your details</h3>" +
       '<p class="muted" style="margin-bottom:16px">We\'ll send your tickets to this address, so do check it carefully.</p>' +
@@ -521,6 +565,7 @@
         '<div class="form-field"><label>Repeat email</label><input id="d-email2" type="email" value="' + esc(details.email2) + '" autocomplete="off"></div>' +
         '<div class="form-field full"><label>Phone</label><input id="d-phone" type="tel" value="' + esc(details.phone) + '" autocomplete="tel"></div>' +
       "</div>" +
+      notesHtml() +
       '<label class="terms-accept' + (termsOk ? " on" : "") + '" id="terms-box">' +
         '<input type="checkbox" id="d-terms"' + (termsOk ? " checked" : "") + ">" +
         // Linked only once ticket terms have actually been written. Until then
@@ -602,6 +647,14 @@
         errorMsg = "The two email addresses don't match."; return render();
       }
       if (!termsOk) { errorMsg = "Please accept the ticket terms and conditions."; return render(); }
+      var unanswered = askingTypes().filter(function (t) {
+        return t.notes_required && !String(notes[t.id] || "").trim();
+      });
+      if (unanswered.length) {
+        errorMsg = String(unanswered[0].notes_label || "").trim() ||
+          "Please answer the question above.";
+        return render();
+      }
       errorMsg = ""; step = 3; render(); window.scrollTo(0, 0);
     });
 
@@ -637,6 +690,12 @@
       details.email2    = v("d-email2").trim();
       details.phone     = v("d-phone").trim();
     }
+    // Kept whether or not the step is left forwards, so going back to change
+    // a quantity doesn't lose what somebody has already typed.
+    askingTypes().forEach(function (t) {
+      var el = document.getElementById("note-" + t.id);
+      if (el) notes[t.id] = el.value.slice(0, 500);
+    });
   }
 
   function startCheckout() {
@@ -644,7 +703,13 @@
     busy = true; errorMsg = ""; render();
 
     var lines = (ev.ticket_types || []).filter(function (t) { return qty[t.id]; })
-      .map(function (t) { return { ticket_type_id: t.id, qty: qty[t.id] }; });
+      .map(function (t) {
+        return {
+          ticket_type_id: t.id,
+          qty: qty[t.id],
+          note: t.notes_enabled ? String(notes[t.id] || "").trim().slice(0, 500) : ""
+        };
+      });
 
     fetch(CHECKOUT_FN, {
       method: "POST",
@@ -768,6 +833,10 @@
       })
       .catch(function () {});
 
+    // notes_enabled / notes_label / notes_required arrive on each ticket type
+    // from box_public_event, alongside price and remaining. A page served
+    // before the migration has run simply gets undefined for all three and
+    // asks nothing, which is how it behaved before this existed.
     rpc("box_public_event", { p_slug: slug, p_code: accessCode })
       .then(function (data) {
         if (!data || !data.ok) {
