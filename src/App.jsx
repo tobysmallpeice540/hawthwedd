@@ -1705,6 +1705,37 @@ function findAccomClashes(bookings, rec) {
   return out;
 }
 
+// Every double booking currently sitting in the lettings diary.
+//
+// The per-save checks stop most clashes being created, but not all of them can
+// be prevented: an Airbnb block arrives through the iCal sync for a night
+// Airbnb has already sold, and both the lettings screen and the contract panel
+// allow a deliberate override. So as well as blocking at the door, the diary is
+// swept and anything overlapping is put on the front page — otherwise an
+// override made in a hurry, or a clash imported overnight, is only discovered
+// when two sets of guests arrive.
+//
+// Returns one entry per colliding pair, deduplicated (A-vs-B, not also B-vs-A).
+function findAllAccomClashes(bookings) {
+  const list = (bookings || []).filter(function(b) { return b && b.status !== "cancelled"; });
+  const seen = {};
+  const out = [];
+  list.forEach(function(b) {
+    findAccomClashes(list, b).forEach(function(c) {
+      if (!c.other || String(c.other.id) === String(b.id)) return;
+      // Symmetric key: the same collision is found once from each side, and
+      // the two sides report the stays the other way round.
+      const pair = [String(b.id), String(c.other.id)].sort().join("|")
+                 + "|" + (c.stay.propertyId || "")
+                 + "|" + [c.stay.checkIn || "", c.otherStay.checkIn || ""].sort().join("~");
+      if (seen[pair]) return;
+      seen[pair] = true;
+      out.push({ a: b, b: c.other, stay: c.stay, otherStay: c.otherStay });
+    });
+  });
+  return out;
+}
+
 // Arrival and departure times for a stay.
 //
 // Order of precedence: a time typed onto the stay itself, then the property's
@@ -1871,7 +1902,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-09-08a";
+const APP_BUILD = "2026-09-08b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4662,7 +4693,12 @@ function BackupPanel() {
   const [msg, setMsg]           = useState(null);
   const [pending, setPending]   = useState(null);   // full restore awaiting confirmation
   const [diff, setDiff]         = useState(null);   // selective merge preview
+  // Thirty snapshots is a long scroll for a list where the useful one is
+  // almost always the newest. Show the last four and keep the rest a press
+  // away.
+  const [showAll, setShowAll]   = useState(false);
   const fileRef = useRef(null);
+  const SNAPS_SHOWN = 4;
 
   async function loadIndex() {
     try { setIndex((await sbGet(BACKUP_INDEX_KEY)) || []); }
@@ -4942,7 +4978,7 @@ function BackupPanel() {
           <div style={{ padding:"16px", fontSize:13, color:T.textLight }}>
             No snapshots yet. Press “Take a snapshot now” to create the first one.
           </div>
-        ) : index.map(function(s, i) {
+        ) : (showAll ? index : index.slice(0, SNAPS_SHOWN)).map(function(s, i) {
           return (
             <div key={s.key} style={{ padding:"10px 16px", borderTop: i ? `1px solid ${T.border}` : "none", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
               <span style={{ fontSize:13, fontWeight:600, color:T.text, width:110 }}>{s.date}</span>
@@ -4965,6 +5001,16 @@ function BackupPanel() {
             </div>
           );
         })}
+        {index && index.length > SNAPS_SHOWN && (
+          <div style={{ padding:"9px 16px", borderTop:`1px solid ${T.border}`, textAlign:"center" }}>
+            <button onClick={function(){ setShowAll(!showAll); }}
+              style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer", padding:"2px 6px" }}>
+              {showAll
+                ? "Show fewer"
+                : "More — " + (index.length - SNAPS_SHOWN) + " older snapshot" + ((index.length - SNAPS_SHOWN) === 1 ? "" : "s")}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5349,6 +5395,44 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     catch (e) { console.error(e); setFlash("Save failed"); }
   };
 
+  // Change ONE lettings booking without rewriting the array from this tab's
+  // copy of it.
+  //
+  // The whole lettings diary lives under a single Supabase key, so every save
+  // rewrites all of it. saveBookings(next) built `next` from React state — a
+  // snapshot from when this tab loaded — so saving a booking here would
+  // silently delete any booking created since by the online checkout, the
+  // Airbnb sync, a signed contract, or somebody else's tab. This is exactly
+  // the failure that cost a batch of events and their Xero ids on the other
+  // side of the app, and mutateBookings was written to stop; the lettings
+  // screen never got the same treatment.
+  //
+  // Re-read, apply, write back. If the read fails we abort rather than write
+  // from an unknown base.
+  const mutateAccom = async (mutator) => {
+    let server;
+    try { server = await sbGet(ACCOM_STORAGE); }
+    catch (e) {
+      console.error("Aborting lettings save — could not read current bookings:", e);
+      throw new Error("Could not reach the database, so nothing was saved. Please try again.");
+    }
+    const base = Array.isArray(server) ? server.map(normalizeAccom) : [];
+    const next = mutator(base);
+    if (!Array.isArray(next)) throw new Error("Internal error: lettings mutation produced no array");
+    // Same tripwire as the events array: one edit should never drop more than
+    // the single record a delete targets.
+    if (next.length < base.length - 1) {
+      console.error("Refusing to save: would drop " + (base.length - next.length) + " lettings bookings");
+      throw new Error(
+        "Save cancelled — this would have deleted " + (base.length - next.length) + " bookings. " +
+        "Nothing was changed. Please reload the page and try again."
+      );
+    }
+    await sbSet(ACCOM_STORAGE, next);
+    setBookings(next);
+    return next;
+  };
+
   const saveProperties = async () => {
     try { await sbSet(PROPERTIES_STORAGE, properties); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
     catch (e) { console.error(e); setFlash("Save failed"); }
@@ -5450,17 +5534,46 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     // before the write, listing exactly what it collides with. Overriding is
     // still possible, because otherwise an existing double booking could
     // never be edited or corrected, but it takes a deliberate second press.
-    if (!force) {
-      var clashes = findAccomClashes(bookings, rec);
-      if (clashes.length) {
-        setClashWarning({ rec: rec, stayOpen: !!stayOpen, clashes: clashes });
+    //
+    // The check runs INSIDE the write, against the array the server holds.
+    // Checking against this tab's copy meant a booking taken online, imported
+    // from Airbnb, or created by a signed contract in the last few minutes was
+    // invisible to it, and the property got double booked by a screen that had
+    // truthfully reported no clash when it loaded. Throwing from the mutator
+    // aborts before anything is written.
+    var isNew = !editId;
+    try {
+      await mutateAccom(function(base) {
+        if (!force) {
+          var clashes = findAccomClashes(base, rec);
+          if (clashes.length) { var ce = new Error("CLASH"); ce.clashes = clashes; throw ce; }
+        }
+        // A new booking's reference was drawn from this tab's array, so
+        // re-draw it if the server has since handed that one out.
+        if (isNew && base.some(function(b){ return String(b.id) === String(rec.id); })) {
+          rec = Object.assign({}, rec, { id: newBookingRef(base, "A") });
+        }
+        if (!editId) return base.concat([rec]);
+        // An edit whose record has vanished (deleted on another device) is put
+        // back rather than silently discarded — losing someone's typing to a
+        // race is worse than resurrecting a row they can delete again.
+        var seen = false;
+        var next = base.map(function(b) {
+          if (String(b.id) !== String(editId)) return b;
+          seen = true; return rec;
+        });
+        return seen ? next : next.concat([rec]);
+      });
+      setFlash("Saved"); setTimeout(function(){ setFlash(""); }, 1500);
+    } catch (e) {
+      if (e.clashes) {
+        setClashWarning({ rec: rec, stayOpen: !!stayOpen, clashes: e.clashes });
         return;
       }
+      console.error(e);
+      alert(e.message || "Could not save the booking.");
+      return;
     }
-
-    var isNew = !editId;
-    var next = editId ? bookings.map(function(b){ return b.id===editId ? rec : b; }) : bookings.concat([rec]);
-    await saveBookings(next);
 
     if (stayOpen) {
       // Stay on the booking, but keep editing the record that was actually
@@ -5504,8 +5617,18 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     setAskSendConfirm(null);
   };
   const handleDelete = async () => {
-    const next = bookings.filter(b=> b.id!==editId);
-    await saveBookings(next);
+    // Against the server's array, not this tab's — otherwise deleting one
+    // booking also quietly removes every booking made elsewhere since the
+    // page loaded.
+    try {
+      await mutateAccom(function(base) {
+        return base.filter(function(b){ return String(b.id) !== String(editId); });
+      });
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "Could not delete the booking.");
+      return;
+    }
     setTab("calendar"); setForm(null); setEditId(null); setAskDeleteBooking(false);
   };
 
@@ -5929,8 +6052,13 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   // Insert or update one event, leaving every other record exactly as the
   // server has it.
-  const saveBookingRecord = useCallback((id, data) => {
+  // guard: an optional check run against the array the server actually holds,
+  // just before the write. Throwing from it aborts the save without writing
+  // anything — which is how the clash check gets to see events created on
+  // another device since this tab loaded, rather than only this tab's copy.
+  const saveBookingRecord = useCallback((id, data, guard) => {
     return mutateBookings(function(base) {
+      if (guard) guard(base);
       let found = false;
       let next = base.map(function(b) {
         if (String(b.id) === String(id)) { found = true; return Object.assign({}, data, { id: b.id }); }
@@ -5939,6 +6067,39 @@ export default function App({ role = "admin", onSignOut } = {}) {
       if (!found) next = next.concat([Object.assign({}, data, { id: id })]);
       return next.sort(function(a, b) { return (a.date || "") > (b.date || "") ? 1 : -1; });
     });
+  }, [mutateBookings]);
+
+  // Create a NEW event, choosing its id from the array the server actually
+  // holds rather than from this tab's copy.
+  //
+  // Callers used to do `nextBookingId(bookings)` against React state — a
+  // snapshot taken when the tab loaded. If an event had been created anywhere
+  // else since (another tab, a phone, the enquiries screen), that id was
+  // already taken on the server, and saveBookingRecord's "update the record
+  // whose id matches" then silently OVERWROTE that other event with this one.
+  // Allocating inside the mutator fixes it, because the mutator has just
+  // re-read the array it is about to write.
+  //
+  // dedupe: an optional predicate run against the server's array. If it finds
+  // a record, nothing is created and that record is returned instead — which
+  // is how converting the same enquiry twice stops producing two events.
+  // Returns { record, created }.
+  const createBookingRecord = useCallback(async (data, dedupe, guard) => {
+    let made = null, existing = null;
+    await mutateBookings(function(base) {
+      // Dedupe BEFORE the guard: if this has already been created, there is
+      // nothing to write and no clash to ask about — asking would offer to
+      // double book against the record's own earlier self.
+      if (dedupe) {
+        existing = base.find(dedupe) || null;
+        if (existing) return base;            // no change; the tripwire allows this
+      }
+      if (guard) guard(base);
+      const id = nextBookingId(base);
+      made = Object.assign({}, data, { id: id, createdAt: data.createdAt || new Date().toISOString() });
+      return base.concat([made]).sort(function(a, b) { return (a.date || "") > (b.date || "") ? 1 : -1; });
+    });
+    return existing ? { record: existing, created: false } : { record: made, created: true };
   }, [mutateBookings]);
 
   // Apply a change to a single event without touching the rest.
@@ -5977,7 +6138,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // screen — today, a signed contract. Appends against the server's current
   // array rather than this tab's snapshot, for the same reason mutateBookings
   // does: another tab may have added a booking since this one loaded.
-  const createAccomBookings = useCallback(async (records) => {
+  const createAccomBookings = useCallback(async (records, force) => {
     if (!records || !records.length) return [];
     let server;
     try { server = await sbGet(ACCOM_STORAGE); }
@@ -5988,6 +6149,43 @@ export default function App({ role = "admin", onSignOut } = {}) {
     const base = Array.isArray(server) ? server : [];
     const made = [];
     const next = base.slice();
+
+    // Clash check on the way in. This route had none: a signed contract could
+    // book Amly for a weekend that was already let to somebody else and
+    // nothing anywhere said so — the lettings screen checks clashes, the
+    // online checkout checks clashes, but a contract coming back went straight
+    // into the array. Checking against `next` rather than `base` also catches
+    // two rows of the same contract colliding with each other.
+    if (!force) {
+      const found = [];
+      // Each record is checked against the diary plus the records already
+      // accepted from this same batch, so two rows of one contract landing on
+      // the same property are caught as well. Built in a throwaway array —
+      // pushing probes into `next` and truncating it afterwards worked, but
+      // left the real array temporarily holding rows that were never meant to
+      // be written, which is the sort of thing that survives one refactor and
+      // not the next.
+      const probe = base.slice();
+      records.forEach(function(r, i) {
+        const withId = Object.assign({}, r, { id: r.id || "__batch" + i });
+        findAccomClashes(probe, withId).forEach(function(c) { found.push(c); });
+        probe.push(withId);
+      });
+      if (found.length) {
+        const err = new Error(
+          "That accommodation is already booked — " +
+          found.slice(0, 4).map(function(c) {
+            return (c.stay.propertyName || c.stay.propertyId) + " " +
+                   fmtDate(c.stay.checkIn) + "–" + fmtDate(c.stay.checkOut) +
+                   " clashes with " + (c.other.guestName || "another booking");
+          }).join("; ") +
+          (found.length > 4 ? "; and " + (found.length - 4) + " more" : "") + "."
+        );
+        err.clashes = found;
+        throw err;
+      }
+    }
+
     records.forEach(function(r) {
       const rec = Object.assign({}, r, { id: newBookingRef(next, "A") });
       next.push(rec); made.push(rec);
@@ -6005,8 +6203,12 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [confirmDlg, setConfirmDlg] = useState(null);
   const askConfirm = (message, subMessage, onConfirm) => setConfirmDlg({ message, subMessage, onConfirm });
 
-  const handleNew    = ()=>{ setFormData(emptyBooking()); setEditId(null); setView("form"); };
-  const handleEdit   = id=>{ const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
+  // Holds the in-flight "create this brand-new event" promise so two autosaves
+  // racing each other can't each mint a record. Cleared whenever we move to a
+  // different event, or the next new event would be glued to the last one's id.
+  const newEventRef = useRef(null);
+  const handleNew    = ()=>{ newEventRef.current = null; setFormData(emptyBooking()); setEditId(null); setView("form"); };
+  const handleEdit   = id=>{ newEventRef.current = null; const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
   const handleDelete = id => {
     const b = bookings.find(x=>x.id===id);
     askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
@@ -6022,12 +6224,54 @@ export default function App({ role = "admin", onSignOut } = {}) {
   };
   // stayOpen: save and remain on the form, so several tabs can be filled in
   // without bouncing back to the list each time.
-  const handleSubmit = async (stayOpen)=>{
+  const handleSubmit = async (stayOpen, force)=>{
     if(!formData.couple||!formData.date){ alert("Event name and date are required."); return; }
+
+    // Double-booking the venue is now stopped at the save, not merely noted on
+    // screen. EventClashWarning has always drawn an amber banner on the form,
+    // but a banner is not a control: it can be scrolled past, and on the
+    // enquiry-conversion route the record was written before anyone could see
+    // it. Overriding stays possible — an existing clash has to remain editable,
+    // and a genuine two-events-one-day does happen — but it takes a second,
+    // deliberate press.
+    //
+    // The check runs inside the save, against the array the server holds, not
+    // against this tab's copy: an event added on a phone ten minutes ago has
+    // to be able to block this one.
+    const clashGuard = force ? null : function(base) {
+      const clashes = overlappingEvents(base, formData.date, formData.endDate, editId);
+      if (clashes.length) { const err = new Error("CLASH"); err.clashes = clashes; throw err; }
+    };
+
     // Single-record merge against the latest state (see saveBookingRecord) so
     // an explicit Save can't roll back edits made elsewhere in the meantime.
-    const id = editId != null ? editId : nextBookingId(bookings);
-    await saveBookingRecord(id, {...formData, id, createdAt: formData.createdAt || new Date().toISOString()});
+    // A NEW event has its id allocated server-side by createBookingRecord —
+    // taking it from this tab's `bookings` could hand back an id another
+    // device had already used, and the save would then overwrite that event.
+    let id = editId;
+    try {
+      if (editId != null) {
+        await saveBookingRecord(editId, {...formData, id: editId, createdAt: formData.createdAt || new Date().toISOString()}, clashGuard);
+      } else {
+        const res = await createBookingRecord({...formData}, null, clashGuard);
+        id = res.record.id;
+      }
+    } catch (e) {
+      if (e.clashes) {
+        askConfirm(
+          "Saving this would double book the venue",
+          "These dates overlap " + e.clashes.slice(0, 4).map(function(c) {
+            return "“" + (c.couple || "(no name)") + "” on " + fmtDate(c.date);
+          }).join(", ")
+          + (e.clashes.length > 4 ? ", and " + (e.clashes.length - 4) + " more" : "")
+          + ". Save anyway?",
+          function() { setConfirmDlg(null); handleSubmit(stayOpen, true); }
+        );
+        return;
+      }
+      alert(e.message || "Could not save the event.");
+      return;
+    }
 
     if (stayOpen) {
       // Keep editing the record that was written. Without this a new event
@@ -6068,13 +6312,57 @@ export default function App({ role = "admin", onSignOut } = {}) {
       files: enq.files || [],
     };
 
-    const newId = nextBookingId(bookings);
-    const withId = { ...newBooking, id:newId };
-    saveBookingRecord(newId, withId);
+    // Stamped with the enquiry it came from. This is what makes a second
+    // press of "Convert to Booking" harmless: without it there was nothing
+    // linking the event back to the enquiry, so converting again — after
+    // navigating away, or on a second click — simply built another event with
+    // another id and the same details, and the venue was double booked from
+    // the inside. Nothing on the enquiry screen prevented it and nothing on
+    // the events screen noticed.
+    newBooking.fromEnquiryId = enq.id;
 
-    setFormData(withId);
-    setEditId(newId);
-    setView("form");
+    const open = function(rec) {
+      setFormData(rec);
+      setEditId(rec.id);
+      setView("form");
+    };
+
+    // Converting is a write, so the clash check has to happen as part of it
+    // rather than relying on the banner that appears once the form is open —
+    // by then the event has already been saved. Like the manual save, the
+    // check runs against the server's array inside the write.
+    const make = async function(force) {
+      const guard = (force || !newBooking.date) ? null : function(base) {
+        const clashes = overlappingEvents(base, newBooking.date, "", null);
+        if (clashes.length) { const err = new Error("CLASH"); err.clashes = clashes; throw err; }
+      };
+      try {
+        const res = await createBookingRecord(newBooking, function(b) {
+          return b && enq.id != null && String(b.fromEnquiryId) === String(enq.id);
+        }, guard);
+        open(res.record);
+        if (!res.created) {
+          alert("This enquiry has already been converted — opening the booking that was created for it "
+              + "rather than making a second one.");
+        }
+      } catch (e) {
+        if (e.clashes) {
+          askConfirm(
+            "That date already has " + (e.clashes.length === 1 ? "an event" : e.clashes.length + " events") + " on it",
+            e.clashes.slice(0, 4).map(function(c) {
+              return (c.couple || "(no name)") + " — " + fmtDate(c.date) + (c.status ? " (" + c.status + ")" : "");
+            }).join("; ")
+            + (e.clashes.length > 4 ? "; and " + (e.clashes.length - 4) + " more" : "")
+            + ". Convert anyway?",
+            function() { setConfirmDlg(null); make(true); }
+          );
+          return;
+        }
+        alert(e.message || "Could not create the booking.");
+      }
+    };
+
+    make(false);
   };
 
   const emptyStaff = ()=>({ id:"", name:"", email:"", phone:"", rate:"", dob:"", role:"Bar Staff", active:true, notes:"" });
@@ -6254,12 +6542,31 @@ export default function App({ role = "admin", onSignOut } = {}) {
             if(editId) {
               await saveBookingRecord(editId, fd);
             } else {
-              // First autosave of a brand-new booking: mint an id and remember it,
-              // so subsequent autosaves update this same record instead of creating duplicates
-              const newId=nextBookingId(bookings);
-              setEditId(newId);
-              setFormData(f=>({...f, id:newId}));
-              await saveBookingRecord(newId, {...fd, id:newId, createdAt: fd.createdAt || new Date().toISOString()});
+              // First autosave of a brand-new booking mints the record.
+              //
+              // Two things were wrong here. The id came from nextBookingId
+              // (bookings) — this tab's copy — so it could be an id another
+              // device had already used, and the save would then overwrite
+              // that event. And setEditId is asynchronous: a second autosave
+              // firing before React re-rendered still saw editId === null and
+              // minted a SECOND record, so one event was created twice.
+              //
+              // Now the id is allocated server-side, and the in-flight create
+              // is held in a ref so whoever arrives second waits for it and
+              // updates that record instead of making another.
+              if (!newEventRef.current) {
+                newEventRef.current = createBookingRecord({...fd, createdAt: fd.createdAt || new Date().toISOString()})
+                  .then(function(r){ return r.record.id; })
+                  .catch(function(e){ newEventRef.current = null; throw e; });
+                const newId = await newEventRef.current;
+                setEditId(newId);
+                setFormData(f=>({...f, id:newId}));
+              } else {
+                const newId = await newEventRef.current;
+                setEditId(newId);
+                setFormData(f=>({...f, id:newId}));
+                await saveBookingRecord(newId, {...fd, id:newId});
+              }
             }
           }}
         />}
@@ -6409,6 +6716,39 @@ function nextBookingId(bookings) {
   return (nums.length ? Math.max.apply(null, nums) : 0) + 1;
 }
 
+// ── Contracts sent but never signed ─────────────────────────────────────────
+// A contract that has been out for more than a fortnight has almost certainly
+// been forgotten by somebody — the client, or us. Nothing in the app noticed
+// before: the Contract tab knows the status, but only for whoever happens to
+// open that one event. This puts it on the front page instead.
+//
+// Test contracts are ignored (nobody was ever emailed), and so is anything
+// that has reached an end state, signed or otherwise.
+const CONTRACT_CHASE_DAYS = 14;
+
+function daysSince(iso, today) {
+  if (!iso) return null;
+  const then = Date.parse(String(iso).slice(0, 10));
+  const now  = Date.parse(today);
+  if (!Number.isFinite(then) || !Number.isFinite(now)) return null;
+  return Math.floor((now - then) / 86400000);
+}
+
+function outstandingContracts(bookings, today) {
+  const out = [];
+  (bookings || []).forEach(function(b) {
+    const c = b && b.contract;
+    if (!c || !c.sentAt || c.testMode) return;
+    const st = String(c.status || "sent").toLowerCase();
+    if (st === "completed" || st === "declined" || st === "voided" || st === "expired") return;
+    const days = daysSince(c.sentAt, today);
+    if (days === null || days < CONTRACT_CHASE_DAYS) return;
+    out.push({ booking: b, days: days });
+  });
+  // Longest outstanding first — that's the one to chase today.
+  return out.sort(function(a, b) { return b.days - a.days; });
+}
+
 // Events that share one or more days with the given date range.
 // Used to warn (never block) when double-booking the venue.
 function overlappingEvents(bookings, date, endDate, ignoreId) {
@@ -6423,6 +6763,28 @@ function overlappingEvents(bookings, date, endDate, ignoreId) {
     // Inclusive overlap on both ends — events occupy whole days.
     return bStart <= end && bEnd >= start;
   });
+}
+
+// Every pair of events sitting on top of each other in the diary.
+//
+// The same reasoning as findAllAccomClashes: the save now warns before
+// creating a clash, but the warning can be overridden, autosave persists a
+// half-typed event without asking, and there are already events in the
+// database from before any of this existed. Detection has to sit alongside
+// prevention or the old ones are never found.
+function findAllEventClashes(bookings) {
+  const seen = {};
+  const out = [];
+  (bookings || []).forEach(function(b) {
+    if (!isValidEventDate(b && b.date)) return;
+    overlappingEvents(bookings, b.date, b.endDate, b.id).forEach(function(o) {
+      const pair = [String(b.id), String(o.id)].sort().join("|");
+      if (seen[pair]) return;
+      seen[pair] = true;
+      out.push({ a: b, b: o });
+    });
+  });
+  return out;
 }
 
 // The last day an event actually occupies — multi-day events run date..endDate.
@@ -6946,6 +7308,13 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
   const missingName = bookings.filter(b => isValidEventDate(b.date) && !b.couple);
   const accountedFor = upcoming.length + past.length + problem.length;
   const orphans = findOrphanedEventLinks(bookings, accomBookings);
+  const chase = outstandingContracts(bookings, today);
+  // Only clashes that haven't happened yet — a past one can't be fixed and
+  // would sit on the front page forever.
+  const accomClashes = findAllAccomClashes(accomBookings)
+    .filter(function(c){ return (c.stay.checkOut || "") >= today; });
+  const eventClashes = findAllEventClashes(bookings)
+    .filter(function(c){ return (eventEndDate(c.a) || c.a.date || "") >= today; });
 
   return (
     <div>
@@ -6988,6 +7357,100 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
           </div>
           <div style={{ fontSize:11, color:"#b91c1c", marginTop:6, lineHeight:1.6 }}>
             These event records are no longer in the database. Recreate the event and re-link the accommodation, or clear the link on the booking.
+          </div>
+        </div>
+      )}
+
+      {/* Two events on the same dates */}
+      {eventClashes.length > 0 && !search && (
+        <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#dc2626", marginBottom:5 }}>
+            {eventClashes.length} pair{eventClashes.length!==1?"s":""} of events on the same dates
+          </div>
+          <div style={{ fontSize:12, color:"#dc2626", lineHeight:1.8 }}>
+            {eventClashes.slice(0, 8).map(function(c, i) {
+              return (
+                <div key={i}>
+                  <strong>{fmtDate(c.a.date)}</strong>
+                  {" — " + (c.a.couple || "(no name)") + (c.a.status ? " (" + c.a.status + ")" : "")}
+                  {" vs " + (c.b.couple || "(no name)") + (c.b.status ? " (" + c.b.status + ")" : "")}
+                  <button onClick={function(){ onEdit(c.a.id); }}
+                    style={{ marginLeft:8, background:"none", border:"1px solid #fecaca", color:"#dc2626", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                    Open
+                  </button>
+                  <button onClick={function(){ onEdit(c.b.id); }}
+                    style={{ marginLeft:5, background:"none", border:"1px solid #fecaca", color:"#dc2626", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                    Open the other
+                  </button>
+                </div>
+              );
+            })}
+            {eventClashes.length > 8 && <div>…and {eventClashes.length - 8} more</div>}
+          </div>
+          <div style={{ fontSize:11, color:"#b91c1c", marginTop:6, lineHeight:1.6 }}>
+            Often a genuine duplicate — the same event entered twice, or converted from an enquiry more than
+            once. If one is a leftover, delete it; if both are real, this can be ignored.
+          </div>
+        </div>
+      )}
+
+      {/* Lettings double bookings sitting in the diary right now */}
+      {accomClashes.length > 0 && !search && (
+        <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#dc2626", marginBottom:5 }}>
+            {accomClashes.length} lettings double booking{accomClashes.length!==1?"s":""}
+          </div>
+          <div style={{ fontSize:12, color:"#dc2626", lineHeight:1.8 }}>
+            {accomClashes.slice(0, 8).map(function(c, i) {
+              return (
+                <div key={i}>
+                  <strong>{c.stay.propertyName || c.stay.propertyId}</strong>
+                  {" " + fmtDate(c.stay.checkIn) + "–" + fmtDate(c.stay.checkOut) + " — "}
+                  {(c.a.guestName || "(no name)") + " (" + accomSourceLabel(c.a) + ")"}
+                  {" vs "}
+                  {(c.b.guestName || "(no name)") + " (" + accomSourceLabel(c.b) + ")"}
+                  {onOpenAccom && (
+                    <button onClick={function(){ onOpenAccom(c.a.id); }}
+                      style={{ marginLeft:8, background:"none", border:"1px solid #fecaca", color:"#dc2626", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                      Open
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {accomClashes.length > 8 && <div>…and {accomClashes.length - 8} more</div>}
+          </div>
+          <div style={{ fontSize:11, color:"#b91c1c", marginTop:6, lineHeight:1.6 }}>
+            The same property is let to two parties on overlapping nights. An Airbnb block imported overnight
+            can land on top of an existing booking, and an override made here does the same — either way it
+            needs sorting out before both parties arrive.
+          </div>
+        </div>
+      )}
+
+      {/* Contracts sent for signature that haven't come back */}
+      {chase.length > 0 && !search && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#92400e", marginBottom:5 }}>
+            {chase.length} booking form{chase.length!==1?"s":""} sent but not signed
+          </div>
+          <div style={{ fontSize:12, color:"#92400e", lineHeight:1.8 }}>
+            {chase.map(function(c) {
+              return (
+                <div key={String(c.booking.id)}>
+                  <strong>{c.booking.couple || "(no name)"}</strong>
+                  {c.booking.date ? " — " + fmtDate(c.booking.date) : ""}
+                  {" · sent " + c.days + " days ago"}
+                  <button onClick={function(){ onEdit(c.booking.id); }}
+                    style={{ marginLeft:8, background:"none", border:"1px solid #fde68a", color:"#92400e", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                    Open
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:"#b45309", marginTop:6, lineHeight:1.6 }}>
+            Open the event and use Contract → Check status to see where it has got to, or chase the clients.
           </div>
         </div>
       )}
@@ -18888,6 +19351,23 @@ function showVal(row, v) {
   return v;
 }
 
+// One labelled text/date input on the contract form.
+//
+// This MUST stay at module scope. It used to be defined inside ContractSection,
+// which made it a brand-new component type on every render: React can't know
+// two different function objects are "the same component", so on each keystroke
+// it unmounted the old input and mounted a new one. The DOM node holding the
+// caret was destroyed and rebuilt every time, so the field lost focus after a
+// single character and had to be clicked again for the next one. Same rule the
+// list-view badges already follow — see AccomBadgeList.
+function CField({ label, k, type, hint, f, up }) {
+  return (
+    <BoxField label={label} hint={hint}>
+      <BoxInput type={type || "text"} value={f[k]} onChange={function(v){ up(k, v); }}/>
+    </BoxField>
+  );
+}
+
 function ContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings }) {
   const saved = formData.contract || {};
   const [f, setF] = useState(function() {
@@ -18902,6 +19382,10 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
   // Both start from a sensible default and are the operator's to change.
   const [accept, setAccept]     = useState(null);
   const [rows, setRows]         = useState(null);
+  // Set when the lettings side refused the proposed stays because they clash
+  // with something already booked. Turns the button into a deliberate override
+  // rather than silently double booking.
+  const [forceAccom, setForceAccom] = useState(false);
 
   function up(k, v) { setF(function(p) { return Object.assign({}, p, { [k]: v }); }); }
   function reset() { setF(buildContractDefaults(formData)); setMsg("Prefills restored."); }
@@ -18976,21 +19460,76 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
     setBusy(false);
   }
 
-  async function refresh() {
-    setBusy(true); setErr("");
+  // Check SignWell for the current state of the contract, and — if it has been
+  // signed by everybody — file the PDF against the event there and then.
+  //
+  // Filing used to wait for somebody to press "Apply to this event", so a
+  // contract could be fully signed and still have no copy on the event, with
+  // the EBF square stubbornly red. The PDF is not a proposal: it is the signed
+  // document, there is nothing to decide about it, and it can only ever be
+  // filed once (the signwellDocumentId stamp makes a second copy impossible).
+  // So it saves itself. The *values* still go through the review panel, because
+  // those genuinely can overwrite something a human typed.
+  //
+  // silent: used by the automatic check on opening the tab, which shouldn't
+  // paint a status message or an error over a screen nobody asked to see.
+  async function refresh(silent) {
+    if (!silent) setBusy(true);
+    setErr("");
     try {
       const d = await signWell("document", { documentId: saved.documentId });
       const record = Object.assign({}, saved, {
         status: d.status, values: d.values, recipients: d.recipients,
         raw: d.raw, checkedAt: new Date().toISOString()
       });
+
+      // File the signed copy in the same save as the status, so there is never
+      // a moment where the event says "completed" but holds no document.
+      const patch = { contract: record };
+      let filed = false;
+      const done = String(d.status || "").toLowerCase() === "completed";
+      const already = (formData.files || []).some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
+      if (done && !already) {
+        try {
+          const made = await attachPdf(record);
+          if (made) {
+            patch.files = (formData.files || []).concat([made]);
+            update("files", patch.files);
+            filed = true;
+          }
+        } catch (e) {
+          // A PDF that won't download must not cost us the status update.
+          setErr("Status updated, but the signed PDF could not be filed: " + (e.message || String(e)));
+        }
+      }
+
       update("contract", record);
-      if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
+      if (onAutoSave) await onAutoSave(Object.assign({}, formData, patch));
       buildReview(d.values);
-      setMsg("Status: " + (d.status || "unknown"));
-    } catch (e) { setErr(e.message); }
-    setBusy(false);
+      if (!silent) setMsg("Status: " + (d.status || "unknown") + (filed ? " — signed copy filed as the Event Booking Form." : ""));
+      else if (filed) setMsg("Contract signed — signed copy filed as the Event Booking Form.");
+    } catch (e) {
+      if (!silent) setErr(e.message);
+    }
+    if (!silent) setBusy(false);
   }
+
+  // Ask SignWell once, on opening the tab, whether an outstanding contract has
+  // come back. Deliberately not a webhook: a background function would have to
+  // rewrite the whole event record and could clobber somebody editing it. This
+  // runs in the tab that is already looking at the event, so it can't.
+  const autoChecked = useRef(false);
+  useEffect(function() {
+    if (autoChecked.current) return;
+    if (!saved.documentId) return;
+    const st = String(saved.status || "").toLowerCase();
+    const settled = st === "declined" || st === "voided" || st === "expired";
+    const filed = (formData.files || []).some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
+    // Completed AND already filed means there is nothing left to find out.
+    if (settled || (st === "completed" && filed)) return;
+    autoChecked.current = true;
+    refresh(true);
+  }, [saved.documentId]);
 
   // Keep a copy of the signed contract with the event. Filed as an Event
   // Booking Form, which is also what turns the EBF square green on the list —
@@ -19093,7 +19632,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
             createdAt: new Date().toISOString().slice(0, 10),
             stays: [stay],
           };
-        }));
+        }), forceAccom);
         madeCount = made.length;
       }
 
@@ -19128,19 +19667,18 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       if (filed) bits.push("signed PDF filed against the event");
       if (pdfProblem) setErr("Saved, but the signed PDF could not be filed: " + pdfProblem);
       setMsg(bits.length ? bits.join(", ") + "." : "Nothing selected, so nothing changed.");
-      setAccept(null); setRows(null);
-    } catch (e) { setErr(e.message); }
+      setAccept(null); setRows(null); setForceAccom(false);
+    } catch (e) {
+      setErr(e.message);
+      // A clash is a question, not a failure — leave the panel exactly as it
+      // is so the operator can untick a row, pick a different property, or
+      // press again to go ahead regardless.
+      if (e.clashes) setForceAccom(true);
+    }
     setBusy(false);
   }
 
   const row = { display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 };
-  const F = function({ label, k, type, hint }) {
-    return (
-      <BoxField label={label} hint={hint}>
-        <BoxInput type={type || "text"} value={f[k]} onChange={function(v){ up(k, v); }}/>
-      </BoxField>
-    );
-  };
 
   return (
     <div>
@@ -19276,8 +19814,8 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
                   Event Booking Form.
                 </div>
               )}
-              <BoxBtn onClick={applyReview} disabled={busy}>
-                {busy ? "Saving…" : "Apply to this event"}
+              <BoxBtn onClick={applyReview} disabled={busy} tone={forceAccom ? "danger" : "primary"}>
+                {busy ? "Saving…" : forceAccom ? "Double book it anyway" : "Apply to this event"}
               </BoxBtn>
             </div>
           )}
@@ -19311,11 +19849,11 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       {msg && <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{msg}</div>}
 
       <div style={row}>
-        <F label="Event name" k="eventName"/>
-        <F label="Event type" k="eventType"/>
-        <F label="Event date" k="eventDate" type="date"/>
-        <F label="Max guests" k="maxGuests"/>
-        <F label="Venue fee" k="venueFee"/>
+        <CField f={f} up={up} label="Event name" k="eventName"/>
+        <CField f={f} up={up} label="Event type" k="eventType"/>
+        <CField f={f} up={up} label="Event date" k="eventDate" type="date"/>
+        <CField f={f} up={up} label="Max guests" k="maxGuests"/>
+        <CField f={f} up={up} label="Venue fee" k="venueFee"/>
       </div>
 
       {/* Full width — these run to a few lines and are the one place the
@@ -19329,25 +19867,25 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
 
       <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Grain Store Access</div>
       <div style={row}>
-        <F label="Day before" k="accessBefore"/>
-        <F label="Event day" k="accessDay"/>
-        <F label="Day after" k="accessAfter"/>
+        <CField f={f} up={up} label="Day before" k="accessBefore"/>
+        <CField f={f} up={up} label="Event day" k="accessDay"/>
+        <CField f={f} up={up} label="Day after" k="accessAfter"/>
       </div>
 
       <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Accommodation</div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
-        <F label="Amly from" k="amlyFrom" type="date"/>
-        <F label="Amly to" k="amlyTo" type="date"/>
-        <F label="Amly fee" k="amlyFee"/>
-        <F label="Hamlet from" k="hamletFrom" type="date"/>
-        <F label="Hamlet to" k="hamletTo" type="date"/>
-        <F label="Hamlet fee" k="hamletFee"/>
-        <F label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
-        <F label="Glamping, 1 night — to" k="glampingTo" type="date"/>
-        <F label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night."/>
-        <F label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
-        <F label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
-        <F label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights."/>
+        <CField f={f} up={up} label="Amly from" k="amlyFrom" type="date"/>
+        <CField f={f} up={up} label="Amly to" k="amlyTo" type="date"/>
+        <CField f={f} up={up} label="Amly fee" k="amlyFee"/>
+        <CField f={f} up={up} label="Hamlet from" k="hamletFrom" type="date"/>
+        <CField f={f} up={up} label="Hamlet to" k="hamletTo" type="date"/>
+        <CField f={f} up={up} label="Hamlet fee" k="hamletFee"/>
+        <CField f={f} up={up} label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
+        <CField f={f} up={up} label="Glamping, 1 night — to" k="glampingTo" type="date"/>
+        <CField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night."/>
+        <CField f={f} up={up} label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
+        <CField f={f} up={up} label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
+        <CField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights."/>
       </div>
       <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
         All four choices — Amly, Hamlet, and the two glamping options — are the client's to make on the form.
@@ -19357,10 +19895,10 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
 
       <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Who signs</div>
       <div style={row}>
-        <F label="Client 1 name" k="client1Name"/>
-        <F label="Client 1 email" k="client1Email"/>
-        <F label="Client 2 name" k="client2Name"/>
-        <F label="Client 2 email" k="client2Email"
+        <CField f={f} up={up} label="Client 1 name" k="client1Name"/>
+        <CField f={f} up={up} label="Client 1 email" k="client1Email"/>
+        <CField f={f} up={up} label="Client 2 name" k="client2Name"/>
+        <CField f={f} up={up} label="Client 2 email" k="client2Email"
            hint="Required, and must differ from Client 1 — the template has three signers and SignWell rejects a repeated address."/>
       </div>
 

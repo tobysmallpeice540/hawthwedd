@@ -107,6 +107,23 @@ function parseIcal(text) {
   return events;
 }
 
+// Bookings already in the diary that overlap the nights this feed event wants.
+// Half-open, same rule as the app: a stay ending on the day another begins is
+// a changeover, not a clash.
+function overlapsExisting(bookings, propertyId, start, end) {
+  var out = [];
+  (bookings || []).forEach(function(b) {
+    if (!b || b.status === "cancelled") return;
+    var stays = (b.stays && b.stays.length) ? b.stays : [b];
+    var hit = stays.some(function(s) {
+      if (!s || s.propertyId !== propertyId || !s.checkIn || !s.checkOut) return false;
+      return start < s.checkOut && end > s.checkIn;
+    });
+    if (hit) out.push(b);
+  });
+  return out;
+}
+
 function nightsBetween(ci, co) {
   if (!ci || !co) return 0;
   return Math.round((new Date(co + "T00:00:00") - new Date(ci + "T00:00:00")) / 86400000);
@@ -167,6 +184,7 @@ exports.handler = async function(event) {
 
     // ── 5. Create new blocks ─────────────────────────────────────────────────
     var newBlocks = [];
+    var clashed = [];
     var now = new Date().toISOString();
 
     for (var fi = 0; fi < feedEvents.length; fi++) {
@@ -197,6 +215,21 @@ exports.handler = async function(event) {
         createdAt:       now,
         airbnbUid:       fe.uid
       };
+
+      // Airbnb has already sold this night, so refusing the import would only
+      // hide the problem — the guest is coming either way. Stamp the collision
+      // instead, so the block carries its own explanation and the app can put
+      // it on the front page rather than leaving it to be discovered when two
+      // parties turn up for the same cottage.
+      var hits = overlapsExisting(bookings.concat(newBlocks), propertyId, fe.start, fe.end);
+      if (hits.length) {
+        block.clashesWith = hits.map(function(h) { return h.id; });
+        block.notes = "⚠ DOUBLE BOOKED — this Airbnb block overlaps "
+          + hits.map(function(h) { return (h.guestName || "an existing booking") + " (" + h.id + ")"; }).join(", ")
+          + ".\n" + block.notes;
+        clashed.push({ uid: fe.uid, start: fe.start, end: fe.end, against: block.clashesWith });
+      }
+
       newBlocks.push(block);
     }
 
@@ -218,7 +251,9 @@ exports.handler = async function(event) {
       body: JSON.stringify({
         imported: newBlocks.length,
         total:    feedEvents.length,
-        skipped:  feedEvents.length - newBlocks.length
+        skipped:  feedEvents.length - newBlocks.length,
+        clashes:  clashed.length,
+        clashed:  clashed
       })
     };
 

@@ -1,0 +1,147 @@
+// The duplicate-event fix, pinned.
+//
+// createBookingRecord and mutateBookings live inside the App component and
+// can't be imported, so this models their contract exactly as written in
+// App.jsx and asserts the behaviour that matters. It is a model, not the
+// shipped function — its job is to stop the *rules* being changed by accident
+// (dedupe before guard, allocate from the server's array, abort on throw).
+// The shipped code is checked against these rules by reading it back below.
+const fs = require("fs");
+const path = require("path");
+const SRC = fs.readFileSync(path.join(__dirname, "..", "src", "App.jsx"), "utf8");
+
+let pass = 0, fail = 0;
+function ok(label, cond) {
+  if (cond) { pass++; console.log("  ok   " + label); }
+  else { fail++; console.log("  FAIL " + label); }
+}
+const eq = (l, g, w) => ok(l + "  (got " + JSON.stringify(g) + ")", g === w);
+
+function nextBookingId(bookings) {
+  var nums = (bookings || []).map(b => Number(b && b.id)).filter(n => Number.isFinite(n));
+  return (nums.length ? Math.max.apply(null, nums) : 0) + 1;
+}
+
+// A stand-in server holding the one events array, plus the two helpers as
+// App.jsx defines them.
+function makeServer(initial) {
+  let rows = initial.slice();
+  const mutateBookings = async (mutator) => {
+    const base = rows.slice();                 // the re-read
+    const next = mutator(base);                // may throw -> nothing written
+    if (next.length < base.length - 1) throw new Error("tripwire");
+    rows = next;
+    return next;
+  };
+  const createBookingRecord = async (data, dedupe, guard) => {
+    let made = null, existing = null;
+    await mutateBookings(function(base) {
+      if (dedupe) { existing = base.find(dedupe) || null; if (existing) return base; }
+      if (guard) guard(base);
+      const id = nextBookingId(base);
+      made = Object.assign({}, data, { id });
+      return base.concat([made]);
+    });
+    return existing ? { record: existing, created: false } : { record: made, created: true };
+  };
+  return { rows: () => rows, createBookingRecord };
+}
+
+const byEnquiry = enqId => b => b && enqId != null && String(b.fromEnquiryId) === String(enqId);
+
+(async () => {
+console.log("\n— converting an enquiry twice —");
+{
+  const s = makeServer([]);
+  const enq = { id: "E9", fromEnquiryId: "E9", couple: "Ali & Sam", date: "2027-05-01" };
+  const first  = await s.createBookingRecord(enq, byEnquiry("E9"));
+  const second = await s.createBookingRecord(enq, byEnquiry("E9"));
+  eq("the first press creates the event", first.created, true);
+  eq("the second press creates nothing", second.created, false);
+  eq("and only one event exists", s.rows().length, 1);
+  eq("the second press returns the SAME record, so the form opens the original",
+     String(second.record.id), String(first.record.id));
+}
+
+console.log("\n— ids are allocated from the server, not a stale tab —");
+{
+  // The old bug: the tab loaded when the array was [1,2]; another device then
+  // added 3. nextBookingId(staleTab) === 3, and saving "created" id 3 —
+  // overwriting the other device's event.
+  const s = makeServer([{ id: 1 }, { id: 2 }, { id: 3, couple: "Made elsewhere" }]);
+  const res = await s.createBookingRecord({ couple: "New one" });
+  eq("allocates 4, not the stale 3", res.record.id, 4);
+  eq("the other device's event survives",
+     s.rows().find(b => b.id === 3).couple, "Made elsewhere");
+  eq("and nothing was replaced", s.rows().length, 4);
+}
+
+console.log("\n— the clash guard —");
+{
+  const s = makeServer([{ id: 1, couple: "Existing", date: "2027-06-05" }]);
+  const guard = base => {
+    if (base.some(b => b.date === "2027-06-05")) { const e = new Error("CLASH"); e.clashes = [base[0]]; throw e; }
+  };
+  let threw = null;
+  try { await s.createBookingRecord({ couple: "Clashing", date: "2027-06-05" }, null, guard); }
+  catch (e) { threw = e; }
+  ok("a clash aborts the save", !!threw && !!threw.clashes);
+  eq("and nothing was written", s.rows().length, 1);
+
+  const forced = await s.createBookingRecord({ couple: "Clashing", date: "2027-06-05" }, null, null);
+  eq("forcing writes it", forced.created, true);
+  eq("now there are two", s.rows().length, 2);
+}
+
+console.log("\n— dedupe runs BEFORE the guard —");
+{
+  // An enquiry already converted onto a date that now looks like a clash must
+  // report "already converted", not offer to double book against itself.
+  const s = makeServer([{ id: 1, couple: "Ali & Sam", date: "2027-05-01", fromEnquiryId: "E9" }]);
+  const guard = () => { const e = new Error("CLASH"); e.clashes = [{}]; throw e; };
+  let threw = null, res = null;
+  try { res = await s.createBookingRecord({ fromEnquiryId: "E9", date: "2027-05-01" }, byEnquiry("E9"), guard); }
+  catch (e) { threw = e; }
+  ok("no clash prompt for an already-converted enquiry", threw === null);
+  eq("it reports the existing record instead", res && res.created, false);
+  eq("still one event", s.rows().length, 1);
+}
+
+console.log("\n— the shipped code follows those rules —");
+{
+  const fn = SRC.slice(SRC.indexOf("const createBookingRecord"), SRC.indexOf("// Apply a change to a single event"));
+  ok("createBookingRecord takes (data, dedupe, guard)",
+     /createBookingRecord = useCallback\(async \(data, dedupe, guard\)/.test(fn));
+  ok("dedupe is checked before the guard",
+     fn.indexOf("existing = base.find(dedupe)") < fn.indexOf("if (guard) guard(base)"));
+  ok("the id comes from the mutator's base, not component state",
+     /const id = nextBookingId\(base\)/.test(fn));
+
+  ok("saveBookingRecord accepts a guard and runs it first",
+     /saveBookingRecord = useCallback\(\(id, data, guard\)/.test(SRC));
+  ok("the enquiry conversion stamps fromEnquiryId",
+     /newBooking\.fromEnquiryId = enq\.id/.test(SRC));
+  ok("the enquiry conversion dedupes on it",
+     /String\(b\.fromEnquiryId\) === String\(enq\.id\)/.test(SRC));
+  // The function's own definition and the comment explaining the old bug both
+  // contain the phrase, so look for actual CALL SITES only.
+  const staleCallers = SRC.split("\n").filter(function(l) {
+    if (!/nextBookingId\(bookings\)/.test(l)) return false;
+    if (/^\s*(\/\/|\*)/.test(l)) return false;          // a comment
+    if (/^function nextBookingId/.test(l)) return false;  // the definition
+    return true;
+  });
+  ok("no caller allocates an event id from component state" +
+     (staleCallers.length ? " — found: " + staleCallers.join(" | ") : ""),
+     staleCallers.length === 0);
+  ok("the lettings save no longer writes the array from tab state",
+     !/var next = editId \? bookings\.map/.test(SRC));
+  ok("the contract form's input is a module-level component",
+     /^function CField\(/m.test(SRC));
+  ok("and is not redefined inside ContractSection",
+     !/const F = function\(\{ label, k, type, hint \}\)/.test(SRC));
+}
+
+console.log("\n" + pass + " passed, " + fail + " failed\n");
+process.exit(fail ? 1 : 0);
+})();
