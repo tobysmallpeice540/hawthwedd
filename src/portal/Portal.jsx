@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { supabase, rpc } from './supabase.js'
+import Guests from './Guests.jsx'
 
 // The eight tabs from the build spec. Only Overview is built; the rest declare
 // themselves honestly rather than pretending. Order matches the order a couple
 // actually needs them in, not the order they get built.
 const TABS = [
   { key: 'overview',  label: 'Overview',      ready: true  },
-  { key: 'guests',    label: 'Guests',        ready: false },
+  { key: 'guests',    label: 'Guests',        ready: true  },
   { key: 'checklist', label: 'Checklist',     ready: false },
   { key: 'timeline',  label: 'Timeline',      ready: false },
   { key: 'suppliers', label: 'Suppliers',     ready: false },
@@ -152,7 +153,9 @@ export default function Portal({ session }) {
       </nav>
 
       <main className="wrap">
-        {tab === 'overview' ? <Overview event={event} days={days} /> : <Soon label={active.label} />}
+        {tab === 'overview' && <Overview event={event} days={days} />}
+        {tab === 'guests'   && <Guests />}
+        {tab !== 'overview' && tab !== 'guests' && <Soon label={active.label} />}
       </main>
     </>
   )

@@ -119,6 +119,29 @@ own header.
   functions therefore do their own gating (`is_staff()`) rather than assuming a
   caller was filtered upstream.
 
+## Working in this folder from a Claude session
+
+The repo is reached through a mount that does not allow deletion, and two
+things break because of it. Neither is a repo problem.
+
+- **`git commit` fails with "could not read commit message".** Git writes
+  `.git/COMMIT_EDITMSG` successfully and then cannot read it back. Commit with
+  plumbing instead, which never touches that file:
+
+      TREE=$(git write-tree)
+      C=$(git commit-tree "$TREE" -p "$(git rev-parse HEAD)" -F /path/to/msg)
+      git update-ref refs/heads/main "$C"
+
+  Set `GIT_AUTHOR_*` and `GIT_COMMITTER_*` in the environment first. Verify with
+  `git log`, `git status` and `git fsck --connectivity-only`.
+- **`vite build` fails at `prepareOutDir` with EPERM** because it cannot empty
+  `dist/`. Build somewhere else to check compilation:
+  `npx vite build --outDir "$HOME/dist-check" --emptyOutDir`. Netlify builds
+  from a clean checkout, so `dist/` here is only ever a local artefact.
+- Git also leaves a `.git/HEAD.lock` or `.git/index.lock` behind after most
+  writes. Move them aside (`mv` works, `rm` does not) or the next commit — including
+  one from GitHub Desktop — is refused.
+
 ## Where the rest of the context lives
 
 Build history and decisions live in the Claude project ("Weddings Booking App")
