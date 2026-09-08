@@ -1914,7 +1914,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-09-08d";
+const APP_BUILD = "2026-09-08e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8067,6 +8067,36 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
 // ─── FORM ─────────────────────────────────────────────────────────────────────
 const EVENT_TYPES = ["Wedding (Peak)","Wedding (Off Peak)","Party","Wake","Other"];
 
+// One colour per event type, used by the annual report's stacked bars and its
+// legend so the same type is the same colour everywhere.
+//
+// The two wedding types are deliberately two shades of the same red rather
+// than unrelated colours: at a glance a month should read as "mostly weddings"
+// without losing the peak/off-peak split, which is a real distinction on the
+// financial side and shouldn't be collapsed just to make the picture simpler.
+const EVENT_TYPE_COLOURS = {
+  "Wedding (Peak)":     "#dc2626",
+  "Wedding (Off Peak)": "#fca5a5",
+  "Party":              "#2563eb",
+  "Wake":               "#64748b",
+  "Other":              "#d97706",
+};
+const EVENT_TYPE_FALLBACK = "#94a3b8";
+function eventTypeColour(t) { return EVENT_TYPE_COLOURS[t] || EVENT_TYPE_FALLBACK; }
+
+// Count events by type, in a stable order: the known types first, in the order
+// they are declared, then anything unrecognised (old records, typos) after.
+function countByEventType(list) {
+  const counts = {};
+  (list || []).forEach(function(b) {
+    const t = (b && b.eventType) || "Other";
+    counts[t] = (counts[t] || 0) + 1;
+  });
+  const known = EVENT_TYPES.filter(function(t) { return counts[t]; });
+  const extra = Object.keys(counts).filter(function(t) { return EVENT_TYPES.indexOf(t) === -1; }).sort();
+  return known.concat(extra).map(function(t) { return { type: t, count: counts[t], colour: eventTypeColour(t) }; });
+}
+
 // What an enquiry is about. Deliberately plainer than EVENT_TYPES above, which
 // carries the peak/off-peak split that only matters once something is booked.
 const ENQUIRY_EVENT_TYPES = ["Wedding", "Party", "Celebration of Life", "Other"];
@@ -8132,6 +8162,58 @@ const FORM_SECTIONS = {
 // and Gmail's own stars are personal to whoever is signed in, whereas this is
 // shared by everyone using the app.
 const STARRED_EMAILS_KEY = "hbf_starred_emails_v1";
+
+// Last time an email was exchanged with each enquiry address, so the enquiries
+// list can say "last contact 3 days ago" on the strength of a real reply
+// rather than only on what somebody remembered to log by hand.
+//
+// Cached in Supabase so the list is right the moment it opens, before Gmail
+// has been asked anything — and so it still reads correctly when Gmail is not
+// connected at all.
+const ENQUIRY_EMAIL_SEEN_KEY = "hbf_enquiry_email_seen_v1";
+
+// The date of the most recent Gmail message either to or from one address.
+//
+// Two small calls: list the single newest matching message, then read it with
+// format=minimal, which returns internalDate and almost nothing else. This
+// runs once per enquiry on the list, so it deliberately does NOT use the
+// thread-metadata fetch the Emails tab does — that pulls subjects, senders and
+// content types for fifteen threads, which is the right request for a panel
+// showing the conversation and the wrong one for a column showing a date.
+async function gmailLastMessageDate(email, accessToken) {
+  const q = "from:" + email + " OR to:" + email;
+  const listRes = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=1&q=" + encodeURIComponent(q),
+    { headers: { Authorization: "Bearer " + accessToken } });
+  if (!listRes.ok) throw new Error("Gmail search failed: " + listRes.status);
+  const data = await listRes.json();
+  const id = data.messages && data.messages[0] && data.messages[0].id;
+  if (!id) return null;                       // never emailed — not an error
+  const msgRes = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + id + "?format=minimal",
+    { headers: { Authorization: "Bearer " + accessToken } });
+  if (!msgRes.ok) throw new Error("Gmail message read failed: " + msgRes.status);
+  const msg = await msgRes.json();
+  const ms = Number(msg.internalDate);
+  if (!isFinite(ms)) return null;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// Run an async job over a list a few at a time. Fifty enquiries at once would
+// have Gmail rate-limiting us; one at a time would take most of a minute.
+async function mapWithLimit(items, limit, fn) {
+  const out = [];
+  let i = 0;
+  const workers = new Array(Math.min(limit, items.length)).fill(0).map(async function() {
+    while (i < items.length) {
+      const idx = i++;
+      try { out[idx] = await fn(items[idx]); }
+      catch (e) { out[idx] = { error: e }; }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, entityId, entityType="booking" }) {
   const [starred, setStarred] = useState({});
@@ -9448,30 +9530,59 @@ function SummaryReport({ bookings }) {
   const totalAccom = yearBookings.reduce((s,b)=>s+parseMoney(b.amlyFee)+parseMoney(b.hamletFee)+parseMoney(b.campingFee),0);
   const totalRevenue = totalVenueFees + totalAccom;
   const totalDeposits = yearBookings.reduce((s,b)=>s+parseMoney(b.deposit),0);
-  // Bar take = recorded gross bar take + corkage.
-  // Prefer the numeric "Final Total Corkage Amount" field; fall back to a number
-  // parsed from the free-text corkage note only if the numeric box is empty.
+  // Wet revenue = gross bar take + corkage actually invoiced.
+  //
+  // Corkage now comes ONLY from the numeric "Final Total Corkage Amount"
+  // (corkageTotal). It used to fall back to parsing a number out of the
+  // free-text corkage note when that box was empty, and that note is prose —
+  // "£9 per adult - 100 guests invoiced" strips down to the digits 9 and 100
+  // and reads as £9,100 of corkage on a single wedding. A year's figure built
+  // partly out of misread sentences is worse than one that is merely
+  // incomplete, so the fallback is gone: an event with nothing in the numeric
+  // box now contributes nothing, and is listed below so it can be filled in.
   const totalBarGross = yearBookings.reduce((s,b)=>s+parseMoney(b.barTakeGross),0);
-  const totalCorkage  = yearBookings.reduce((s,b)=>s+(parseMoney(b.corkageTotal) || parseMoney(b.corkage)),0);
-  const totalBarTake  = totalBarGross + totalCorkage;
+  const totalCorkage  = yearBookings.reduce((s,b)=>s+parseMoney(b.corkageTotal),0);
+  const totalWet      = totalBarGross + totalCorkage;
+  // Past events with a bar take recorded but no corkage figure — the ones most
+  // likely to be a gap rather than a genuine zero.
+  const corkageMissing = yearBookings.filter(b =>
+    b.date < today && !parseMoney(b.corkageTotal) && (parseMoney(b.barTakeGross) > 0 || String(b.corkage || "").trim())
+  );
+
+  const byType = countByEventType(yearBookings);
+
+  // Bookings by month, split by event type so a month reads as "5 events —
+  // 3 weddings, 2 parties" rather than just "5".
   const monthCounts = {};
   yearBookings.forEach(b=>{ const m=b.date.slice(0,7); monthCounts[m]=(monthCounts[m]||0)+1; });
+  const monthByType = {};
+  yearBookings.forEach(b=>{
+    const m = b.date.slice(0,7);
+    const t = b.eventType || "Other";
+    monthByType[m] = monthByType[m] || {};
+    monthByType[m][t] = (monthByType[m][t] || 0) + 1;
+  });
+  const maxMonth = Math.max(1, ...Object.values(monthCounts));
   const prevYear = allYears[allYears.indexOf(year)-1];
   const nextYear = allYears[allYears.indexOf(year)+1];
 
   const printText = [
     `Annual Summary — ${year}`,
     `Bookings: ${yearBookings.length} (${upcoming.length} upcoming)`,
+    `  by type: ${byType.map(t=>`${t.count} ${t.type}`).join(", ") || "none"}`,
     `Venue Fees: £${totalVenueFees.toLocaleString()}`,
     `Accommodation Revenue: £${totalAccom.toLocaleString()}`,
     `Total Revenue: £${totalRevenue.toLocaleString()}`,
-    `Bar Take (incl. corkage): £${totalBarTake.toLocaleString()} (bar £${totalBarGross.toLocaleString()} + corkage £${totalCorkage.toLocaleString()})`,
+    `Wet Revenue: £${totalWet.toLocaleString()} (bar £${totalBarGross.toLocaleString()} + corkage £${totalCorkage.toLocaleString()})`,
     `Deposits Held (advance on venue fees): £${totalDeposits.toLocaleString()}`,
     `Confirmed: ${yearBookings.filter(b=>b.status==="Confirmed").length} | Holding: ${yearBookings.filter(b=>b.status==="Holding").length}`,
     `Accommodation — Amly: ${yearBookings.filter(b=>b.amlyBooked==="yes").length} | Hamlet: ${yearBookings.filter(b=>b.hamletBooked==="yes").length} | Camping: ${yearBookings.filter(b=>b.campingBooked==="yes").length}`,
     "",
     "Bookings by Month:",
-    ...Object.entries(monthCounts).sort().map(([m,c])=>`  ${new Date(m+"-01").toLocaleDateString("en-GB",{month:"long"})}: ${c}`)
+    ...Object.entries(monthCounts).sort().map(([m,c])=>{
+      const split = Object.entries(monthByType[m]||{}).sort().map(([t,n])=>`${n} ${t}`).join(", ");
+      return `  ${new Date(m+"-01").toLocaleDateString("en-GB",{month:"long"})}: ${c}${split?" — "+split:""}`;
+    })
   ].join("\n");
 
   if(printMode) return (
@@ -9498,57 +9609,122 @@ function SummaryReport({ bookings }) {
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:28 }}>
-        <StatCard label="Bookings" value={yearBookings.length} sub={`${upcoming.length} upcoming`}/>
+        <StatCard label="Bookings" value={yearBookings.length}
+          sub={byType.length ? byType.map(t=>`${t.count} ${t.type}`).join(" · ") : `${upcoming.length} upcoming`}/>
         <StatCard label="Venue Fees" value={`£${totalVenueFees.toLocaleString()}`} sub={`${year}`}/>
         <StatCard label="Accom Revenue" value={`£${totalAccom.toLocaleString()}`} sub={`Total: £${totalRevenue.toLocaleString()}`}/>
-        <StatCard label="Bar Take (incl. corkage)" value={`£${totalBarTake.toLocaleString()}`} sub={`Bar £${totalBarGross.toLocaleString()} + corkage £${totalCorkage.toLocaleString()}`}/>
+        <StatCard label="Wet Revenue" value={`£${totalWet.toLocaleString()}`} sub={`Bar £${totalBarGross.toLocaleString()} + corkage £${totalCorkage.toLocaleString()}`}/>
         <StatCard label="Deposits Held" value={`£${totalDeposits.toLocaleString()}`} sub="Advance on venue fees — not additional"/>
         <StatCard label="Confirmed" value={yearBookings.filter(b=>b.status==="Confirmed").length} sub="Confirmed bookings"/>
         <StatCard label="Holding" value={yearBookings.filter(b=>b.status==="Holding").length} sub="Holding bookings"/>
         <StatCard label="Amly / Hamlet / Camping" value={`${yearBookings.filter(b=>b.amlyBooked==="yes").length} / ${yearBookings.filter(b=>b.hamletBooked==="yes").length} / ${yearBookings.filter(b=>b.campingBooked==="yes").length}`} sub="Accommodation bookings"/>
       </div>
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-        <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Bookings by Month</h3>
+        <h3 style={{ margin:"0 0 4px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Bookings by Month</h3>
+
+        {/* Legend first: the bars are meaningless without it, and a legend
+            underneath gets missed on a printed page. */}
+        {byType.length > 0 && (
+          <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 14px", marginBottom:16 }}>
+            {byType.map(function(t) {
+              return (
+                <span key={t.type} style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid }}>
+                  <span style={{ width:11, height:11, borderRadius:3, background:t.colour, display:"inline-block", flexShrink:0 }}/>
+                  {t.type} <strong style={{ color:T.text }}>{t.count}</strong>
+                </span>
+              );
+            })}
+          </div>
+        )}
+
         {Object.entries(monthCounts).sort().map(([month,count])=>{
           const lbl=new Date(month+"-01").toLocaleDateString("en-GB",{month:"long",year:"numeric"});
+          // Segments in the same order as the legend, so the colours read the
+          // same way down the page.
+          const segs = byType
+            .map(function(t) { return { type:t.type, colour:t.colour, n:(monthByType[month]||{})[t.type]||0 }; })
+            .filter(function(x) { return x.n > 0; });
+          // The whole row is scaled against the busiest month, so bar length
+          // still compares months at a glance; the segments then split that
+          // length by type.
+          const rowPct = (count / maxMonth) * 100;
           return (
             <div key={month} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
-              <span style={{ width:130, color:T.textMid, fontSize:13 }}>{lbl}</span>
-              <div style={{ flex:1, background:T.accentLight, borderRadius:4, height:22, overflow:"hidden" }}>
-                <div style={{ width:`${Math.min(100,(count/5)*100)}%`, minWidth:count>0?30:0, height:"100%", background:T.midBlue, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
-                  <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{count}</span>
+              <span style={{ width:130, color:T.textMid, fontSize:13, flexShrink:0 }}>{lbl}</span>
+              <div style={{ flex:1, background:T.accentLight, borderRadius:4, height:22, overflow:"hidden", minWidth:0 }}>
+                <div style={{ width:`${rowPct}%`, minWidth:count>0?34:0, height:"100%", borderRadius:4, display:"flex", flexWrap:"nowrap", overflow:"hidden" }}>
+                  {segs.map(function(sg) {
+                    return (
+                      <div key={sg.type}
+                        title={sg.n + " × " + sg.type}
+                        style={{ flex:sg.n, background:sg.colour, height:"100%", display:"flex", alignItems:"center",
+                          justifyContent:"center", minWidth:0 }}>
+                        {/* Only label a segment wide enough to hold the number
+                            — a digit sliced in half is worse than none. */}
+                        {(sg.n / count) * rowPct > 8 && (
+                          <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{sg.n}</span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
+              <span style={{ width:132, fontSize:11.5, color:T.textLight, textAlign:"right", flexShrink:0 }}>
+                {count} event{count===1?"":"s"}
+              </span>
             </div>
           );
         })}
         {Object.keys(monthCounts).length===0 && <p style={{ color:T.textLight, fontSize:13 }}>No bookings in {year}.</p>}
       </div>
 
-      {/* Events by event type */}
-      {yearBookings.length>0 && (()=>{
-        const typeCounts = {};
-        yearBookings.forEach(b => {
-          const t = b.eventType || "Other";
-          typeCounts[t] = (typeCounts[t]||0)+1;
-        });
-        const maxCount = Math.max(...Object.values(typeCounts), 1);
+      {/* Events by event type — same colours as the monthly bars above */}
+      {byType.length>0 && (()=>{
+        const maxCount = Math.max(...byType.map(t=>t.count), 1);
         return (
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, marginTop:16, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
             <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Events by Type</h3>
-            {Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).map(([type, count])=>(
-              <div key={type} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
-                <span style={{ width:160, color:T.textMid, fontSize:13, flexShrink:0 }}>{type}</span>
-                <div style={{ flex:1, background:T.accentLight, borderRadius:4, height:22, overflow:"hidden" }}>
-                  <div style={{ width:`${Math.min(100,(count/maxCount)*100)}%`, minWidth:count>0?30:0, height:"100%", background:T.midBlue, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
-                    <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{count}</span>
+            {byType.slice().sort((a,b)=>b.count-a.count).map(t=>(
+              <div key={t.type} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+                <span style={{ width:160, color:T.textMid, fontSize:13, flexShrink:0 }}>{t.type}</span>
+                <div style={{ flex:1, background:T.accentLight, borderRadius:4, height:22, overflow:"hidden", minWidth:0 }}>
+                  <div style={{ width:`${Math.min(100,(t.count/maxCount)*100)}%`, minWidth:t.count>0?30:0, height:"100%", background:t.colour, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
+                    <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{t.count}</span>
                   </div>
                 </div>
+                <span style={{ width:60, fontSize:11.5, color:T.textLight, textAlign:"right", flexShrink:0 }}>
+                  {Math.round((t.count / yearBookings.length) * 100)}%
+                </span>
               </div>
             ))}
           </div>
         );
       })()}
+
+      {/* Which past events are dragging the wet revenue figure down by having
+          no corkage recorded. Named, so they can be filled in rather than
+          quietly under-reported. */}
+      {corkageMissing.length>0 && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:10, padding:"14px 18px", marginTop:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#92400e", marginBottom:5 }}>
+            {corkageMissing.length} past event{corkageMissing.length!==1?"s":""} with no corkage figure
+          </div>
+          <div style={{ fontSize:12, color:"#92400e", lineHeight:1.8 }}>
+            {corkageMissing.slice(0,10).map(b=>(
+              <div key={b.id}>
+                {fmtDate(b.date)} — {b.couple||"(no name)"}
+                {String(b.corkage||"").trim() ? <span style={{ color:"#b45309" }}> · note: “{String(b.corkage).trim().slice(0,60)}”</span> : null}
+              </div>
+            ))}
+            {corkageMissing.length>10 && <div>…and {corkageMissing.length-10} more</div>}
+          </div>
+          <div style={{ fontSize:11, color:"#b45309", marginTop:6, lineHeight:1.6 }}>
+            Wet revenue counts the numeric <strong>Final Total Corkage Amount</strong> only. The free-text
+            corkage note is prose and is no longer parsed for a number — it used to turn
+            “£9 per adult · 100 guests” into £9,100.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -15715,6 +15891,93 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
 }
 
 // ─── EnquiriesView (top-level) ────────────────────────────────────────────────
+// The most recent time anybody was in touch about an enquiry, and how.
+//
+// Four sources, because relying on the manual contact log alone made active
+// enquiries look neglected: what somebody logged by hand, email actually
+// exchanged with the address (see ENQUIRY_EMAIL_SEEN_KEY), a viewing that has
+// already happened, and the moment the enquiry itself arrived.
+//
+// firstViewing and viewingForm are deliberately ignored: they hold free text
+// like "Sunday 26th April" and "RECIEVED", so any date read out of them
+// would be a guess.
+function lastContactFrom(e, emailSeen, todayStr) {
+  const today = todayStr || new Date().toISOString().slice(0, 10);
+  emailSeen = emailSeen || {};
+  const events = [];
+
+  (e.contacts || []).forEach(function(c) {
+    if (c && c.date) events.push({ date: c.date, method: c.method || "contact", note: c.note });
+  });
+
+  // Email actually exchanged with this enquiry. This was the gap: a reply
+  // sent last week only counted if somebody also remembered to add a line to
+  // the contact log, so warm enquiries drifted cold on screen while the
+  // conversation was still going.
+  const em = String(e.email || "").trim().toLowerCase();
+  const seen = em && emailSeen[em];
+  if (seen && seen.date) events.push({ date: seen.date, method: "email" });
+
+  // A viewing that has happened is contact. One still to come is not.
+  (e.viewings || []).forEach(function(v) {
+    if (v && v.date && v.date <= today) events.push({ date: v.date, method: "viewing" });
+  });
+
+  // The enquiry itself. Its id is minted as enq_<epoch>, so the moment it
+  // arrived is recoverable — which is what makes "they filled the form in
+  // yesterday" read as one day rather than as never.
+  const m = String(e.id || "").match(/^enq_(\d{10,})$/);
+  if (m) {
+    const d = new Date(Number(m[1]));
+    if (isFinite(d.getTime())) events.push({ date: d.toISOString().slice(0, 10), method: "enquiry received" });
+  }
+
+  if (!events.length) return null;
+  return events.sort(function(a, b) { return b.date > a.date ? 1 : -1; })[0];
+}
+
+// Every viewing on an enquiry, past and future.
+//
+// The column used to show `firstViewing`, a free-text field from the older
+// enquiry format holding things like "Sunday 26th April" or "RECIEVED" — one
+// viewing at best, and not a date anything could sort or compare. Enquiries
+// now carry a proper `viewings` array (the same shape events use), so this
+// lists all of them and marks which have already happened. The legacy text is
+// still shown when there is no structured viewing, because on older enquiries
+// it is the only record there is.
+function EnquiryViewingsCell({ enq }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const vs = (enq.viewings || []).filter(function(v) { return v && v.date; })
+    .slice().sort(function(a, z) { return a.date > z.date ? 1 : -1; });
+
+  if (!vs.length) {
+    const legacy = String(enq.firstViewing || "").trim();
+    if (!legacy) return <span style={{ color:T.textLight, fontSize:12 }}>—</span>;
+    return (
+      <span title="From the old free-text viewing field" style={{ fontSize:12, color:T.textMid, fontStyle:"italic" }}>
+        {legacy}
+      </span>
+    );
+  }
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+      {vs.map(function(v, i) {
+        const past = v.date < today;
+        return (
+          <span key={i} title={past ? "Already happened" : "Still to come"}
+            style={{ fontSize:10.5, fontWeight:600, whiteSpace:"nowrap", borderRadius:4, padding:"2px 6px",
+              background: past ? "#f1f5f9" : T.midBlueBg,
+              color: past ? T.textLight : T.midBlue,
+              border: `1px solid ${past ? "#e2e8f0" : T.border}` }}>
+            {past ? "✓" : "📅"} {fmtDate(v.date)}{v.time ? " " + v.time : ""}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFocus }) {
   const [enquiries, setEnquiries] = useState([]);
   const [loaded, setLoaded]       = useState(false);
@@ -15725,6 +15988,13 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   // enquiry is one you've decided not to think about for now.
   const [tempFilter, setTempFilter] = useState("current");
   const [sortBy, setSortBy] = useState("temp");     // "temp" | "contact"
+  // email (lowercased) -> { date, at } for the last message either way.
+  const [emailSeen, setEmailSeen] = useState({});
+  const [emailScan, setEmailScan] = useState({ busy:false, done:0, total:0, error:"" });
+  // The cached map has to arrive before the scan decides what is missing, or
+  // the first render scans every address and throws the cache away.
+  const [seenLoaded, setSeenLoaded] = useState(false);
+  const scannedRef = useRef("");
   const [sortDir, setSortDir] = useState("desc");   // for contact: desc = longest ago first
   const [search, setSearch]       = useState("");
   const [confirmDlg, setConfirmDlg] = useState(null);
@@ -15739,6 +16009,85 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
       setLoaded(true);
     })();
   }, []);
+
+  // The cached "last email seen" map, so the Last contact column is right the
+  // moment the page opens rather than after Gmail has been round every
+  // address — and so it still reads correctly with Gmail disconnected.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const m = await sbGet(ENQUIRY_EMAIL_SEEN_KEY);
+        if (!cancelled && m && typeof m === "object") setEmailSeen(m);
+      } catch (e) { /* a warm cache is a convenience, not a requirement */ }
+      if (!cancelled) setSeenLoaded(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Then ask Gmail for anything that has moved. Runs once per set of
+  // addresses — scannedRef holds the set already done, so switching filters or
+  // opening an enquiry doesn't set the whole thing going again.
+  useEffect(() => {
+    if (!loaded || !gmailToken || !seenLoaded) return;
+    const all = Array.from(new Set(
+      enquiries.map(e => String(e.email || "").trim().toLowerCase()).filter(e => e.indexOf("@") > 0)
+    )).sort();
+    // Only ask about addresses we have no answer for, or whose answer has gone
+    // stale. Signing the whole set would mean adding one enquiry re-scanned
+    // every address on the list — a few hundred Gmail calls to learn one date.
+    const STALE_MS = 6 * 60 * 60 * 1000;
+    const now = Date.now();
+    const emails = all.filter(em => {
+      const c = emailSeen[em];
+      if (!c) return true;
+      const at = Date.parse(c.at || "");
+      return !isFinite(at) || (now - at) > STALE_MS;
+    });
+    if (!emails.length) return;
+    const sig = emails.join(",");
+    if (scannedRef.current === sig) return;
+    scannedRef.current = sig;
+
+    let cancelled = false;
+    (async () => {
+      const token = gmailGetValidToken();
+      if (!token) return;
+      setEmailScan({ busy:true, done:0, total:emails.length, error:"" });
+      let done = 0;
+      const found = {};
+      await mapWithLimit(emails, 4, async (em) => {
+        if (cancelled) return;
+        try {
+          const date = await gmailLastMessageDate(em, token.access_token);
+          // A null date is a real answer — "we have never emailed them" — and
+          // is cached too, or every address with no history is looked up again
+          // on every visit.
+          found[em] = { date: date || null, at: new Date().toISOString() };
+        } catch (e) {
+          if (!cancelled) setEmailScan(s => ({ ...s, error: e.message || String(e) }));
+        }
+        done++;
+        if (!cancelled) setEmailScan(s => ({ ...s, done }));
+      });
+      if (cancelled) return;
+      setEmailScan(s => ({ ...s, busy:false }));
+      if (!Object.keys(found).length) return;
+
+      // Merge onto the server's copy rather than this tab's: the same key is
+      // written from wherever the enquiries list is open.
+      let base = {};
+      try {
+        const server = await sbGet(ENQUIRY_EMAIL_SEEN_KEY);
+        if (server && typeof server === "object") base = server;
+      } catch (e) { base = emailSeen; }
+      const next = Object.assign({}, base, found);
+      setEmailSeen(next);
+      try { await sbSet(ENQUIRY_EMAIL_SEEN_KEY, next); }
+      catch (e) { console.error("Could not cache email dates:", e); }
+    })();
+    return () => { cancelled = true; };
+  }, [loaded, seenLoaded, gmailToken, enquiries]);
 
   // Deep-link: when arriving with a focus enquiry id (e.g. clicked from Viewings or Year Calendar), open it
   useEffect(() => {
@@ -15796,39 +16145,9 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   // burying it at the bottom would hide the very enquiries most worth acting on.
   const TEMP_ORDER = { hot:0, warm:1, cold:2, freezing:3 };
 
-  // Contact means anything either way, not only what somebody remembered to
-  // log. An enquiry that arrived yesterday has been in touch, and so has one
-  // whose viewing was last week — counting only the manual contact log made
-  // both look neglected, which is what turned the list cold.
-  //
-  // firstViewing and viewingForm are deliberately ignored: they hold free text
-  // like "Sunday 26th April" and "RECIEVED", so any date read out of them
-  // would be a guess.
-  const lastContactOf = function(e) {
-    const today = new Date().toISOString().slice(0, 10);
-    const events = [];
-
-    (e.contacts || []).forEach(function(c) {
-      if (c && c.date) events.push({ date: c.date, method: c.method || "contact", note: c.note });
-    });
-
-    // A viewing that has happened is contact. One still to come is not.
-    (e.viewings || []).forEach(function(v) {
-      if (v && v.date && v.date <= today) events.push({ date: v.date, method: "viewing" });
-    });
-
-    // The enquiry itself. Its id is minted as enq_<epoch>, so the moment it
-    // arrived is recoverable — which is what makes "they filled the form in
-    // yesterday" read as one day rather than as never.
-    const m = String(e.id || "").match(/^enq_(\d{10,})$/);
-    if (m) {
-      const d = new Date(Number(m[1]));
-      if (isFinite(d.getTime())) events.push({ date: d.toISOString().slice(0, 10), method: "enquiry received" });
-    }
-
-    if (!events.length) return null;
-    return events.sort(function(a, b) { return b.date > a.date ? 1 : -1; })[0];
-  };
+  // See lastContactFrom at module scope — bound here to the email dates this
+  // view has fetched.
+  const lastContactOf = function(e) { return lastContactFrom(e, emailSeen); };
   const daysSinceContact = function(e) {
     const lc = lastContactOf(e);
     if (!lc) return null;
@@ -15890,6 +16209,24 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or email…"
           style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 12px", outline:"none", width:220 }}/>
         <span style={{ fontSize:12, color:T.textLight }}>{filtered.length} of {enquiries.length}</span>
+        {/* Say when Last contact is still catching up, so a column that is
+            about to change isn't mistaken for the final answer. */}
+        {emailScan.busy && (
+          <span style={{ fontSize:11.5, color:T.textLight }}>
+            · checking email {emailScan.done}/{emailScan.total}
+          </span>
+        )}
+        {!emailScan.busy && emailScan.error && (
+          <span title={emailScan.error} style={{ fontSize:11.5, color:T.amber }}>
+            · email check incomplete
+          </span>
+        )}
+        {!gmailToken && (
+          <span title="Connect Gmail in Settings to include emailed contact in this column"
+            style={{ fontSize:11.5, color:T.textLight }}>
+            · Gmail not connected
+          </span>
+        )}
       </div>
 
       {/* List */}
@@ -15897,7 +16234,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr style={{ background:"#eef4fd" }}>
-              {["Name","Event","Date Preference","First Viewing","Last contact","Temp","Outcome",""].map(h=>{
+              {["Name","Event","Date Preference","Viewings","Last contact","Temp","Outcome",""].map(h=>{
                 const sortable = h === "Last contact";
                 const active = sortable && sortBy === "contact";
                 return (
@@ -15937,7 +16274,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
                   </td>
                   <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.eventType||"—"}</td>
                   <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.datePreference||"—"}</td>
-                  <td style={{ padding:"11px 14px", fontSize:13, color:T.accent, fontWeight:500 }}>{e.firstViewing||"—"}</td>
+                  <td style={{ padding:"11px 14px" }}><EnquiryViewingsCell enq={e}/></td>
                   <td style={{ padding:"11px 14px", fontSize:13, whiteSpace:"nowrap" }}>
                     {lastContact ? (
                       <>
@@ -15946,7 +16283,11 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
                           {days === 0 ? "Today" : days === 1 ? "Yesterday" : days + " days ago"}
                         </span>
                         <div style={{ fontSize:10, color:T.textLight }}>
-                          {fmtDate(lastContact.date)} · {(e.contacts||[]).length} contact{(e.contacts||[]).length===1?"":"s"}
+                          {fmtDate(lastContact.date)} · {lastContact.method === "email" ? "email"
+                            : lastContact.method === "viewing" ? "viewing"
+                            : lastContact.method === "enquiry received" ? "enquiry"
+                            : lastContact.method}
+                          {" · "}{(e.contacts||[]).length} logged
                         </div>
                       </>
                     ) : (

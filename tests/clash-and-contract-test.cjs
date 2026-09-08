@@ -25,13 +25,26 @@ function lift(name) {
 const NAMES = ["findAccomClashes", "findAllAccomClashes", "outstandingContracts",
                "daysSince", "overlappingEvents", "eventEndDate", "isValidEventDate",
                "nextBookingId", "findAllEventClashes", "matchContractStay",
-               "signedUnfiledContracts"];
+               "signedUnfiledContracts", "lastContactFrom", "countByEventType",
+               "eventTypeColour", "parseMoney"];
+// Constants the lifted functions close over, taken from the same source rather
+// than restated here — a colour or a type list retyped into the test would let
+// the two drift apart silently.
+function liftConst(name) {
+  const re = new RegExp("^const " + name + " = [\\s\\S]*?;$", "m");
+  const m = re.exec(SRC);
+  if (!m) throw new Error("Could not find const " + name + " in App.jsx");
+  return m[0];
+}
+const CONSTS = ["EVENT_TYPES", "EVENT_TYPE_COLOURS", "EVENT_TYPE_FALLBACK", "CONTRACT_CHASE_DAYS"];
+
 const ctx = {};
-eval(NAMES.map(lift).join("\n\n") + "\n" +
+eval(CONSTS.map(liftConst).join("\n") + "\n\n" +
+     NAMES.map(lift).join("\n\n") + "\n" +
      NAMES.map(n => "ctx." + n + " = " + n + ";").join("\n"));
 
 // Constant the contract sweep depends on.
-const CONTRACT_CHASE_DAYS = Number(/CONTRACT_CHASE_DAYS = (\d+)/.exec(SRC)[1]);
+const CHASE_DAYS = Number(/CONTRACT_CHASE_DAYS = (\d+)/.exec(SRC)[1]);
 
 let pass = 0, fail = 0;
 function ok(label, cond) {
@@ -139,7 +152,7 @@ console.log("\n— outstandingContracts: chasing unsigned booking forms —");
   const today = new Date().toISOString().slice(0, 10);
   const ev = (id, contract) => ({ id, couple: "C" + id, date: "2027-01-01", contract });
 
-  eq("chase threshold is a fortnight", CONTRACT_CHASE_DAYS, 14);
+  eq("chase threshold is a fortnight", CHASE_DAYS, 14);
   eq("sent 20 days ago and still out — chase",
      ctx.outstandingContracts([ev(1, { sentAt: iso(20), status: "sent" })], today).length, 1);
   eq("sent 3 days ago — leave it alone",
@@ -171,6 +184,103 @@ console.log("\n— outstandingContracts: chasing unsigned booking forms —");
   ], today);
   eq("longest outstanding is listed first", many[0].booking.id, 2);
   eq("and the day count is reported", many[0].days, 90);
+}
+
+console.log("\n— lastContactFrom: what counts as being in touch —");
+{
+  const T0 = "2026-09-08";
+  const e = (x) => Object.assign({ id:"enq_x", name:"A", email:"guest@example.com" }, x);
+
+  // The reported bug: a reply last week didn't count unless someone logged it.
+  {
+    const r = ctx.lastContactFrom(e({ contacts:[{date:"2026-01-01",method:"email"}] }),
+      { "guest@example.com": { date:"2026-09-05" } }, T0);
+    eq("a recent email beats an old logged contact", r.date, "2026-09-05");
+    eq("and is reported as email", r.method, "email");
+  }
+  {
+    const r = ctx.lastContactFrom(e({ contacts:[{date:"2026-09-07",method:"phone"}] }),
+      { "guest@example.com": { date:"2026-09-05" } }, T0);
+    eq("a newer logged contact still wins", r.date, "2026-09-07");
+    eq("and keeps its own method", r.method, "phone");
+  }
+  {
+    const r = ctx.lastContactFrom(e({}), { "guest@example.com": { date:"2026-09-05" } }, T0);
+    eq("email alone is enough", r.date, "2026-09-05");
+  }
+  {
+    const r = ctx.lastContactFrom(e({ email:"  GUEST@Example.COM " }),
+      { "guest@example.com": { date:"2026-09-05" } }, T0);
+    ok("the address is matched case- and space-insensitively", r && r.date === "2026-09-05");
+  }
+  {
+    const r = ctx.lastContactFrom(e({}), { "guest@example.com": { date:null } }, T0);
+    ok("a cached \"never emailed\" is not treated as contact",
+       !r || r.method !== "email");
+  }
+  {
+    const r = ctx.lastContactFrom(e({ id:"enq_x" }), {}, T0);
+    ok("no sources at all means no answer", r === null);
+  }
+  // The pre-existing rules must survive the change.
+  {
+    const r = ctx.lastContactFrom(e({ viewings:[{date:"2026-09-06"}] }), {}, T0);
+    eq("a viewing that has happened counts", r.date, "2026-09-06");
+    eq("and says so", r.method, "viewing");
+  }
+  {
+    const r = ctx.lastContactFrom(e({ viewings:[{date:"2026-12-01"}] }), {}, T0);
+    ok("a viewing still to come does not count", r === null);
+  }
+  {
+    const ts = Date.parse("2026-09-02T10:00:00Z");
+    const r = ctx.lastContactFrom({ id:"enq_" + ts, email:"" }, {}, T0);
+    eq("the enquiry's own arrival counts", r.date, "2026-09-02");
+    eq("and is labelled", r.method, "enquiry received");
+  }
+  {
+    const ts = Date.parse("2026-09-02T10:00:00Z");
+    const r = ctx.lastContactFrom({ id:"enq_" + ts, email:"guest@example.com" },
+      { "guest@example.com": { date:"2026-09-06" } }, T0);
+    eq("email beats the arrival date when it is newer", r.date, "2026-09-06");
+  }
+  ok("a missing emailSeen map is harmless",
+     ctx.lastContactFrom(e({ contacts:[{date:"2026-09-01"}] }), null, T0).date === "2026-09-01");
+}
+
+console.log("\n— the annual report —");
+{
+  // The corkage bug, stated as a test: this is the string that used to become
+  // £9,100 of corkage on one wedding.
+  eq("free-text corkage parses to a nonsense number (why it is no longer used)",
+     ctx.parseMoney("£9 per adult - 100 guests invoiced"), 9100);
+  eq("the numeric corkage field parses correctly", ctx.parseMoney("950"), 950);
+  eq("an empty corkage total is zero, not a guess", ctx.parseMoney(""), 0);
+
+  const ev = (t) => ({ eventType:t });
+  const by = ctx.countByEventType([ev("Wedding (Peak)"),ev("Party"),ev("Wedding (Peak)"),ev("Wake"),ev("Party"),ev("Party")]);
+  eq("counts each type", by.length, 3);
+  eq("declared order is preserved — weddings first", by[0].type, "Wedding (Peak)");
+  eq("with the right count", by[0].count, 2);
+  eq("parties counted", by.find(x=>x.type==="Party").count, 3);
+  ok("each type carries its colour", by.every(x => /^#[0-9a-f]{6}$/i.test(x.colour)));
+  ok("the two wedding types are different shades",
+     ctx.eventTypeColour("Wedding (Peak)") !== ctx.eventTypeColour("Wedding (Off Peak)"));
+  ok("weddings are red and parties blue, as asked",
+     ctx.eventTypeColour("Wedding (Peak)") === "#dc2626" && ctx.eventTypeColour("Party") === "#2563eb");
+  {
+    const b2 = ctx.countByEventType([{ eventType:"Handfasting" }, ev("Party")]);
+    eq("an unrecognised type still appears", b2.length, 2);
+    eq("known types sort before unknown ones", b2[0].type, "Party");
+    ok("and the unknown one gets the fallback colour",
+       b2[1].colour === ctx.eventTypeColour("Handfasting"));
+  }
+  {
+    const b3 = ctx.countByEventType([{}, {}]);
+    eq("an event with no type counts as Other", b3[0].type, "Other");
+    eq("and is counted", b3[0].count, 2);
+  }
+  eq("an empty year produces no types", ctx.countByEventType([]).length, 0);
 }
 
 console.log("\n— matchContractStay: update, create, or warn —");

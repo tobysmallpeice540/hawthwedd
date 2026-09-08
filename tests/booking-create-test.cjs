@@ -216,6 +216,47 @@ console.log("\n— the contract writeback wiring (2026-09-08d) —");
      /^function signedUnfiledContracts\(/m.test(SRC) && /signedUnfiledContracts\(bookings\)/.test(SRC));
 }
 
+console.log("\n— enquiries and the annual report (2026-09-08e) —");
+{
+  ok("the enquiries column is titled Viewings, not First Viewing",
+     /"Date Preference","Viewings","Last contact"/.test(SRC));
+  ok("and renders every viewing rather than the legacy text field",
+     /<EnquiryViewingsCell enq=\{e\}\/>/.test(SRC) && /^function EnquiryViewingsCell\(/m.test(SRC));
+  ok("the legacy free-text field is still shown when there is nothing better",
+     /enq\.firstViewing/.test(SRC));
+
+  ok("last contact counts email exchanged with the address",
+     /^function lastContactFrom\(e, emailSeen, todayStr\)/m.test(SRC) &&
+     /events\.push\(\{ date: seen\.date, method: "email" \}\)/.test(SRC));
+  ok("email dates are cached so the column is right before Gmail answers",
+     /ENQUIRY_EMAIL_SEEN_KEY = "hbf_enquiry_email_seen_v1"/.test(SRC));
+  ok("the scan waits for that cache before deciding what to fetch",
+     /if \(!loaded \|\| !gmailToken \|\| !seenLoaded\) return;/.test(SRC));
+  ok("only stale or unknown addresses are looked up",
+     /const STALE_MS = 6 \* 60 \* 60 \* 1000;/.test(SRC));
+  ok("a 'never emailed' answer is cached too",
+     /found\[em\] = \{ date: date \|\| null, at: new Date\(\)\.toISOString\(\) \};/.test(SRC));
+  ok("the lookup uses the cheap minimal message read, not thread metadata",
+     /format=minimal/.test(SRC) && /internalDate/.test(SRC));
+  ok("Gmail is called a few at a time, not all at once",
+     /mapWithLimit\(emails, 4,/.test(SRC));
+
+  ok("the free-text corkage field is no longer parsed as money",
+     !/parseMoney\(b\.corkageTotal\) \|\| parseMoney\(b\.corkage\)/.test(SRC));
+  ok("wet revenue replaces bar take (incl. corkage)",
+     /label="Wet Revenue"/.test(SRC) && !/Bar Take \(incl\. corkage\)/.test(SRC));
+  ok("events with no corkage figure are named rather than silently dropped",
+     /past event\{corkageMissing\.length!==1\?"s":""\} with no corkage figure/.test(SRC));
+  ok("the bookings summary breaks down by type",
+     /sub=\{byType\.length \? byType\.map/.test(SRC));
+  ok("the monthly bars are stacked by type",
+     /const monthByType = \{\};/.test(SRC) && /segs\.map\(function\(sg\)/.test(SRC));
+  ok("stacked segments cannot wrap on a phone",
+     /display:"flex", flexWrap:"nowrap", overflow:"hidden"/.test(SRC));
+  ok("the monthly chart carries a legend",
+     /byType\.length > 0 && \(/.test(SRC));
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed\n");
 process.exit(fail ? 1 : 0);
 })();
