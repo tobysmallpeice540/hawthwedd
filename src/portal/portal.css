@@ -182,3 +182,30 @@ input:focus, select:focus, textarea:focus {
 }
 .filebtn:hover { color: var(--ink); border-color: var(--muted); }
 .filebtn input { display: none; }
+
+/* ── checklist ──────────────────────────────────────────────────────────── */
+
+.progress-line { font-size: 14px; margin-bottom: 10px; }
+.progress-line strong { font-size: 20px; }
+
+.bar { height: 8px; background: var(--sand); border-radius: 999px; overflow: hidden; }
+.bar .bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .25s ease; }
+@media (prefers-reduced-motion: reduce) { .bar .bar-fill { transition: none; } }
+
+.tasks {
+  display: grid; gap: 1px; background: var(--line);
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 14px;
+}
+.task {
+  background: var(--card); display: flex; align-items: flex-start; gap: 12px; padding: 13px 15px;
+}
+.task.is-done .task-title { color: var(--muted); text-decoration: line-through; }
+.tick { width: 19px; height: 19px; margin-top: 2px; flex: 0 0 auto; accent-color: var(--accent); cursor: pointer; }
+.task-main { flex: 1; min-width: 0; }
+.task-title { font-size: 15px; line-height: 1.4; }
+.task-detail { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-top: 3px; }
+.task-detail.err { color: var(--warn); }
+.task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.due { font-weight: 500; }
+.due.soon { color: var(--warn); }
+.due.late { color: #b91c1c; }
