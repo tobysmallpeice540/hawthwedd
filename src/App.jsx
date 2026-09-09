@@ -7848,11 +7848,22 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 // ── door swings ──────────────────────────────────────────────────────────────
 //
-// A door is drawn the way a floor plan draws one: the leaf, and the quarter
-// circle it sweeps. Eight arrangements — four corners to hinge on, and for each
-// one, two choices of which adjacent edge the leaf rests against. Rather than
-// ask anyone to think about that, there is one button that cycles all eight.
-// Press it until the door looks like the real one.
+// A door is drawn two ways, and which one depends on something that actually
+// matters to a table plan: whether it eats floor.
+//
+//   OPENS OUTWARDS — the doorway alone, a solid bar in the wall. No arc. The
+//     swing happens outside the room, so drawing it would mean an arc hanging
+//     off the edge of the plan, and the floor inside is unaffected either way.
+//     This is the default, because at Hawthbush they all do.
+//
+//   OPENS INWARDS — the leaf and the quarter circle it sweeps, the way a floor
+//     plan draws one. That arc is floor nobody can put a table on, which is the
+//     whole reason for drawing it.
+//
+// Eight arrangements either way — four corners to hinge on, and for each, two
+// choices of which adjacent edge the door sits in. Rather than ask anyone to
+// reason about that, one button cycles all eight: press it until it matches
+// the real door.
 //
 // The box is kept square, because the arc's radius IS the door's width.
 const DOOR_STATES = 8;
@@ -7870,14 +7881,19 @@ function doorGeometry(w, h, state) {
   return { r, P, A, B, sweep, leaf };
 }
 
-function DoorGlyph({ w, h, state, colour }) {
+function DoorGlyph({ w, h, state, swing, colour }) {
   const g = doorGeometry(w, h, state);
+  const inward = swing === "in";
   return (
     <svg viewBox={`0 0 ${g.r} ${g.r}`} width="100%" height="100%" style={{ display:"block", overflow:"visible" }}>
-      <path d={`M ${g.A.x} ${g.A.y} A ${g.r} ${g.r} 0 0 ${g.sweep} ${g.B.x} ${g.B.y}`}
-        fill="none" stroke={colour} strokeWidth={Math.max(20, g.r * 0.03)} strokeDasharray={`${g.r*0.06} ${g.r*0.05}`} />
+      {inward && (
+        <path d={`M ${g.A.x} ${g.A.y} A ${g.r} ${g.r} 0 0 ${g.sweep} ${g.B.x} ${g.B.y}`}
+          fill="none" stroke={colour} strokeWidth={Math.max(20, g.r * 0.03)} strokeDasharray={`${g.r*0.06} ${g.r*0.05}`} />
+      )}
+      {/* The doorway itself, drawn either way: where the door sits when shut.
+          Heavier when there is no arc, so it still reads as a door. */}
       <line x1={g.P.x} y1={g.P.y} x2={g.leaf.x} y2={g.leaf.y}
-        stroke={colour} strokeWidth={Math.max(40, g.r * 0.07)} strokeLinecap="round" />
+        stroke={colour} strokeWidth={Math.max(40, g.r * (inward ? 0.07 : 0.11))} strokeLinecap="round" />
     </svg>
   );
 }
@@ -7970,7 +7986,10 @@ function PortalRoomEditor() {
     const x = snap((draft.width_mm - size[0]) / 2), y = snap((draft.height_mm - size[1]) / 2);
     const s = { kind: kind, x: x, y: y, w: size[0], h: size[1],
       label: { fixed:"Bar", nogo:"Keep clear", door:"Door", text:"Label" }[kind] };
-    if (kind === "door") s.hinge = outwardDoorState(x, y, size[0], size[1], draft.width_mm, draft.height_mm);
+    if (kind === "door") {
+      s.hinge = outwardDoorState(x, y, size[0], size[1], draft.width_mm, draft.height_mm);
+      s.swing = "out";   // they all do here; the tick is for the exceptions
+    }
     setDraft(function(d){ return Object.assign({}, d, { shapes: d.shapes.concat([s]) }); });
     setSel(draft.shapes.length);
     setDirty(true);
@@ -8073,8 +8092,9 @@ function PortalRoomEditor() {
       <p style={{ fontSize:13, color:T.textMid, maxWidth:680, lineHeight:1.7, marginTop:0 }}>
         Drag things roughly into place, then type the exact measurement if you know it.
         <b> Fixed</b> never moves — the bar, the stage, a pillar. <b>Keep clear</b> is floor
-        no table may stand on. <b>Door</b> draws the swing, so a door that opens into the
-        room is visibly not somewhere to seat anybody. <b>Text</b> is a label on its own.
+        no table may stand on. <b>Door</b> marks the doorway; tick <b>opens inwards</b>
+        and it draws the arc too, because that is floor nobody can sit on.
+        <b>Text</b> is a label on its own.
       </p>
 
       <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap", margin:"16px 0" }}>
@@ -8118,7 +8138,7 @@ function PortalRoomEditor() {
               return (
                 <div key={i} onPointerDown={down} style={Object.assign({}, common,
                   { border: on ? `2px solid ${T.accent}` : "1px dashed transparent" })}>
-                  <DoorGlyph w={sh.w} h={sh.h} state={sh.hinge || 0} colour={T.text} />
+                  <DoorGlyph w={sh.w} h={sh.h} state={sh.hinge || 0} swing={sh.swing} colour={T.text} />
                   {handle}
                 </div>
               );
@@ -8171,8 +8191,17 @@ function PortalRoomEditor() {
             </select>
           </Field>
           {s.kind === "door" && (
-            <button onClick={function(){ editShape(sel, { hinge: ((s.hinge||0) + 1) % DOOR_STATES }); }}
-              style={btnQuiet}>Turn the swing</button>
+            <>
+              <button onClick={function(){ editShape(sel, { hinge: ((s.hinge||0) + 1) % DOOR_STATES }); }}
+                style={btnQuiet}>Turn the door</button>
+              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, color:T.textMid,
+                paddingBottom:9, whiteSpace:"nowrap", cursor:"pointer" }}
+                title="Only an inward door takes up floor, so only an inward door is drawn with its arc.">
+                <input type="checkbox" checked={s.swing === "in"}
+                  onChange={function(e){ editShape(sel, { swing: e.target.checked ? "in" : "out" }); }} />
+                Opens inwards
+              </label>
+            </>
           )}
           {[["x","From left (m)"],["y","From top (m)"],
             ["w", s.kind === "door" ? "Door width (m)" : "Width (m)"],
@@ -8259,7 +8288,10 @@ function toDraft(r) {
       return { kind: kind, label: s.label || "",
                x: Number(s.x)||0, y: Number(s.y)||0,
                w: Number(s.w)||1000, h: Number(s.h)||1000,
-               hinge: kind === "door" ? (Number(s.hinge)||0) : undefined };
+               hinge: kind === "door" ? (Number(s.hinge)||0) : undefined,
+               // Anything not explicitly inward opens out — the case here, and
+               // the one that costs no floor.
+               swing: kind === "door" ? (s.swing === "in" ? "in" : "out") : undefined };
     }),
   };
 }

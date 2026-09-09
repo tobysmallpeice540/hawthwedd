@@ -68,13 +68,19 @@ function tableFootprint(t, z) {
   }
 }
 
-// A door, drawn the way a floor plan draws one: the leaf and the quarter circle
-// it sweeps. Eight arrangements — four corners to hinge on, and for each, two
-// choices of which adjacent edge the leaf rests against.
+// A door. Two drawings, and which one depends on the thing that matters to a
+// table plan: whether it eats floor.
+//
+//   opens outwards — the doorway alone. The swing happens outside the room, so
+//     an arc would hang off the edge of the plan and would describe floor that
+//     is not ours anyway. Default, and how they all open here.
+//
+//   opens inwards — the leaf AND the arc, because that arc is floor nobody can
+//     put a table on, which is the whole reason for drawing it.
 //
 // THIS MUST MATCH doorGeometry() IN THE ADMIN APP EXACTLY. Toby cycles a button
 // until the door looks like the real one; if the couple's copy resolved the
-// same number differently, they would be shown a door that opens the other way.
+// same number differently, they would be shown a door in the wrong place.
 function doorPath(s) {
   const r = Math.min(s.w, s.h)
   const c = (((s.hinge || 0) % 8) + 8) % 8
@@ -87,6 +93,7 @@ function doorPath(s) {
   const sweep = cross > 0 ? 1 : 0
   const leaf = leafIsNext ? A : B
   return {
+    inward: s.swing === 'in',
     arc: `M ${s.x + A.x} ${s.y + A.y} A ${r} ${r} 0 0 ${sweep} ${s.x + B.x} ${s.y + B.y}`,
     px: s.x + P.x, py: s.y + P.y,
     lx: s.x + leaf.x, ly: s.y + leaf.y,
@@ -300,8 +307,9 @@ function RoomCanvas({ room, size, tables, selected, readOnly, onSelect, onMoved,
             const d = doorPath(s)
             return (
               <g key={i}>
-                <path d={d.arc} className="door-arc" />
-                <line x1={d.px} y1={d.py} x2={d.lx} y2={d.ly} className="door-leaf" />
+                {d.inward && <path d={d.arc} className="door-arc" />}
+                <line x1={d.px} y1={d.py} x2={d.lx} y2={d.ly}
+                  className={d.inward ? 'door-leaf' : 'door-leaf is-shut'} />
               </g>
             )
           }

@@ -77,6 +77,29 @@ for (let s = 0; s < 8; s++) {
     (g.leaf.x === g.P.x) !== (g.leaf.y === g.P.y))
 }
 
+// ── 3b. Only an INWARD door draws its arc ───────────────────────────────────
+//
+// The rule, and the reason for it: at Hawthbush the doors open outwards, so the
+// swing happens outside the room. An arc there would hang off the edge of the
+// plan and would describe floor that is not ours to plan anyway. An inward
+// door's arc IS floor nobody can put a table on, which is the whole reason for
+// drawing one.
+//
+// Both apps must agree about that, or Toby draws a doorway and the couple is
+// shown an arc eating their floor — or worse, the reverse.
+const drawsArc = (swing) => swing === 'in'
+
+check('an inward door draws its arc', drawsArc('in'))
+check('an outward door does not', !drawsArc('out'))
+check('anything unset opens outwards', !drawsArc(undefined) && !drawsArc(null) && !drawsArc(''))
+// A typo must not quietly become an inward door and start eating floor.
+check('an unrecognised value opens outwards', !drawsArc('inward') && !drawsArc('IN'))
+
+for (const [file, name] of [[app, 'admin app'], [portal, 'portal']]) {
+  check(name + ' tests the swing for the exact string "in"', /swing\s*===\s*['"]in['"]/.test(file))
+  check(name + ' draws the arc only when inward', /inward\s*&&/.test(file))
+}
+
 // ── 4. The state wraps rather than breaking ─────────────────────────────────
 // The button does (hinge + 1) % 8 forever, and an old row may hold anything.
 check('state 8 is state 0', JSON.stringify(reference(900,900,8)) === JSON.stringify(reference(900,900,0)))
