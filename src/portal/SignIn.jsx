@@ -15,7 +15,7 @@ import { useState } from 'react'
 // stranger's address no longer creates an account. It answers identically
 // either way, so this form cannot be used to find out who is on the system —
 // which is why there is no "we don't have that address" state below.
-export default function SignIn() {
+export default function SignIn({ notice }) {
   const [email, setEmail] = useState('')
   const [state, setState] = useState('idle')   // idle | sending | sent | error
   const [message, setMessage] = useState('')
@@ -66,6 +66,11 @@ export default function SignIn() {
                 come straight in — there is no password to remember, and the link is good
                 for one use.
               </p>
+              <p className="muted" style={{ marginTop: 10 }}>
+                If we sent you one in the last minute — an invitation, say — that one is
+                still the live link and no second email will follow. Have a look for it
+                before asking again.
+              </p>
               <button
                 className="btn-quiet"
                 style={{ marginTop: 18 }}
@@ -82,6 +87,8 @@ export default function SignIn() {
                 Enter the email address we have for your booking and we will send
                 you a link.
               </p>
+
+              {notice && <div className="alert alert-warn" style={{ marginBottom: 16 }}>{notice}</div>}
 
               <form onSubmit={send}>
                 <label htmlFor="email">Email address</label>

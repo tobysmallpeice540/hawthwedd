@@ -105,15 +105,33 @@ async function ensureUser(email) {
   throw new Error("could not create the account: " + created.text.slice(0, 200));
 }
 
+// We build the link ourselves out of the token, rather than sending the
+// action_link Supabase hands back.
+//
+// WHY, because it looks like the long way round. The action_link points at
+// Supabase, which verifies the token and then REDIRECTS to whatever URL it is
+// given — but only if that URL is on the project's redirect allowlist. If it is
+// not, GoTrue silently falls back to the project's Site URL, and the first real
+// invite ever sent landed on localhost, because that is what Site URL happened
+// to be. The token was spent getting there, so the link could not be retried.
+//
+// A configuration setting in a dashboard that nobody looks at should not be
+// able to break every sign-in link silently. So the link points at our own
+// page, carrying the hashed token in the fragment, and the portal calls
+// verifyOtp itself. No redirect, no allowlist, nothing to get wrong later.
+//
+// The fragment is deliberate: it is never sent to a server, unlike a query
+// string, and it is what the portal strips out of the address bar on arrival.
 async function mintLink(email) {
   var r = await sbAuthAdmin("/generate_link", {
     method: "POST",
     body: { type: "magiclink", email: email, options: { redirect_to: PORTAL_URL } }
   });
   if (!r.ok) throw new Error("could not create a sign-in link: " + r.text.slice(0, 200));
-  var link = (r.body && (r.body.action_link || (r.body.properties && r.body.properties.action_link))) || "";
-  if (!link) throw new Error("Supabase returned no sign-in link");
-  return link;
+  var props = (r.body && r.body.properties) || r.body || {};
+  var token = props.hashed_token || "";
+  if (!token) throw new Error("Supabase returned no sign-in token");
+  return PORTAL_URL + "#t=" + encodeURIComponent(token);
 }
 
 // ── Email ───────────────────────────────────────────────────────────────────
