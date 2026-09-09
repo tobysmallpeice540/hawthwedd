@@ -188,6 +188,18 @@ export default function Layout() {
             </div>
           )}
           <div className="plan-main">
+            {/* Above the plan, not below it. Underneath, on a room the size of
+                the barn, the button sits past the bottom of the drawing and you
+                have to scroll away from the thing you are building to add to
+                it. */}
+            {!narrow && (
+              <div className="actions" style={{ marginTop: 0, marginBottom: 12 }}>
+                <button className="btn-small" onClick={async () => {
+                  try { await rpc('wp_add_table', { p_x_mm: snap(data.room.width_mm / 2), p_y_mm: snap(data.room.height_mm / 2) }); await load() }
+                  catch (e) { setNotice(e.message || String(e)) }
+                }}>Add a table</button>
+              </div>
+            )}
             <RoomCanvas
               room={data.room}
               size={sizeOf(data)}
@@ -199,14 +211,6 @@ export default function Layout() {
               onNotice={setNotice}
             />
             {notice && <div className="alert alert-warn" style={{ marginTop: 12 }}>{notice}</div>}
-            {!narrow && (
-              <div className="actions">
-                <button className="btn-small" onClick={async () => {
-                  try { await rpc('wp_add_table', { p_x_mm: snap(data.room.width_mm / 2), p_y_mm: snap(data.room.height_mm / 2) }); await load() }
-                  catch (e) { setNotice(e.message || String(e)) }
-                }}>Add a table</button>
-              </div>
-            )}
           </div>
         </div>
       </section>

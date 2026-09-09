@@ -1386,11 +1386,39 @@ function EmailHistoryPanel({ title, emptyLabel, bookingId, emails, typeFilter })
   );
 }
 
+// What can be logged, in one place, because two screens render this same list
+// and a vocabulary defined twice is a vocabulary that will disagree with itself.
+//
+// Only a call or a meeting can be ADDED. Email is deliberately not offered: it
+// is already tracked from the mailbox, and logging it twice by hand is how two
+// records come to contradict each other. The heading stays "Contact History"
+// because the log still holds 81 emails, and calling it a call log would
+// mislabel almost everything in it.
+const CONTACT_METHODS = [["phone", "Call"], ["other", "Meeting"]];
+
+// Stored values are untouched — only what they are called. 'other' and
+// 'inperson' both read as Meeting; 'email' keeps its own label, because the
+// entries already recorded that way are emails and always will be.
+function contactMethodLabel(m) {
+  return m === "email" ? "Email" : m === "phone" ? "Call" : "Meeting";
+}
+
+// An entry stored as something no longer on the menu keeps its own option while
+// it is being edited, so opening an old email to fix a typo does not silently
+// turn it into a call.
+function contactMethodOptions(current) {
+  const out = CONTACT_METHODS.slice();
+  if (current && !out.some(function(o){ return o[0] === current; })) {
+    out.unshift([current, contactMethodLabel(current)]);
+  }
+  return out;
+}
+
 // Generic "Contact History" log (date + method + note entries), reusable
 // anywhere a manual contact log is needed. Manages its own add/edit UI state
 // and reports the updated contacts array back via onChange.
 function ContactHistoryPanel({ contacts, onChange }) {
-  const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+  const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"phone", note:"" });
   const [adding, setAdding] = useState(false);
   const [editingIdx, setEditingIdx] = useState(null);
   const [editForm, setEditForm] = useState(null);
@@ -1404,7 +1432,7 @@ function ContactHistoryPanel({ contacts, onChange }) {
   const addContact = function() {
     if (!newContact.note.trim()) return;
     onChange(list.concat([{ ...newContact }]));
-    setNewContact({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+    setNewContact({ date: new Date().toISOString().slice(0,10), method:"phone", note:"" });
     setAdding(false);
   };
 
@@ -1424,7 +1452,7 @@ function ContactHistoryPanel({ contacts, onChange }) {
     onChange(list.filter(function(_, ii) { return ii !== actualIdx; }));
   };
 
-  const methodLabel = function(m) { return m==="email" ? "Email" : m==="phone" ? "Phone" : m==="inperson" ? "In Person" : "Other"; };
+  const methodLabel = contactMethodLabel;
   const iStyle = { width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" };
 
   return (
@@ -1444,14 +1472,11 @@ function ContactHistoryPanel({ contacts, onChange }) {
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
               <select value={newContact.method} onChange={function(e){ setNewContact(function(n){ return { ...n, method:e.target.value }; }); }} style={iStyle}>
-                <option value="email">Email</option>
-                <option value="phone">Phone</option>
-                <option value="inperson">In Person</option>
-                <option value="other">Other</option>
+                {CONTACT_METHODS.map(function(o){ return <option key={o[0]} value={o[0]}>{o[1]}</option>; })}
               </select>
             </div>
           </div>
-          <textarea value={newContact.note} onChange={function(e){ setNewContact(function(n){ return { ...n, note:e.target.value }; }); }} placeholder="Contact note…" rows={3}
+          <textarea value={newContact.note} onChange={function(e){ setNewContact(function(n){ return { ...n, note:e.target.value }; }); }} placeholder="What was said…" rows={3}
             style={{ ...iStyle, resize:"vertical", marginBottom:10 }}/>
           <div style={{ display:"flex", gap:8 }}>
             <button onClick={addContact} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Add</button>
@@ -1475,11 +1500,8 @@ function ContactHistoryPanel({ contacts, onChange }) {
                   </div>
                   <div>
                     <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
-                    <select value={editForm.method||"email"} onChange={function(e){ setEditForm(function(f){ return { ...f, method:e.target.value }; }); }} style={iStyle}>
-                      <option value="email">Email</option>
-                      <option value="phone">Phone</option>
-                      <option value="inperson">In Person</option>
-                      <option value="other">Other</option>
+                    <select value={editForm.method||"phone"} onChange={function(e){ setEditForm(function(f){ return { ...f, method:e.target.value }; }); }} style={iStyle}>
+                      {contactMethodOptions(editForm.method).map(function(o){ return <option key={o[0]} value={o[0]}>{o[1]}</option>; })}
                     </select>
                   </div>
                 </div>
@@ -6625,7 +6647,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   const handleConvertEnquiryToBooking = (enq) => {
     const sortedContacts = [...(enq.contacts||[])].sort((a,b)=> (a.date||"") > (b.date||"") ? 1 : -1);
-    const methodLabel = m => m==="phone" ? "Phone" : m==="other" ? "Other" : "Email";
+    const methodLabel = contactMethodLabel;
     const contactLines = sortedContacts.map(c => `${c.date||"No date"} (${methodLabel(c.method)}): ${c.note||""}`).join("\n\n");
 
     const extraLines = [];
@@ -9467,6 +9489,12 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
   return (
     <div>
       <div style={{ padding:"28px 0 18px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        {onOpenPortal && (
+          <button onClick={onOpenPortal}
+            style={{ background:"#4a5d4e", color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+            Manage Client Portal
+          </button>
+        )}
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name, email or date…"
           style={{ flex:1, minWidth:180, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 14px", outline:"none", boxShadow:"0 1px 3px rgba(37,99,235,.06)" }}/>
         {onOpenInvoices && (
@@ -9476,12 +9504,6 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
             {invoiceDueCount > 0 && (
               <span style={{ background:"#fff", color:T.midBlue, borderRadius:10, padding:"1px 8px", fontSize:11, fontWeight:800 }}>{invoiceDueCount}</span>
             )}
-          </button>
-        )}
-        {onOpenPortal && (
-          <button onClick={onOpenPortal}
-            style={{ background:"#4a5d4e", color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
-            Manage Client Portal
           </button>
         )}
         <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} event{bookings.length!==1?"s":""}</span>
@@ -16095,10 +16117,14 @@ const OUTCOME_CONFIG = {
   booked:       { label:"Booked",       bg:"#dcfce7", text:"#166534", border:"#86efac" },
   didnotbook:   { label:"Did Not Book", bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
 };
+// Labels for entries already stored. 'email' keeps its own, because those
+// entries are emails; 'other' and 'inperson' read as Meeting. See
+// CONTACT_METHODS for what can still be added.
 const METHOD_CONFIG = {
-  email: { label:"Email", icon:"✉" },
-  phone: { label:"Phone", icon:"📞" },
-  other: { label:"Other", icon:"💬" },
+  email:    { label:"Email",   icon:"✉" },
+  phone:    { label:"Call",    icon:"📞" },
+  inperson: { label:"Meeting", icon:"🤝" },
+  other:    { label:"Meeting", icon:"🤝" },
 };
 
 function TempBadge({ temp }) {
@@ -18259,7 +18285,7 @@ function FRow({ label, children }) {
 
 function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking }) {
   const [form, setForm]         = useState({...enq});
-  const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+  const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"phone", note:"" });
   const [addingContact, setAddingContact] = useState(false);
   const [editingContactIdx, setEditingContactIdx] = useState(null);
   const [editContactForm, setEditContactForm] = useState(null);
@@ -18288,7 +18314,7 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
     if (!newContact.note.trim()) return;
     const c = [...(form.contacts||[]), { ...newContact }];
     setForm(f=>({...f, contacts:c})); setDirty(true);
-    setNewContact({ date: new Date().toISOString().slice(0,10), method:"email", note:"" });
+    setNewContact({ date: new Date().toISOString().slice(0,10), method:"phone", note:"" });
     setAddingContact(false);
   };
 
@@ -18437,13 +18463,11 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
                   <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
                   <select value={newContact.method} onChange={e=>setNewContact(n=>({...n,method:e.target.value}))}
                     style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none" }}>
-                    <option value="email">Email</option>
-                    <option value="phone">Phone</option>
-                    <option value="other">Other</option>
+                    {CONTACT_METHODS.map(function(o){ return <option key={o[0]} value={o[0]}>{o[1]}</option>; })}
                   </select>
                 </div>
               </div>
-              <textarea value={newContact.note} onChange={e=>setNewContact(n=>({...n,note:e.target.value}))} placeholder="Contact note…" rows={3}
+              <textarea value={newContact.note} onChange={e=>setNewContact(n=>({...n,note:e.target.value}))} placeholder="What was said…" rows={3}
                 style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 9px", outline:"none", resize:"vertical", boxSizing:"border-box", marginBottom:10 }}/>
               <div style={{ display:"flex", gap:8 }}>
                 <button onClick={addContact} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Add</button>
@@ -18471,11 +18495,9 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
                       </div>
                       <div>
                         <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Method</label>
-                        <select value={editContactForm.method||"email"} onChange={e=>setEditContactForm(f=>({...f,method:e.target.value}))}
+                        <select value={editContactForm.method||"phone"} onChange={e=>setEditContactForm(f=>({...f,method:e.target.value}))}
                           style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none" }}>
-                          <option value="email">Email</option>
-                          <option value="phone">Phone</option>
-                          <option value="other">Other</option>
+                          {contactMethodOptions(editContactForm.method).map(function(o){ return <option key={o[0]} value={o[0]}>{o[1]}</option>; })}
                         </select>
                       </div>
                     </div>
