@@ -171,37 +171,46 @@ export default function Layout() {
       </section>
 
       <section className="card">
-        <RoomCanvas
-          room={data.room}
-          size={sizeOf(data)}
-          tables={data.tables}
-          selected={selected}
-          readOnly={narrow}
-          onSelect={setSelected}
-          onMoved={load}
-          onNotice={setNotice}
-        />
-        {notice && <div className="alert alert-warn" style={{ marginTop: 12 }}>{notice}</div>}
-        {!narrow && (
-          <div className="actions">
-            <button className="btn-small" onClick={async () => {
-              try { await rpc('wp_add_table', { p_x_mm: snap(data.room.width_mm / 2), p_y_mm: snap(data.room.height_mm / 2) }); await load() }
-              catch (e) { setNotice(e.message || String(e)) }
-            }}>Add a table</button>
+        {/* The seat list sits BESIDE the plan, not under it. Underneath, on a
+            laptop, it fell below the fold: you clicked a table and then could
+            not see the thing you had just opened. */}
+        <div className="plan-split">
+          {sel && (
+            <div className="plan-side">
+              <TablePanel
+                table={sel}
+                unseated={data.unseated}
+                readOnly={narrow}
+                onChanged={load}
+                onNotice={setNotice}
+                onClose={() => setSelected(null)}
+              />
+            </div>
+          )}
+          <div className="plan-main">
+            <RoomCanvas
+              room={data.room}
+              size={sizeOf(data)}
+              tables={data.tables}
+              selected={selected}
+              readOnly={narrow}
+              onSelect={setSelected}
+              onMoved={load}
+              onNotice={setNotice}
+            />
+            {notice && <div className="alert alert-warn" style={{ marginTop: 12 }}>{notice}</div>}
+            {!narrow && (
+              <div className="actions">
+                <button className="btn-small" onClick={async () => {
+                  try { await rpc('wp_add_table', { p_x_mm: snap(data.room.width_mm / 2), p_y_mm: snap(data.room.height_mm / 2) }); await load() }
+                  catch (e) { setNotice(e.message || String(e)) }
+                }}>Add a table</button>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </section>
 
-      {sel && (
-        <TablePanel
-          table={sel}
-          unseated={data.unseated}
-          readOnly={narrow}
-          onChanged={load}
-          onNotice={setNotice}
-          onClose={() => setSelected(null)}
-        />
-      )}
     </>
   )
 }
@@ -366,7 +375,7 @@ function TablePanel({ table, unseated, readOnly, onChanged, onNotice, onClose })
     !search.trim() || g.name.toLowerCase().includes(search.trim().toLowerCase()))
 
   return (
-    <section className="card">
+    <div className="table-panel">
       <div className="list-head">
         <h3 style={{ marginBottom: 0 }}>{table.label}</h3>
         <button className="btn-small ghost" onClick={onClose}>Close</button>
@@ -464,6 +473,6 @@ function TablePanel({ table, unseated, readOnly, onChanged, onNotice, onClose })
           )}
         </div>
       )}
-    </section>
+    </div>
   )
 }

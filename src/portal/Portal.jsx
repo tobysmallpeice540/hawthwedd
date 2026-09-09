@@ -162,7 +162,7 @@ export default function Portal({ session }) {
 
       <main className="wrap">
         {tab === 'overview' && <Overview event={event} days={days} />}
-        {tab === 'guests'    && <Guests />}
+        {tab === 'guests'    && <Guests accommodation={event.accommodation} />}
         {tab === 'checklist' && <Checklist />}
         {tab === 'details'   && <VenueForm />}
         {tab === 'contract'  && <Contract />}

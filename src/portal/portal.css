@@ -276,6 +276,38 @@ a.btn-small { text-decoration: none; display: inline-block; }
 }
 .room-floor { fill: #fdfcfa; }
 
+/* The seat list beside the plan rather than beneath it. Beneath, on a laptop,
+   it fell below the fold — you clicked a table and could not see what you had
+   opened. The list leads, because it is what you read while dragging.
+   Narrow screens stack, and the plan is read-only there anyway. */
+.plan-split { display: flex; gap: 20px; align-items: flex-start; }
+.plan-main  { flex: 1 1 auto; min-width: 0; }
+.plan-side  { flex: 0 0 268px; max-width: 268px; }
+.table-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  position: sticky;
+  top: 12px;
+}
+@media (max-width: 820px) {
+  .plan-split { flex-direction: column; }
+  .plan-side  { flex: 1 1 auto; max-width: none; width: 100%; order: 2; }
+  .table-panel { position: static; }
+}
+
+/* Sorting a named list, and moving somebody between tables from it. */
+.sort-bar {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0 12px; font-size: 13px; flex-wrap: wrap;
+}
+.table-pick {
+  font-family: inherit; font-size: 13px; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+  max-width: 140px;
+}
+
 .zone-fixed { fill: #e6e0d5; stroke: #d6cec0; stroke-width: 12; }
 .zone-nogo  { fill: #f6e6e6; stroke: #e3c9c9; stroke-width: 12; stroke-dasharray: 90 70; }
 .zone-label { font-size: 320px; fill: var(--muted); font-family: 'Jost', sans-serif; }

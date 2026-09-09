@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
 import { parseGuests } from './parseGuests.js'
+import { ACCOM_LABEL, accomOptions, sortGuests } from './guestSort.js'
 
 // EVERY component that renders an input lives at module scope. A component
 // defined inside another is a new type on every render, so React rebuilds its
@@ -9,13 +10,14 @@ import { parseGuests } from './parseGuests.js'
 
 const AGE_LABEL = { adult: 'Adult', child: 'Child', baby: 'Baby' }
 
+
 function n(v) {
   if (v === '' || v === null || v === undefined) return null
   const x = parseInt(v, 10)
   return Number.isFinite(x) ? x : null
 }
 
-export default function Guests() {
+export default function Guests({ accommodation }) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -55,6 +57,8 @@ export default function Guests() {
         blurb="Everyone at a table for the wedding breakfast. This is the list the table plan will use."
         list="seated"
         guests={seated}
+        tables={data.tables || []}
+        accommodation={accommodation}
         onChanged={load}
       />
       <GuestList
@@ -158,9 +162,13 @@ function NumberField({ label, value, onChange, hint }) {
 
 // ── a named list ───────────────────────────────────────────────────────────
 
-function GuestList({ title, blurb, list, guests, onChanged }) {
+function GuestList({ title, blurb, list, guests, tables, accommodation, onChanged }) {
   const [adding, setAdding] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [sort, setSort] = useState(list === 'seated' ? 'table' : 'name')
+
+  const seatable = list === 'seated' && (tables || []).length > 0
+  const shown = sortGuests(guests, sort)
 
   return (
     <section className="card">
@@ -172,9 +180,25 @@ function GuestList({ title, blurb, list, guests, onChanged }) {
         <span className="count">{guests.length}</span>
       </div>
 
+      {guests.length > 1 && (
+        <div className="sort-bar">
+          <span className="muted">Sort by</span>
+          {[['name', 'Name'], seatable ? ['table', 'Table'] : null, ['where', 'Staying']]
+            .filter(Boolean)
+            .map(([k, lbl]) => (
+              <button key={k} type="button"
+                className={'btn-small ' + (sort === k ? '' : 'ghost')}
+                onClick={() => setSort(k)}>{lbl}</button>
+            ))}
+        </div>
+      )}
+
       {guests.length > 0 && (
         <div className="guests">
-          {guests.map((g) => <GuestRow key={g.id} guest={g} onChanged={onChanged} />)}
+          {shown.map((g) => (
+            <GuestRow key={g.id} guest={g} tables={seatable ? tables : null}
+              accommodation={accommodation} onChanged={onChanged} />
+          ))}
         </div>
       )}
 
@@ -184,7 +208,7 @@ function GuestList({ title, blurb, list, guests, onChanged }) {
         </p>
       )}
 
-      {adding && <AddGuest list={list} onDone={() => { setAdding(false); onChanged() }} onCancel={() => setAdding(false)} />}
+      {adding && <AddGuest list={list} accommodation={accommodation} onDone={() => { setAdding(false); onChanged() }} onCancel={() => setAdding(false)} />}
       {importing && <ImportGuests list={list} onDone={() => { setImporting(false); onChanged() }} onCancel={() => setImporting(false)} />}
 
       {!adding && !importing && (
@@ -197,11 +221,25 @@ function GuestList({ title, blurb, list, guests, onChanged }) {
   )
 }
 
-function GuestRow({ guest, onChanged }) {
+function GuestRow({ guest, tables, accommodation, onChanged }) {
   const [editing, setEditing] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+
+  // Changing the table from the list picks the first free chair — which is what
+  // somebody working down a list wants. Choosing a particular seat is what the
+  // plan itself is for.
+  async function moveTo(tableId) {
+    setBusy(true); setErr('')
+    try {
+      const r = await rpc('wp_set_guest_table', { p_guest_id: guest.id, p_table_id: tableId || null })
+      await onChanged()
+      if (r && r.ok === false) setErr('That table is full.')
+    } catch (e) {
+      setErr(e.code === 'table_full' ? 'That table is full.' : (e.message || String(e)))
+    } finally { setBusy(false) }
+  }
 
   async function remove() {
     setBusy(true); setErr('')
@@ -214,7 +252,10 @@ function GuestRow({ guest, onChanged }) {
   }
 
   if (editing) {
-    return <EditGuest guest={guest} onDone={() => { setEditing(false); onChanged() }} onCancel={() => setEditing(false)} />
+    return (
+      <EditGuest guest={guest} accommodation={accommodation}
+        onDone={() => { setEditing(false); onChanged() }} onCancel={() => setEditing(false)} />
+    )
   }
 
   const name = [guest.first_name, guest.last_name].filter(Boolean).join(' ')
@@ -224,12 +265,24 @@ function GuestRow({ guest, onChanged }) {
       <div className="guest-main">
         <span className="guest-name">{name}</span>
         {guest.age_band !== 'adult' && <span className="chip">{AGE_LABEL[guest.age_band]}</span>}
-        {guest.staying && <span className="chip">Staying</span>}
+        {guest.staying && (
+          <span className="chip">
+            {guest.staying_where ? 'Staying · ' + ACCOM_LABEL[guest.staying_where] : 'Staying'}
+          </span>
+        )}
         {guest.side && <span className="guest-side">{guest.side}</span>}
         {guest.access_needs && <div className="guest-note">{guest.access_needs}</div>}
         {err && <div className="guest-note err">{err}</div>}
       </div>
       <div className="guest-actions">
+        {tables && !confirming && (
+          <select className="table-pick" value={guest.table_id || ''} disabled={busy}
+            aria-label={'Table for ' + name}
+            onChange={(e) => moveTo(e.target.value)}>
+            <option value="">Not seated</option>
+            {tables.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        )}
         {confirming ? (
           <>
             <button className="btn-small danger" onClick={remove} disabled={busy}>
@@ -250,7 +303,8 @@ function GuestRow({ guest, onChanged }) {
 
 // ── adding and editing ─────────────────────────────────────────────────────
 
-function GuestFields({ v, set }) {
+function GuestFields({ v, set, accommodation }) {
+  const options = accomOptions(accommodation)
   return (
     <>
       <div className="namegrid">
@@ -278,9 +332,24 @@ function GuestFields({ v, set }) {
         </div>
       </div>
       <label className="check">
-        <input type="checkbox" checked={v.staying} onChange={(e) => set('staying', e.target.checked)} />
+        <input type="checkbox" checked={v.staying}
+          onChange={(e) => { set('staying', e.target.checked); if (!e.target.checked) set('staying_where', '') }} />
         Staying overnight with us
       </label>
+      {v.staying && options.length > 0 && (
+        <>
+          <label>Where are they staying?</label>
+          <select value={v.staying_where || ''} onChange={(e) => set('staying_where', e.target.value)}>
+            <option value="">Not decided yet</option>
+            {options.map((k) => <option key={k} value={k}>{ACCOM_LABEL[k]}</option>)}
+          </select>
+        </>
+      )}
+      {v.staying && options.length === 0 && (
+        <p className="hint">
+          Once your accommodation is confirmed you'll be able to say who is in which.
+        </p>
+      )}
       <label>Anything we should know <span className="opt">optional</span></label>
       <input
         value={v.access_needs}
@@ -291,9 +360,9 @@ function GuestFields({ v, set }) {
   )
 }
 
-const BLANK = { first_name: '', last_name: '', side: '', age_band: 'adult', staying: false, access_needs: '' }
+const BLANK = { first_name: '', last_name: '', side: '', age_band: 'adult', staying: false, staying_where: '', access_needs: '' }
 
-function AddGuest({ list, onDone, onCancel }) {
+function AddGuest({ list, accommodation, onDone, onCancel }) {
   const [v, setV] = useState(BLANK)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -308,6 +377,7 @@ function AddGuest({ list, onDone, onCancel }) {
         p_first_name: v.first_name, p_last_name: v.last_name,
         p_side: v.side || null, p_age_band: v.age_band,
         p_staying: v.staying, p_access_needs: v.access_needs || null,
+        p_staying_where: v.staying ? (v.staying_where || null) : null,
       })
       onDone()
     } catch (e2) {
@@ -318,7 +388,7 @@ function AddGuest({ list, onDone, onCancel }) {
 
   return (
     <form className="editor" onSubmit={submit}>
-      <GuestFields v={v} set={set} />
+      <GuestFields v={v} set={set} accommodation={accommodation} />
       {err && <div className="alert alert-warn">{err}</div>}
       <div className="actions">
         <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Adding…' : 'Add'}</button>
@@ -328,11 +398,12 @@ function AddGuest({ list, onDone, onCancel }) {
   )
 }
 
-function EditGuest({ guest, onDone, onCancel }) {
+function EditGuest({ guest, accommodation, onDone, onCancel }) {
   const [v, setV] = useState({
     first_name: guest.first_name || '', last_name: guest.last_name || '',
     side: guest.side || '', age_band: guest.age_band || 'adult',
-    staying: !!guest.staying, access_needs: guest.access_needs || '',
+    staying: !!guest.staying, staying_where: guest.staying_where || '',
+    access_needs: guest.access_needs || '',
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -350,6 +421,9 @@ function EditGuest({ guest, onDone, onCancel }) {
         p_first_name: v.first_name, p_last_name: v.last_name,
         p_side: v.side, p_age_band: v.age_band,
         p_staying: v.staying, p_access_needs: v.access_needs,
+        // Empty string, never null: null means "leave it alone", so a couple
+        // going back to "not decided yet" would silently keep the old answer.
+        p_staying_where: v.staying ? (v.staying_where || '') : '',
       })
       onDone()
     } catch (e2) {
@@ -359,7 +433,7 @@ function EditGuest({ guest, onDone, onCancel }) {
 
   return (
     <form className="editor" onSubmit={submit}>
-      <GuestFields v={v} set={set} />
+      <GuestFields v={v} set={set} accommodation={accommodation} />
       {err && <div className="alert alert-warn">{err}</div>}
       <div className="actions">
         <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
