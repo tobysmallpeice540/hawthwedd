@@ -12,6 +12,31 @@ function endsAt(start, mins) {
   return String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0')
 }
 
+// The venue's own times — music ends, bar closes, carriages, site closed — are
+// part of the day, not a separate list to cross-reference. They are woven in at
+// their own times so a couple planning speeches at 23:30 can SEE the bar closing
+// at 23:45 on the line below, rather than being told it somewhere else.
+//
+// They come back computed, never stored, so they cannot go stale when an access
+// time changes — and they are not editable here, which the row says quietly
+// rather than with a button that refuses.
+//
+// Two things at the same time is fine. A band setting up while the cake arrives
+// is an ordinary afternoon, so equal start times simply sit next to each other
+// in the order they were added.
+function mergeDay(blocks, fixed) {
+  const rows = blocks.map((b) => ({ kind: 'block', at: b.start_time, block: b }))
+  for (const f of fixed || []) {
+    if (f && f.time) rows.push({ kind: 'venue', at: f.time, title: f.title })
+  }
+  return rows.sort((a, b) => {
+    const t = String(a.at || '').localeCompare(String(b.at || ''))
+    if (t !== 0) return t
+    // A venue line at the same minute reads better after the couple's own.
+    return (a.kind === 'venue' ? 1 : 0) - (b.kind === 'venue' ? 1 : 0)
+  })
+}
+
 function lengthLabel(mins) {
   if (!mins) return null
   if (mins < 60) return mins + ' min'
@@ -48,6 +73,7 @@ export default function Timeline() {
 
   const current = data.days.find((d) => d.day_key === day) || data.days[0]
   const blocks = data.blocks.filter((b) => b.day_key === (current || {}).day_key)
+  const rows = mergeDay(blocks, current ? current.fixed : [])
 
   return (
     <>
@@ -81,20 +107,26 @@ export default function Timeline() {
         )}
       </section>
 
-      {current && <Limits day={current} />}
-
       <section className="card">
         <div className="list-head">
           <h3 style={{ marginBottom: 0 }}>{current ? current.label : 'The day'}</h3>
           <span className="count">{blocks.length}</span>
         </div>
 
-        {blocks.length === 0 ? (
+        {current && current.access_text && (
+          <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+            Access {current.access_text}.
+          </p>
+        )}
+
+        {rows.length === 0 ? (
           <p className="muted" style={{ fontSize: 14, padding: '12px 0' }}>Nothing here yet.</p>
         ) : (
           <div className="tl">
-            {blocks.map((b) => (
-              <Block key={b.id} block={b} suppliers={data.suppliers} onChanged={load} />
+            {rows.map((r, i) => (
+              r.kind === 'venue'
+                ? <VenueRow key={'v' + i} at={r.at} title={r.title} />
+                : <Block key={r.block.id} block={r.block} suppliers={data.suppliers} onChanged={load} />
             ))}
           </div>
         )}
@@ -104,55 +136,31 @@ export default function Timeline() {
           suppliers={data.suppliers}
           onChanged={load}
         />
-      </section>
 
-      {blocks.length > 0 && current && (
-        <RunningLate dayKey={current.day_key} onChanged={load} />
-      )}
+        {(current && (current.fixed || []).length > 0) && (
+          <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>
+            The greyed lines come with the venue and cannot be moved from here. If you
+            need something different, talk to us — sometimes there is room, and it is
+            much easier to ask now.
+          </p>
+        )}
+      </section>
     </>
   )
 }
 
-// What is fixed comes back computed, never stored, so it cannot go stale when
-// an access time changes. The contract's own wording is shown verbatim beside
-// it — deliberately not parsed. "10am to Midnight" is prose, and turning prose
-// into numbers is how the corkage note once became a £9,100 charge.
-function Limits({ day }) {
-  const fixed = day.fixed || []
-  if (!fixed.length && !day.access_text) return null
-
+// One of the venue's own times, sitting in the day where it falls.
+function VenueRow({ at, title }) {
   return (
-    <section className="card">
-      <h3>What is fixed</h3>
-
-      {day.access_text && (
-        <div className="rows">
-          <div className="row">
-            <span className="k">Access</span>
-            <span className="v">{day.access_text}</span>
-          </div>
-        </div>
-      )}
-
-      {fixed.length > 0 && (
-        <div className="rows" style={{ marginTop: day.access_text ? 12 : 0 }}>
-          {fixed.map((f) => (
-            <div className="row" key={f.title}>
-              <span className="k">{f.title}</span>
-              <span className="v">{hhmm(f.time)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-        {fixed.length
-          ? 'These come with the venue and cannot be moved from here. If you need something different, talk to us — sometimes there is room, and it is much easier to ask now.'
-          : 'Your finishing times follow the access times in your contract. We will confirm them with you.'}
-      </p>
-    </section>
+    <div className="tl-row is-venue">
+      <div className="tl-time"><span className="tl-start">{hhmm(at)}</span></div>
+      <div className="tl-main">
+        <div className="tl-title">{title}</div>
+      </div>
+    </div>
   )
 }
+
 
 function Block({ block, suppliers, onChanged }) {
   const [editing, setEditing] = useState(false)
@@ -164,12 +172,6 @@ function Block({ block, suppliers, onChanged }) {
     setBusy(true); setErr('')
     try { await rpc('wp_delete_block', { p_id: block.id }); await onChanged() }
     catch (e) { setErr(e.message || String(e)); setBusy(false); setConfirming(false) }
-  }
-
-  async function togglePin() {
-    setBusy(true); setErr('')
-    try { await rpc('wp_update_block', { p_id: block.id, p_pinned: !block.pinned }); await onChanged() }
-    catch (e) { setErr(e.message || String(e)) } finally { setBusy(false) }
   }
 
   if (editing) {
@@ -198,7 +200,6 @@ function Block({ block, suppliers, onChanged }) {
         <div className="tl-title">
           {block.title}
           {block.locked && <span className="chip">Set by us</span>}
-          {block.pinned && !block.locked && <span className="chip">Fixed</span>}
         </div>
         <div className="tl-meta">
           {lengthLabel(block.duration_min)}
@@ -216,9 +217,6 @@ function Block({ block, suppliers, onChanged }) {
             </>
           ) : (
             <>
-              <button className="btn-small ghost" onClick={togglePin} disabled={busy}>
-                {block.pinned ? 'Unfix' : 'Fix'}
-              </button>
               <button className="btn-small ghost" onClick={() => setEditing(true)}>Edit</button>
               <button className="btn-small ghost" onClick={() => setConfirming(true)}>Remove</button>
             </>
@@ -322,60 +320,3 @@ function AddBlock({ dayKey, suppliers, onChanged }) {
   )
 }
 
-// What actually happens on the day: one thing overruns and everything after it
-// slides. Anything we have fixed stays put — the bar does not close later
-// because lunch went long — and so does anything the couple has fixed.
-function RunningLate({ dayKey, onChanged }) {
-  const [from, setFrom] = useState('')
-  const [mins, setMins] = useState(30)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  const [msg, setMsg] = useState('')
-
-  async function go(e) {
-    e.preventDefault()
-    if (!from) return
-    setBusy(true); setErr(''); setMsg('')
-    try {
-      const r = await rpc('wp_shift_after', { p_day_key: dayKey, p_from: from, p_minutes: Number(mins) })
-      setMsg(r.moved === 0 ? 'Nothing after that time to move.' : `Moved ${r.moved} thing${r.moved === 1 ? '' : 's'}.`)
-      await onChanged()
-    } catch (e2) { setErr(e2.message || String(e2)) } finally { setBusy(false) }
-  }
-
-  return (
-    <section className="card">
-      <h3>Everything running late?</h3>
-      <p className="muted" style={{ fontSize: 13, marginBottom: 14 }}>
-        Push everything after a certain time along, in one go. Anything we have set,
-        and anything you have fixed, stays where it is.
-      </p>
-      <form onSubmit={go}>
-        <div className="namegrid">
-          <div>
-            <label>Everything after</label>
-            <input type="time" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </div>
-          <div>
-            <label>Moves later by</label>
-            <select value={mins} onChange={(e) => setMins(e.target.value)}>
-              <option value="15">15 minutes</option>
-              <option value="30">30 minutes</option>
-              <option value="45">45 minutes</option>
-              <option value="60">an hour</option>
-              <option value="-15">15 minutes earlier</option>
-              <option value="-30">30 minutes earlier</option>
-            </select>
-          </div>
-        </div>
-        {err && <div className="alert alert-warn">{err}</div>}
-        {msg && <div className="alert alert-ok">{msg}</div>}
-        <div className="actions">
-          <button className="btn-small" type="submit" disabled={busy || !from}>
-            {busy ? 'Moving…' : 'Shift them'}
-          </button>
-        </div>
-      </form>
-    </section>
-  )
-}

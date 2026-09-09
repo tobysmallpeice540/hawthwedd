@@ -6947,6 +6947,7 @@ const PORTAL_TABS = [
   { id: "times",    label: "Access times" },
   { id: "suppliers",label: "Supplier directory" },
   { id: "room",     label: "The room" },
+  { id: "templates",label: "Templates" },
 ];
 
 function PortalAdminScreen({ bookings, onBack }) {
@@ -6976,9 +6977,420 @@ function PortalAdminScreen({ bookings, onBack }) {
       {tab === "times"     && <PortalAccessTimes />}
       {tab === "suppliers" && <PortalSupplierDirectory />}
       {tab === "room"      && <PortalRoomEditor />}
+      {tab === "templates" && <PortalTemplates bookings={bookings} />}
     </div>
   );
 }
+
+// ─── what every event starts from ────────────────────────────────────────────
+//
+// Three templates, all of which existed in the database from the day the portal
+// was built and none of which had a screen: the timings offered for each event
+// type, the days each type gets and what they are called, and the checklist.
+//
+// THE RULE THAT MAKES THESE SAFE TO EDIT: changing a template never touches a
+// wedding that has already been seeded. A couple shown a 2pm ceremony does not
+// find it silently moved because the template changed months later. Both
+// templates are COPIED at seed time rather than referenced, which is why.
+//
+// So the honest reading of this screen is "what the next couple will see", and
+// it says so rather than leaving anyone to wonder.
+
+const DAY_ORDER = { before: 1, event: 2, after: 3 };
+const DAY_FALLBACK = { before: "The day before", event: "The day", after: "The day after" };
+
+function hhmm(t) { return t ? String(t).slice(0, 5) : ""; }
+
+function PortalTemplates({ bookings }) {
+  const [data, setData] = useState(null);
+  const [type, setType] = useState("Wedding");
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  async function load() {
+    setErr("");
+    try { setData(await sbRpc("wp_admin_templates")); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  if (err) return <ErrBanner text={err} />;
+  if (!data) return <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>;
+
+  const types = data.event_types || [];
+  const current = types.find(function(t){ return t.event_type === type; }) || types[0];
+
+  return (
+    <div>
+      {note && <div style={{ background:T.greenBg, border:`1px solid ${T.green}33`, color:T.green,
+        borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{note}</div>}
+
+      <p style={{ fontSize:13, color:T.textMid, maxWidth:680, lineHeight:1.7, marginTop:0 }}>
+        What the <b>next</b> couple starts from. Changing anything here leaves every
+        wedding already opened exactly as it is — a couple shown a 2pm ceremony does
+        not find it moved months later — so this is safe to rework whenever you like.
+      </p>
+
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", margin:"16px 0" }}>
+        {types.map(function(t){
+          const on = current && t.event_type === current.event_type;
+          return (
+            <button key={t.event_type} onClick={function(){ setType(t.event_type); }}
+              style={{ background: on ? T.accentLight : "none", border:`1.5px solid ${on ? T.accent : T.border}`,
+                color: on ? T.accent : T.textMid, borderRadius:8, padding:"7px 14px",
+                cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight: on ? 700 : 400 }}>
+              {t.event_type}
+            </button>
+          );
+        })}
+      </div>
+
+      {current && (
+        <>
+          <TemplateDays eventType={current.event_type} days={current.days || []}
+            onSaved={function(m){ setNote(m); load(); }} />
+          <TemplateBlocks eventType={current.event_type} days={current.days || []}
+            blocks={current.blocks || []} onSaved={function(m){ setNote(m); load(); }} />
+        </>
+      )}
+
+      <ChecklistTemplate rows={data.checklist || []} onSaved={function(m){ setNote(m); load(); }} />
+      <CoupleTimelines bookings={bookings} />
+    </div>
+  );
+}
+
+// ── the days an event type gets, and the venue's own times on each ──────────
+function TemplateDays({ eventType, days, onSaved }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function saveDay(d, patch) {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_save_event_day", Object.assign({
+        p_event_type: eventType, p_day_key: d.day_key,
+      }, patch));
+      onSaved("Saved.");
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Days and finishing times</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        A blank time means the couple's own contract decides it — which is right for
+        access, and usually wrong for the bar. Untick a day and it disappears from the
+        portal for this event type entirely.
+      </p>
+      {err && <ErrBanner text={err} />}
+
+      {days.slice().sort(function(a,b){ return DAY_ORDER[a.day_key] - DAY_ORDER[b.day_key]; }).map(function(d){
+        return (
+          <div key={d.day_key} style={{ borderTop:`1px solid ${T.border}`, padding:"12px 0",
+            display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+            <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, color:T.textMid,
+              width:96, paddingBottom:9 }}>
+              <input type="checkbox" checked={!!d.offered} disabled={busy}
+                onChange={function(e){ saveDay(d, { p_offered: e.target.checked }); }} />
+              Offered
+            </label>
+            <Field label="Called" width={170}>
+              <input defaultValue={d.label || DAY_FALLBACK[d.day_key]} disabled={busy}
+                onBlur={function(e){ if (e.target.value !== d.label) saveDay(d, { p_label: e.target.value }); }}
+                style={inputCss} />
+            </Field>
+            {[["p_music_ends","Music ends","music_ends"],
+              ["p_bar_closes","Bar closes","bar_closes"],
+              ["p_carriages","Carriages","carriages"],
+              ["p_site_closed","Site closed","site_closed"]].map(function(f){
+              return (
+                <Field key={f[0]} label={f[1]} width={98}>
+                  <input type="time" defaultValue={hhmm(d[f[2]])} disabled={busy}
+                    onBlur={function(e){
+                      if (e.target.value && e.target.value !== hhmm(d[f[2]])) {
+                        saveDay(d, (function(){ const o={}; o[f[0]] = e.target.value; return o; })());
+                      }
+                    }}
+                    style={inputCss} />
+                </Field>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── the timings pre-filled into each new event of this type ─────────────────
+function TemplateBlocks({ eventType, days, blocks, onSaved }) {
+  const [rows, setRows] = useState(blocks);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(function(){ setRows(blocks); setDirty(false); }, [eventType, blocks]);
+
+  const offered = days.filter(function(d){ return d.offered; });
+
+  function edit(i, patch) {
+    setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
+    setDirty(true);
+  }
+  function add() {
+    const day = offered.length ? offered[0].day_key : "event";
+    setRows(function(r){ return r.concat([{ day_key: day, start_time: "12:00", duration_min: 30, title: "", notes: "", locked: false }]); });
+    setDirty(true);
+  }
+  function remove(i) {
+    setRows(function(r){ return r.filter(function(_, j){ return j !== i; }); });
+    setDirty(true);
+  }
+
+  async function save() {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_save_timeline_template", {
+        p_event_type: eventType,
+        p_rows: rows.map(function(r, i){
+          return { day_key: r.day_key, start_time: hhmm(r.start_time), title: r.title,
+                   duration_min: Number(r.duration_min) || 0, notes: r.notes || null,
+                   locked: !!r.locked, sort: (i + 1) * 10 };
+        }),
+      });
+      setDirty(false);
+      onSaved("Saved. The next " + eventType.toLowerCase() + " will start from this.");
+    } catch (e) {
+      setErr(e.code === "needs_time_and_title" ? "Every line needs a time and a name."
+        : e.code === "day_not_offered" ? "One of those lines is on a day this event type does not get."
+        : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>
+        Suggested timings for a {eventType.toLowerCase()}
+      </div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        Pre-filled into each new event of this type as a starting point the couple can
+        change. Tick <b>ours</b> for a line they cannot move — use it sparingly; the
+        venue's own finishing times are already handled above and do not belong here.
+      </p>
+      {err && <ErrBanner text={err} />}
+
+      {rows.length === 0 && (
+        <p style={{ fontSize:13, color:T.textLight, padding:"6px 0" }}>
+          Nothing yet, so a {eventType.toLowerCase()} opens with an empty day.
+        </p>
+      )}
+
+      {rows.map(function(r, i){
+        return (
+          <div key={i} style={{ borderTop:`1px solid ${T.border}`, padding:"10px 0",
+            display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
+            <Field label="Day" width={132}>
+              <select value={r.day_key} onChange={function(e){ edit(i, { day_key:e.target.value }); }} style={inputCss}>
+                {offered.map(function(d){
+                  return <option key={d.day_key} value={d.day_key}>{d.label || DAY_FALLBACK[d.day_key]}</option>;
+                })}
+              </select>
+            </Field>
+            <Field label="Starts" width={96}>
+              <input type="time" value={hhmm(r.start_time)}
+                onChange={function(e){ edit(i, { start_time:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="Minutes" width={82}>
+              <input type="number" min="0" step="15" value={r.duration_min == null ? 30 : r.duration_min}
+                onChange={function(e){ edit(i, { duration_min:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="What happens" width={200}>
+              <input value={r.title || ""} onChange={function(e){ edit(i, { title:e.target.value }); }}
+                placeholder="Ceremony" style={inputCss} />
+            </Field>
+            <Field label="Note to the couple" width={220}>
+              <input value={r.notes || ""} onChange={function(e){ edit(i, { notes:e.target.value }); }}
+                placeholder="optional" style={inputCss} />
+            </Field>
+            <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid, paddingBottom:9 }}>
+              <input type="checkbox" checked={!!r.locked}
+                onChange={function(e){ edit(i, { locked:e.target.checked }); }} />
+              ours
+            </label>
+            <button onClick={function(){ remove(i); }}
+              style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55`, padding:"8px 12px" })}>
+              Remove
+            </button>
+          </div>
+        );
+      })}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14, flexWrap:"wrap" }}>
+        <button onClick={add} style={btnQuiet}>+ Add a line</button>
+        <button onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
+            borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : dirty ? "Save these timings" : "Saved"}
+        </button>
+        {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── the checklist every wedding starts with ─────────────────────────────────
+function ChecklistTemplate({ rows: initial, onSaved }) {
+  const [rows, setRows] = useState(initial);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(function(){ setRows(initial); setDirty(false); }, [initial]);
+
+  function edit(i, patch) {
+    setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
+    setDirty(true);
+  }
+
+  async function save() {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_save_checklist_template", {
+        p_rows: rows.map(function(r, i){
+          return { title: r.title, detail: r.detail || null,
+                   days_before: Number(r.days_before) || 0, sort: (i + 1) * 10 };
+        }),
+      });
+      setDirty(false);
+      onSaved("Checklist saved. Weddings already open keep the dates they were given.");
+    } catch (e) {
+      setErr(e.code === "needs_title" ? "Every item needs a name."
+        : e.code === "bad_days_before" ? "Days before has to be a number of days before the wedding, not after."
+        : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>The checklist</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        Seeded into every wedding, with each date worked backwards from the wedding day.
+        <b> These are still the placeholder deadlines</b> — they were a guess at your real
+        ones and want your eye before a couple sees them.
+      </p>
+      {err && <ErrBanner text={err} />}
+
+      {rows.map(function(r, i){
+        return (
+          <div key={i} style={{ borderTop:`1px solid ${T.border}`, padding:"10px 0",
+            display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
+            <Field label="Days before" width={96}>
+              <input type="number" min="0" value={r.days_before == null ? 0 : r.days_before}
+                onChange={function(e){ edit(i, { days_before:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="What they need to do" width={260}>
+              <input value={r.title || ""} onChange={function(e){ edit(i, { title:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="The bit underneath" width={330}>
+              <input value={r.detail || ""} onChange={function(e){ edit(i, { detail:e.target.value }); }} style={inputCss} />
+            </Field>
+            <button onClick={function(){ setRows(function(x){ return x.filter(function(_, j){ return j !== i; }); }); setDirty(true); }}
+              style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55`, padding:"8px 12px" })}>
+              Remove
+            </button>
+          </div>
+        );
+      })}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14, flexWrap:"wrap" }}>
+        <button style={btnQuiet}
+          onClick={function(){ setRows(function(r){ return r.concat([{ title:"", detail:"", days_before:30 }]); }); setDirty(true); }}>
+          + Add an item
+        </button>
+        <button onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
+            borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : dirty ? "Save the checklist" : "Saved"}
+        </button>
+        {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── and what people actually did with it ────────────────────────────────────
+function CoupleTimelines({ bookings }) {
+  const [eventId, setEventId] = useState("");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+
+  const list = (bookings || []).filter(function(b){ return b && b.id != null; }).slice()
+    .sort(function(a,b){ return String(b.date||"").localeCompare(String(a.date||"")); });
+
+  useEffect(function(){
+    if (!eventId) { setData(null); return; }
+    setErr(""); setData(null);
+    sbRpc("wp_admin_event_timeline", { p_event_id: Number(eventId) })
+      .then(setData).catch(function(e){ setErr(e.message || String(e)); });
+  }, [eventId]);
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>What a couple has suggested</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        Read-only. A template is worth very little without seeing what people do with it —
+        if everyone moves the same line, the template is wrong.
+      </p>
+      {err && <ErrBanner text={err} />}
+
+      <select value={eventId} onChange={function(e){ setEventId(e.target.value); }}
+        style={Object.assign({}, inputCss, { maxWidth:380 })}>
+        <option value="">Choose an event…</option>
+        {list.map(function(b){
+          return <option key={b.id} value={b.id}>{(b.date||"—") + " · " + (b.couple || b.eventType || "Event")}</option>;
+        })}
+      </select>
+
+      {data && (data.blocks || []).length === 0 && (
+        <p style={{ fontSize:13, color:T.textLight, marginTop:14 }}>
+          They have not opened the timeline yet.
+        </p>
+      )}
+
+      {data && (data.days || []).map(function(d){
+        const mine = (data.blocks || []).filter(function(b){ return b.day_key === d.day_key; });
+        const fixed = (d.fixed || []).map(function(f){ return { at:f.time, title:f.title, venue:true }; });
+        const all = mine.map(function(b){ return { at:b.start_time, title:b.title, notes:b.notes,
+                                                  supplier:b.supplier_name, locked:b.locked }; })
+          .concat(fixed)
+          .sort(function(a,b){ return String(a.at||"").localeCompare(String(b.at||"")); });
+        if (all.length === 0) return null;
+        return (
+          <div key={d.day_key} style={{ marginTop:16 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:T.textMid, marginBottom:6 }}>{d.label}</div>
+            {all.map(function(r, i){
+              return (
+                <div key={i} style={{ display:"flex", gap:12, padding:"5px 0", fontSize:13,
+                  color: r.venue ? T.textLight : T.text, borderTop: i ? `1px solid ${T.border}55` : "none" }}>
+                  <span style={{ width:52, fontVariantNumeric:"tabular-nums" }}>{hhmm(r.at)}</span>
+                  <span style={{ flex:1 }}>
+                    {r.title}
+                    {r.supplier && <span style={{ color:T.textLight }}> · {r.supplier}</span>}
+                    {r.notes && <div style={{ fontSize:12, color:T.textLight }}>{r.notes}</div>}
+                  </span>
+                  {r.venue && <span style={{ fontSize:11, color:T.textLight }}>ours</span>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 
 // ─── the room the tables go in ───────────────────────────────────────────────
 //

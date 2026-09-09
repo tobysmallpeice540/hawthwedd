@@ -8,6 +8,7 @@ import Suppliers from './Suppliers.jsx'
 import Timeline from './Timeline.jsx'
 import Money from './Money.jsx'
 import Layout from './Layout.jsx'
+import Pinterest from './Pinterest.jsx'
 
 // The eight tabs from the build spec. Only Overview is built; the rest declare
 // themselves honestly rather than pretending. Order matches the order a couple
@@ -22,6 +23,7 @@ const TABS = [
   { key: 'money',     label: 'Payments',      ready: true  },
   { key: 'details',   label: 'Details',       ready: true  },
   { key: 'contract',  label: 'Contract',      ready: true  },
+  { key: 'pinterest', label: 'Inspiration',   ready: true  },
 ]
 
 function fmtDate(iso) {
@@ -170,6 +172,7 @@ export default function Portal({ session }) {
         {tab === 'timeline'  && <Timeline />}
         {tab === 'money'     && <Money />}
         {tab === 'layout'    && <Layout />}
+        {tab === 'pinterest' && <Pinterest />}
         {!['overview', 'guests', 'checklist', 'details', 'contract', 'suppliers', 'timeline', 'money', 'layout'].includes(tab) && <Soon label={active.label} />}
       </main>
     </>

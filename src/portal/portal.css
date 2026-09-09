@@ -248,6 +248,13 @@ a.btn-small { text-decoration: none; display: inline-block; }
 }
 .tl-row { background: var(--card); display: flex; align-items: flex-start; gap: 14px; padding: 13px 15px; }
 .tl-row.is-locked { background: var(--sand); }
+
+/* The venue's own times, woven into the day rather than listed apart. Quieter
+   than the couple's own lines, and with no controls at all — the absence of a
+   button says "not yours to move" better than a button that refuses. */
+.tl-row.is-venue { background: transparent; }
+.tl-row.is-venue .tl-start,
+.tl-row.is-venue .tl-title { color: var(--muted); font-weight: 500; }
 .tl-time {
   flex: 0 0 4.6rem; display: flex; flex-direction: column; gap: 1px;
   font-variant-numeric: tabular-nums;
