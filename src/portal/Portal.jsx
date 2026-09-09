@@ -152,6 +152,7 @@ export default function Portal({ session }) {
         </div>
       </header>
 
+      <div className="tabs-bar">
       <nav className="tabs" role="tablist" aria-label="Your wedding">
         {TABS.map((t) => (
           <button
@@ -166,6 +167,7 @@ export default function Portal({ session }) {
           </button>
         ))}
       </nav>
+      </div>
 
       <main className="wrap">
         {tab === 'overview' && <Overview event={event} days={days} />}

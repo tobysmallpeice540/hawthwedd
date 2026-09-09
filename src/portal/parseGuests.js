@@ -66,10 +66,24 @@ function matchHeader(cells) {
     ? { map, hits } : null
 }
 
+// A pasted list is very often a NUMBERED list — straight out of a document, an
+// email, or a note on a phone — and without this the numbers become part of the
+// name. A real wedding ended up with "1. Olivia Bennett" and "2. James Carter"
+// sixty times over, and every one of those has to be fixed by hand.
+//
+// Deliberately narrow: a number, then a dot or a bracket, then WHITESPACE. That
+// is what a list looks like. It leaves "1,Olivia,Bennett" alone, because a
+// comma there is a CSV column and the 1 is somebody's id, and it leaves names
+// like "3M" or an address alone too. Up to three digits — nobody numbers a
+// guest list past 999, and a longer run of digits is more likely to be data.
+function stripListNumber(line) {
+  return line.replace(/^\s*\d{1,3}\s*[.)]\s+/, '')
+}
+
 export function parseGuests(text) {
   const lines = String(text || '')
     .split(/\r?\n/)
-    .map((l) => l.trim())
+    .map((l) => stripListNumber(l.trim()))
     .filter(Boolean)
 
   if (!lines.length) return { rows: [], skipped: 0, usedHeader: false }

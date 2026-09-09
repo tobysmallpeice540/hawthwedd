@@ -56,5 +56,38 @@ eq('unknown age falls back', r.rows[0].age_band, 'adult')
 r = parseGuests('')
 eq('empty input', r.rows.length, 0)
 
+// ── numbered lists ──────────────────────────────────────────────────────────
+//
+// Added after a real wedding's list arrived as "1. Olivia Bennett",
+// "2. James Carter" and so on, sixty names deep, because somebody pasted a
+// numbered list and the parser kept the numbers as part of the name. Every one
+// of those had to be corrected by hand.
+//
+// The stripping is deliberately narrow — number, dot or bracket, WHITESPACE —
+// so it cannot eat a CSV id column or a name that merely starts with a digit.
+
+r = parseGuests('1. Olivia Bennett\n2. James Carter')
+eq('numbered list loses its numbers',
+   r.rows.map((x) => x.first_name + ' ' + x.last_name), ['Olivia Bennett', 'James Carter'])
+
+r = parseGuests('1) Ava Mitchell')
+eq('brackets count as numbering', r.rows[0].last_name, 'Mitchell')
+
+r = parseGuests('  12 . Noah Wilson')
+eq('spaces around the number are fine', r.rows[0].first_name, 'Noah')
+
+// The three that stop it going too far.
+r = parseGuests('1,Olivia,Bennett')
+eq('a CSV id column is not stripped', r.rows[0].first_name, '1')
+
+r = parseGuests('3M Someone')
+eq('a name starting with a digit survives', r.rows[0].first_name, '3M')
+
+r = parseGuests('1.Olivia Bennett')
+eq('no space after the dot is not a list', r.rows[0].first_name, '1.Olivia')
+
+r = parseGuests('first name,last name\n1. Ada,Lovelace')
+eq('numbering does not confuse a header row', r.rows[0].first_name, 'Ada')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
