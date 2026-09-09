@@ -119,6 +119,19 @@
 #
 # The magic link comes back to /portal with the token in the URL fragment, so
 # this has to answer that exact path.
+# The portal on its own address. A domain alias serves the SAME site, so
+# without this the root of portal.hawthbushfarm.co.uk would show the staff
+# app's sign-in — harmless, since it needs an account, but wrong.
+#
+# Exact path, no splat, deliberately: a wildcard here would also swallow
+# /assets/* and /.netlify/functions/*, and the portal would load a page with no
+# JavaScript and no way to ask for a sign-in link. Inert until the alias exists.
+[[redirects]]
+  from = "https://portal.hawthbushfarm.co.uk/"
+  to = "/portal.html"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/portal"
   to = "/portal.html"

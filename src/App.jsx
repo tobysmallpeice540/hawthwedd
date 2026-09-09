@@ -7686,7 +7686,7 @@ function FarmBoards({ onSaved }) {
     <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
       <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Our inspiration boards</div>
       <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
-        Shown to every couple above their own — the barn dressed for real weddings is
+        Shown to every couple above their own — the Grain Store dressed for real weddings is
         the most useful thing you can put in front of somebody choosing colours.
         Pinterest addresses only, and one bad one rejects the whole save rather than
         leaving you with half a list.
@@ -7699,11 +7699,11 @@ function FarmBoards({ onSaved }) {
             display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
             <Field label="Called" width={190}>
               <input value={r.label || ""} onChange={function(e){ edit(i, { label:e.target.value }); }}
-                placeholder="The barn dressed" style={inputCss} />
+                placeholder="The Grain Store dressed" style={inputCss} />
             </Field>
             <Field label="Address" width={380}>
               <input value={r.url || ""} onChange={function(e){ edit(i, { url:e.target.value }); }}
-                placeholder="https://www.pinterest.co.uk/hawthbush/the-barn/" style={inputCss} />
+                placeholder="https://www.pinterest.co.uk/hawthbush/the-grain-store/" style={inputCss} />
             </Field>
             {r.url && (
               <a href={r.url} target="_blank" rel="noopener noreferrer"
@@ -7819,7 +7819,7 @@ function CoupleTimelines({ bookings }) {
 //
 // The plan is INDICATIVE. Toby's setup sheet stays master, so there is no
 // millimetre accuracy here and nothing checks fire gangways. What it has to do
-// is look enough like the barn that a couple recognises it and puts the top
+// is look enough like the room that a couple recognises it and puts the top
 // table at the right end.
 //
 // Everything is stored in millimetres and shown in metres, because a barn is
@@ -7951,7 +7951,7 @@ function PortalRoomEditor() {
     setBusy(true); setErr("");
     try {
       const r = await sbRpc("wp_admin_upsert_room", {
-        p_name: "The barn", p_width_mm: 12000, p_height_mm: 9000, p_shapes: [], p_active: true,
+        p_name: "The Grain Store", p_width_mm: 12000, p_height_mm: 9000, p_shapes: [], p_active: true,
       });
       await load(r.id);
       setNote("Room created. Set its size, then add the bar, the stage and anything else that never moves.");
@@ -8001,7 +8001,7 @@ function PortalRoomEditor() {
   }
 
   // ── dragging on the plan ──────────────────────────────────────────────────
-  // Pointer events rather than mouse, so this works on a tablet in the barn,
+  // Pointer events rather than mouse, so this works on a tablet in the room itself,
   // which is where somebody is most likely to be checking it against reality.
   function mmPerPx() {
     const el = planRef.current;
@@ -8062,7 +8062,7 @@ function PortalRoomEditor() {
           <button onClick={createRoom} disabled={busy}
             style={{ background:T.accent, color:"#fff", border:"none", padding:"10px 20px", borderRadius:8,
               cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>
-            {busy ? "Creating…" : "Create the barn"}
+            {busy ? "Creating…" : "Create the room"}
           </button>
         </div>
       </div>
@@ -8276,7 +8276,7 @@ function PortalRoomEditor() {
 
 function toDraft(r) {
   return {
-    name: r.name || "The barn",
+    name: r.name || "The Grain Store",
     width_mm: r.width_mm, height_mm: r.height_mm,
     active: r.active !== false,
     table_length_mm: r.table_length_mm || 1830,
@@ -8841,7 +8841,7 @@ function PortalSupplierForm({ onDone }) {
       </div>
       <label style={{ fontSize:11, color:T.textLight }}>A line couples will see
         <input value={v.blurb} onChange={function(e){ set("blurb", e.target.value); }}
-          placeholder="Worked here many times, knows the barn well" style={Object.assign({ marginTop:4 }, F)} /></label>
+          placeholder="Worked here many times, knows the Grain Store well" style={Object.assign({ marginTop:4 }, F)} /></label>
       {err && <div style={{ fontSize:12, color:"#dc2626" }}>{err}</div>}
       <div><button type="submit" disabled={busy}
         style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,

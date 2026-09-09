@@ -64,8 +64,8 @@ export default function Pinterest() {
         <section className="card">
           <h3>From us</h3>
           <p className="muted" style={{ fontSize: 14 }}>
-            Boards we keep of the barn dressed for real weddings. Worth a look before
-            you decide anything — the light in here changes a lot through the day.
+            Boards we keep of the Grain Store dressed for real weddings. Worth a look
+            before you decide anything — the light in here changes a lot through the day.
           </p>
           <div className="boards">
             {venue.map((b) => <BoardLink key={b.id} board={b} />)}

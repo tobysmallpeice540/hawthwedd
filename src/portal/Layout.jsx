@@ -196,7 +196,7 @@ export default function Layout() {
           )}
           <div className="plan-main">
             {/* Above the plan, not below it. Underneath, on a room the size of
-                the barn, the button sits past the bottom of the drawing and you
+                the Grain Store, the button sits past the bottom of the drawing and you
                 have to scroll away from the thing you are building to add to
                 it. */}
             {!narrow && (

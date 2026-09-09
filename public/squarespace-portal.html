@@ -1,0 +1,69 @@
+<!--
+  Hawthbush Farm — wedding planner door, for Squarespace
+  ------------------------------------------------------
+  Paste the whole of this into a Code Block on hawthbushfarm.co.uk/portal.
+  (Add block → Code. Needs a Core plan or above — on Personal or a trial the
+  block saves but shows nothing on the live site.)
+
+  Nothing below needs editing.
+
+  WHY THIS IS A DOOR AND NOT AN EMBED, unlike /book.
+
+  The booking page works fine in an iframe because it remembers nothing. The
+  planner has to keep somebody signed in for eighteen months, and a signed-in
+  session lives in the browser's storage for the site that set it. Inside an
+  iframe that storage is PARTITIONED — kept per parent site — and Safari in
+  particular clears partitioned storage aggressively when a site has not been
+  visited for a while. Couples come back every few weeks. They would be signed
+  out over and over, each time needing another emailed link, and it would look
+  like the planner was broken rather than like a browser policy.
+
+  On its own address the planner is a first-party site and the session simply
+  persists, which is the behaviour anybody expects of something they log into.
+
+  So this page sends them there. The address bar changes to
+  portal.hawthbushfarm.co.uk, which is still Hawthbush and reads as ours.
+-->
+
+<div id="hawthbush-portal-door"
+     style="max-width:640px;margin:0 auto;padding:48px 20px;text-align:center;font-family:inherit">
+  <h2 style="margin:0 0 10px;font-size:26px;font-weight:600">Your wedding planner</h2>
+  <p style="margin:0 0 26px;font-size:16px;line-height:1.6;opacity:.75">
+    Guests, timings, suppliers and your table plan, all in one place.
+    Opening it now&nbsp;…
+  </p>
+  <p style="margin:0">
+    <a id="hawthbush-portal-link"
+       href="https://portal.hawthbushfarm.co.uk/portal"
+       style="display:inline-block;padding:14px 32px;border-radius:8px;background:#2d2a25;
+              color:#fff;text-decoration:none;font-size:16px;font-weight:600">
+      Open your planner
+    </a>
+  </p>
+  <p style="margin:22px 0 0;font-size:13px;opacity:.6">
+    If nothing happens, use the button above.
+  </p>
+</div>
+
+<script>
+(function () {
+  var PORTAL = "https://portal.hawthbushfarm.co.uk/portal";
+  var link = document.getElementById("hawthbush-portal-link");
+  if (!link) return;
+
+  // A sign-in link should never land here — they point straight at the portal —
+  // but if one ever does, carry the token across rather than dropping somebody
+  // on a page that cannot use it. The token lives in the fragment, which never
+  // reaches any server, and it is replaced out of this page's address bar so it
+  // does not survive into the browser history.
+  var hash = window.location.hash || "";
+  if (/[#&]t=/.test(hash)) {
+    link.href = PORTAL + hash;
+    try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
+  }
+
+  // Straight through, replacing this page in the history so Back returns to the
+  // site rather than bouncing between the two.
+  try { window.location.replace(link.href); } catch (e) { window.location.href = link.href; }
+})();
+</script>

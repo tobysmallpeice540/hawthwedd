@@ -63,7 +63,7 @@ export default function Suppliers() {
         {!adding && !browsing && (
           <div className="actions">
             <button className="btn-small" onClick={() => setBrowsing(true)}>
-              Suppliers who know the barn
+              Suppliers who know the Grain Store
             </button>
             <button className="btn-small ghost" onClick={() => setAdding(true)}>
               Add your own
@@ -101,7 +101,7 @@ function Chosen({ chosen, label, onChanged }) {
   const [err, setErr] = useState('')
 
   // Offering a supplier to other couples. Deliberately worded as an offer,
-  // because that is what it is: the barn's list is the venue's own
+  // because that is what it is: the Grain Store list is the venue's own
   // recommendation and every supplier on it has agreed to be there, so this
   // puts them in front of Hawthbush rather than straight onto the list.
   // Promising otherwise would be the easy thing to write and a lie.
@@ -188,7 +188,7 @@ function Directory({ available, labelOf, onChanged, onClose }) {
     <section className="card">
       <div className="list-head">
         <div>
-          <h3 style={{ marginBottom: 4 }}>Suppliers who know the barn</h3>
+          <h3 style={{ marginBottom: 4 }}>Suppliers who know the Grain Store</h3>
           <p className="muted" style={{ fontSize: 13 }}>
             People we have worked with here before. You are under no obligation to
             use any of them — it is a starting point, not a list you must pick from.
