@@ -134,6 +134,18 @@ own header.
     double-invoked effects cannot spend a one-use token twice.
   - The link is a **credential**. It is never written to `hbf_email_log_v1`;
     the log is readable by every member of staff.
+- **Checksumming a migration against the catalogue: compare the BODY, not
+  `pg_get_functiondef`, for any function with parameters.** Postgres prints
+  `p_id uuid DEFAULT NULL::uuid` where a file says `p_id uuid default null`, so
+  a faithful ten-parameter function reads 80 characters longer in the catalogue
+  and looks like drift. Use `md5(trim(regexp_replace(prosrc,'\s+',' ','g')))`
+  plus `pg_get_function_arguments()` separately. `pg_get_functiondef` is still
+  the right comparison for a zero-argument function.
+- **Adding a parameter to a function creates an OVERLOAD, not a replacement.**
+  If every argument has a default, two overloads make every call ambiguous and
+  PostgREST starts failing on a function that looks fine in the catalogue. Drop
+  the old signature explicitly — and remember the new one is a *new* function,
+  so its grants need revoking from `anon` and `authenticated` again.
 - **A database function that records something does not tell anyone about it.**
   `wp_grant_access` writes the access row and nothing more, which is how the
   portal shipped with an invite screen that sent no invite: an address was

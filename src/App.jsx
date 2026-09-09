@@ -6994,21 +6994,77 @@ function PortalAdminScreen({ bookings, onBack }) {
 // Everything is stored in millimetres and shown in metres, because a barn is
 // measured in metres and a trestle table is quoted in millimetres, and mixing
 // the two in storage is how a room ends up a thousand times too big.
+//
+// FOUR KINDS OF THING can be drawn:
+//   fixed  a solid object that never moves — bar, stage, pillar
+//   nogo   floor a table may not stand on
+//   door   drawn as a proper swing, so a doorway that opens into the room is
+//          obviously not somewhere to put a table
+//   text   a label with no box — "stage end", "toward the terrace"
+//
+// The table is no longer a constant either: its length, depth, how far a chair
+// sticks out and how much room somebody needs to pull that chair back all live
+// on the room. The last one is what stops two tables being drawn close enough
+// that nobody could actually get up.
 
-const M = 1000;                       // mm in a metre
-const TABLE_L = 1830, TABLE_D = 760;  // the one table type, for scale
-const SNAP = 100;                     // 10cm — fine enough, and stops the jitter
+const M = 1000;      // mm in a metre
+const SNAP = 100;    // 10cm — fine enough, and stops the jitter
 
 function mToMm(v) { const n = parseFloat(v); return isNaN(n) ? 0 : Math.round(n * M); }
 function mmToM(v) { return (Number(v || 0) / M).toFixed(2).replace(/\.00$/, ""); }
 function snap(v)  { return Math.round(v / SNAP) * SNAP; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+// ── door swings ──────────────────────────────────────────────────────────────
+//
+// A door is drawn the way a floor plan draws one: the leaf, and the quarter
+// circle it sweeps. Eight arrangements — four corners to hinge on, and for each
+// one, two choices of which adjacent edge the leaf rests against. Rather than
+// ask anyone to think about that, there is one button that cycles all eight.
+// Press it until the door looks like the real one.
+//
+// The box is kept square, because the arc's radius IS the door's width.
+const DOOR_STATES = 8;
+
+function doorGeometry(w, h, state) {
+  const r = Math.min(w, h);
+  const c = ((state % DOOR_STATES) + DOOR_STATES) % DOOR_STATES;
+  const corner = Math.floor(c / 2), leafIsNext = c % 2 === 0;
+  const pts = [{ x:0, y:0 }, { x:r, y:0 }, { x:r, y:r }, { x:0, y:r }];
+  const P = pts[corner], A = pts[(corner + 1) % 4], B = pts[(corner + 3) % 4];
+  // SVG's y axis points down, so a positive cross product is a clockwise sweep.
+  const cross = (A.x - P.x) * (B.y - P.y) - (A.y - P.y) * (B.x - P.x);
+  const sweep = cross > 0 ? 1 : 0;
+  const leaf = leafIsNext ? A : B;
+  return { r, P, A, B, sweep, leaf };
+}
+
+function DoorGlyph({ w, h, state, colour }) {
+  const g = doorGeometry(w, h, state);
+  return (
+    <svg viewBox={`0 0 ${g.r} ${g.r}`} width="100%" height="100%" style={{ display:"block", overflow:"visible" }}>
+      <path d={`M ${g.A.x} ${g.A.y} A ${g.r} ${g.r} 0 0 ${g.sweep} ${g.B.x} ${g.B.y}`}
+        fill="none" stroke={colour} strokeWidth={Math.max(20, g.r * 0.03)} strokeDasharray={`${g.r*0.06} ${g.r*0.05}`} />
+      <line x1={g.P.x} y1={g.P.y} x2={g.leaf.x} y2={g.leaf.y}
+        stroke={colour} strokeWidth={Math.max(40, g.r * 0.07)} strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// A door dropped near a wall should swing out of the room without anyone having
+// to think about it — Toby's rule is that they all do. Hinge on a corner that
+// sits on the nearest wall; the cycle button covers the rest.
+function outwardDoorState(x, y, w, h, roomW, roomH) {
+  const gaps = [y, roomW - (x + w), roomH - (y + h), x];   // top, right, bottom, left
+  const wall = gaps.indexOf(Math.min.apply(null, gaps));
+  return [0, 2, 4, 6][wall];
+}
+
 function PortalRoomEditor() {
   const [rooms, setRooms] = useState(null);
   const [liveId, setLiveId] = useState(null);
   const [id, setId] = useState(null);
-  const [draft, setDraft] = useState(null);      // { name, width_mm, height_mm, shapes[] }
+  const [draft, setDraft] = useState(null);
   const [sel, setSel] = useState(-1);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -7027,25 +7083,12 @@ function PortalRoomEditor() {
       const pick = list.find(function(x){ return x.id === keepId; })
                 || list.find(function(x){ return x.id === r.live_room_id; })
                 || list[0];
-      if (pick) { setId(pick.id); setDraft(roomToDraft(pick)); }
+      if (pick) { setId(pick.id); setDraft(toDraft(pick)); }
       else { setId(null); setDraft(null); }
       setDirty(false); setSel(-1);
     } catch (e) { setErr(e.message || String(e)); }
   }
   useEffect(function(){ load(); }, []);
-
-  function roomToDraft(r) {
-    return {
-      name: r.name || "The barn",
-      width_mm: r.width_mm, height_mm: r.height_mm,
-      active: r.active !== false,
-      shapes: (r.shapes || []).map(function(s){
-        return { kind: s.kind === "nogo" ? "nogo" : "fixed", label: s.label || "",
-                 x: Number(s.x)||0, y: Number(s.y)||0,
-                 w: Number(s.w)||1000, h: Number(s.h)||1000 };
-      }),
-    };
-  }
 
   function edit(patch) { setDraft(function(d){ return Object.assign({}, d, patch); }); setDirty(true); }
   function editShape(i, patch) {
@@ -7061,8 +7104,7 @@ function PortalRoomEditor() {
     setBusy(true); setErr("");
     try {
       const r = await sbRpc("wp_admin_upsert_room", {
-        p_name: "The barn", p_width_mm: 12000, p_height_mm: 9000,
-        p_shapes: [], p_active: true,
+        p_name: "The barn", p_width_mm: 12000, p_height_mm: 9000, p_shapes: [], p_active: true,
       });
       await load(r.id);
       setNote("Room created. Set its size, then add the bar, the stage and anything else that never moves.");
@@ -7078,18 +7120,26 @@ function PortalRoomEditor() {
         p_id: id, p_name: draft.name,
         p_width_mm: draft.width_mm, p_height_mm: draft.height_mm,
         p_shapes: draft.shapes, p_active: draft.active,
+        p_table_length_mm: draft.table_length_mm, p_table_depth_mm: draft.table_depth_mm,
+        p_chair_depth_mm: draft.chair_depth_mm, p_clearance_mm: draft.clearance_mm,
       });
       setDirty(false);
       setNote("Saved. Couples will see this next time they open their table plan.");
       await load(id);
-    } catch (e) { setErr(e.message || String(e)); }
+    } catch (e) {
+      setErr(e.code === "measurement_out_of_range"
+        ? "One of the table measurements is outside anything sensible — check the four boxes under Tables."
+        : (e.message || String(e)));
+    }
     finally { setBusy(false); }
   }
 
   function addShape(kind) {
-    const w = kind === "nogo" ? 2000 : 3000, h = kind === "nogo" ? 2000 : 1000;
-    const s = { kind: kind, label: kind === "nogo" ? "Keep clear" : "Bar",
-                x: snap((draft.width_mm - w) / 2), y: snap((draft.height_mm - h) / 2), w: w, h: h };
+    const size = { fixed:[3000,1000], nogo:[2000,2000], door:[900,900], text:[2500,400] }[kind];
+    const x = snap((draft.width_mm - size[0]) / 2), y = snap((draft.height_mm - size[1]) / 2);
+    const s = { kind: kind, x: x, y: y, w: size[0], h: size[1],
+      label: { fixed:"Bar", nogo:"Keep clear", door:"Door", text:"Label" }[kind] };
+    if (kind === "door") s.hinge = outwardDoorState(x, y, size[0], size[1], draft.width_mm, draft.height_mm);
     setDraft(function(d){ return Object.assign({}, d, { shapes: d.shapes.concat([s]) }); });
     setSel(draft.shapes.length);
     setDirty(true);
@@ -7113,8 +7163,7 @@ function PortalRoomEditor() {
     e.preventDefault(); e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     const s = draft.shapes[i];
-    dragRef.current = { i: i, mode: mode, px: e.clientX, py: e.clientY,
-                        x: s.x, y: s.y, w: s.w, h: s.h };
+    dragRef.current = { i:i, mode:mode, px:e.clientX, py:e.clientY, x:s.x, y:s.y, w:s.w, h:s.h };
     setSel(i);
   }
 
@@ -7129,10 +7178,13 @@ function PortalRoomEditor() {
         y: clamp(snap(d.y + dy), 0, draft.height_mm - d.h),
       });
     } else {
-      editShape(d.i, {
-        w: clamp(snap(d.w + dx), 300, draft.width_mm  - d.x),
-        h: clamp(snap(d.h + dy), 300, draft.height_mm - d.y),
-      });
+      // A door's arc radius is its width, so the box stays square or the swing
+      // stops meaning anything.
+      const sq = draft.shapes[d.i].kind === "door";
+      const w = clamp(snap(d.w + dx), 300, draft.width_mm - d.x);
+      const h = sq ? clamp(w, 300, draft.height_mm - d.y)
+                   : clamp(snap(d.h + dy), 200, draft.height_mm - d.y);
+      editShape(d.i, { w: sq ? h : w, h: h });
     }
   }
 
@@ -7168,7 +7220,7 @@ function PortalRoomEditor() {
   }
 
   const PLAN_W = 760;
-  const scale = PLAN_W / draft.width_mm;                 // px per mm
+  const scale = PLAN_W / draft.width_mm;
   const planH = Math.max(140, Math.round(draft.height_mm * scale));
   const s = sel >= 0 ? draft.shapes[sel] : null;
   const notLive = liveId && id !== liveId;
@@ -7187,32 +7239,30 @@ function PortalRoomEditor() {
         </div>
       )}
 
-      <p style={{ fontSize:13, color:T.textMid, maxWidth:660, lineHeight:1.7, marginTop:0 }}>
+      <p style={{ fontSize:13, color:T.textMid, maxWidth:680, lineHeight:1.7, marginTop:0 }}>
         Drag things roughly into place, then type the exact measurement if you know it.
-        <b> Fixed</b> is anything that never moves — the bar, the stage, a doorway, a pillar.
-        <b> Keep clear</b> is floor a table must not go on. Couples can move neither.
+        <b> Fixed</b> never moves — the bar, the stage, a pillar. <b>Keep clear</b> is floor
+        no table may stand on. <b>Door</b> draws the swing, so a door that opens into the
+        room is visibly not somewhere to seat anybody. <b>Text</b> is a label on its own.
       </p>
 
-      {/* room itself */}
       <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap", margin:"16px 0" }}>
-        <Field label="Name" width={220}>
+        <Field label="Name" width={200}>
           <input value={draft.name} onChange={function(e){ edit({ name:e.target.value }); }} style={inputCss} />
         </Field>
-        <Field label="Width (m)" width={110}>
+        <Field label="Width (m)" width={104}>
           <input type="number" step="0.1" min="1" value={mmToM(draft.width_mm)}
             onChange={function(e){ edit({ width_mm: Math.max(1000, mToMm(e.target.value)) }); }} style={inputCss} />
         </Field>
-        <Field label="Depth (m)" width={110}>
+        <Field label="Depth (m)" width={104}>
           <input type="number" step="0.1" min="1" value={mmToM(draft.height_mm)}
             onChange={function(e){ edit({ height_mm: Math.max(1000, mToMm(e.target.value)) }); }} style={inputCss} />
         </Field>
-        <button onClick={function(){ addShape("fixed"); }}
-          style={btnQuiet}>+ Fixed thing</button>
-        <button onClick={function(){ addShape("nogo"); }}
-          style={btnQuiet}>+ Keep clear</button>
+        {[["fixed","+ Fixed"],["nogo","+ Keep clear"],["door","+ Door"],["text","+ Text"]].map(function(b){
+          return <button key={b[0]} onClick={function(){ addShape(b[0]); }} style={btnQuiet}>{b[1]}</button>;
+        })}
       </div>
 
-      {/* the plan */}
       <div style={{ overflowX:"auto", paddingBottom:6 }}>
         <div ref={planRef}
           onPointerMove={onDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
@@ -7224,33 +7274,50 @@ function PortalRoomEditor() {
 
           {draft.shapes.map(function(sh, i) {
             const on = i === sel;
+            const common = { position:"absolute", cursor:"move", boxSizing:"border-box",
+              left: sh.x*scale, top: sh.y*scale, width: sh.w*scale, height: sh.h*scale };
+            const down = function(e){ startDrag(e, i, "move"); };
+            const handle = on ? (
+              <div onPointerDown={function(e){ startDrag(e, i, "size"); }}
+                style={{ position:"absolute", right:-6, bottom:-6, width:13, height:13,
+                  background:"#fff", border:`2px solid ${T.accent}`, borderRadius:3, cursor:"nwse-resize" }} />
+            ) : null;
+
+            if (sh.kind === "door") {
+              return (
+                <div key={i} onPointerDown={down} style={Object.assign({}, common,
+                  { border: on ? `2px solid ${T.accent}` : "1px dashed transparent" })}>
+                  <DoorGlyph w={sh.w} h={sh.h} state={sh.hinge || 0} colour={T.text} />
+                  {handle}
+                </div>
+              );
+            }
+            if (sh.kind === "text") {
+              return (
+                <div key={i} onPointerDown={down} style={Object.assign({}, common, {
+                  display:"flex", alignItems:"center", color:T.text, whiteSpace:"nowrap",
+                  fontSize: Math.max(9, sh.h*scale*0.8), fontWeight:600,
+                  border: on ? `2px solid ${T.accent}` : "1px dashed transparent" })}>
+                  {sh.label}{handle}
+                </div>
+              );
+            }
             const fixed = sh.kind !== "nogo";
             return (
-              <div key={i}
-                onPointerDown={function(e){ startDrag(e, i, "move"); }}
-                style={{ position:"absolute", cursor:"move",
-                  left: sh.x*scale, top: sh.y*scale, width: sh.w*scale, height: sh.h*scale,
-                  background: fixed ? T.midBlueBg : "#fee2e2cc",
-                  border: `${on?2:1.5}px ${fixed?"solid":"dashed"} ${on ? T.accent : (fixed ? T.midBlue : T.red)}`,
-                  borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center",
-                  fontSize:11, fontWeight:600, color: fixed ? T.midBlue : T.red,
-                  textAlign:"center", overflow:"hidden", padding:2, boxSizing:"border-box" }}>
-                {sh.label}
-                {on && (
-                  <div onPointerDown={function(e){ startDrag(e, i, "size"); }}
-                    style={{ position:"absolute", right:-6, bottom:-6, width:13, height:13,
-                      background:"#fff", border:`2px solid ${T.accent}`, borderRadius:3, cursor:"nwse-resize" }} />
-                )}
+              <div key={i} onPointerDown={down} style={Object.assign({}, common, {
+                background: fixed ? T.midBlueBg : "#fee2e2cc",
+                border: `${on?2:1.5}px ${fixed?"solid":"dashed"} ${on ? T.accent : (fixed ? T.midBlue : T.red)}`,
+                borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:11, fontWeight:600, color: fixed ? T.midBlue : T.red,
+                textAlign:"center", overflow:"hidden", padding:2 })}>
+                {sh.label}{handle}
               </div>
             );
           })}
 
-          {/* one trestle, to scale, so the room can be judged against what goes in it */}
-          <div style={{ position:"absolute", right:6, bottom:6, width:TABLE_L*scale, height:TABLE_D*scale,
-            border:`1px dashed ${T.textLight}`, borderRadius:2, display:"flex", alignItems:"center",
-            justifyContent:"center", fontSize:9, color:T.textLight, pointerEvents:"none" }}>
-            one table
-          </div>
+          {/* one table with its chairs and pull-out room, to scale, so the room
+              can be judged against what actually goes in it */}
+          <TableToScale draft={draft} scale={scale} />
         </div>
       </div>
 
@@ -7258,24 +7325,36 @@ function PortalRoomEditor() {
         Grid squares are 1 metre. The room is {mmToM(draft.width_mm)}m × {mmToM(draft.height_mm)}m.
       </div>
 
-      {/* the selected thing */}
       {s && (
         <div style={{ marginTop:16, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16,
           display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
-          <Field label="Label" width={200}>
+          <Field label="Label" width={190}>
             <input value={s.label} onChange={function(e){ editShape(sel, { label:e.target.value }); }} style={inputCss} />
           </Field>
-          <Field label="Type" width={140}>
+          <Field label="Type" width={130}>
             <select value={s.kind} onChange={function(e){ editShape(sel, { kind:e.target.value }); }} style={inputCss}>
               <option value="fixed">Fixed thing</option>
               <option value="nogo">Keep clear</option>
+              <option value="door">Door</option>
+              <option value="text">Text</option>
             </select>
           </Field>
-          {[["x","From left (m)"],["y","From top (m)"],["w","Width (m)"],["h","Depth (m)"]].map(function(f){
+          {s.kind === "door" && (
+            <button onClick={function(){ editShape(sel, { hinge: ((s.hinge||0) + 1) % DOOR_STATES }); }}
+              style={btnQuiet}>Turn the swing</button>
+          )}
+          {[["x","From left (m)"],["y","From top (m)"],
+            ["w", s.kind === "door" ? "Door width (m)" : "Width (m)"],
+            ["h", s.kind === "text" ? "Text size (m)" : "Depth (m)"]].map(function(f){
+            if (f[0] === "h" && s.kind === "door") return null;
             return (
               <Field key={f[0]} label={f[1]} width={104}>
                 <input type="number" step="0.1" value={mmToM(s[f[0]])}
-                  onChange={function(e){ editShape(sel, (function(){ const o={}; o[f[0]] = Math.max(0, mToMm(e.target.value)); return o; })()); }}
+                  onChange={function(e){
+                    const v = Math.max(0, mToMm(e.target.value));
+                    editShape(sel, s.kind === "door" && f[0] === "w" ? { w:v, h:v }
+                      : (function(){ const o={}; o[f[0]] = v; return o; })());
+                  }}
                   style={inputCss} />
               </Field>
             );
@@ -7284,6 +7363,33 @@ function PortalRoomEditor() {
             style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55` })}>Remove</button>
         </div>
       )}
+
+      {/* ── the table itself ─────────────────────────────────────────────── */}
+      <div style={{ marginTop:18, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
+        <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Tables</div>
+        <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:660 }}>
+          Six chairs, three a side. <b>Pull-out room</b> is the gap kept clear behind the
+          chairs so somebody can get up — the couple's plan will not let two tables sit
+          closer than that, which is the difference between a plan that works and one
+          that only looks right.
+        </p>
+        <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+          {[["table_length_mm","Table length (m)"],["table_depth_mm","Table depth (m)"],
+            ["chair_depth_mm","Chair sticks out (m)"],["clearance_mm","Pull-out room (m)"]].map(function(f){
+            return (
+              <Field key={f[0]} label={f[1]} width={132}>
+                <input type="number" step="0.05" value={mmToM(draft[f[0]])}
+                  onChange={function(e){ const o={}; o[f[0]] = Math.max(0, mToMm(e.target.value)); edit(o); }}
+                  style={inputCss} />
+              </Field>
+            );
+          })}
+          <div style={{ fontSize:12, color:T.textLight, paddingBottom:9 }}>
+            Each table needs {mmToM(draft.table_length_mm)}m ×{" "}
+            {mmToM(draft.table_depth_mm + 2*(draft.chair_depth_mm + draft.clearance_mm))}m of floor.
+          </div>
+        </div>
+      </div>
 
       <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:18, flexWrap:"wrap" }}>
         <button onClick={save} disabled={busy || !dirty}
@@ -7295,7 +7401,7 @@ function PortalRoomEditor() {
         {rooms.length > 1 && (
           <select value={id || ""} onChange={function(e){
               const r = rooms.find(function(x){ return x.id === e.target.value; });
-              if (r) { setId(r.id); setDraft(roomToDraft(r)); setSel(-1); setDirty(false); }
+              if (r) { setId(r.id); setDraft(toDraft(r)); setSel(-1); setDirty(false); }
             }}
             style={Object.assign({}, inputCss, { width:"auto", marginLeft:"auto" })}>
             {rooms.map(function(r){
@@ -7304,6 +7410,49 @@ function PortalRoomEditor() {
           </select>
         )}
       </div>
+    </div>
+  );
+}
+
+function toDraft(r) {
+  return {
+    name: r.name || "The barn",
+    width_mm: r.width_mm, height_mm: r.height_mm,
+    active: r.active !== false,
+    table_length_mm: r.table_length_mm || 1830,
+    table_depth_mm:  r.table_depth_mm  || 760,
+    chair_depth_mm:  r.chair_depth_mm  == null ? 450 : r.chair_depth_mm,
+    clearance_mm:    r.clearance_mm    == null ? 450 : r.clearance_mm,
+    shapes: (r.shapes || []).map(function(s){
+      const kind = ["nogo","door","text"].indexOf(s.kind) >= 0 ? s.kind : "fixed";
+      return { kind: kind, label: s.label || "",
+               x: Number(s.x)||0, y: Number(s.y)||0,
+               w: Number(s.w)||1000, h: Number(s.h)||1000,
+               hinge: kind === "door" ? (Number(s.hinge)||0) : undefined };
+    }),
+  };
+}
+
+// The trestle, its six chairs and the room to pull them back, drawn where the
+// room is drawn so the two can be compared without arithmetic.
+function TableToScale({ draft, scale }) {
+  const L = draft.table_length_mm, D = draft.table_depth_mm;
+  const pad = draft.chair_depth_mm + draft.clearance_mm;
+  const w = L, h = D + 2*pad;
+  return (
+    <div style={{ position:"absolute", right:8, bottom:8, width:w*scale, height:h*scale,
+      border:`1px dashed ${T.textLight}`, pointerEvents:"none", boxSizing:"border-box" }}>
+      <div style={{ position:"absolute", left:0, top:pad*scale, width:L*scale, height:D*scale,
+        border:`1px solid ${T.textLight}`, background:"#fff8", boxSizing:"border-box" }} />
+      {[0,1,2].map(function(c){
+        const cx = (c + 0.5) * (L/3) * scale;
+        const cw = Math.max(3, draft.chair_depth_mm * scale * 0.8);
+        return [0,1].map(function(side){
+          return <div key={c+"-"+side} style={{ position:"absolute", left: cx - cw/2,
+            top: side ? (pad + D)*scale + 1 : pad*scale - cw - 1,
+            width: cw, height: cw, borderRadius:2, background:`${T.textLight}66` }} />;
+        });
+      })}
     </div>
   );
 }
