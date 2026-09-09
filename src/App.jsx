@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { dayOrder } from "./shared/dayOrder.js";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
 // Pure viewport-width detection (no device/user-agent sniffing) — recalculates
@@ -7784,7 +7785,9 @@ function CoupleTimelines({ bookings }) {
         const all = mine.map(function(b){ return { at:b.start_time, title:b.title, notes:b.notes,
                                                   supplier:b.supplier_name, locked:b.locked }; })
           .concat(fixed)
-          .sort(function(a,b){ return String(a.at||"").localeCompare(String(b.at||"")); });
+          // Midnight and half past belong at the END of the wedding day. Same
+          // key as the portal uses, so the two read the same way round.
+          .sort(function(a,b){ return dayOrder(a.at) - dayOrder(b.at); });
         if (all.length === 0) return null;
         return (
           <div key={d.day_key} style={{ marginTop:16 }}>

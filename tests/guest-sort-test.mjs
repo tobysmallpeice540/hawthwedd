@@ -5,15 +5,18 @@
 // "Table 12" sorts BEFORE "Table 2" as text. With up to twenty-five tables that
 // is not a nicety — the list reads as scrambled and the couple stops trusting it.
 
-import { sortGuests, tableRank, accomOptions, ACCOM_LABEL } from '../src/portal/guestSort.js'
+import { sortGuests, tableRank, stayingRank, accomOptions, ACCOM_LABEL } from '../src/portal/guestSort.js'
 
 const fails = []
 let passes = 0
 const check = (name, cond, detail) => cond ? passes++ : fails.push(name + (detail ? ' — ' + detail : ''))
 
-const g = (last, table, where) => ({
+// staying defaults to true when a place is given, because that is the only
+// combination the database allows: nobody is not-staying somewhere.
+const g = (last, table, where, staying) => ({
   first_name: 'A', last_name: last,
   table_label: table || null, staying_where: where || null,
+  staying: staying === undefined ? !!where : staying,
 })
 
 // ── by table ────────────────────────────────────────────────────────────────
@@ -43,6 +46,30 @@ const stays = sortGuests(
   .map((x) => x.staying_where)
 check('grouped by accommodation, nobody-staying last',
   JSON.stringify(stays) === JSON.stringify(['amly','hamlet','camping',null]), stays.join(' | '))
+
+// THE ONE THAT WAS WRONG. Somebody staying with nowhere decided yet is not the
+// same as somebody going home, even though both have a null staying_where.
+// They belong after the placed guests and BEFORE everyone not staying, because
+// they are the only people this sort is actually useful for — they are the ones
+// who still need a bed finding.
+const mixed2 = sortGuests([
+  g('Home',   null, null,      false),   // not staying
+  g('Undecided', null, null,   true),    // staying, nowhere yet
+  g('Hamlet', null, 'hamlet'),           // placed
+], 'where').map((x) => x.last_name)
+check('staying-but-unplaced sits between placed and not-staying',
+  JSON.stringify(mixed2) === JSON.stringify(['Hamlet','Undecided','Home']), mixed2.join(' | '))
+
+check('a placed guest ranks by property', stayingRank(g('X',null,'amly')) === 0 &&
+  stayingRank(g('X',null,'hamlet')) === 1 && stayingRank(g('X',null,'camping')) === 2)
+check('staying with nowhere decided ranks after all three properties',
+  stayingRank(g('X',null,null,true)) === 3)
+check('not staying ranks last', stayingRank(g('X',null,null,false)) === 9)
+// A row that somehow holds a place it should not still counts as staying
+// rather than being thrown to the bottom.
+check('an unknown place ranks with the undecided',
+  stayingRank({ staying: true, staying_where: 'treehouse' }) === 3)
+check('stayingRank survives a missing guest', stayingRank(undefined) === 9)
 
 // ── it never mutates what it was given ──────────────────────────────────────
 const original = [g('Z','Table 9'), g('A','Table 1')]

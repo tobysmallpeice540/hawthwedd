@@ -28,6 +28,23 @@ export function byName(a, b) {
          (a.first_name || '').localeCompare(b.first_name || '')
 }
 
+// Sorting by where somebody is staying has THREE groups, not two, and the
+// middle one is the whole point:
+//
+//   0..2  in a particular place — Amly, then the Hamlet, then glamping
+//   3     staying, but nowhere decided yet
+//   9     not staying at all
+//
+// The first version collapsed the middle into the last, because both have a
+// null staying_where. That put the people who still need a bed found for them
+// at the very bottom of the list, mixed in with everyone going home — which is
+// exactly backwards, since they are the only ones the sort is any use for.
+export function stayingRank(g) {
+  if (!g || !g.staying) return 9
+  const i = ACCOM_KEYS.indexOf(g.staying_where)
+  return i >= 0 ? i : 3
+}
+
 // Name is always the tie-break, whichever column is chosen. A list that keeps
 // re-ordering within a group is harder to read than one that never sorted.
 export function sortGuests(guests, how) {
@@ -35,8 +52,7 @@ export function sortGuests(guests, how) {
   if (how === 'table') {
     out.sort((a, b) => tableRank(a) - tableRank(b) || byName(a, b))
   } else if (how === 'where') {
-    const rank = (g) => (g.staying_where ? ACCOM_KEYS.indexOf(g.staying_where) : 9)
-    out.sort((a, b) => rank(a) - rank(b) || byName(a, b))
+    out.sort((a, b) => stayingRank(a) - stayingRank(b) || byName(a, b))
   } else if (how === 'name') {
     out.sort(byName)
   }

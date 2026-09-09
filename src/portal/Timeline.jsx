@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
+import { dayOrder } from '../shared/dayOrder.js'
 
 // Components that render inputs live at module scope — see Guests.jsx.
 
@@ -30,7 +31,9 @@ function mergeDay(blocks, fixed) {
     if (f && f.time) rows.push({ kind: 'venue', at: f.time, title: f.title })
   }
   return rows.sort((a, b) => {
-    const t = String(a.at || '').localeCompare(String(b.at || ''))
+    // Not a text compare: midnight and half past belong at the END of the
+    // wedding day, not the start of it. See dayOrder().
+    const t = dayOrder(a.at) - dayOrder(b.at)
     if (t !== 0) return t
     // A venue line at the same minute reads better after the couple's own.
     return (a.kind === 'venue' ? 1 : 0) - (b.kind === 'venue' ? 1 : 0)
