@@ -7055,6 +7055,7 @@ function PortalTemplates({ bookings }) {
       )}
 
       <ChecklistTemplate rows={data.checklist || []} onSaved={function(m){ setNote(m); load(); }} />
+      <FarmBoards onSaved={function(m){ setNote(m); }} />
       <CoupleTimelines bookings={bookings} />
     </div>
   );
@@ -7313,6 +7314,106 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
           style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
             borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
           {busy ? "Saving…" : dirty ? "Save the checklist" : "Saved"}
+        </button>
+        {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── the farm's own inspiration boards ───────────────────────────────────────
+//
+// Shown on every couple's Inspiration tab above their own. Links, never embeds:
+// Pinterest's widget would run their JavaScript on a page holding a guest list
+// and a live session. Only Pinterest addresses are accepted, and that is
+// enforced in the database rather than here — a rule written twice is a rule
+// that will eventually disagree with itself.
+function FarmBoards({ onSaved }) {
+  const [rows, setRows] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function load() {
+    setErr("");
+    try { const r = await sbRpc("wp_admin_boards"); setRows(r.boards || []); setDirty(false); }
+    catch (e) { setErr(e.message || String(e)); setRows([]); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  function edit(i, patch) {
+    setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
+    setDirty(true);
+  }
+
+  async function save() {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_save_boards", {
+        p_rows: rows.map(function(r){ return { label: r.label, url: r.url }; }),
+      });
+      setDirty(false);
+      onSaved("Boards saved. Every couple sees these on their Inspiration tab.");
+      await load();
+    } catch (e) {
+      setErr(e.code === "not_a_pinterest_link"
+        ? "One of those is not a Pinterest address. Nothing was saved — they must start https://www.pinterest.co.uk/ or https://pinterest.com/."
+        : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  if (rows === null) return null;
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Our inspiration boards</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        Shown to every couple above their own — the barn dressed for real weddings is
+        the most useful thing you can put in front of somebody choosing colours.
+        Pinterest addresses only, and one bad one rejects the whole save rather than
+        leaving you with half a list.
+      </p>
+      {err && <ErrBanner text={err} />}
+
+      {rows.map(function(r, i){
+        return (
+          <div key={i} style={{ borderTop:`1px solid ${T.border}`, padding:"10px 0",
+            display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
+            <Field label="Called" width={190}>
+              <input value={r.label || ""} onChange={function(e){ edit(i, { label:e.target.value }); }}
+                placeholder="The barn dressed" style={inputCss} />
+            </Field>
+            <Field label="Address" width={380}>
+              <input value={r.url || ""} onChange={function(e){ edit(i, { url:e.target.value }); }}
+                placeholder="https://www.pinterest.co.uk/hawthbush/the-barn/" style={inputCss} />
+            </Field>
+            {r.url && (
+              <a href={r.url} target="_blank" rel="noopener noreferrer"
+                style={Object.assign({}, btnQuiet, { textDecoration:"none", padding:"9px 12px" })}>Open</a>
+            )}
+            <button onClick={function(){ setRows(function(x){ return x.filter(function(_, j){ return j !== i; }); }); setDirty(true); }}
+              style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55`, padding:"9px 12px" })}>
+              Remove
+            </button>
+          </div>
+        );
+      })}
+
+      {rows.length === 0 && (
+        <p style={{ fontSize:13, color:T.textLight, padding:"6px 0" }}>
+          None yet, so couples see only their own.
+        </p>
+      )}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14, flexWrap:"wrap" }}>
+        <button style={btnQuiet}
+          onClick={function(){ setRows(function(r){ return r.concat([{ label:"", url:"" }]); }); setDirty(true); }}>
+          + Add a board
+        </button>
+        <button onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
+            borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : dirty ? "Save our boards" : "Saved"}
         </button>
         {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
       </div>

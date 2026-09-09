@@ -29,8 +29,20 @@
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const RESEND_KEY   = process.env.RESEND_API_KEY;
+// Where the portal lives, and therefore where every sign-in link points.
+//
+// Set PORTAL_ORIGIN in Netlify to move the portal to its own address —
+// https://portal.hawthbushfarm.co.uk, say — without touching code. Because the
+// link carries its own token and is verified by the page rather than redirected
+// by Supabase, moving it needs no allowlist anywhere: this one variable is the
+// whole change. Falls back to the Netlify address, which is where it is today.
+//
+// SITE_ORIGIN stays the Netlify site regardless: it is where the email logo is
+// served from, and that must keep working in an inbox whatever the portal's
+// address becomes.
 const SITE_ORIGIN  = "https://hawthbushfarm.netlify.app";
-const PORTAL_URL   = SITE_ORIGIN + "/portal";
+const PORTAL_ORIGIN = (process.env.PORTAL_ORIGIN || SITE_ORIGIN).replace(/\/+$/, "");
+const PORTAL_URL   = PORTAL_ORIGIN + "/portal";
 const FROM_EMAIL   = "hello@hawthbushfarm.co.uk";
 const FROM_HEADER  = "Hawthbush Farm <" + FROM_EMAIL + ">";
 const EMAIL_LOG_KEY = "hbf_email_log_v1";

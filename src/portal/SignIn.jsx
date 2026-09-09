@@ -52,9 +52,12 @@ export default function SignIn({ notice }) {
     <div className="centre">
       <div className="wrap narrow" style={{ padding: 0 }}>
         <div className="card">
-          <div style={{ marginBottom: 22 }}>
-            <div className="brand">Hawthbush Farm</div>
-            <div className="brand-sub">Wedding planner</div>
+          <div className="brand-row" style={{ marginBottom: 22 }}>
+            <img className="brand-logo" src="/email-logo.png" alt="" aria-hidden="true" />
+            <div>
+              <div className="brand">Hawthbush Farm</div>
+              <div className="brand-sub">Wedding planner</div>
+            </div>
           </div>
 
           {state === 'sent' ? (

@@ -31,6 +31,8 @@ body {
   max-width: 900px; margin: 0 auto; padding: 18px 16px;
   display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap;
 }
+.brand-row { display: flex; align-items: center; gap: 12px; }
+.brand-logo { width: 42px; height: auto; display: block; flex: 0 0 auto; }
 .brand { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; letter-spacing: .5px; }
 .brand-sub { font-size: 11px; color: var(--muted); letter-spacing: 1.4px; text-transform: uppercase; margin-top: 2px; }
 .who { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 12px; }
@@ -282,6 +284,15 @@ a.btn-small { text-decoration: none; display: inline-block; }
   touch-action: none;               /* so a drag does not scroll the page */
 }
 .room-floor { fill: #fdfcfa; }
+
+/* Inspiration boards. Links, never embeds — see Pinterest.jsx for why. */
+.boards { display: flex; flex-direction: column; gap: 1px; background: var(--line);
+          border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 14px; }
+.board  { background: var(--card); display: flex; align-items: center; justify-content: space-between;
+          gap: 12px; padding: 12px 15px; }
+.board-name { font-size: 15px; font-weight: 600; color: var(--ink); text-decoration: none; }
+.board-name:hover { text-decoration: underline; }
+.board-name::after { content: ' ↗'; font-size: 12px; color: var(--muted); }
 
 /* The seat list beside the plan rather than beneath it. Beneath, on a laptop,
    it fell below the fold — you clicked a table and could not see what you had

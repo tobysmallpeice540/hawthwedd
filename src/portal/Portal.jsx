@@ -136,9 +136,14 @@ export default function Portal({ session }) {
     <>
       <header className="top">
         <div className="top-in">
-          <div>
-            <div className="brand">Hawthbush Farm</div>
-            <div className="brand-sub">Wedding planner</div>
+          <div className="brand-row">
+            {/* Served from this same site, so it works wherever the portal is
+                hosted and needs no third-party request. */}
+            <img className="brand-logo" src="/email-logo.png" alt="" aria-hidden="true" />
+            <div>
+              <div className="brand">Hawthbush Farm</div>
+              <div className="brand-sub">Wedding planner</div>
+            </div>
           </div>
           <div className="who">
             <span>{session.user.email}</span>
