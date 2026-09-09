@@ -43,6 +43,41 @@ function daysUntil(iso) {
   return Math.round((then - new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12)) / 86400000)
 }
 
+// One place to stay: what it is, whether it is booked, and how full it is.
+//
+// The count is only shown for somewhere actually booked or held. On a place
+// they have not taken, "0 of 6" invites the reading that they have six beds
+// going spare — which is the opposite of true.
+//
+// Over capacity WARNS and never refuses. Somebody may well know something we
+// do not: a travel cot, a child sharing, two people in a single. The house rule
+// throughout is that the venue flags and the couple decides.
+function AccomRow({ place }) {
+  const taken = place.status === 'yes' || place.status === 'hold'
+  const over = taken && place.allocated > place.sleeps
+  return (
+    <div className="row">
+      <span className="k">{place.label}</span>
+      <span className="v">
+        {accomLabel(place.status)}
+        {taken && place.sleeps > 0 && (
+          <>
+            <span className="dot">·</span>
+            <span className={over ? 'over' : undefined}>
+              {place.allocated} of {place.sleeps}
+            </span>
+            {place.sleeps_children > 0 && (
+              <span className="muted" style={{ fontSize: 12 }}>
+                {' '}({place.sleeps_adults} + {place.sleeps_children} child)
+              </span>
+            )}
+          </>
+        )}
+      </span>
+    </div>
+  )
+}
+
 // "yes" / "no" / "undecided" as the diary stores them, in words a couple reads.
 function accomLabel(v) {
   if (v === 'yes')  return 'Booked'
@@ -190,6 +225,16 @@ function Overview({ event, days }) {
   const a = event.accommodation || {}
   const n = event.venue_numbers || {}
   const anyAccom = ['amly', 'hamlet', 'camping'].some((k) => a[k] === 'yes' || a[k] === 'hold')
+  const [accom, setAccom] = useState(null)
+
+  useEffect(() => {
+    if (!anyAccom) return
+    let off = false
+    rpc('wp_get_accommodation')
+      .then((r) => { if (!off) setAccom(r) })
+      .catch(() => { /* the panel falls back to booked/held on its own */ })
+    return () => { off = true }
+  }, [anyAccom])
 
   return (
     <>
@@ -226,13 +271,33 @@ function Overview({ event, days }) {
         <section className="card">
           <h3>Staying with us</h3>
           <div className="rows">
-            <div className="row"><span className="k">Amly</span><span className="v">{accomLabel(a.amly)}</span></div>
-            <div className="row"><span className="k">The Hamlet</span><span className="v">{accomLabel(a.hamlet)}</span></div>
-            <div className="row"><span className="k">Glamping</span><span className="v">{accomLabel(a.camping)}</span></div>
+            {(accom && accom.places ? accom.places : []).map((p) => (
+              <AccomRow key={p.slug} place={p} />
+            ))}
+            {/* Until the counts load, the booked/held status on its own is
+                still worth showing — it is the part that never changes. */}
+            {!accom && (
+              <>
+                <div className="row"><span className="k">Amly</span><span className="v">{accomLabel(a.amly)}</span></div>
+                <div className="row"><span className="k">The Hamlet</span><span className="v">{accomLabel(a.hamlet)}</span></div>
+                <div className="row"><span className="k">Glamping</span><span className="v">{accomLabel(a.camping)}</span></div>
+              </>
+            )}
           </div>
-          <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-            You will be able to put names to rooms here once the guest list is open.
-          </p>
+
+          {accom && accom.unplaced > 0 && (
+            <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+              <strong>{accom.unplaced}</strong>{' '}
+              {accom.unplaced === 1 ? 'person is' : 'people are'} down as staying without
+              somewhere to sleep yet — say where on the Guests tab.
+            </p>
+          )}
+          {accom && accom.unplaced === 0 && (
+            <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+              Everyone staying has somewhere to sleep. Names to actual rooms come later —
+              we will sort that with you nearer the time.
+            </p>
+          )}
         </section>
       )}
 

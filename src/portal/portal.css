@@ -293,6 +293,10 @@ a.btn-small { text-decoration: none; display: inline-block; }
 }
 .room-floor { fill: #fdfcfa; }
 
+/* Over capacity warns, never refuses — somebody may know something we do not.
+   Amber rather than red for that reason: it is a question, not a fault. */
+.over { color: #b45309; font-weight: 600; }
+
 /* Inspiration boards. Links, never embeds — see Pinterest.jsx for why. */
 .boards { display: flex; flex-direction: column; gap: 1px; background: var(--line);
           border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 14px; }

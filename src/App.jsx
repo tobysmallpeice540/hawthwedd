@@ -7078,6 +7078,7 @@ function PortalTemplates({ bookings }) {
 
       <ChecklistTemplate rows={data.checklist || []} onSaved={function(m){ setNote(m); load(); }} />
       <PortalFormBuilder />
+      <PortalAccommodation onSaved={function(m){ setNote(m); }} />
       <FarmBoards onSaved={function(m){ setNote(m); }} />
       <CoupleTimelines bookings={bookings} />
     </div>
@@ -7337,6 +7338,99 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
           style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
             borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
           {busy ? "Saving…" : dirty ? "Save the checklist" : "Saved"}
+        </button>
+        {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
+      </div>
+    </div>
+  );
+}
+
+// ─── what each place sleeps ──────────────────────────────────────────────────
+//
+// In the database rather than the code, because these are facts about the farm
+// that change when a bed is added or a bell tent retired, and a venue fact
+// buried in a JavaScript bundle is one nobody can correct without a deploy.
+//
+// The slugs are fixed to the three the diary has fields for. Inventing a fourth
+// here would create a place that shows as permanently undecided with nothing to
+// explain why, so the database refuses it.
+function PortalAccommodation({ onSaved }) {
+  const [rows, setRows] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function load() {
+    setErr("");
+    try { const r = await sbRpc("wp_admin_accommodation"); setRows(r.places || []); setDirty(false); }
+    catch (e) { setErr(e.message || String(e)); setRows([]); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  function edit(i, patch) {
+    setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
+    setDirty(true);
+  }
+
+  async function save() {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_save_accommodation", {
+        p_rows: rows.map(function(r){
+          return { slug: r.slug, label: r.label,
+                   sleeps_adults: Number(r.sleeps_adults) || 0,
+                   sleeps_children: Number(r.sleeps_children) || 0 };
+        }),
+      });
+      setDirty(false);
+      onSaved("Saved. Couples see this on their overview straight away.");
+      await load();
+    } catch (e) {
+      setErr(e.code === "bad_capacity" ? "That is not a number of beds anybody has."
+        : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  if (rows === null) return null;
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>What each place sleeps</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        Shown on every couple's overview as "4 of 6", so they can see at a glance how much
+        room is left. Adults and children are counted separately because the Hamlet's
+        capacity is genuinely fourteen and a cot rather than fifteen of anything. Going
+        over warns them; it never stops them, since they may know something we do not.
+      </p>
+      {err && <ErrBanner text={err} />}
+
+      {rows.map(function(r, i){
+        return (
+          <div key={r.slug} style={{ borderTop:`1px solid ${T.border}`, padding:"10px 0",
+            display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+            <Field label="Called" width={190}>
+              <input value={r.label || ""} onChange={function(e){ edit(i, { label:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="Sleeps (adults)" width={130}>
+              <input type="number" min="0" value={r.sleeps_adults == null ? 0 : r.sleeps_adults}
+                onChange={function(e){ edit(i, { sleeps_adults:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="Plus children" width={130}>
+              <input type="number" min="0" value={r.sleeps_children == null ? 0 : r.sleeps_children}
+                onChange={function(e){ edit(i, { sleeps_children:e.target.value }); }} style={inputCss} />
+            </Field>
+            <div style={{ fontSize:12, color:T.textLight, paddingBottom:9 }}>
+              {(Number(r.sleeps_adults) || 0) + (Number(r.sleeps_children) || 0)} in total
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14, flexWrap:"wrap" }}>
+        <button onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
+            borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : dirty ? "Save the capacities" : "Saved"}
         </button>
         {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
       </div>
