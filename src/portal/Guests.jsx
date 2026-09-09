@@ -8,7 +8,7 @@ import { ACCOM_LABEL, accomOptions, sortGuests } from './guestSort.js'
 // DOM — which destroys focus mid-typing and throws away list rows. That has
 // caused two bugs and one performance problem in this codebase already.
 
-const AGE_LABEL = { adult: 'Adult', child: 'Child', baby: 'Baby' }
+const AGE_LABEL = { adult: 'Adult', child: 'Child', baby: 'High chair' }
 
 
 function n(v) {
@@ -115,7 +115,8 @@ function NumbersPanel({ numbers, derived, onSaved }) {
         <div className="numgrid">
           <NumberField label="Adults seated"   value={adults}   onChange={setAdults} />
           <NumberField label="Children seated" value={children} onChange={setChildren} />
-          <NumberField label="Babies"          value={babies}   onChange={setBabies} />
+          <NumberField label="High chairs"     value={babies}   onChange={setBabies}
+            hint="Little ones not taking a seat" />
           <NumberField label="Evening only"    value={evening}  onChange={setEvening} hint="Extra people arriving after the meal" />
         </div>
 
@@ -327,7 +328,7 @@ function GuestFields({ v, set, accommodation }) {
           <select value={v.age_band} onChange={(e) => set('age_band', e.target.value)}>
             <option value="adult">Adult</option>
             <option value="child">Child</option>
-            <option value="baby">Baby</option>
+            <option value="baby">High chair</option>
           </select>
         </div>
       </div>

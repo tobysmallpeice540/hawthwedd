@@ -100,6 +100,18 @@ function Chosen({ chosen, label, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
+  // Offering a supplier to other couples. Deliberately worded as an offer,
+  // because that is what it is: the barn's list is the venue's own
+  // recommendation and every supplier on it has agreed to be there, so this
+  // puts them in front of Hawthbush rather than straight onto the list.
+  // Promising otherwise would be the easy thing to write and a lie.
+  async function toggleShare(on) {
+    setBusy(true); setErr('')
+    try { await rpc('wp_offer_supplier', { p_id: chosen.supplier_id, p_share: on }); await onChanged() }
+    catch (e) { setErr(e.message || String(e)) }
+    finally { setBusy(false) }
+  }
+
   async function remove() {
     setBusy(true); setErr('')
     try {
@@ -125,6 +137,18 @@ function Chosen({ chosen, label, onChanged }) {
           </div>
         )}
         {chosen.notes && <div className="doc-meta">{chosen.notes}</div>}
+        {chosen.mine && (
+          <label className="check" style={{ marginTop: 8, fontSize: 13 }}>
+            <input type="checkbox" checked={!!chosen.shared} disabled={busy}
+              onChange={(e) => toggleShare(e.target.checked)} />
+            Happy for us to suggest them to other couples
+          </label>
+        )}
+        {chosen.mine && chosen.shared && (
+          <div className="doc-meta">
+            Thank you — we will check with them before adding them to the list.
+          </div>
+        )}
         {err && <div className="doc-meta err">{err}</div>}
       </div>
       <div className="guest-actions">

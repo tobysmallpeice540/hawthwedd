@@ -7055,6 +7055,7 @@ function PortalTemplates({ bookings }) {
       )}
 
       <ChecklistTemplate rows={data.checklist || []} onSaved={function(m){ setNote(m); load(); }} />
+      <PortalFormBuilder />
       <FarmBoards onSaved={function(m){ setNote(m); }} />
       <CoupleTimelines bookings={bookings} />
     </div>
@@ -7314,6 +7315,207 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
           style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
             borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
           {busy ? "Saving…" : dirty ? "Save the checklist" : "Saved"}
+        </button>
+        {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
+      </div>
+    </div>
+  );
+}
+
+// ─── the Details form, built rather than hardcoded ───────────────────────────
+//
+// Sections are not a table: a section is just the text on each question, so
+// renaming one is a save and inventing one is typing a name. That keeps the
+// whole thing to a single list with a single Save.
+//
+// THE ONE THING THIS SCREEN MUST NOT DO is change a question's key. qkey is
+// what each couple's answer is filed under, so changing it orphans every answer
+// already given — still in the database, invisible for ever, with nothing to
+// say it happened. The key is assigned once by the database and never rewritten
+// there, so renaming a question here is always safe. Deleting one is not, which
+// is why each row says how many couples have answered it.
+
+const FIELD_KINDS = [
+  ["text",     "Short text"],
+  ["longtext", "Notes"],
+  ["number",   "Number"],
+  ["time",     "Time"],
+  ["date",     "Date"],
+  ["yesno",    "Yes / No / Not sure"],
+  ["radio",    "Radio buttons"],
+  ["select",   "Dropdown"],
+  ["choice",   "Dropdown (old)"],
+];
+
+const NEEDS_OPTIONS = ["radio", "select", "choice"];
+
+function PortalFormBuilder() {
+  const [rows, setRows] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  async function load() {
+    setErr("");
+    try { const r = await sbRpc("wp_admin_form_questions"); setRows(r.questions || []); setDirty(false); }
+    catch (e) { setErr(e.message || String(e)); setRows([]); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  function edit(i, patch) {
+    setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
+    setDirty(true);
+  }
+  function move(i, by) {
+    setRows(function(r){
+      const n = r.slice(), j = i + by;
+      if (j < 0 || j >= n.length) return n;
+      const t = n[i]; n[i] = n[j]; n[j] = t;
+      return n;
+    });
+    setDirty(true);
+  }
+
+  async function save() {
+    setBusy(true); setErr(""); setNote("");
+    try {
+      await sbRpc("wp_admin_save_form_questions", {
+        p_rows: rows.map(function(r){
+          return {
+            // Sent back exactly as it came, or the answers already given to
+            // this question are lost. A blank one is a new question.
+            qkey: r.qkey || null,
+            section: r.section, label: r.label, help: r.help || null, kind: r.kind,
+            options: NEEDS_OPTIONS.indexOf(r.kind) >= 0
+              ? String(r.options_text == null ? (r.options || []).join("\n") : r.options_text)
+                  .split("\n").map(function(x){ return x.trim(); }).filter(Boolean)
+              : null,
+          };
+        }),
+      });
+      setDirty(false);
+      setNote("Saved. Couples see this next time they open the Details tab.");
+      await load();
+    } catch (e) {
+      setErr(
+        e.code === "needs_label" ? "Every question needs wording."
+        : e.code === "needs_section" ? "Every question needs a heading to sit under."
+        : e.code === "needs_two_options" ? "A dropdown or radio needs at least two options — one per line."
+        : e.code === "bad_kind" ? "One of those field types is not one we can render."
+        : (e.message || String(e))
+      );
+    } finally { setBusy(false); }
+  }
+
+  if (rows === null) return null;
+
+  // Grouped only for the headings; the list itself stays flat so that moving a
+  // question between sections is just retyping its heading.
+  const sections = [];
+  rows.forEach(function(r){ if (sections.indexOf(r.section) < 0) sections.push(r.section); });
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>The Details form</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 6px", maxWidth:680 }}>
+        Everything a couple is asked on the Details tab. A <b>heading</b> is just text —
+        type the same one on two questions and they group together; change it and the
+        heading changes. Order is top to bottom.
+      </p>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        Renaming a question keeps every answer already given to it. <b>Deleting one
+        throws those answers away</b>, which is why each row says how many couples have
+        answered.
+      </p>
+      {err && <ErrBanner text={err} />}
+      {note && <div style={{ background:T.greenBg, border:`1px solid ${T.green}33`, color:T.green,
+        borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{note}</div>}
+
+      <div style={{ fontSize:11, color:T.textLight, marginBottom:10 }}>
+        {rows.length} question{rows.length === 1 ? "" : "s"} under {sections.length} heading
+        {sections.length === 1 ? "" : "s"}: {sections.join(" · ")}
+      </div>
+
+      {rows.map(function(r, i){
+        const needsOptions = NEEDS_OPTIONS.indexOf(r.kind) >= 0;
+        const optionsText = r.options_text == null ? (r.options || []).join("\n") : r.options_text;
+        const newHeading = i === 0 || rows[i - 1].section !== r.section;
+        return (
+          <div key={r.qkey || ("new" + i)}
+            style={{ borderTop:`1px solid ${T.border}`, padding:"12px 0",
+              background: newHeading ? "transparent" : "transparent" }}>
+            <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
+              <Field label="Heading" width={170}>
+                <input value={r.section || ""} onChange={function(e){ edit(i, { section:e.target.value }); }}
+                  placeholder="On the day" style={inputCss} />
+              </Field>
+              <Field label="The question" width={280}>
+                <input value={r.label || ""} onChange={function(e){ edit(i, { label:e.target.value }); }}
+                  placeholder="What time do you expect your florist?" style={inputCss} />
+              </Field>
+              <Field label="Answered with" width={170}>
+                <select value={r.kind || "text"} onChange={function(e){ edit(i, { kind:e.target.value }); }}
+                  style={inputCss}>
+                  {FIELD_KINDS.map(function(k){ return <option key={k[0]} value={k[0]}>{k[1]}</option>; })}
+                </select>
+              </Field>
+              <Field label="Hint underneath" width={230}>
+                <input value={r.help || ""} onChange={function(e){ edit(i, { help:e.target.value }); }}
+                  placeholder="optional" style={inputCss} />
+              </Field>
+              <div style={{ display:"flex", gap:4, paddingBottom:9 }}>
+                <button onClick={function(){ move(i, -1); }} disabled={i === 0}
+                  style={Object.assign({}, btnQuiet, { padding:"8px 10px", opacity: i === 0 ? 0.4 : 1 })}>↑</button>
+                <button onClick={function(){ move(i, 1); }} disabled={i === rows.length - 1}
+                  style={Object.assign({}, btnQuiet, { padding:"8px 10px", opacity: i === rows.length - 1 ? 0.4 : 1 })}>↓</button>
+              </div>
+              <button
+                onClick={function(){
+                  if (r.answered > 0 &&
+                      !window.confirm(r.answered + " couple" + (r.answered === 1 ? " has" : "s have") +
+                        " answered this. Removing it throws those answers away. Remove it?")) return;
+                  setRows(function(x){ return x.filter(function(_, j){ return j !== i; }); });
+                  setDirty(true);
+                }}
+                style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55`, padding:"8px 12px" })}>
+                Remove
+              </button>
+            </div>
+
+            {needsOptions && (
+              <div style={{ marginTop:10, maxWidth:420 }}>
+                <Field label="Options, one per line">
+                  <textarea rows={3} value={optionsText}
+                    onChange={function(e){ edit(i, { options_text:e.target.value }); }}
+                    placeholder={"Yes\nNo\nNot sure yet"}
+                    style={Object.assign({}, inputCss, { width:"100%", resize:"vertical", lineHeight:1.5 })} />
+                </Field>
+              </div>
+            )}
+
+            <div style={{ fontSize:11, color:T.textLight, marginTop:6 }}>
+              {r.qkey
+                ? <>Saved as <code>{r.qkey}</code>{r.answered > 0 && <> · answered by {r.answered} couple{r.answered === 1 ? "" : "s"}</>}</>
+                : "New — its key will be made from the wording when you save"}
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14, flexWrap:"wrap" }}>
+        <button style={btnQuiet}
+          onClick={function(){
+            const last = rows.length ? rows[rows.length - 1].section : "On the day";
+            setRows(function(r){ return r.concat([{ qkey:null, section:last, label:"", kind:"text", help:"", options:[] }]); });
+            setDirty(true);
+          }}>
+          + Add a question
+        </button>
+        <button onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
+            borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : dirty ? "Save the form" : "Saved"}
         </button>
         {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
       </div>

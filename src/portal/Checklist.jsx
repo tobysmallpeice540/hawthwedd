@@ -75,6 +75,16 @@ export default function Checklist() {
           <span className="count">{todo.length}</span>
         </div>
 
+        {/* Above the list, not below it. A list of nine items pushes the
+            button off the screen, and by the time you have scrolled past
+            everything we need from you, adding your own feels like an
+            afterthought — which is the opposite of the intention. */}
+        {adding
+          ? <AddTask onDone={() => { setAdding(false); load() }} onCancel={() => setAdding(false)} />
+          : <div className="actions" style={{ marginTop: 0, marginBottom: 4 }}>
+              <button className="btn-small" onClick={() => setAdding(true)}>Add your own</button>
+            </div>}
+
         {todo.length === 0 ? (
           <p className="muted" style={{ fontSize: 14, padding: '12px 0' }}>
             Nothing outstanding. That is a rare and lovely thing.
@@ -84,10 +94,6 @@ export default function Checklist() {
             {todo.map((t) => <Task key={t.id} task={t} onChanged={load} />)}
           </div>
         )}
-
-        {adding
-          ? <AddTask onDone={() => { setAdding(false); load() }} onCancel={() => setAdding(false)} />
-          : <div className="actions"><button className="btn-small" onClick={() => setAdding(true)}>Add your own</button></div>}
       </section>
 
       {complete.length > 0 && (

@@ -113,11 +113,25 @@ function Question({ q, value, onChange }) {
           <YesNoOption qkey={q.qkey} value={value} option="unsure" label="Not sure yet" onChange={onChange} />
         </div>
       )}
-      {q.kind === 'choice' && (
+      {/* 'choice' is the original name for a dropdown and is still in use, so
+          it renders as one. 'radio' shows every option at once, which is what
+          you want for three, and 'select' is the same list behind a click. */}
+      {(q.kind === 'choice' || q.kind === 'select') && (
         <select id={id} value={value} onChange={(e) => onChange(q.qkey, e.target.value)}>
           <option value="">—</option>
           {(q.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
+      )}
+      {q.kind === 'radio' && (
+        <div className="yesno">
+          {(q.options || []).map((o, i) => (
+            <YesNoOption key={o} id={i === 0 ? id : undefined} qkey={q.qkey}
+              value={value} option={o} label={o} onChange={onChange} />
+          ))}
+        </div>
+      )}
+      {q.kind === 'date' && (
+        <input id={id} type="date" value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />
       )}
       {q.kind === 'longtext' && (
         <textarea id={id} rows={3} value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />
