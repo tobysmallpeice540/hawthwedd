@@ -6946,6 +6946,7 @@ const PORTAL_TABS = [
   { id: "logins",   label: "Logins" },
   { id: "times",    label: "Access times" },
   { id: "suppliers",label: "Supplier directory" },
+  { id: "room",     label: "The room" },
 ];
 
 function PortalAdminScreen({ bookings, onBack }) {
@@ -6974,9 +6975,359 @@ function PortalAdminScreen({ bookings, onBack }) {
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
       {tab === "times"     && <PortalAccessTimes />}
       {tab === "suppliers" && <PortalSupplierDirectory />}
+      {tab === "room"      && <PortalRoomEditor />}
     </div>
   );
 }
+
+// ─── the room the tables go in ───────────────────────────────────────────────
+//
+// One room, drawn once, shared by every wedding — the scope's decision, and the
+// reason this lives in the admin app rather than the portal. A couple arranges
+// tables inside it; they do not get to move the bar.
+//
+// The plan is INDICATIVE. Toby's setup sheet stays master, so there is no
+// millimetre accuracy here and nothing checks fire gangways. What it has to do
+// is look enough like the barn that a couple recognises it and puts the top
+// table at the right end.
+//
+// Everything is stored in millimetres and shown in metres, because a barn is
+// measured in metres and a trestle table is quoted in millimetres, and mixing
+// the two in storage is how a room ends up a thousand times too big.
+
+const M = 1000;                       // mm in a metre
+const TABLE_L = 1830, TABLE_D = 760;  // the one table type, for scale
+const SNAP = 100;                     // 10cm — fine enough, and stops the jitter
+
+function mToMm(v) { const n = parseFloat(v); return isNaN(n) ? 0 : Math.round(n * M); }
+function mmToM(v) { return (Number(v || 0) / M).toFixed(2).replace(/\.00$/, ""); }
+function snap(v)  { return Math.round(v / SNAP) * SNAP; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function PortalRoomEditor() {
+  const [rooms, setRooms] = useState(null);
+  const [liveId, setLiveId] = useState(null);
+  const [id, setId] = useState(null);
+  const [draft, setDraft] = useState(null);      // { name, width_mm, height_mm, shapes[] }
+  const [sel, setSel] = useState(-1);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const planRef = useRef(null);
+  const dragRef = useRef(null);
+
+  async function load(keepId) {
+    setErr("");
+    try {
+      const r = await sbRpc("wp_admin_rooms");
+      const list = r.rooms || [];
+      setRooms(list);
+      setLiveId(r.live_room_id || null);
+      const pick = list.find(function(x){ return x.id === keepId; })
+                || list.find(function(x){ return x.id === r.live_room_id; })
+                || list[0];
+      if (pick) { setId(pick.id); setDraft(roomToDraft(pick)); }
+      else { setId(null); setDraft(null); }
+      setDirty(false); setSel(-1);
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  function roomToDraft(r) {
+    return {
+      name: r.name || "The barn",
+      width_mm: r.width_mm, height_mm: r.height_mm,
+      active: r.active !== false,
+      shapes: (r.shapes || []).map(function(s){
+        return { kind: s.kind === "nogo" ? "nogo" : "fixed", label: s.label || "",
+                 x: Number(s.x)||0, y: Number(s.y)||0,
+                 w: Number(s.w)||1000, h: Number(s.h)||1000 };
+      }),
+    };
+  }
+
+  function edit(patch) { setDraft(function(d){ return Object.assign({}, d, patch); }); setDirty(true); }
+  function editShape(i, patch) {
+    setDraft(function(d){
+      const next = d.shapes.slice();
+      next[i] = Object.assign({}, next[i], patch);
+      return Object.assign({}, d, { shapes: next });
+    });
+    setDirty(true);
+  }
+
+  async function createRoom() {
+    setBusy(true); setErr("");
+    try {
+      const r = await sbRpc("wp_admin_upsert_room", {
+        p_name: "The barn", p_width_mm: 12000, p_height_mm: 9000,
+        p_shapes: [], p_active: true,
+      });
+      await load(r.id);
+      setNote("Room created. Set its size, then add the bar, the stage and anything else that never moves.");
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  async function save() {
+    if (!draft) return;
+    setBusy(true); setErr(""); setNote("");
+    try {
+      await sbRpc("wp_admin_upsert_room", {
+        p_id: id, p_name: draft.name,
+        p_width_mm: draft.width_mm, p_height_mm: draft.height_mm,
+        p_shapes: draft.shapes, p_active: draft.active,
+      });
+      setDirty(false);
+      setNote("Saved. Couples will see this next time they open their table plan.");
+      await load(id);
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  function addShape(kind) {
+    const w = kind === "nogo" ? 2000 : 3000, h = kind === "nogo" ? 2000 : 1000;
+    const s = { kind: kind, label: kind === "nogo" ? "Keep clear" : "Bar",
+                x: snap((draft.width_mm - w) / 2), y: snap((draft.height_mm - h) / 2), w: w, h: h };
+    setDraft(function(d){ return Object.assign({}, d, { shapes: d.shapes.concat([s]) }); });
+    setSel(draft.shapes.length);
+    setDirty(true);
+  }
+
+  function removeShape(i) {
+    setDraft(function(d){ return Object.assign({}, d, { shapes: d.shapes.filter(function(_,j){ return j !== i; }) }); });
+    setSel(-1); setDirty(true);
+  }
+
+  // ── dragging on the plan ──────────────────────────────────────────────────
+  // Pointer events rather than mouse, so this works on a tablet in the barn,
+  // which is where somebody is most likely to be checking it against reality.
+  function mmPerPx() {
+    const el = planRef.current;
+    if (!el || !draft) return 1;
+    return draft.width_mm / el.getBoundingClientRect().width;
+  }
+
+  function startDrag(e, i, mode) {
+    e.preventDefault(); e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const s = draft.shapes[i];
+    dragRef.current = { i: i, mode: mode, px: e.clientX, py: e.clientY,
+                        x: s.x, y: s.y, w: s.w, h: s.h };
+    setSel(i);
+  }
+
+  function onDrag(e) {
+    const d = dragRef.current;
+    if (!d) return;
+    const k = mmPerPx();
+    const dx = (e.clientX - d.px) * k, dy = (e.clientY - d.py) * k;
+    if (d.mode === "move") {
+      editShape(d.i, {
+        x: clamp(snap(d.x + dx), 0, draft.width_mm  - d.w),
+        y: clamp(snap(d.y + dy), 0, draft.height_mm - d.h),
+      });
+    } else {
+      editShape(d.i, {
+        w: clamp(snap(d.w + dx), 300, draft.width_mm  - d.x),
+        h: clamp(snap(d.h + dy), 300, draft.height_mm - d.y),
+      });
+    }
+  }
+
+  function endDrag(e) {
+    if (dragRef.current) {
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (e2) {}
+      dragRef.current = null;
+    }
+  }
+
+  // ── render ────────────────────────────────────────────────────────────────
+
+  if (rooms === null) return <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>;
+
+  if (!draft) {
+    return (
+      <div>
+        {err && <ErrBanner text={err} />}
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, maxWidth:620 }}>
+          <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:8 }}>No room set up yet</div>
+          <p style={{ fontSize:13, color:T.textMid, lineHeight:1.7, margin:"0 0 16px" }}>
+            Until there is one, every couple's Table plan tab says the room has not been
+            set up and nothing can be placed. Create it once and it serves every wedding.
+          </p>
+          <button onClick={createRoom} disabled={busy}
+            style={{ background:T.accent, color:"#fff", border:"none", padding:"10px 20px", borderRadius:8,
+              cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>
+            {busy ? "Creating…" : "Create the barn"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const PLAN_W = 760;
+  const scale = PLAN_W / draft.width_mm;                 // px per mm
+  const planH = Math.max(140, Math.round(draft.height_mm * scale));
+  const s = sel >= 0 ? draft.shapes[sel] : null;
+  const notLive = liveId && id !== liveId;
+
+  return (
+    <div>
+      {err  && <ErrBanner text={err} />}
+      {note && <div style={{ background:T.greenBg, border:`1px solid ${T.green}33`, color:T.green,
+        borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{note}</div>}
+
+      {notLive && (
+        <div style={{ background:T.amberBg, border:`1px solid ${T.amber}44`, color:T.amber,
+          borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14, lineHeight:1.6 }}>
+          Couples see the oldest active room, which is not this one. Edits here change
+          nothing on their screen until this is the only active room.
+        </div>
+      )}
+
+      <p style={{ fontSize:13, color:T.textMid, maxWidth:660, lineHeight:1.7, marginTop:0 }}>
+        Drag things roughly into place, then type the exact measurement if you know it.
+        <b> Fixed</b> is anything that never moves — the bar, the stage, a doorway, a pillar.
+        <b> Keep clear</b> is floor a table must not go on. Couples can move neither.
+      </p>
+
+      {/* room itself */}
+      <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap", margin:"16px 0" }}>
+        <Field label="Name" width={220}>
+          <input value={draft.name} onChange={function(e){ edit({ name:e.target.value }); }} style={inputCss} />
+        </Field>
+        <Field label="Width (m)" width={110}>
+          <input type="number" step="0.1" min="1" value={mmToM(draft.width_mm)}
+            onChange={function(e){ edit({ width_mm: Math.max(1000, mToMm(e.target.value)) }); }} style={inputCss} />
+        </Field>
+        <Field label="Depth (m)" width={110}>
+          <input type="number" step="0.1" min="1" value={mmToM(draft.height_mm)}
+            onChange={function(e){ edit({ height_mm: Math.max(1000, mToMm(e.target.value)) }); }} style={inputCss} />
+        </Field>
+        <button onClick={function(){ addShape("fixed"); }}
+          style={btnQuiet}>+ Fixed thing</button>
+        <button onClick={function(){ addShape("nogo"); }}
+          style={btnQuiet}>+ Keep clear</button>
+      </div>
+
+      {/* the plan */}
+      <div style={{ overflowX:"auto", paddingBottom:6 }}>
+        <div ref={planRef}
+          onPointerMove={onDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
+          onPointerDown={function(){ setSel(-1); }}
+          style={{ position:"relative", width:PLAN_W, height:planH, flex:"0 0 auto",
+            background:"#fbfaf7", border:`2px solid ${T.text}`, borderRadius:2,
+            backgroundImage:`linear-gradient(${T.border}55 1px, transparent 1px), linear-gradient(90deg, ${T.border}55 1px, transparent 1px)`,
+            backgroundSize:`${M*scale}px ${M*scale}px`, touchAction:"none", userSelect:"none" }}>
+
+          {draft.shapes.map(function(sh, i) {
+            const on = i === sel;
+            const fixed = sh.kind !== "nogo";
+            return (
+              <div key={i}
+                onPointerDown={function(e){ startDrag(e, i, "move"); }}
+                style={{ position:"absolute", cursor:"move",
+                  left: sh.x*scale, top: sh.y*scale, width: sh.w*scale, height: sh.h*scale,
+                  background: fixed ? T.midBlueBg : "#fee2e2cc",
+                  border: `${on?2:1.5}px ${fixed?"solid":"dashed"} ${on ? T.accent : (fixed ? T.midBlue : T.red)}`,
+                  borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center",
+                  fontSize:11, fontWeight:600, color: fixed ? T.midBlue : T.red,
+                  textAlign:"center", overflow:"hidden", padding:2, boxSizing:"border-box" }}>
+                {sh.label}
+                {on && (
+                  <div onPointerDown={function(e){ startDrag(e, i, "size"); }}
+                    style={{ position:"absolute", right:-6, bottom:-6, width:13, height:13,
+                      background:"#fff", border:`2px solid ${T.accent}`, borderRadius:3, cursor:"nwse-resize" }} />
+                )}
+              </div>
+            );
+          })}
+
+          {/* one trestle, to scale, so the room can be judged against what goes in it */}
+          <div style={{ position:"absolute", right:6, bottom:6, width:TABLE_L*scale, height:TABLE_D*scale,
+            border:`1px dashed ${T.textLight}`, borderRadius:2, display:"flex", alignItems:"center",
+            justifyContent:"center", fontSize:9, color:T.textLight, pointerEvents:"none" }}>
+            one table
+          </div>
+        </div>
+      </div>
+
+      <div style={{ fontSize:11, color:T.textLight, marginTop:6 }}>
+        Grid squares are 1 metre. The room is {mmToM(draft.width_mm)}m × {mmToM(draft.height_mm)}m.
+      </div>
+
+      {/* the selected thing */}
+      {s && (
+        <div style={{ marginTop:16, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16,
+          display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+          <Field label="Label" width={200}>
+            <input value={s.label} onChange={function(e){ editShape(sel, { label:e.target.value }); }} style={inputCss} />
+          </Field>
+          <Field label="Type" width={140}>
+            <select value={s.kind} onChange={function(e){ editShape(sel, { kind:e.target.value }); }} style={inputCss}>
+              <option value="fixed">Fixed thing</option>
+              <option value="nogo">Keep clear</option>
+            </select>
+          </Field>
+          {[["x","From left (m)"],["y","From top (m)"],["w","Width (m)"],["h","Depth (m)"]].map(function(f){
+            return (
+              <Field key={f[0]} label={f[1]} width={104}>
+                <input type="number" step="0.1" value={mmToM(s[f[0]])}
+                  onChange={function(e){ editShape(sel, (function(){ const o={}; o[f[0]] = Math.max(0, mToMm(e.target.value)); return o; })()); }}
+                  style={inputCss} />
+              </Field>
+            );
+          })}
+          <button onClick={function(){ removeShape(sel); }}
+            style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55` })}>Remove</button>
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:18, flexWrap:"wrap" }}>
+        <button onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"10px 22px",
+            borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>
+          {busy ? "Saving…" : dirty ? "Save the room" : "Saved"}
+        </button>
+        {dirty && <span style={{ fontSize:12, color:T.amber }}>Unsaved changes.</span>}
+        {rooms.length > 1 && (
+          <select value={id || ""} onChange={function(e){
+              const r = rooms.find(function(x){ return x.id === e.target.value; });
+              if (r) { setId(r.id); setDraft(roomToDraft(r)); setSel(-1); setDirty(false); }
+            }}
+            style={Object.assign({}, inputCss, { width:"auto", marginLeft:"auto" })}>
+            {rooms.map(function(r){
+              return <option key={r.id} value={r.id}>{r.name + (r.id === liveId ? " (live)" : "")}</option>;
+            })}
+          </select>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const inputCss = { width:"100%", padding:"8px 10px", borderRadius:8, border:`1.5px solid ${T.border}`,
+  fontFamily:"inherit", fontSize:14, boxSizing:"border-box", background:"#fff" };
+
+const btnQuiet = { background:"none", border:`1.5px solid ${T.border}`, borderRadius:8, padding:"9px 14px",
+  cursor:"pointer", fontFamily:"inherit", fontSize:13, color:T.textMid };
+
+function Field({ label, width, children }) {
+  return (
+    <label style={{ display:"block", width: width || 160 }}>
+      <span style={{ display:"block", fontSize:11, color:T.textLight, marginBottom:4 }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ErrBanner({ text }) {
+  return <div style={{ background:T.redBg, border:`1px solid ${T.red}44`, color:T.red,
+    borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{text}</div>;
+}
+
 
 // ─── who can sign in ─────────────────────────────────────────────────────────
 
