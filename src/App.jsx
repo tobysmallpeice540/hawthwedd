@@ -9075,10 +9075,71 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
 }
 
 // ─── XERO LIVE INVOICES PANEL ────────────────────────────────────────────────
-function XeroInvoicesPanel({ contactId, xeroToken }) {
+// Mirrors what Xero says into wp_invoices, so the client portal can show a
+// couple their own invoices without any Xero credential existing on that side.
+//
+// Only AUTHORISED and PAID are worth mirroring, and the database filters again
+// anyway — this app pushes DRAFTs, and a couple must never see one.
+//
+// The public "view and pay" link is fetched only for invoices we have not got
+// one for yet. It does not change, so this settles down to no extra calls at
+// all after the first look at an event, which keeps well clear of Xero's rate
+// limit on a busy morning.
+async function syncInvoicesToPortal(eventId, invoices) {
+  if (!eventId || !Array.isArray(invoices)) return null;
+
+  const rows = invoices
+    .filter(function(inv) { return inv.Status === "AUTHORISED" || inv.Status === "PAID"; })
+    .map(function(inv) {
+      return {
+        xero_invoice_id: inv.InvoiceID,
+        invoice_number:  inv.InvoiceNumber || "",
+        invoice_date:    xeroDateToIso(inv.DateString || inv.Date) || "",
+        due_date:        xeroDateToIso(inv.DueDateString || inv.DueDate) || "",
+        status:          inv.Status,
+        total:           String(inv.Total == null ? "" : inv.Total),
+        amount_due:      String(inv.AmountDue == null ? "" : inv.AmountDue),
+        amount_paid:     String(inv.AmountPaid == null ? "" : inv.AmountPaid),
+        currency:        inv.CurrencyCode || "GBP"
+      };
+    });
+
+  let res = await sbRpc("wp_admin_sync_invoices", { p_event_id: Number(eventId), p_rows: rows });
+
+  // Fill in any missing public links, then send just those back.
+  const needs = (res && res.needs_url) || [];
+  if (needs.length) {
+    const withUrls = [];
+    for (let i = 0; i < needs.length && i < 25; i++) {
+      const id = needs[i];
+      const row = rows.find(function(r) { return r.xero_invoice_id === id; });
+      if (!row) continue;
+      try {
+        const d = await xeroFetch("Invoices/" + id + "/OnlineInvoice");
+        const url = d && d.OnlineInvoices && d.OnlineInvoices[0] && d.OnlineInvoices[0].OnlineInvoiceUrl;
+        if (url) withUrls.push(Object.assign({}, row, { online_url: url }));
+      } catch (e) {
+        // A missing link is not a failure worth stopping for — the invoice
+        // still shows, just without a button, and the next look tries again.
+        console.warn("online invoice url unavailable for " + id + ": " + e.message);
+      }
+    }
+    if (withUrls.length) {
+      res = await sbRpc("wp_admin_sync_invoices", { p_event_id: Number(eventId), p_rows: rows.map(function(r) {
+        const withUrl = withUrls.find(function(w) { return w.xero_invoice_id === r.xero_invoice_id; });
+        return withUrl || r;
+      })});
+    }
+  }
+  return res;
+}
+
+function XeroInvoicesPanel({ contactId, xeroToken, eventId }) {
   const [invoices, setInvoices] = useState(null);
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState(null);
+  const [mirrored, setMirrored] = useState(null);
+  const [mirrorError, setMirrorError] = useState(null);
 
   const load = async () => {
     if (!xeroToken) return;
@@ -9086,6 +9147,16 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
     try {
       const data = await xeroFetch(`Invoices?ContactIDs=${contactId}&order=Date DESC`);
       setInvoices(data.Invoices || []);
+      // Mirror into the portal. Deliberately after the panel has its data, and
+      // deliberately not fatal: a failed mirror must never stop staff seeing
+      // the invoices they came here for.
+      try {
+        const res = await syncInvoicesToPortal(eventId, data.Invoices || []);
+        if (res) setMirrored({ stored: res.stored, at: new Date() });
+      } catch (e) {
+        console.warn("portal invoice mirror failed: " + e.message);
+        setMirrorError(e.message);
+      }
     } catch(err) { setError(err.message); }
     finally { setLoading(false); }
   };
@@ -9117,7 +9188,11 @@ function XeroInvoicesPanel({ contactId, xeroToken }) {
   return (
     <div style={{ marginTop:14 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
-        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{invoices.length} invoice{invoices.length!==1?"s":""} in Xero</span>
+        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>
+          {invoices.length} invoice{invoices.length!==1?"s":""} in Xero
+          {mirrored && <span style={{ fontWeight:400, color:T.textLight }}> · {mirrored.stored} shared with the couple</span>}
+          {mirrorError && <span style={{ fontWeight:400, color:"#92400e" }}> · not shared: {mirrorError}</span>}
+        </span>
         <button onClick={load} style={{ background:"none", border:"none", color:T.midBlue, cursor:"pointer", fontSize:11, fontWeight:600 }}>↻ Refresh</button>
       </div>
       <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
@@ -9745,7 +9820,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <InvoiceSchedulePanel formData={formData} accomBookings={accomBookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={onSaveInvoiceRecords}/>
                 <XeroContactField formData={formData} update={update}/>
                 {formData.xeroContactId && formData.xeroContactId.trim() && (
-                  <XeroInvoicesPanel contactId={formData.xeroContactId.trim()} xeroToken={xeroToken}/>
+                  <XeroInvoicesPanel contactId={formData.xeroContactId.trim()} xeroToken={xeroToken} eventId={formData.id}/>
                 )}
               </div>
 

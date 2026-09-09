@@ -6,6 +6,7 @@ import VenueForm from './VenueForm.jsx'
 import Contract from './Contract.jsx'
 import Suppliers from './Suppliers.jsx'
 import Timeline from './Timeline.jsx'
+import Money from './Money.jsx'
 
 // The eight tabs from the build spec. Only Overview is built; the rest declare
 // themselves honestly rather than pretending. Order matches the order a couple
@@ -17,7 +18,7 @@ const TABS = [
   { key: 'timeline',  label: 'Timeline',      ready: true  },
   { key: 'suppliers', label: 'Suppliers',     ready: true  },
   { key: 'layout',    label: 'Table plan',    ready: false },
-  { key: 'money',     label: 'Payments',      ready: false },
+  { key: 'money',     label: 'Payments',      ready: true  },
   { key: 'details',   label: 'Details',       ready: true  },
   { key: 'contract',  label: 'Contract',      ready: true  },
 ]
@@ -166,7 +167,8 @@ export default function Portal({ session }) {
         {tab === 'contract'  && <Contract />}
         {tab === 'suppliers' && <Suppliers />}
         {tab === 'timeline'  && <Timeline />}
-        {!['overview', 'guests', 'checklist', 'details', 'contract', 'suppliers', 'timeline'].includes(tab) && <Soon label={active.label} />}
+        {tab === 'money'     && <Money />}
+        {!['overview', 'guests', 'checklist', 'details', 'contract', 'suppliers', 'timeline', 'money'].includes(tab) && <Soon label={active.label} />}
       </main>
     </>
   )
