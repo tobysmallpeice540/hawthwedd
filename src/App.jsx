@@ -7012,6 +7012,7 @@ function PortalEventPanel({ eventId }) {
   const [numbers, setNumbers] = useState(null);
   const [checklist, setChecklist] = useState(null);
   const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -7028,11 +7029,55 @@ function PortalEventPanel({ eventId }) {
   }
   useEffect(function(){ load(); }, [eventId]);
 
+  // Granting access and telling somebody about it are one action as far as
+  // anyone here is concerned. wp_grant_access only writes the row — nothing
+  // sends — which is precisely how this was found: an address was added and no
+  // email ever arrived. The function mints the sign-in link and sends it
+  // through Resend, so it lands branded and shows up in Recent Automated
+  // Emails with everything else.
+  async function sendInvite(address) {
+    const res = await fetch("/.netlify/functions/portal-auth", {
+      method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json" },
+        SESSION_TOKEN ? { Authorization: "Bearer " + SESSION_TOKEN } : {}),
+      body: JSON.stringify({ action: "invite", email: address })
+    });
+    const text = await res.text();
+    let data = null; try { data = text ? JSON.parse(text) : null; } catch (e) {}
+    if (!res.ok) throw new Error((data && data.error) || ("the invite did not send (" + res.status + ")"));
+    return true;
+  }
+
   async function grant(e) {
     e.preventDefault();
-    setBusy(true); setErr("");
-    try { await sbRpc("wp_grant_access", { p_event_id: eventId, p_email: email }); setEmail(""); await load(); }
-    catch (e2) { setErr(e2.code === "bad_email" ? "That does not look like an email address." : (e2.message || String(e2))); }
+    const address = String(email || "").trim().toLowerCase();
+    setBusy(true); setErr(""); setNote("");
+
+    // Two steps, reported separately: if the access lands and the email does
+    // not, saying "failed" would be wrong and would invite a second grant.
+    try {
+      await sbRpc("wp_grant_access", { p_event_id: eventId, p_email: address });
+      setEmail("");
+      await load();
+    } catch (e2) {
+      setErr(e2.code === "bad_email" ? "That does not look like an email address." : (e2.message || String(e2)));
+      setBusy(false);
+      return;
+    }
+
+    try {
+      await sendInvite(address);
+      setNote("Access given, and the invite is on its way to " + address + ".");
+    } catch (e3) {
+      setErr("Access was given, but " + (e3.message || String(e3)) + " Try Send invite again in a moment.");
+    }
+    setBusy(false);
+  }
+
+  async function resend(address) {
+    setBusy(true); setErr(""); setNote("");
+    try { await sendInvite(address); setNote("Sent to " + address + "."); }
+    catch (e2) { setErr(e2.message || String(e2)); }
     finally { setBusy(false); }
   }
 
@@ -7046,6 +7091,7 @@ function PortalEventPanel({ eventId }) {
   return (
     <div style={{ marginTop:18, display:"grid", gap:16 }}>
       {err && <div style={{ background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", borderRadius:8, padding:"10px 14px", fontSize:13 }}>{err}</div>}
+      {note && <div style={{ background:"#f0fdf4", border:"1px solid #bbf7d0", color:"#15803d", borderRadius:8, padding:"10px 14px", fontSize:13 }}>{note}</div>}
 
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
         <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:10 }}>Who can sign in</div>
@@ -7066,9 +7112,16 @@ function PortalEventPanel({ eventId }) {
                     </div>
                   </div>
                   {!r.revoked_at && (
-                    <button onClick={function(){ revoke(r.id); }} disabled={busy}
-                      style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:7, padding:"6px 12px",
-                        cursor:"pointer", fontFamily:"inherit", fontSize:12, color:T.textMid }}>Revoke</button>
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={function(){ resend(r.email); }} disabled={busy}
+                        style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:7, padding:"6px 12px",
+                          cursor:"pointer", fontFamily:"inherit", fontSize:12, color:T.textMid }}>
+                        {r.last_seen_at ? "Send link" : "Send invite"}
+                      </button>
+                      <button onClick={function(){ revoke(r.id); }} disabled={busy}
+                        style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:7, padding:"6px 12px",
+                          cursor:"pointer", fontFamily:"inherit", fontSize:12, color:T.textMid }}>Revoke</button>
+                    </div>
                   )}
                 </div>
               );
@@ -7086,6 +7139,10 @@ function PortalEventPanel({ eventId }) {
             {busy ? "Adding…" : "Give access"}
           </button>
         </form>
+        <div style={{ fontSize:11, color:T.textLight, marginTop:8, lineHeight:1.5 }}>
+          Giving access emails them a sign-in link straight away. There is no password —
+          they ask for a fresh link whenever they come back.
+        </div>
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px, 1fr))", gap:14 }}>

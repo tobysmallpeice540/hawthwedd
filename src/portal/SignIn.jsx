@@ -1,17 +1,20 @@
 import { useState } from 'react'
-import { supabase } from './supabase.js'
 
 // Magic link, not a password. Couples plan a wedding over eighteen months on
 // three devices; nobody wants to run password resets for them, and a password
 // they set once and forget is worse than no password at all.
 //
-// shouldCreateUser is left at its default (true), so an invited couple can sign
-// in the first time without anyone pre-creating an account. That does mean a
-// stranger can create an empty account. It grants nothing: every read is gated
-// on wp_access, and an uninvited account sees the "not linked" screen and
-// nothing else — asserted in portal-phase00-access-test.sql. Closing signup
-// properly means pre-creating accounts at invite time; that comes with the
-// invite function.
+// The link is minted and sent by our own function rather than by Supabase's
+// mailer, which is unbranded, heavily rate-limited and lands in spam often
+// enough that a couple would simply never get in. Ours goes out through Resend
+// with the same shell as every other email from the farm, and appears in Recent
+// Automated Emails.
+//
+// It also closes the open-signup gap the first version had: the function sends
+// a link only to an address that already has portal access, so typing a
+// stranger's address no longer creates an account. It answers identically
+// either way, so this form cannot be used to find out who is on the system —
+// which is why there is no "we don't have that address" state below.
 export default function SignIn() {
   const [email, setEmail] = useState('')
   const [state, setState] = useState('idle')   // idle | sending | sent | error
@@ -23,14 +26,23 @@ export default function SignIn() {
     if (!address) return
 
     setState('sending')
-    const { error } = await supabase.auth.signInWithOtp({
-      email: address,
-      options: { emailRedirectTo: window.location.origin + '/portal' },
-    })
-
-    if (error) {
+    try {
+      const res = await fetch('/.netlify/functions/portal-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'request-link', email: address }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        let data = null
+        try { data = text ? JSON.parse(text) : null } catch (e) { /* not JSON */ }
+        setState('error')
+        setMessage((data && data.error) || 'Something went wrong. Please try again.')
+        return
+      }
+    } catch (e) {
       setState('error')
-      setMessage(error.message || 'Something went wrong. Please try again.')
+      setMessage('We could not reach the farm just now. Please try again in a moment.')
       return
     }
     setState('sent')
@@ -49,9 +61,10 @@ export default function SignIn() {
             <>
               <h2>Check your email</h2>
               <p className="muted" style={{ marginTop: 10 }}>
-                We have sent a sign-in link to <strong>{email.trim().toLowerCase()}</strong>.
-                Open it on any device and you will come straight in — there is no password
-                to remember. The link is good for one use.
+                If <strong>{email.trim().toLowerCase()}</strong> is the address on your
+                booking, a sign-in link is on its way. Open it on any device and you will
+                come straight in — there is no password to remember, and the link is good
+                for one use.
               </p>
               <button
                 className="btn-quiet"
