@@ -121,10 +121,17 @@ own header.
 - **Sign-in links are minted and sent by us**, in `netlify/functions/portal-auth.js`,
   never by Supabase's mailer — which is unbranded, heavily rate-limited and
   spam-prone. Two consequences that are easy to forget:
-  - `https://hawthbushfarm.netlify.app/portal` must stay in **Supabase →
-    Authentication → URL Configuration → Redirect URLs**. If it is removed,
-    `generate_link` falls back to the Site URL and a couple's link drops them
-    on the staff app instead of the planner.
+  - **The link points at us, not at Supabase.** `generate_link` hands back an
+    `action_link` that verifies the token and then redirects — but only to a URL
+    on the project's redirect allowlist, silently falling back to the Site URL
+    otherwise. The first invite ever sent went to `localhost` that way, and
+    spent its one-use token getting there. So we send `/portal#t=<hashed_token>`
+    and the page calls `verifyOtp` itself. **Do not "simplify" this back to
+    `action_link`** — it reintroduces a dashboard setting that can break every
+    sign-in link without a word.
+  - The token is taken out of the address bar at module scope, before React
+    renders, and the exchange is a single module-scope promise so React 18's
+    double-invoked effects cannot spend a one-use token twice.
   - The link is a **credential**. It is never written to `hbf_email_log_v1`;
     the log is readable by every member of staff.
 - **A database function that records something does not tell anyone about it.**
