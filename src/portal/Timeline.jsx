@@ -113,27 +113,42 @@ export default function Timeline() {
   )
 }
 
+// What is fixed comes back computed, never stored, so it cannot go stale when
+// an access time changes. The contract's own wording is shown verbatim beside
+// it — deliberately not parsed. "10am to Midnight" is prose, and turning prose
+// into numbers is how the corkage note once became a £9,100 charge.
 function Limits({ day }) {
-  const rows = [
-    ['Access from', day.access_at],
-    ['Music ends', day.music_ends],
-    ['Bar closes', day.bar_closes],
-    ['Carriages', day.carriages],
-    ['Everything away by', day.vacate_by],
-  ].filter(([, v]) => v)
+  const fixed = day.fixed || []
+  if (!fixed.length && !day.access_text) return null
 
-  if (!rows.length) return null
   return (
     <section className="card">
       <h3>What is fixed</h3>
-      <div className="rows">
-        {rows.map(([k, v]) => (
-          <div className="row" key={k}><span className="k">{k}</span><span className="v">{hhmm(v)}</span></div>
-        ))}
-      </div>
+
+      {day.access_text && (
+        <div className="rows">
+          <div className="row">
+            <span className="k">Access</span>
+            <span className="v">{day.access_text}</span>
+          </div>
+        </div>
+      )}
+
+      {fixed.length > 0 && (
+        <div className="rows" style={{ marginTop: day.access_text ? 12 : 0 }}>
+          {fixed.map((f) => (
+            <div className="row" key={f.title}>
+              <span className="k">{f.title}</span>
+              <span className="v">{hhmm(f.time)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-        These come with the venue and cannot be moved from here. If you need something
-        different, talk to us — sometimes there is room, and it is much easier to ask now.
+        {fixed.length
+          ? 'These come with the venue and cannot be moved from here. If you need something different, talk to us — sometimes there is room, and it is much easier to ask now.'
+          : 'Your finishing times follow the access times in your contract. We will confirm them with you.'}
       </p>
     </section>
   )

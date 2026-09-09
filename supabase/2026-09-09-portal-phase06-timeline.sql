@@ -22,6 +22,12 @@
 -- distinction, not an operational one, and a peak wedding keeps the same curfew
 -- as an off-peak one.
 --
+-- >>> SUPERSEDED IN PART by 2026-09-09-portal-phase06b-real-curfews.sql, which
+-- >>> corrects three things: access times are per event and live in the
+-- >>> contract as PROSE (never parsed), a Party's curfew is derived from the
+-- >>> end of access rather than fixed, and fixed points are computed on read
+-- >>> rather than seeded as locked rows. Read that file alongside this one.
+--
 -- >>> THE TIMES BELOW ARE PLACEHOLDERS. Party-as-single-day and
 -- >>> wedding-as-three-days are Toby's decisions and are correct. Every clock
 -- >>> time — access, music end, bar close, carriages, vacate — and the Wake and
