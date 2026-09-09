@@ -8544,6 +8544,14 @@ function PortalSupplierDirectory() {
     catch (e) { setErr(e.message || String(e)); }
   }
 
+  // Suppressing is not deleting. The couple who added them keeps them and is
+  // told nothing — this is a judgement about the farm's own recommendations,
+  // not a verdict to deliver to a customer.
+  async function suppress(id, on) {
+    try { await sbRpc("wp_admin_suppress_supplier", { p_id: id, p_suppress: on }); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+
   const directory = (list || []).filter(function(s){ return !s.owner_event_id; });
   const clientAdded = (list || []).filter(function(s){ return s.owner_event_id; });
 
@@ -8581,7 +8589,9 @@ function PortalSupplierDirectory() {
               </div>
               <div style={{ display:"grid", gap:8 }}>
                 {clientAdded.map(function(s){
-                  return <PortalSupplierRow key={s.id} s={s} onPromote={function(){ promote(s.id); }} />;
+                  return <PortalSupplierRow key={s.id} s={s}
+                    onPromote={function(){ promote(s.id); }}
+                    onSuppress={function(on){ suppress(s.id, on); }} />;
                 })}
               </div>
             </>
@@ -8592,29 +8602,51 @@ function PortalSupplierDirectory() {
   );
 }
 
-function PortalSupplierRow({ s, onPromote }) {
+function PortalSupplierRow({ s, onPromote, onSuppress }) {
   const bits = [s.contact_name, s.phone, s.email].filter(Boolean);
+  const off = !!s.suppressed_at;
   return (
-    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"11px 14px",
+    <div style={{ background: off ? "#f9fafb" : "#fff", border:`1px solid ${T.border}`, borderRadius:9,
+      padding:"11px 14px", opacity: off ? 0.72 : 1,
       display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
       <div style={{ minWidth:0 }}>
         <div style={{ fontSize:13, fontWeight:600, color:T.text }}>
           {s.name}
           <span style={{ fontWeight:400, color:T.textLight }}> · {s.category}</span>
-          {s.used_by > 0 && <span style={{ fontWeight:400, color:T.textLight }}> · used by {s.used_by}</span>}
+          <span style={{ fontWeight:400, color:T.textLight }}>
+            {" · used by "}{s.used_by || 0}{" "}{(s.used_by === 1 ? "wedding" : "weddings")}
+          </span>
+          {s.share_offered_at && !off && (
+            <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.green,
+              background:T.greenBg, borderRadius:5, padding:"1px 6px" }}>OFFERED</span>
+          )}
+          {off && (
+            <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.textLight,
+              background:"#f1f5f9", borderRadius:5, padding:"1px 6px" }}>SUPPRESSED</span>
+          )}
         </div>
         {bits.length > 0 && <div style={{ fontSize:11, color:T.textLight, marginTop:2, wordBreak:"break-all" }}>{bits.join(" · ")}</div>}
         <div style={{ fontSize:11, marginTop:3, color: s.pli_held ? "#166534" : "#92400e" }}>
           {s.pli_held ? ("Insurance held" + (s.pli_expires ? " until " + s.pli_expires : "")) : "No insurance certificate on file"}
         </div>
       </div>
-      {onPromote && (
-        <button onClick={onPromote}
-          style={{ alignSelf:"flex-start", background:"#4a5d4e", color:"#fff", border:"none", padding:"7px 14px",
-            borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
-          Add to directory
-        </button>
-      )}
+      <div style={{ display:"flex", gap:10, alignItems:"center", alignSelf:"flex-start", flexWrap:"wrap" }}>
+        {onSuppress && (
+          <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid,
+            whiteSpace:"nowrap", cursor:"pointer" }}
+            title="Never suggest them to anyone else. The couple who added them keeps them and is told nothing.">
+            <input type="checkbox" checked={off} onChange={function(e){ onSuppress(e.target.checked); }} />
+            Suppress
+          </label>
+        )}
+        {onPromote && !off && (
+          <button onClick={onPromote}
+            style={{ background:"#4a5d4e", color:"#fff", border:"none", padding:"7px 14px",
+              borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
+            Add to directory
+          </button>
+        )}
+      </div>
     </div>
   );
 }

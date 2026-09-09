@@ -211,7 +211,19 @@ function Directory({ available, labelOf, onChanged, onClose }) {
               {g.items.map((s) => (
                 <div className="doc" key={s.id}>
                   <div className="doc-main">
-                    <div className="doc-name">{s.name}</div>
+                    <div className="doc-name">
+                      {s.name}
+                      {/* An aggregate, and the most useful line on the page —
+                          "eleven weddings here have used them" beats any blurb.
+                          It says nothing about any individual wedding, which is
+                          why it is allowed through a payload that otherwise
+                          withholds insurance status and internal notes. */}
+                      {s.used_by > 0 && (
+                        <span className="chip" style={{ marginLeft: 8 }}>
+                          {s.used_by} wedding{s.used_by === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </div>
                     {s.blurb && <div className="doc-meta">{s.blurb}</div>}
                     {s.website && (
                       <div className="doc-meta">
