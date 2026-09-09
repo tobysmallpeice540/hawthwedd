@@ -144,6 +144,34 @@ const sbSet = async (key, value) => {
   if (!res.ok) noteDataFailure(`saving ${key}`, res.status, await res.text());
 };
 
+// Calling a database function. Everything the client portal exposes to this app
+// goes through here rather than through table reads, because the wp_ tables have
+// RLS on with no policies — the functions are the only way in, and they do their
+// own staff check.
+//
+// Throws rather than returning null: an unchecked response treated as data is
+// the shape of every silent failure this project has had.
+const sbRpc = async (fn, args) => {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
+    body: JSON.stringify(args || {})
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    noteDataFailure(`calling ${fn}`, res.status, text);
+    throw new Error(`${fn} failed (${res.status})`);
+  }
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+  if (data && data.ok === false) {
+    const err = new Error(data.error || "refused");
+    err.code = data.error;
+    throw err;
+  }
+  return data;
+};
+
 // ─── BUILD VERSION GUARD ─────────────────────────────────────────────────────
 // A browser tab keeps running whatever JavaScript it loaded, so deploying a fix
 // does nothing for a tab that's already open — it carries on writing with the
@@ -6841,7 +6869,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
       <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
-        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount}/>}
+        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")}/>}
+        {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
         {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
           onAutoSave={async(fd)=>{
@@ -6898,6 +6927,474 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
       </div>
     </div>
+  );
+}
+
+
+// ─── CLIENT PORTAL ADMIN ──────────────────────────────────────────────────────
+// Everything the portal needs from this side: who can sign in, the access times
+// a party's curfew is derived from, and the supplier directory.
+//
+// All of it goes through wp_ functions, which do their own is_staff() check —
+// this screen being reachable is not what authorises anything.
+//
+// Components that render inputs live at module scope. A component defined inside
+// another is a new type on every render, so React rebuilds its DOM and focus
+// dies mid-word.
+
+const PORTAL_TABS = [
+  { id: "logins",   label: "Logins" },
+  { id: "times",    label: "Access times" },
+  { id: "suppliers",label: "Supplier directory" },
+];
+
+function PortalAdminScreen({ bookings, onBack }) {
+  const [tab, setTab] = useState("logins");
+  return (
+    <div style={{ padding:"0 4px" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18, flexWrap:"wrap" }}>
+        <button onClick={onBack}
+          style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:7, padding:"7px 14px",
+            cursor:"pointer", fontFamily:"inherit", fontSize:13, color:T.textMid }}>← Events</button>
+        <h2 style={{ margin:0, fontSize:20, color:T.text }}>Client portal</h2>
+      </div>
+
+      <div style={{ display:"flex", gap:4, borderBottom:`2px solid ${T.border}`, marginBottom:18, flexWrap:"wrap" }}>
+        {PORTAL_TABS.map(function(t) {
+          const on = tab === t.id;
+          return (
+            <button key={t.id} onClick={function(){ setTab(t.id); }}
+              style={{ background:"none", border:"none", borderBottom: on?`3px solid ${T.accent}`:"3px solid transparent",
+                color:on?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:on?700:400,
+                padding:"9px 14px", cursor:"pointer" }}>{t.label}</button>
+          );
+        })}
+      </div>
+
+      {tab === "logins"    && <PortalLogins bookings={bookings} />}
+      {tab === "times"     && <PortalAccessTimes />}
+      {tab === "suppliers" && <PortalSupplierDirectory />}
+    </div>
+  );
+}
+
+// ─── who can sign in ─────────────────────────────────────────────────────────
+
+function PortalLogins({ bookings }) {
+  const [eventId, setEventId] = useState("");
+  const upcoming = (bookings || [])
+    .filter(function(b){ return b && b.id != null; })
+    .slice()
+    .sort(function(a,b){ return String(b.date||"").localeCompare(String(a.date||"")); });
+
+  return (
+    <div>
+      <p style={{ fontSize:13, color:T.textMid, marginBottom:14, maxWidth:640, lineHeight:1.6 }}>
+        Invite a couple by adding their email here. They sign in with a link sent to
+        that address — there is no password. Both partners can be added, and a planner
+        if they want one.
+      </p>
+      <select value={eventId} onChange={function(e){ setEventId(e.target.value); }}
+        style={{ padding:"9px 12px", borderRadius:8, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14, minWidth:320, maxWidth:"100%" }}>
+        <option value="">Choose an event…</option>
+        {upcoming.map(function(b){
+          return <option key={b.id} value={b.id}>{(b.date||"—") + " · " + (b.couple || b.eventType || "Event")}</option>;
+        })}
+      </select>
+
+      {eventId && <PortalEventPanel eventId={Number(eventId)} />}
+    </div>
+  );
+}
+
+function PortalEventPanel({ eventId }) {
+  const [rows, setRows] = useState(null);
+  const [numbers, setNumbers] = useState(null);
+  const [checklist, setChecklist] = useState(null);
+  const [err, setErr] = useState("");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setErr("");
+    try {
+      const a = await sbRpc("wp_list_access", { p_event_id: eventId });
+      setRows(a.access || []);
+      const n = await sbRpc("wp_admin_numbers", { p_event_id: eventId });
+      setNumbers(n);
+      const c = await sbRpc("wp_admin_checklist", { p_event_id: eventId });
+      setChecklist(c);
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, [eventId]);
+
+  async function grant(e) {
+    e.preventDefault();
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_grant_access", { p_event_id: eventId, p_email: email }); setEmail(""); await load(); }
+    catch (e2) { setErr(e2.code === "bad_email" ? "That does not look like an email address." : (e2.message || String(e2))); }
+    finally { setBusy(false); }
+  }
+
+  async function revoke(id) {
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_revoke_access", { p_id: id }); await load(); }
+    catch (e2) { setErr(e2.message || String(e2)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ marginTop:18, display:"grid", gap:16 }}>
+      {err && <div style={{ background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", borderRadius:8, padding:"10px 14px", fontSize:13 }}>{err}</div>}
+
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
+        <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:10 }}>Who can sign in</div>
+        {rows === null ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>
+         : rows.length === 0 ? <div style={{ fontSize:13, color:T.textLight }}>Nobody yet.</div>
+         : (
+          <div style={{ display:"grid", gap:8 }}>
+            {rows.map(function(r){
+              return (
+                <div key={r.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
+                  padding:"9px 12px", background: r.revoked_at ? "#f9fafb" : T.accentLight, borderRadius:8 }}>
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:600, color:T.text, wordBreak:"break-all" }}>{r.email}</div>
+                    <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>
+                      {r.revoked_at ? "Revoked"
+                        : r.last_seen_at ? ("Last signed in " + String(r.last_seen_at).slice(0,10))
+                        : "Invited, not signed in yet"}
+                    </div>
+                  </div>
+                  {!r.revoked_at && (
+                    <button onClick={function(){ revoke(r.id); }} disabled={busy}
+                      style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:7, padding:"6px 12px",
+                        cursor:"pointer", fontFamily:"inherit", fontSize:12, color:T.textMid }}>Revoke</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <form onSubmit={grant} style={{ display:"flex", gap:8, marginTop:12, flexWrap:"wrap" }}>
+          <input type="email" required value={email} onChange={function(e){ setEmail(e.target.value); }}
+            placeholder="their@email.com"
+            style={{ flex:"1 1 220px", minWidth:0, padding:"9px 12px", borderRadius:8, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14 }} />
+          <button type="submit" disabled={busy}
+            style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 18px", borderRadius:8,
+              cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            {busy ? "Adding…" : "Give access"}
+          </button>
+        </form>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px, 1fr))", gap:14 }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:10 }}>Numbers they have given</div>
+          {!numbers ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>
+           : !numbers.told_us ? <div style={{ fontSize:13, color:T.textLight }}>Nothing yet.</div>
+           : (
+            <div style={{ fontSize:13, color:T.textMid, lineHeight:1.9 }}>
+              <div><b style={{ color:T.text }}>{numbers.seated_total}</b> seated ({numbers.seated_adults||0} adults, {numbers.seated_children||0} children, {numbers.seated_babies||0} babies)</div>
+              <div><b style={{ color:T.text }}>{numbers.evening_total}</b> on site in the evening <span style={{ color:T.textLight }}>({numbers.evening_extras||0} evening-only)</span></div>
+              <div style={{ color:T.textLight }}>{numbers.named_seated} of {numbers.seated_total} named</div>
+              <div style={{ fontSize:11, color:T.textLight, marginTop:6, lineHeight:1.5 }}>
+                The diary's evening figure is a total, so it is {numbers.evening_total}, not {numbers.evening_extras||0}.
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:10 }}>Checklist</div>
+          {!checklist ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>
+           : checklist.total === 0 ? <div style={{ fontSize:13, color:T.textLight }}>Not opened yet.</div>
+           : (
+            <div>
+              <div style={{ fontSize:13, color:T.textMid }}><b style={{ color:T.text, fontSize:18 }}>{checklist.done}</b> of {checklist.total} done</div>
+              {(checklist.overdue || []).length > 0 && (
+                <div style={{ marginTop:10 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:"#92400e", marginBottom:4 }}>Overdue</div>
+                  {checklist.overdue.map(function(o, i){
+                    return <div key={i} style={{ fontSize:12, color:"#92400e" }}>{o.title} — {o.due_on}</div>;
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── access times: the contract's words, what we read, and what you confirm ──
+
+function PortalAccessTimes() {
+  const [queue, setQueue] = useState(null);
+  const [err, setErr] = useState("");
+
+  async function load() {
+    setErr("");
+    try { const r = await sbRpc("wp_admin_access_queue"); setQueue(r.events || []); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  return (
+    <div>
+      <p style={{ fontSize:13, color:T.textMid, marginBottom:16, maxWidth:660, lineHeight:1.6 }}>
+        A party's and a wake's finishing times are worked out from when access ends —
+        music, bar and carriages half an hour before, the site closed at the end.
+        A wedding's are fixed and need nothing here. What is read from the contract
+        below is a <b>suggestion</b>: nothing reaches a couple until you save it.
+      </p>
+
+      {err && <div style={{ background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{err}</div>}
+
+      {queue === null ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>
+       : queue.length === 0 ? <div style={{ fontSize:13, color:T.textLight }}>No events with a signed contract yet.</div>
+       : (
+        <div style={{ display:"grid", gap:12 }}>
+          {queue.map(function(ev){
+            return <PortalAccessRow key={ev.event_id} ev={ev} onSaved={load} />;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PortalAccessRow({ ev, onSaved }) {
+  const proposed = ev.proposed || {};
+  const [from, setFrom] = useState(proposed.ok ? String(proposed.from).slice(0,5) : "");
+  const [to, setTo]     = useState(proposed.ok ? String(proposed.to).slice(0,5) : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr]   = useState("");
+  const [done, setDone] = useState(false);
+
+  async function save() {
+    setBusy(true); setErr(""); setDone(false);
+    try {
+      await sbRpc("wp_admin_set_access", {
+        p_event_id: ev.event_id, p_day_key: "event",
+        p_access_from: from || null, p_access_to: to || null
+      });
+      setDone(true);
+      await onSaved();
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  const derived = to ? shiftClock(to, -30) : null;
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${ev.confirmed ? T.border : "#fde68a"}`, borderRadius:10, padding:16 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:10 }}>
+        <div>
+          <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{ev.couple || "Event"}</div>
+          <div style={{ fontSize:12, color:T.textLight, marginTop:2 }}>{ev.date} · {ev.event_type}</div>
+        </div>
+        <span style={{ alignSelf:"flex-start", fontSize:11, fontWeight:700, padding:"3px 10px", borderRadius:999,
+          background: ev.confirmed ? "#f0fdf4" : "#fffbeb", color: ev.confirmed ? "#166534" : "#92400e" }}>
+          {ev.confirmed ? "Confirmed" : "Not confirmed"}
+        </span>
+      </div>
+
+      <div style={{ fontSize:12, color:T.textMid, marginBottom:10 }}>
+        Contract says: <b style={{ color:T.text }}>{ev.contract_text || "—"}</b>
+        {proposed.ok
+          ? <span style={{ color:T.textLight }}> · read as {String(proposed.from).slice(0,5)} to {String(proposed.to).slice(0,5)}</span>
+          : <span style={{ color:"#92400e" }}> · could not read it ({proposed.reason || "unclear"}) — please set it by hand</span>}
+      </div>
+
+      <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
+        <label style={{ fontSize:11, color:T.textLight }}>Access from
+          <input type="time" value={from} onChange={function(e){ setFrom(e.target.value); setDone(false); }}
+            style={{ display:"block", marginTop:4, padding:"8px 10px", borderRadius:7, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14 }} />
+        </label>
+        <label style={{ fontSize:11, color:T.textLight }}>Access until
+          <input type="time" value={to} onChange={function(e){ setTo(e.target.value); setDone(false); }}
+            style={{ display:"block", marginTop:4, padding:"8px 10px", borderRadius:7, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14 }} />
+        </label>
+        <button onClick={save} disabled={busy || !to}
+          style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 18px", borderRadius:8,
+            cursor: (busy || !to) ? "default" : "pointer", opacity:(busy||!to)?0.5:1, fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : "Confirm"}
+        </button>
+        {done && <span style={{ fontSize:12, color:"#166534", fontWeight:600 }}>Saved</span>}
+      </div>
+
+      {derived && ev.event_type !== "Wedding" && (
+        <div style={{ fontSize:12, color:T.textMid, marginTop:10, lineHeight:1.6 }}>
+          That gives music, bar and carriages at <b style={{ color:T.text }}>{derived}</b>,
+          and the site closed at <b style={{ color:T.text }}>{to}</b>.
+        </div>
+      )}
+      {ev.event_type === "Wedding" && (
+        <div style={{ fontSize:12, color:T.textLight, marginTop:10 }}>
+          A wedding's finishing times are fixed — music midnight, bar 23:45, carriages midnight, site closed 00:30 — so these access times are for your records.
+        </div>
+      )}
+      {err && <div style={{ fontSize:12, color:"#dc2626", marginTop:8 }}>{err}</div>}
+    </div>
+  );
+}
+
+// minutes added to "HH:MM", wrapping over midnight
+function shiftClock(hhmm, mins) {
+  const parts = String(hhmm || "").split(":");
+  if (parts.length < 2) return null;
+  let total = (Number(parts[0]) * 60 + Number(parts[1]) + mins) % 1440;
+  if (total < 0) total += 1440;
+  return String(Math.floor(total / 60)).padStart(2, "0") + ":" + String(total % 60).padStart(2, "0");
+}
+
+// ─── the supplier directory ──────────────────────────────────────────────────
+
+const BLANK_DIR_SUPPLIER = { name:"", category:"catering", contact_name:"", email:"", phone:"", website:"", blurb:"" };
+
+function PortalSupplierDirectory() {
+  const [list, setList] = useState(null);
+  const [err, setErr] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  async function load() {
+    setErr("");
+    try { const r = await sbRpc("wp_admin_suppliers"); setList(r.suppliers || []); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  async function promote(id) {
+    try { await sbRpc("wp_admin_promote_supplier", { p_id: id }); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+
+  const directory = (list || []).filter(function(s){ return !s.owner_event_id; });
+  const clientAdded = (list || []).filter(function(s){ return s.owner_event_id; });
+
+  return (
+    <div>
+      <p style={{ fontSize:13, color:T.textMid, marginBottom:16, maxWidth:660, lineHeight:1.6 }}>
+        The people you would happily recommend. Couples can pick from this list or add
+        their own — and anyone they add appears below, where you can promote them into
+        the directory if they were good.
+      </p>
+
+      {err && <div style={{ background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{err}</div>}
+
+      <button onClick={function(){ setAdding(!adding); }}
+        style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 18px", borderRadius:8,
+          cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, marginBottom:14 }}>
+        {adding ? "Cancel" : "Add a supplier"}
+      </button>
+
+      {adding && <PortalSupplierForm onDone={function(){ setAdding(false); load(); }} />}
+
+      {list === null ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div> : (
+        <>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"16px 0 8px" }}>
+            In the directory ({directory.length})
+          </div>
+          {directory.length === 0
+            ? <div style={{ fontSize:13, color:T.textLight }}>Nothing yet — couples will see an empty list until you add some.</div>
+            : <div style={{ display:"grid", gap:8 }}>{directory.map(function(s){ return <PortalSupplierRow key={s.id} s={s} />; })}</div>}
+
+          {clientAdded.length > 0 && (
+            <>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"22px 0 8px" }}>
+                Added by couples ({clientAdded.length})
+              </div>
+              <div style={{ display:"grid", gap:8 }}>
+                {clientAdded.map(function(s){
+                  return <PortalSupplierRow key={s.id} s={s} onPromote={function(){ promote(s.id); }} />;
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function PortalSupplierRow({ s, onPromote }) {
+  const bits = [s.contact_name, s.phone, s.email].filter(Boolean);
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"11px 14px",
+      display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+      <div style={{ minWidth:0 }}>
+        <div style={{ fontSize:13, fontWeight:600, color:T.text }}>
+          {s.name}
+          <span style={{ fontWeight:400, color:T.textLight }}> · {s.category}</span>
+          {s.used_by > 0 && <span style={{ fontWeight:400, color:T.textLight }}> · used by {s.used_by}</span>}
+        </div>
+        {bits.length > 0 && <div style={{ fontSize:11, color:T.textLight, marginTop:2, wordBreak:"break-all" }}>{bits.join(" · ")}</div>}
+        <div style={{ fontSize:11, marginTop:3, color: s.pli_held ? "#166534" : "#92400e" }}>
+          {s.pli_held ? ("Insurance held" + (s.pli_expires ? " until " + s.pli_expires : "")) : "No insurance certificate on file"}
+        </div>
+      </div>
+      {onPromote && (
+        <button onClick={onPromote}
+          style={{ alignSelf:"flex-start", background:"#4a5d4e", color:"#fff", border:"none", padding:"7px 14px",
+            borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
+          Add to directory
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PortalSupplierForm({ onDone }) {
+  const [v, setV] = useState(BLANK_DIR_SUPPLIER);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  function set(k, val) { setV(function(p){ const n = Object.assign({}, p); n[k] = val; return n; }); }
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_upsert_supplier", {
+        p_id: null, p_name: v.name, p_category: v.category,
+        p_contact_name: v.contact_name || null, p_email: v.email || null,
+        p_phone: v.phone || null, p_website: v.website || null, p_blurb: v.blurb || null
+      });
+      onDone();
+    } catch (e2) { setErr(e2.message || String(e2)); setBusy(false); }
+  }
+
+  const F = { padding:"9px 11px", borderRadius:7, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14, width:"100%" };
+
+  return (
+    <form onSubmit={submit} style={{ background:"#f9fafb", border:`1px solid ${T.border}`, borderRadius:10, padding:16, display:"grid", gap:10 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(190px, 1fr))", gap:10 }}>
+        <label style={{ fontSize:11, color:T.textLight }}>Name
+          <input required value={v.name} onChange={function(e){ set("name", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
+        <label style={{ fontSize:11, color:T.textLight }}>Category
+          <select value={v.category} onChange={function(e){ set("category", e.target.value); }} style={Object.assign({ marginTop:4 }, F)}>
+            {["catering","photography","video","flowers","music","cake","hair_makeup","celebrant","transport","hire","stationery","other"].map(function(c){
+              return <option key={c} value={c}>{c.replace("_"," ")}</option>; })}
+          </select></label>
+        <label style={{ fontSize:11, color:T.textLight }}>Contact
+          <input value={v.contact_name} onChange={function(e){ set("contact_name", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
+        <label style={{ fontSize:11, color:T.textLight }}>Phone
+          <input value={v.phone} onChange={function(e){ set("phone", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
+        <label style={{ fontSize:11, color:T.textLight }}>Email
+          <input type="email" value={v.email} onChange={function(e){ set("email", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
+        <label style={{ fontSize:11, color:T.textLight }}>Website
+          <input value={v.website} onChange={function(e){ set("website", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
+      </div>
+      <label style={{ fontSize:11, color:T.textLight }}>A line couples will see
+        <input value={v.blurb} onChange={function(e){ set("blurb", e.target.value); }}
+          placeholder="Worked here many times, knows the barn well" style={Object.assign({ marginTop:4 }, F)} /></label>
+      {err && <div style={{ fontSize:12, color:"#dc2626" }}>{err}</div>}
+      <div><button type="submit" disabled={busy}
+        style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,
+          cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>{busy ? "Saving…" : "Save"}</button></div>
+    </form>
   );
 }
 
@@ -7645,7 +8142,7 @@ function findOrphanedEventLinks(bookings, accomBookings) {
   return Object.keys(byEvent).map(function(k) { return byEvent[k]; });
 }
 
-function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom, xeroToken, onOpenInvoices, invoiceDueCount }) {
+function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom, xeroToken, onOpenInvoices, invoiceDueCount, onOpenPortal }) {
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b => classifyEventRow(b, today) === "upcoming");
   const past     = bookings.filter(b => classifyEventRow(b, today) === "past");
@@ -7675,6 +8172,12 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
             {invoiceDueCount > 0 && (
               <span style={{ background:"#fff", color:T.midBlue, borderRadius:10, padding:"1px 8px", fontSize:11, fontWeight:800 }}>{invoiceDueCount}</span>
             )}
+          </button>
+        )}
+        {onOpenPortal && (
+          <button onClick={onOpenPortal}
+            style={{ background:"#4a5d4e", color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+            Manage Client Portal
           </button>
         )}
         <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} event{bookings.length!==1?"s":""}</span>
