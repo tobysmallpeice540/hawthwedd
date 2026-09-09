@@ -118,6 +118,22 @@ own header.
   authorisation is execute grants plus the `app_data` RLS policy. Portal
   functions therefore do their own gating (`is_staff()`) rather than assuming a
   caller was filtered upstream.
+- **Sign-in links are minted and sent by us**, in `netlify/functions/portal-auth.js`,
+  never by Supabase's mailer — which is unbranded, heavily rate-limited and
+  spam-prone. Two consequences that are easy to forget:
+  - `https://hawthbushfarm.netlify.app/portal` must stay in **Supabase →
+    Authentication → URL Configuration → Redirect URLs**. If it is removed,
+    `generate_link` falls back to the Site URL and a couple's link drops them
+    on the staff app instead of the planner.
+  - The link is a **credential**. It is never written to `hbf_email_log_v1`;
+    the log is readable by every member of staff.
+- **A database function that records something does not tell anyone about it.**
+  `wp_grant_access` writes the access row and nothing more, which is how the
+  portal shipped with an invite screen that sent no invite: an address was
+  added, no email arrived, and Recent Automated Emails showed nothing either.
+  When a write is meant to reach a person, the sending is a second, separate
+  step — and it is reported separately, so "the row landed but the email did
+  not" never reads as outright failure and prompt a duplicate grant.
 
 ## Working in this folder from a Claude session
 
