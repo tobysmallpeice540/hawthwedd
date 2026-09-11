@@ -42,15 +42,6 @@
     </div>
 
     <fieldset class="hbf-br-group">
-      <legend>Roughly how many guests do you expect?</legend>
-      <div class="hbf-br-pills">
-        <label class="hbf-br-pill"><input type="radio" name="guests" value="under60"><span>Under 60</span></label>
-        <label class="hbf-br-pill"><input type="radio" name="guests" value="60to120"><span>60 – 120</span></label>
-        <label class="hbf-br-pill"><input type="radio" name="guests" value="over120"><span>Over 120</span></label>
-      </div>
-    </fieldset>
-
-    <fieldset class="hbf-br-group">
       <legend>Which year are you interested in? <span class="hbf-br-opt">(choose as many as you like)</span></legend>
       <div class="hbf-br-pills" data-years></div>
     </fieldset>
@@ -61,6 +52,15 @@
         <label class="hbf-br-pill"><input type="checkbox" name="types" value="peak_weekend"><span>Peak weekend</span></label>
         <label class="hbf-br-pill"><input type="checkbox" name="types" value="peak_midweek"><span>Peak midweek</span></label>
         <label class="hbf-br-pill"><input type="checkbox" name="types" value="off_peak"><span>Off peak</span></label>
+      </div>
+    </fieldset>
+
+    <fieldset class="hbf-br-group">
+      <legend>Roughly how many guests do you expect?</legend>
+      <div class="hbf-br-pills">
+        <label class="hbf-br-pill"><input type="radio" name="guests" value="under60"><span>Under 60</span></label>
+        <label class="hbf-br-pill"><input type="radio" name="guests" value="60to120"><span>60 – 120</span></label>
+        <label class="hbf-br-pill"><input type="radio" name="guests" value="over120"><span>Over 120</span></label>
       </div>
     </fieldset>
 
@@ -129,10 +129,12 @@
   var btn  = root.querySelector(".hbf-br-submit");
 
   // The years are built here rather than typed into the markup, so the form
-  // doesn't quietly start offering a year that has already gone.
+  // doesn't quietly start offering a year that has already gone: it always
+  // offers the next three, counting from whatever year it is when the page
+  // loads.
   var thisYear = new Date().getFullYear();
   var yearBox = root.querySelector("[data-years]");
-  for (var i = 0; i < 4; i++) {
+  for (var i = 0; i < 3; i++) {
     var y = thisYear + i + 1;
     var l = document.createElement("label");
     l.className = "hbf-br-pill";
@@ -161,10 +163,12 @@
     var years  = checkedValues("years");
     var types  = checkedValues("types");
 
+    // Complained about in the order the questions are asked, so the message
+    // always points at the first thing on screen that is missing.
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return show("Please enter a valid email address.");
-    if (!guests) return show("Please tell us roughly how many guests you expect.");
     if (!years.length) return show("Please choose at least one year.");
     if (!types.length) return show("Please choose at least one kind of wedding.");
+    if (!guests) return show("Please tell us roughly how many guests you expect.");
 
     btn.disabled = true;
     btn.textContent = "Sending…";

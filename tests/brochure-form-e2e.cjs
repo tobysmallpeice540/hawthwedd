@@ -47,16 +47,23 @@ const ok = (l, c) => { if (c) { pass++; console.log("  ok   " + l); } else { fai
   ok("it collects an email", await page.locator('#hbf-brochure input[name="email"]').count() === 1);
   ok("three guest bands", await page.locator('#hbf-brochure input[name="guests"]').count() === 3);
   ok("guests is one-of-three", await page.locator('#hbf-brochure input[name="guests"][type="radio"]').count() === 3);
-  ok("four years", await page.locator('#hbf-brochure input[name="years"]').count() === 4);
+  ok("three years", await page.locator('#hbf-brochure input[name="years"]').count() === 3);
   ok("three wedding types", await page.locator('#hbf-brochure input[name="types"]').count() === 3);
   ok("years and types allow more than one",
-     await page.locator('#hbf-brochure input[name="years"][type="checkbox"]').count() === 4 &&
+     await page.locator('#hbf-brochure input[name="years"][type="checkbox"]').count() === 3 &&
      await page.locator('#hbf-brochure input[name="types"][type="checkbox"]').count() === 3);
 
   const years = await page.locator('#hbf-brochure input[name="years"]').evaluateAll(els => els.map(e => e.value));
   const nextYear = new Date().getFullYear() + 1;
-  ok("the years start at next year and run four deep (" + years.join(",") + ")",
-     JSON.stringify(years) === JSON.stringify([nextYear, nextYear+1, nextYear+2, nextYear+3].map(String)));
+  ok("the years start at next year and run three deep (" + years.join(",") + ")",
+     JSON.stringify(years) === JSON.stringify([nextYear, nextYear+1, nextYear+2].map(String)));
+
+  // The order the questions are asked in, which the error messages follow.
+  const asked = await page.locator("#hbf-brochure fieldset legend")
+    .evaluateAll(els => els.map(e => e.textContent.split("?")[0].split("(")[0].trim()));
+  ok("guests is asked last (" + asked.join(" | ") + ")",
+     asked.length === 3 && asked[2].indexOf("how many guests") !== -1);
+  ok("year is asked first of the three", asked[0].indexOf("Which year") !== -1);
 
   console.log("\nIt keeps to itself");
   ok("the honeypot is off screen",
@@ -76,16 +83,17 @@ const ok = (l, c) => { if (c) { pass++; console.log("  ok   " + l); } else { fai
 
   await page.fill('#hbf-brochure input[name="email"]', "jo@example.com");
   await page.click(".hbf-br-submit");
-  ok("no guest band is refused", (await errText()).indexOf("how many guests") !== -1);
-
-  await page.click('#hbf-brochure input[name="guests"][value="60to120"]', { force: true });
-  await page.click(".hbf-br-submit");
-  ok("no year is refused", (await errText()).indexOf("at least one year") !== -1);
+  ok("no year is refused next", (await errText()).indexOf("at least one year") !== -1);
 
   await page.click(`#hbf-brochure input[name="years"][value="${nextYear}"]`, { force: true });
   await page.click(".hbf-br-submit");
-  ok("no wedding type is refused", (await errText()).indexOf("kind of wedding") !== -1);
+  ok("no wedding type is refused next", (await errText()).indexOf("kind of wedding") !== -1);
+
+  await page.click('#hbf-brochure input[name="types"][value="peak_midweek"]', { force: true });
+  await page.click(".hbf-br-submit");
+  ok("no guest band is refused last", (await errText()).indexOf("how many guests") !== -1);
   ok("still nothing posted", posted.length === 0);
+  await page.click('#hbf-brochure input[name="types"][value="peak_midweek"]', { force: true });
 
   console.log("\nChoosing");
   await page.click('#hbf-brochure input[name="types"][value="peak_weekend"]', { force: true });
