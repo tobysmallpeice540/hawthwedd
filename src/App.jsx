@@ -1328,6 +1328,36 @@ function EmailViewerModal({ email, onClose }) {
   );
 }
 
+// What each logged email was, in words. The log stores the template id that
+// sent it — "viewing_confirm", "brochure_request" — which is fine when a list
+// is all one kind and unreadable when it is mixed. Anything not named here is
+// tidied up rather than hidden, so a template added later still reads sensibly
+// without anyone remembering to come back here.
+const EMAIL_KIND_LABELS = {
+  viewing_confirm:      "Viewing confirmed",
+  viewing_amend:        "Viewing moved",
+  viewing_decline:      "Viewing declined",
+  brochure_request:     "Brochure",
+  booking_confirmed:    "Booking confirmed",
+  deposit_request:      "Deposit request",
+  balance_request:      "Balance request",
+  balance_overdue:      "Balance overdue",
+  payment_confirmation: "Payment received",
+  arrival_general:      "Arrival info",
+  arrival_event:        "Arrival info",
+  table_reserved:       "Table reserved",
+  "portal-invite":      "Portal invite",
+  "portal-signin":      "Portal sign-in",
+};
+
+function emailKindLabel(kind) {
+  const k = String(kind || "").trim();
+  if (!k) return "";
+  if (EMAIL_KIND_LABELS[k]) return EMAIL_KIND_LABELS[k];
+  const pretty = k.replace(/[_-]+/g, " ").trim();
+  return pretty ? pretty.charAt(0).toUpperCase() + pretty.slice(1) : "";
+}
+
 // Shows automated emails logged in hbf_email_log_v1 that relate to a specific
 // lettings booking (matched by bookingId) or a specific person (matched by
 // recipient email address — used for viewing confirm/decline emails, which
@@ -1368,6 +1398,7 @@ function EmailHistoryPanel({ title, emptyLabel, bookingId, emails, typeFilter })
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {matches.map(function(e) {
               const hasBody = !!(e.body || e.bodyHtml);
+              const kindLabel = emailKindLabel(e.type || e.template);
               return (
                 <div key={e.id || (e.sentAt + e.subject)} onClick={function(){ setViewing(e); }}
                   title="Click to read the full email"
@@ -1378,8 +1409,20 @@ function EmailHistoryPanel({ title, emptyLabel, bookingId, emails, typeFilter })
                       {e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" }) : ""}
                     </span>
                   </div>
-                  <div style={{ fontSize:11, color:T.textLight, marginTop:2, display:"flex", justifyContent:"space-between", gap:8 }}>
-                    <span>To {e.to || "—"}</span>
+                  <div style={{ fontSize:11, color:T.textLight, marginTop:2, display:"flex", justifyContent:"space-between", gap:8, alignItems:"center" }}>
+                    <span style={{ display:"flex", alignItems:"center", gap:7, minWidth:0 }}>
+                      {/* Which email this was. The list can hold a brochure
+                          reply, a viewing confirmation and a balance request
+                          at once, and the subject line alone does not always
+                          say which. */}
+                      {kindLabel && (
+                        <span style={{ fontSize:10, fontWeight:700, color:T.midBlue, background:T.midBlueBg,
+                          border:`1px solid ${T.border}`, borderRadius:6, padding:"1px 6px", whiteSpace:"nowrap", flexShrink:0 }}>
+                          {kindLabel}
+                        </span>
+                      )}
+                      <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>To {e.to || "—"}</span>
+                    </span>
                     <span style={{ color:T.accent, fontWeight:600, flexShrink:0 }}>{hasBody ? "Read →" : "Details →"}</span>
                   </div>
                 </div>
@@ -19035,8 +19078,13 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
 
           {form.email && (
             <div style={{ marginTop:6, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
-              <EmailHistoryPanel emails={[form.email]} typeFilter={(t)=>t.indexOf("viewing_")===0}
-                title="Viewing Emails Sent" emptyLabel="No viewing emails sent yet."/>
+              {/* Every automated email this person has had, not just the
+                  viewing ones: the brochure reply, arrival information, a
+                  balance request — anything the app sent to this address.
+                  Filtering to viewings meant an enquiry that had been sent the
+                  brochure looked like one nobody had written to. */}
+              <EmailHistoryPanel emails={[form.email]}
+                title="Emails Sent" emptyLabel="No emails sent to this enquiry yet."/>
             </div>
           )}
 
