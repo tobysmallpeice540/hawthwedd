@@ -1,0 +1,201 @@
+<!--
+  Hawthbush Farm — brochure request form for Squarespace
+  ------------------------------------------------------
+  Paste the whole of this into a Code Block on hawthbushfarm.co.uk.
+  (Add block → Code. Needs a Core plan or above — on Personal or a trial the
+  block saves but shows nothing on the live site.)
+
+  Nothing below needs editing. In particular:
+
+   · Everything is scoped under #hbf-brochure, so none of it can leak out and
+     restyle the rest of the page — a code block shares the page's stylesheet,
+     so a bare `input { … }` rule here would reach every form on the site.
+   · It posts straight to the Netlify function. No iframe, so it inherits the
+     page width and never needs a height guessing at.
+   · On success it sends the visitor to the thank-you page, which returns them
+     to the website on its own.
+   · The "website" field is a honeypot. It is invisible to a person and filled
+     in by most bots, and a submission carrying it is quietly dropped.
+
+  The brochure link, the wording of the email and the availability rules are
+  all in the app under Settings → Brochure request. Nothing about them lives
+  here.
+-->
+
+<div id="hbf-brochure">
+  <form class="hbf-br-form" novalidate>
+    <p class="hbf-br-intro">
+      Let us know a little information about you and we will send our brochure
+      and availability.
+    </p>
+
+    <div class="hbf-br-err" hidden></div>
+
+    <div class="hbf-br-field">
+      <label for="hbf-br-name">Your name <span class="hbf-br-opt">(optional)</span></label>
+      <input id="hbf-br-name" name="name" type="text" autocomplete="name" maxlength="120">
+    </div>
+
+    <div class="hbf-br-field">
+      <label for="hbf-br-email">Your email <span class="hbf-br-req">*</span></label>
+      <input id="hbf-br-email" name="email" type="email" autocomplete="email" required maxlength="200">
+    </div>
+
+    <fieldset class="hbf-br-group">
+      <legend>Roughly how many guests do you expect?</legend>
+      <div class="hbf-br-pills">
+        <label class="hbf-br-pill"><input type="radio" name="guests" value="under60"><span>Under 60</span></label>
+        <label class="hbf-br-pill"><input type="radio" name="guests" value="60to120"><span>60 – 120</span></label>
+        <label class="hbf-br-pill"><input type="radio" name="guests" value="over120"><span>Over 120</span></label>
+      </div>
+    </fieldset>
+
+    <fieldset class="hbf-br-group">
+      <legend>Which year are you interested in? <span class="hbf-br-opt">(choose as many as you like)</span></legend>
+      <div class="hbf-br-pills" data-years></div>
+    </fieldset>
+
+    <fieldset class="hbf-br-group">
+      <legend>What kind of wedding? <span class="hbf-br-opt">(choose as many as you like)</span></legend>
+      <div class="hbf-br-pills">
+        <label class="hbf-br-pill"><input type="checkbox" name="types" value="peak_weekend"><span>Peak weekend</span></label>
+        <label class="hbf-br-pill"><input type="checkbox" name="types" value="peak_midweek"><span>Peak midweek</span></label>
+        <label class="hbf-br-pill"><input type="checkbox" name="types" value="off_peak"><span>Off peak</span></label>
+      </div>
+    </fieldset>
+
+    <!-- Honeypot. Hidden from people, irresistible to bots. -->
+    <div class="hbf-br-hp" aria-hidden="true">
+      <label for="hbf-br-website">Website</label>
+      <input id="hbf-br-website" name="website" type="text" tabindex="-1" autocomplete="off">
+    </div>
+
+    <button type="submit" class="hbf-br-submit">Send me the brochure</button>
+    <p class="hbf-br-small">
+      We will email you the brochure and our availability for the dates you
+      chose. We never pass your details on.
+    </p>
+  </form>
+</div>
+
+<style>
+#hbf-brochure { max-width: 620px; margin: 0 auto; font-family: Georgia, 'Times New Roman', serif; color: #2c2c2c; }
+#hbf-brochure .hbf-br-form { background:#fff; border:1px solid #e8e4df; border-radius:10px; padding:26px 24px; box-shadow:0 2px 12px rgba(0,0,0,.07); }
+#hbf-brochure .hbf-br-intro { font-size:15px; line-height:1.7; color:#555; margin:0 0 20px; }
+#hbf-brochure .hbf-br-field { margin-bottom:16px; }
+#hbf-brochure label { display:block; font-size:12px; font-weight:700; color:#555; margin-bottom:5px; letter-spacing:.2px; }
+#hbf-brochure .hbf-br-opt { font-weight:400; color:#999; letter-spacing:0; }
+#hbf-brochure .hbf-br-req { color:#c0392b; }
+#hbf-brochure input[type=text], #hbf-brochure input[type=email] {
+  width:100%; box-sizing:border-box; border:1.5px solid #d4cfc9; border-radius:6px; padding:10px 12px;
+  font-size:15px; font-family:Georgia,'Times New Roman',serif; color:#2c2c2c; background:#fdfcfb; outline:none;
+  transition:border-color .15s; }
+#hbf-brochure input[type=text]:focus, #hbf-brochure input[type=email]:focus { border-color:#1e3a2f; }
+
+#hbf-brochure .hbf-br-group { border:0; padding:0; margin:0 0 18px; }
+#hbf-brochure .hbf-br-group legend { padding:0; font-size:12px; font-weight:700; color:#555; letter-spacing:.2px; margin-bottom:8px; }
+#hbf-brochure .hbf-br-pills { display:flex; flex-wrap:wrap; gap:8px; }
+#hbf-brochure .hbf-br-pill { display:inline-block; margin:0; font-weight:400; }
+/* Off screen rather than display:none — a hidden input cannot be reached by
+   keyboard or read by a screen reader, and these are the whole form. */
+#hbf-brochure .hbf-br-pill input { position:absolute; opacity:0; width:1px; height:1px; }
+#hbf-brochure .hbf-br-pill span {
+  display:block; border:1.5px solid #d4cfc9; border-radius:22px; padding:9px 18px; background:#fdfcfb;
+  font-size:14px; color:#2c2c2c; cursor:pointer; transition:all .12s; user-select:none; }
+#hbf-brochure .hbf-br-pill span:hover { border-color:#1e3a2f; background:#f0f7f3; }
+#hbf-brochure .hbf-br-pill input:checked + span { background:#1e3a2f; border-color:#1e3a2f; color:#fff; font-weight:700; }
+#hbf-brochure .hbf-br-pill input:focus-visible + span { outline:2px solid #7a9e8a; outline-offset:2px; }
+
+#hbf-brochure .hbf-br-hp { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
+#hbf-brochure .hbf-br-submit {
+  width:100%; background:#1e3a2f; color:#fff; border:none; padding:14px; border-radius:7px; font-size:16px;
+  font-family:Georgia,'Times New Roman',serif; cursor:pointer; transition:background .15s; letter-spacing:.3px; margin-top:4px; }
+#hbf-brochure .hbf-br-submit:hover:not(:disabled) { background:#2d5441; }
+#hbf-brochure .hbf-br-submit:disabled { opacity:.6; cursor:wait; }
+#hbf-brochure .hbf-br-small { font-size:12px; color:#999; line-height:1.6; margin:12px 0 0; text-align:center; }
+#hbf-brochure .hbf-br-err { background:#fde8e8; border:1px solid #fca5a5; border-radius:6px; padding:10px 13px; color:#c0392b; font-size:14px; margin-bottom:16px; }
+@media (max-width:420px) { #hbf-brochure .hbf-br-pills { flex-direction:column; } #hbf-brochure .hbf-br-pill span { text-align:center; } }
+</style>
+
+<script>
+(function () {
+  var ENDPOINT = "https://hawthbushfarm.netlify.app/.netlify/functions/submit-brochure";
+  var THANKS   = "https://hawthbushfarm.netlify.app/brochure-thanks";
+
+  var root = document.getElementById("hbf-brochure");
+  if (!root) return;
+  var form = root.querySelector(".hbf-br-form");
+  var err  = root.querySelector(".hbf-br-err");
+  var btn  = root.querySelector(".hbf-br-submit");
+
+  // The years are built here rather than typed into the markup, so the form
+  // doesn't quietly start offering a year that has already gone.
+  var thisYear = new Date().getFullYear();
+  var yearBox = root.querySelector("[data-years]");
+  for (var i = 0; i < 4; i++) {
+    var y = thisYear + i + 1;
+    var l = document.createElement("label");
+    l.className = "hbf-br-pill";
+    l.innerHTML = '<input type="checkbox" name="years" value="' + y + '"><span>' + y + '</span>';
+    yearBox.appendChild(l);
+  }
+
+  function show(msg) {
+    err.textContent = msg;
+    err.hidden = false;
+    err.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function checkedValues(name) {
+    return Array.prototype.slice
+      .call(form.querySelectorAll('input[name="' + name + '"]:checked'))
+      .map(function (el) { return el.value; });
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    err.hidden = true;
+
+    var email  = form.querySelector('input[name="email"]').value.trim();
+    var guests = checkedValues("guests")[0] || "";
+    var years  = checkedValues("years");
+    var types  = checkedValues("types");
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return show("Please enter a valid email address.");
+    if (!guests) return show("Please tell us roughly how many guests you expect.");
+    if (!years.length) return show("Please choose at least one year.");
+    if (!types.length) return show("Please choose at least one kind of wedding.");
+
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+
+    fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name:    form.querySelector('input[name="name"]').value.trim(),
+        email:   email,
+        guests:  guests,
+        years:   years,
+        types:   types,
+        website: form.querySelector('input[name="website"]').value,
+        source:  "Website brochure request"
+      })
+    })
+      .then(function (res) {
+        // Check the response before believing it. A 400 with a JSON body is a
+        // message worth showing; anything else is ours to apologise for.
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          if (!res.ok || !data.ok) throw new Error(data.error || "Sorry — something went wrong. Please try again, or email hello@hawthbushfarm.co.uk.");
+          return data;
+        });
+      })
+      .then(function () { window.location.href = THANKS; })
+      .catch(function (e) {
+        show(e.message || "Sorry — something went wrong. Please try again.");
+        btn.disabled = false;
+        btn.textContent = "Send me the brochure";
+      });
+  });
+})();
+</script>

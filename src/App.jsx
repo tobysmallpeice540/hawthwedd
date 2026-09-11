@@ -1265,6 +1265,11 @@ const ACCOM_GUESTS_STORAGE   = "hbf_accom_guests_v1";
 const EMAIL_LOG_STORAGE      = "hbf_email_log_v1";
 const DISCOUNT_CODES_STORAGE  = "hbf_discount_codes_v1";
 const EMAIL_TEMPLATES_STORAGE = "hbf_email_templates_v1";
+// Brochure requests from the website. The requests themselves, and separately
+// the wording, brochure link and availability rules the sending function
+// reads — both written by netlify/functions/submit-brochure.js.
+const BROCHURE_REQUESTS_STORAGE = "hbf_brochure_requests_v1";
+const BROCHURE_SETTINGS_STORAGE = "hbf_brochure_settings_v1";
 const SITE_URL = "https://hawthbushfarm.netlify.app";
 
 // Read back a sent email in full.
@@ -4898,7 +4903,8 @@ const BACKUP_DATA_KEYS = [
   "hawthbush_bookings_v6", "hawthbush_staff_v5", "hbf_accom_v1", "hbf_accom_guests_v1",
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
-  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1"
+  "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1"
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -4906,7 +4912,8 @@ const KEY_LABELS = {
   "hbf_viewings_v1":"Viewings", "hbf_viewing_requests_v1":"Viewing requests", "hbf_viewing_blocks_v1":"Viewing blocks",
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
-  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails"
+  "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
+  "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -13188,6 +13195,10 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const [xeroUnpaid, setXeroUnpaid]       = useState([]);
   const [xeroContactEvent, setXeroContactEvent] = useState({});
   const [xeroInvErr, setXeroInvErr]       = useState(null);
+  const [brochureReqs, setBrochureReqs]   = useState([]);
+  // Box office balances live in their own tables behind box-admin, so they
+  // arrive separately from everything else on this page.
+  const [boxDue, setBoxDue]               = useState(null);
   const [loaded, setLoaded]               = useState(false);
 
   useEffect(()=>{
@@ -13195,7 +13206,12 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
       try { const b = await sbGet(ACCOM_STORAGE); setAccomBookings((b||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
       try { const l = await sbGet(EMAIL_LOG_STORAGE); setEmailLog(l||[]); } catch { setEmailLog([]); }
       try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecs(r||[]); } catch { setInvoiceRecs([]); }
+      try { const r = await sbGet(BROCHURE_REQUESTS_STORAGE); setBrochureReqs(r||[]); } catch { setBrochureReqs([]); }
       setLoaded(true);
+      // Last, and allowed to fail on its own: the box office is a separate
+      // system and its being down should not empty the rest of this page.
+      try { const b = await boxAdmin("balances.due"); setBoxDue(b || { orders:[], events:[] }); }
+      catch (e) { setBoxDue({ orders:[], events:[], error:String(e.message||e) }); }
     })();
   }, []);
 
@@ -13335,22 +13351,27 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   // Pending viewing requests
   const pendingViewings = (viewingRequests||[]).filter(r=>r.status==="pending");
 
-  // Overdue accom payments: schedule entries where paid=false AND dueDate < today AND booking not cancelled
-  // A schedule row worth nothing isn't a debt. Zero-value rows get left behind
-  // when a booking's price is changed to nil, and chasing someone for £0.00 is
-  // worse than useless. Event-linked lettings are billed on the event's Xero
-  // invoices, so they don't belong here either.
-  const overduePayments = [];
-  accomBookings.forEach(b => {
-    if (b.status==="cancelled" || b.bookingType==="Blocked") return;
-    if (b.linkedEventId) return;
-    (b.schedule||[]).forEach(s => {
-      if (s.paid) return;
-      if (!s.dueDate || s.dueDate >= today) return;
-      if (!(Number(s.amount) > 0)) return;
-      overduePayments.push({ booking:b, entry:s });
-    });
-  });
+  // The last three brochure requests, newest first. Unlike a viewing request
+  // there is nothing to confirm — the brochure has already gone — so this is
+  // a "who is looking at us" list, not a queue.
+  const recentBrochure = (brochureReqs||[]).slice()
+    .sort(function(a,b){ return String(b.submittedAt||"") > String(a.submittedAt||"") ? 1 : -1; })
+    .slice(0,3);
+
+  // Box office balances past their due date. Not gated on whether the chase
+  // has gone out: money late is money late, and the chase is a separate
+  // question answered inside the box office.
+  const overdueBox = ((boxDue && boxDue.orders) || []).filter(function(o) {
+    return Number(o.balance_pence||0) > 0 && o.balance_due_on &&
+      String(o.balance_due_on).slice(0,10) < today;
+  }).map(function(o) {
+    return { o:o, daysLate: Math.round((new Date(today) - new Date(String(o.balance_due_on).slice(0,10))) / 86400000) };
+  }).sort(function(a,b){ return b.daysLate - a.daysLate; });
+  const boxEventName = {};
+  ((boxDue && boxDue.events) || []).forEach(function(e){ boxEventName[e.id] = e.name; });
+  const overdueBoxTotal = overdueBox.reduce(function(a,r){ return a + Number(r.o.balance_pence||0); }, 0) / 100;
+  const overdueTotal = overdueInvoiceTotal + overdueAccomTotal + overdueBoxTotal;
+  const overdueCount = overdueInvoices.length + overdueAccom.length + overdueBox.length;
 
   const sectionStyle = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 };
   const secHead = (label, count, colour) => (
@@ -13384,72 +13405,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           near the top with the other things waiting on someone. */}
       <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom}/>
 
-      {/* A zero is not "overdue" — it's nothing owed. Rows worth nothing are
-          filtered above; this also stops a section rendering a £0.00 header
-          if one ever gets through. */}
-      {(overdueInvoiceTotal > 0 || overdueAccomTotal > 0) && (
-        <div style={{ background:"#fff", border:"1px solid #fecaca", borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(220,38,38,.08)", marginBottom:18 }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
-            <h3 style={{ margin:0, color:"#dc2626", fontWeight:700, fontSize:15 }}>Overdue</h3>
-            <span style={{ fontSize:12, fontWeight:700, color:"#dc2626", background:"#fef2f2", padding:"2px 10px", borderRadius:8 }}>
-              {overdueInvoices.length + overdueAccom.length}
-            </span>
-          </div>
-
-          {overdueInvoiceTotal > 0 && (
-            <div style={{ marginBottom: overdueAccom.length ? 16 : 0 }}>
-              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
-                Event invoices unpaid — £{overdueInvoiceTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
-              </div>
-              {overdueInvoices.slice(0,8).map(function(r) {
-                return (
-                  <a key={r.inv.InvoiceID} href={xeroInvoiceUrl(r.inv.InvoiceID)} target="_blank" rel="noreferrer"
-                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap", textDecoration:"none", color:"inherit" }}>
-                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>
-                      {r.ev ? (r.ev.couple || "(no name)") : (r.contactName || "(unknown)")}
-                    </span>
-                    {r.stage && <span style={{ fontSize:11, color:T.textLight }}>{INVOICE_STAGE_LABELS[r.stage]}</span>}
-                    <span style={{ fontSize:11, color:"#13B5EA", fontWeight:600 }}>{r.inv.InvoiceNumber || "—"}</span>
-                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.due)}</span>
-                    <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
-                    <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
-                      £{r.amountDue.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
-                    </span>
-                  </a>
-                );
-              })}
-              {overdueInvoices.length > 8 && (
-                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueInvoices.length-8} more.</div>
-              )}
-            </div>
-          )}
-
-          {overdueAccomTotal > 0 && (
-            <div>
-              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
-                Accommodation unpaid — £{overdueAccomTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
-              </div>
-              {overdueAccom.slice(0,8).map(function(r,i) {
-                return (
-                  <div key={r.b.id + "-" + r.s.label + "-" + i} onClick={()=>setView("lettings")}
-                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
-                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>{r.b.guestName || "(no name)"}</span>
-                    <span style={{ fontSize:11, color:T.textLight }}>{r.s.label}</span>
-                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.s.dueDate)}</span>
-                    <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
-                    <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
-                      £{Number(r.s.amount||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
-                    </span>
-                  </div>
-                );
-              })}
-              {overdueAccom.length > 8 && (
-                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueAccom.length-8} more — see Lettings.</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Overdue money used to be said twice: a red banner here, and a panel in
+          the grid below repeating the accommodation half of it. It is now one
+          section under the grid — see "Overdue" further down. */}
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:18 }}>
 
@@ -13515,23 +13473,155 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {pendingViewings.length>6 && <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("viewings")}>+ {pendingViewings.length-6} more</div>}
         </div>
 
-        {/* Overdue payments */}
+        {/* Brochure requests — next to the viewing requests, because the two
+            are the same thing from the same website: somebody has just put
+            their hand up. Nothing here needs confirming; the brochure has
+            already gone. */}
         <div style={sectionStyle}>
-          {secHead("Overdue Accom Payments", overduePayments.length, overduePayments.length?T.red:null)}
+          {secHead("Brochure Requests", brochureReqs.length || null, recentBrochure.length ? T.accent : null)}
           {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
-          {loaded && overduePayments.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No overdue payments.</div>}
-          {overduePayments.slice(0,8).map(({ booking:b, entry:s },i)=>(
-            <div key={b.id+"-"+i} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
-              <span style={{ fontSize:11, fontWeight:700, color:T.red, background:T.redBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>Due {fmtDay(s.dueDate)}</span>
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"} — {s.label}</div>
-                <div style={{ fontSize:11, color:T.red, fontWeight:600 }}>{fmtMoney(s.amount)}</div>
+          {loaded && recentBrochure.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No brochure requests yet.</div>}
+          {recentBrochure.map(function(r, i) {
+            const when = r.submittedAt ? new Date(r.submittedAt) : null;
+            return (
+              <div key={r.id||i} onClick={()=>setView("enquiries")}
+                style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+                <span title={r.emailSent === false ? "The brochure email did not go out — see Recent Automated Emails" : "Brochure emailed"}
+                  style={{ fontSize:11, fontWeight:700, flexShrink:0, padding:"2px 8px", borderRadius:6,
+                    color: r.emailSent === false ? T.red : "#6b21a8",
+                    background: r.emailSent === false ? T.redBg : "#f3e8ff" }}>
+                  {r.emailSent === false ? "Not sent" : (when ? fmtDay(when.toISOString().slice(0,10)) : "Sent")}
+                </span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {r.name || r.email || "(no name)"}
+                  </div>
+                  <div style={{ fontSize:11, color:T.textLight, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {[r.guestsLabel, (r.years||[]).join(", "), (r.typeLabels||[]).join(", ")].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
               </div>
+            );
+          })}
+          {brochureReqs.length > 3 && (
+            <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("enquiries")}>
+              {brochureReqs.length} in total — see Enquiries
             </div>
-          ))}
-          {overduePayments.length>8 && <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("lettings")}>+ {overduePayments.length-8} more</div>}
+          )}
         </div>
       </div>
+
+      {/* ── Overdue ───────────────────────────────────────────────────────
+          One place for money that is late, in the order it gets chased: the
+          venue first because it is the largest, then accommodation, then the
+          box office. A zero is not overdue — rows worth nothing are filtered
+          out above, so a £0.00 heading can never render. */}
+      {overdueTotal > 0 && (
+        <div style={{ background:"#fff", border:"1px solid #fecaca", borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(220,38,38,.08)", marginBottom:18 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
+            <h3 style={{ margin:0, color:"#dc2626", fontWeight:700, fontSize:15 }}>Overdue</h3>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:13, fontWeight:800, color:"#dc2626" }}>
+                £{overdueTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+              </span>
+              <span style={{ fontSize:12, fontWeight:700, color:"#dc2626", background:"#fef2f2", padding:"2px 10px", borderRadius:8 }}>
+                {overdueCount}
+              </span>
+            </div>
+          </div>
+
+          {/* Venue */}
+          {overdueInvoiceTotal > 0 && (
+            <div style={{ marginBottom: (overdueAccom.length || overdueBox.length) ? 16 : 0 }}>
+              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
+                Venue — event invoices unpaid — £{overdueInvoiceTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+              </div>
+              {overdueInvoices.slice(0,8).map(function(r) {
+                return (
+                  <a key={r.inv.InvoiceID} href={xeroInvoiceUrl(r.inv.InvoiceID)} target="_blank" rel="noreferrer"
+                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap", textDecoration:"none", color:"inherit" }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>
+                      {r.ev ? (r.ev.couple || "(no name)") : (r.contactName || "(unknown)")}
+                    </span>
+                    {r.stage && <span style={{ fontSize:11, color:T.textLight }}>{INVOICE_STAGE_LABELS[r.stage]}</span>}
+                    <span style={{ fontSize:11, color:"#13B5EA", fontWeight:600 }}>{r.inv.InvoiceNumber || "—"}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.due)}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
+                      £{r.amountDue.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+                    </span>
+                  </a>
+                );
+              })}
+              {overdueInvoices.length > 8 && (
+                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueInvoices.length-8} more.</div>
+              )}
+            </div>
+          )}
+
+          {/* Accommodation */}
+          {overdueAccomTotal > 0 && (
+            <div style={{ marginBottom: overdueBox.length ? 16 : 0 }}>
+              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
+                Accommodation unpaid — £{overdueAccomTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+              </div>
+              {overdueAccom.slice(0,8).map(function(r,i) {
+                return (
+                  <div key={r.b.id + "-" + r.s.label + "-" + i} onClick={()=>setView("lettings")}
+                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>{r.b.guestName || "(no name)"}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>{r.s.label}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(r.s.dueDate)}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
+                      £{Number(r.s.amount||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+                    </span>
+                  </div>
+                );
+              })}
+              {overdueAccom.length > 8 && (
+                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueAccom.length-8} more — see Lettings.</div>
+              )}
+            </div>
+          )}
+
+          {/* Box office, last */}
+          {overdueBoxTotal > 0 && (
+            <div>
+              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:7 }}>
+                Box office — ticket balances — £{overdueBoxTotal.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}
+              </div>
+              {overdueBox.slice(0,8).map(function(r) {
+                return (
+                  <div key={r.o.id} onClick={()=>setView("boxoffice")}
+                    style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>
+                      {[r.o.first_name, r.o.last_name].filter(Boolean).join(" ") || r.o.email || "(no name)"}
+                    </span>
+                    <span style={{ fontSize:11, color:T.textLight }}>{boxEventName[r.o.event_id] || ""}</span>
+                    <span style={{ fontSize:11, color:T.textLight }}>due {fmtDate(String(r.o.balance_due_on).slice(0,10))}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:"#dc2626" }}>{r.daysLate}d late</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:T.text, width:90, textAlign:"right" }}>
+                      {boxMoney(r.o.balance_pence)}
+                    </span>
+                  </div>
+                );
+              })}
+              {overdueBox.length > 8 && (
+                <div style={{ fontSize:11, color:T.textLight, paddingTop:6 }}>…and {overdueBox.length-8} more — see Box Office.</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* The box office half of the section above can only be as truthful as
+          the answer that came back. Silence would read as "nothing owing". */}
+      {boxDue && boxDue.error && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:18, fontSize:12, color:"#92400e", lineHeight:1.6 }}>
+          Couldn’t read ticket balances from the box office ({boxDue.error}), so any overdue ones are not shown above.
+        </div>
+      )}
 
       {/* Ticket sales and new bookings sit below the viewing requests. Both
           are worth reading when there is a minute; neither is somebody waiting
@@ -16233,11 +16323,16 @@ const INITIAL_ENQUIRIES = [
 // the picker, so re-saving any of them moves it to a current category.
 const TEMP_CONFIG = {
   warm:     { label:"Warm",     bg:"#fef3c7", text:"#92400e", border:"#fcd34d" },
+  // Asked for the brochure through the website and has not been spoken to
+  // since. Its own category rather than Cold, because it is a person who put
+  // their hand up this week, not one who went quiet months ago — and the
+  // difference is the whole point of looking at this list.
+  brochure: { label:"Brochure", bg:"#f3e8ff", text:"#6b21a8", border:"#d8b4fe" },
   cold:     { label:"Cold",     bg:"#e0f2fe", text:"#075985", border:"#7dd3fc" },
   freezing: { label:"Freezing", bg:"#eef2f7", text:"#475569", border:"#cbd5e1" },
 };
 // Selectable in the enquiry form. Hot is deliberately absent.
-const TEMP_CHOICES = ["warm", "cold", "freezing"];
+const TEMP_CHOICES = ["warm", "brochure", "cold", "freezing"];
 const LEGACY_TEMP_CONFIG = {
   hot: { label:"Hot", bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
 };
@@ -17886,6 +17981,285 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
 }
 
 // ─── SETTINGS ─────────────────────────────────────────────────────────────────
+// ── Brochure request email ───────────────────────────────────────────────────
+// Everything the website's brochure form says back to a visitor: the wording,
+// the link to the brochure, and the rules that decide whether a month reads
+// green, amber or grey.
+//
+// The preview is not a drawing of the email — it asks the sending function to
+// render one, against the real diary, and shows what comes back. There is one
+// implementation of the availability rules and it is the one that posts.
+const BROCHURE_DEFAULTS = {
+  enabled: true,
+  brochureUrl: "https://www.hawthbushfarm.co.uk/brochure",
+  notifyEmail: "hello@hawthbushfarm.co.uk",
+  subject: "Your Hawthbush Farm brochure",
+  body:
+    "Hello {{name}},\n\n" +
+    "Thank you for getting in touch — it is lovely to hear from you.\n\n" +
+    "Our brochure is here: {{brochureUrl}}\n\n" +
+    "{{availability}}\n\n" +
+    "Dates move quickly, so if a month above looks right do say and we will pencil it in while you come and see us.\n\n" +
+    "Just reply to this email and we will find a time to show you around.\n\n" +
+    "With very best wishes,\nHawthbush Farm",
+  peakStart: 5,
+  peakEnd: 9,
+  hideWithinMonths: 3,
+  goodThreshold: 3,
+  offPeakSlots: "weekend",
+};
+
+const BROCHURE_TOKENS = [
+  ["{{name}}", "their name, or “there” if they didn’t give one"],
+  ["{{brochureUrl}}", "the brochure link below"],
+  ["{{availability}}", "the month-by-month availability block"],
+  ["{{guests}}", "the guest band they chose"],
+  ["{{years}}", "the years they ticked"],
+  ["{{types}}", "peak weekend / peak midweek / off peak"],
+];
+
+const BROCHURE_MONTHS = ["January","February","March","April","May","June",
+                         "July","August","September","October","November","December"];
+const BROCHURE_TYPES = [["peak_weekend","Peak weekend"],["peak_midweek","Peak midweek"],["off_peak","Off peak"]];
+
+function BrochureSettingsPanel() {
+  const [cfg, setCfg]       = useState(null);
+  const [flash, setFlash]   = useState("");
+  const [busy, setBusy]     = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [pvErr, setPvErr]   = useState("");
+  const [pvYears, setPvYears] = useState([new Date().getFullYear() + 1]);
+  const [pvTypes, setPvTypes] = useState(["peak_weekend"]);
+
+  useEffect(function() {
+    let cancelled = false;
+    (async function() {
+      try {
+        const c = await sbGet(BROCHURE_SETTINGS_STORAGE);
+        if (!cancelled) setCfg(Object.assign({}, BROCHURE_DEFAULTS, c || {}));
+      } catch (e) { if (!cancelled) setCfg(Object.assign({}, BROCHURE_DEFAULTS)); }
+    })();
+    return function() { cancelled = true; };
+  }, []);
+
+  if (cfg === null) return <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>;
+
+  const upd = function(k, v) { setCfg(function(c) { return Object.assign({}, c, { [k]: v }); }); };
+
+  const save = async function() {
+    setBusy(true);
+    try {
+      await sbSet(BROCHURE_SETTINGS_STORAGE, cfg);
+      setFlash("Saved");
+    } catch (e) { setFlash("Save failed: " + (e.message || e)); }
+    setBusy(false);
+    setTimeout(function(){ setFlash(""); }, 3000);
+  };
+
+  // The preview renders whatever is *saved*, not whatever is on screen — the
+  // function reads the stored settings. Saying so beats quietly showing the
+  // old wording next to the new.
+  const showPreview = async function() {
+    setBusy(true); setPvErr(""); setPreview(null);
+    try {
+      const qs = "preview=1&years=" + pvYears.join(",") + "&types=" + pvTypes.join(",") + "&name=Jo";
+      const res = await fetch("/.netlify/functions/submit-brochure?" + qs);
+      const data = await res.json().catch(function(){ return {}; });
+      if (!res.ok || !data.ok) throw new Error(data.error || "Preview failed");
+      setPreview(data);
+    } catch (e) { setPvErr(String(e.message || e)); }
+    setBusy(false);
+  };
+
+  const toggleIn = function(list, setList, value) {
+    setList(list.indexOf(value) === -1
+      ? list.concat([value])
+      : list.filter(function(v){ return v !== value; }));
+  };
+
+  const inp = { width:"100%", boxSizing:"border-box", border:`1px solid ${T.border}`, borderRadius:6,
+    padding:"8px 10px", fontSize:13, fontFamily:"inherit", color:T.text, background:T.bgInput, outline:"none" };
+  const lbl = { display:"block", fontSize:11, fontWeight:700, color:T.textMid, marginBottom:4, letterSpacing:.3 };
+  const num = Object.assign({}, inp, { width:80 });
+
+  return (
+    <div>
+      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 16px", lineHeight:1.6 }}>
+        Sent automatically when somebody asks for the brochure on the website. It goes out
+        with availability for exactly the years and kinds of wedding they ticked, and is
+        logged under Recent Automated Emails like every other automated send.
+      </p>
+
+      <label style={{ display:"flex", alignItems:"center", gap:9, marginBottom:16, cursor:"pointer" }}>
+        <input type="checkbox" checked={cfg.enabled !== false}
+          onChange={function(e){ upd("enabled", e.target.checked); }}/>
+        <span style={{ fontSize:13, color:T.text, fontWeight:600 }}>Send the brochure email</span>
+        {cfg.enabled === false && (
+          <span style={{ fontSize:11, fontWeight:700, color:T.amber, background:T.amberBg, padding:"2px 8px", borderRadius:8 }}>
+            requests are still recorded, no email goes out
+          </span>
+        )}
+      </label>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
+        <div>
+          <label style={lbl}>Brochure link</label>
+          <input style={inp} value={cfg.brochureUrl || ""}
+            onChange={function(e){ upd("brochureUrl", e.target.value); }}/>
+        </div>
+        <div>
+          <label style={lbl}>Tell us at</label>
+          <input style={inp} value={cfg.notifyEmail || ""}
+            onChange={function(e){ upd("notifyEmail", e.target.value); }}/>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>Subject</label>
+        <input style={inp} value={cfg.subject || ""}
+          onChange={function(e){ upd("subject", e.target.value); }}/>
+      </div>
+
+      <div style={{ marginBottom:8 }}>
+        <label style={lbl}>Body</label>
+        <textarea style={Object.assign({}, inp, { minHeight:230, lineHeight:1.6, resize:"vertical" })}
+          value={cfg.body || ""} onChange={function(e){ upd("body", e.target.value); }}/>
+      </div>
+
+      <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 14px", marginBottom:20 }}>
+        {BROCHURE_TOKENS.map(function(t) {
+          return (
+            <span key={t[0]} title={t[1]} style={{ fontSize:11, color:T.textLight }}>
+              <code style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:4, padding:"1px 5px", color:T.midBlue }}>{t[0]}</code>
+              {" " + t[1]}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* ── Availability rules ─────────────────────────────────────────── */}
+      <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:18, marginBottom:18 }}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:6 }}>
+          What counts as available
+        </div>
+        <p style={{ fontSize:12.5, color:T.textMid, margin:"0 0 14px", lineHeight:1.6 }}>
+          One weekend slot a week (Friday, Saturday and Sunday together) and one midweek slot
+          a week (Monday to Thursday). A wedding on any day of a slot takes the whole slot, and
+          a date being <em>held</em> counts as taken. Off peak counts weekends only unless you
+          change that below.
+        </p>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:16, alignItems:"flex-end" }}>
+          <div>
+            <label style={lbl}>Peak runs from</label>
+            <select style={Object.assign({}, inp, { width:130 })} value={cfg.peakStart}
+              onChange={function(e){ upd("peakStart", Number(e.target.value)); }}>
+              {BROCHURE_MONTHS.map(function(m, i){ return <option key={m} value={i+1}>{m}</option>; })}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>to</label>
+            <select style={Object.assign({}, inp, { width:130 })} value={cfg.peakEnd}
+              onChange={function(e){ upd("peakEnd", Number(e.target.value)); }}>
+              {BROCHURE_MONTHS.map(function(m, i){ return <option key={m} value={i+1}>{m}</option>; })}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Green from</label>
+            <input type="number" min="1" max="10" style={num} value={cfg.goodThreshold}
+              onChange={function(e){ upd("goodThreshold", Number(e.target.value)); }}/>
+          </div>
+          <div>
+            <label style={lbl}>Hide the next</label>
+            <input type="number" min="0" max="24" style={num} value={cfg.hideWithinMonths}
+              onChange={function(e){ upd("hideWithinMonths", Number(e.target.value)); }}/>
+          </div>
+          <div>
+            <label style={lbl}>Off peak counts</label>
+            <select style={Object.assign({}, inp, { width:190 })} value={cfg.offPeakSlots || "weekend"}
+              onChange={function(e){ upd("offPeakSlots", e.target.value); }}>
+              <option value="weekend">weekends only</option>
+              <option value="both">weekends and midweeks</option>
+            </select>
+          </div>
+        </div>
+        <p style={{ fontSize:12, color:T.textLight, margin:"12px 0 0", lineHeight:1.6 }}>
+          Peak is {BROCHURE_MONTHS[(Number(cfg.peakStart)||5) - 1]} to {BROCHURE_MONTHS[(Number(cfg.peakEnd)||9) - 1]};
+          off peak is every other month. A month with {cfg.goodThreshold || 3} or more slots free reads as
+          good availability, one to {Math.max(0, (Number(cfg.goodThreshold)||3) - 1)} as limited, none as booked.
+          Nothing inside the next {cfg.hideWithinMonths} month{Number(cfg.hideWithinMonths) === 1 ? "" : "s"} is shown at all.
+        </p>
+      </div>
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+        <button onClick={save} disabled={busy}
+          style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:7,
+            cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity:busy?.7:1 }}>
+          Save
+        </button>
+        {flash && <span style={{ fontSize:12.5, color: flash.indexOf("fail")!==-1 ? T.red : T.green, fontWeight:600 }}>{flash}</span>}
+      </div>
+
+      {/* ── Preview ────────────────────────────────────────────────────── */}
+      <div style={{ borderTop:`1px solid ${T.border}`, marginTop:22, paddingTop:18 }}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:6 }}>
+          Preview
+        </div>
+        <p style={{ fontSize:12.5, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
+          Rendered by the sending function itself against the real diary — this is the email, not a
+          mock-up of one. <strong>Save first:</strong> it reads what is stored, not what is on screen.
+        </p>
+
+        <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:10 }}>
+          {[0,1,2,3].map(function(i) {
+            const y = new Date().getFullYear() + i + 1;
+            const on = pvYears.indexOf(y) !== -1;
+            return (
+              <button key={y} onClick={function(){ toggleIn(pvYears, setPvYears, y); }}
+                style={{ border:`1px solid ${on?T.accent:T.border}`, background:on?T.accentLight:"#fff",
+                  color:on?T.accent:T.textMid, borderRadius:20, padding:"5px 14px", fontSize:12.5,
+                  fontWeight:on?700:500, fontFamily:"inherit", cursor:"pointer" }}>{y}</button>
+            );
+          })}
+          <span style={{ width:1, background:T.border, margin:"0 4px" }}/>
+          {BROCHURE_TYPES.map(function(t) {
+            const on = pvTypes.indexOf(t[0]) !== -1;
+            return (
+              <button key={t[0]} onClick={function(){ toggleIn(pvTypes, setPvTypes, t[0]); }}
+                style={{ border:`1px solid ${on?T.accent:T.border}`, background:on?T.accentLight:"#fff",
+                  color:on?T.accent:T.textMid, borderRadius:20, padding:"5px 14px", fontSize:12.5,
+                  fontWeight:on?700:500, fontFamily:"inherit", cursor:"pointer" }}>{t[1]}</button>
+            );
+          })}
+        </div>
+
+        <button onClick={showPreview} disabled={busy || !pvYears.length || !pvTypes.length}
+          style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"8px 18px",
+            borderRadius:7, cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600,
+            opacity:(busy || !pvYears.length || !pvTypes.length)?.6:1 }}>
+          {busy ? "…" : "Show the email"}
+        </button>
+
+        {pvErr && (
+          <div style={{ marginTop:12, background:T.redBg, border:"1px solid #fca5a5", borderRadius:8,
+            padding:"10px 14px", fontSize:12.5, color:T.red }}>{pvErr}</div>
+        )}
+
+        {preview && (
+          <div style={{ marginTop:14 }}>
+            <div style={{ fontSize:12.5, color:T.textMid, marginBottom:8 }}>
+              <strong style={{ color:T.text }}>Subject:</strong> {preview.subject}
+            </div>
+            {/* sandbox with no allow-scripts: the preview renders, and nothing
+                in it can run. */}
+            <iframe title="Brochure email preview" srcDoc={preview.html} sandbox=""
+              style={{ width:"100%", height:620, border:`1px solid ${T.border}`, borderRadius:10, background:"#fff" }}/>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, setView }) {
   const [feedCopied, setFeedCopied] = useState(false);
   const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
@@ -17899,6 +18273,12 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Backup &amp; restore</div>
         <BackupPanel/>
+      </div>
+
+      {/* Brochure request — the website form's wording, link and rules */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Brochure request</div>
+        <BrochureSettingsPanel/>
       </div>
 
       {/* Weekly cleaning summary */}
@@ -18236,7 +18616,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
 
   // Legacy "hot" sorts alongside warm — it was the keenest category, and
   // burying it at the bottom would hide the very enquiries most worth acting on.
-  const TEMP_ORDER = { hot:0, warm:1, cold:2, freezing:3 };
+  const TEMP_ORDER = { hot:0, warm:1, brochure:2, cold:3, freezing:4 };
 
   // See lastContactFrom at module scope — bound here to the email dates this
   // view has fetched.
@@ -21555,6 +21935,7 @@ const AUDIT_KEY_LABELS = {
   "hbf_bar_products_v1":   "Bar products",
   "hbf_bar_events_v1":     "Bar events",
   "hbf_email_log_v1":      "Email log",
+  "hbf_brochure_requests_v1": "Brochure requests",
   "hbf_app_build_v1":      "App build",
 };
 

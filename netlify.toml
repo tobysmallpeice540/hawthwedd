@@ -112,6 +112,14 @@
   to = "/whats-on.html"
   status = 200
 
+# The brochure request form on Squarespace posts to submit-brochure and then
+# sends the visitor here. Above the catch-all, like everything else with a
+# clean URL, or /brochure-thanks serves the staff app instead.
+[[redirects]]
+  from = "/brochure-thanks"
+  to = "/brochure-thanks.html"
+  status = 200
+
 # ── Client portal ────────────────────────────────────────────────────────────
 # Its own Vite entry (portal.html), so the bundle a wedding client downloads
 # contains none of the staff app. Must stay above the /* catch-all, like the

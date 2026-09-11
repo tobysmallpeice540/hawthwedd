@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Thank you — Hawthbush Farm</title>
+  <meta name="robots" content="noindex"/>
+  <!--
+    Where the brochure request form sends people. Hosted here rather than on
+    Squarespace so the form has somewhere certain to land, and it takes the
+    visitor back to the website on its own — a dead end on a different domain
+    is a worse ending than no page at all.
+
+    The countdown is visible and can be stopped, because a page that moves
+    under you while you are still reading it is rude.
+  -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Georgia, 'Times New Roman', serif; background: #f9f6f1; color: #2c2c2c;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+    }
+    .card {
+      background: #fff; border: 1px solid #e8e4df; border-radius: 14px; padding: 44px 36px;
+      box-shadow: 0 2px 16px rgba(0,0,0,.07); max-width: 520px; width: 100%; text-align: center;
+    }
+    .mark {
+      width: 58px; height: 58px; border-radius: 50%; background: #e8f3ec; border: 1px solid #b6d8c3;
+      margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;
+      font-size: 26px; color: #22613e; line-height: 1;
+    }
+    h1 { font-size: 26px; font-weight: 400; color: #1e3a2f; letter-spacing: .5px; margin-bottom: 14px; }
+    p { font-size: 15px; line-height: 1.75; color: #555; margin-bottom: 14px; }
+    .note { font-size: 13px; color: #8b8279; }
+    .back {
+      display: inline-block; margin-top: 14px; background: #1e3a2f; color: #fff; text-decoration: none;
+      padding: 13px 30px; border-radius: 7px; font-size: 15px; letter-spacing: .3px;
+    }
+    .back:hover { background: #2d5441; }
+    .countdown { font-size: 12px; color: #a39a8f; margin-top: 18px; }
+    .countdown button {
+      background: none; border: none; color: #7a9e8a; font-family: inherit; font-size: 12px;
+      text-decoration: underline; cursor: pointer; padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark">✓</div>
+    <h1>Thank you</h1>
+    <p>
+      Your brochure is on its way. It should reach you within a minute or two,
+      along with our availability for the years and dates you chose.
+    </p>
+    <p class="note">
+      If it hasn't arrived shortly, do check your junk folder — or just email
+      <a href="mailto:hello@hawthbushfarm.co.uk" style="color:#1e3a2f">hello@hawthbushfarm.co.uk</a>
+      and we will send it straight over.
+    </p>
+    <a class="back" href="https://www.hawthbushfarm.co.uk/">Back to Hawthbush Farm</a>
+    <p class="countdown">
+      Taking you back in <span id="secs">10</span> seconds ·
+      <button type="button" id="stay">stay here</button>
+    </p>
+  </div>
+
+  <script>
+    (function () {
+      var SITE = "https://www.hawthbushfarm.co.uk/";
+      var left = 10, stopped = false;
+      var secs = document.getElementById("secs");
+      document.getElementById("stay").addEventListener("click", function () {
+        stopped = true;
+        document.querySelector(".countdown").textContent = "";
+      });
+      var timer = setInterval(function () {
+        if (stopped) { clearInterval(timer); return; }
+        left -= 1;
+        secs.textContent = left;
+        if (left <= 0) { clearInterval(timer); window.location.href = SITE; }
+      }, 1000);
+    })();
+  </script>
+</body>
+</html>
