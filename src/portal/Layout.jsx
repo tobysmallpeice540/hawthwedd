@@ -91,6 +91,7 @@ export default function Layout() {
   const [selected, setSelected] = useState(null)
   const [notice, setNotice] = useState('')
   const [narrow, setNarrow] = useState(false)
+  const [presets, setPresets] = useState([])
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 820px)')
@@ -105,6 +106,16 @@ export default function Layout() {
     catch (e) { setError(e.message || String(e)); setState('error') }
   }
   useEffect(() => { load() }, [])
+
+  // Suggestions are optional scenery: if they fail to load the plan still
+  // works, and there is nothing useful to say about it.
+  useEffect(() => {
+    let off = false
+    rpc('wp_get_presets')
+      .then((r) => { if (!off) setPresets(r.presets || []) })
+      .catch(() => {})
+    return () => { off = true }
+  }, [])
 
   if (state === 'loading') return <section className="card"><p className="muted">Loading…</p></section>
   if (state === 'error') {
@@ -152,6 +163,10 @@ export default function Layout() {
             The plan needs a bigger screen to move things around. You can look at it here,
             but do come back on a laptop to change it.
           </div>
+        )}
+        {!narrow && presets.length > 0 && (
+          <Suggestions presets={presets} placed={data.tables.length}
+            onLoaded={load} onNotice={setNotice} />
         )}
       </section>
 
@@ -201,6 +216,82 @@ export default function Layout() {
       </section>
 
     </>
+  )
+}
+
+// ── layouts we have already worked out ──────────────────────────────────────
+//
+// Most couples do not want to place twenty tables one at a time; they want the
+// room the way it usually is. Loading one REPLACES everything currently on the
+// plan, so this asks first — and it says how many people are already sitting
+// down, because that is the number somebody needs to weigh, not a generic
+// warning about losing work.
+function Suggestions({ presets, placed, onLoaded, onNotice }) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(null)
+
+  async function loadPreset(p) {
+    if (placed > 0 && !window.confirm(
+      'Loading “' + p.name + '” replaces the ' + placed + ' table' + (placed === 1 ? '' : 's') +
+      ' already on your plan. Anyone sitting at them goes back to the unseated list — ' +
+      'nobody is removed from your guest list. Carry on?')) return
+
+    setBusy(p.id)
+    try {
+      const r = await rpc('wp_load_preset', { p_preset_id: p.id })
+      await onLoaded()
+      // Say who lost a seat, by name. The tables they were sitting at no
+      // longer exist, so it is unavoidable — doing it silently is not.
+      const names = r.unseated_names || []
+      onNotice(
+        r.unseated > 0
+          ? 'Loaded “' + p.name + '”. ' + r.unseated + ' ' +
+            (r.unseated === 1 ? 'person is' : 'people are') + ' back on the unseated list' +
+            (names.length ? ' — ' + names.slice(0, 6).join(', ') +
+              (names.length > 6 ? ' and ' + (names.length - 6) + ' more' : '') : '') + '.'
+          : 'Loaded “' + p.name + '”. Move anything you like — nothing here is fixed.'
+      )
+      setOpen(false)
+    } catch (e) {
+      onNotice(e.message || String(e))
+    } finally { setBusy(null) }
+  }
+
+  if (!open) {
+    return (
+      <div className="actions" style={{ marginTop: 14 }}>
+        <button className="btn-small ghost" onClick={() => setOpen(true)}>
+          Start from one of our layouts
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Ways we often set the room out. Load one and then change whatever you like —
+        it is a starting point, not a rule.
+      </p>
+      <div className="boards">
+        {presets.map((p) => (
+          <div className="board" key={p.id}>
+            <span>
+              <span className="board-name" style={{ textDecoration: 'none' }}>{p.name}</span>
+              <span className="muted" style={{ fontSize: 13 }}>
+                {' · '}{p.seats} seated on {p.table_count} table{p.table_count === 1 ? '' : 's'}
+              </span>
+            </span>
+            <button className="btn-small" disabled={busy === p.id} onClick={() => loadPreset(p)}>
+              {busy === p.id ? 'Loading…' : 'Use this'}
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="actions">
+        <button className="btn-small ghost" onClick={() => setOpen(false)}>Close</button>
+      </div>
+    </div>
   )
 }
 

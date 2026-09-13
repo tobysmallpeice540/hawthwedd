@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { dayOrder } from "./shared/dayOrder.js";
+import { snapToNeighbours, boxesOverlap, tableFootprint } from "./shared/tableSnap.js";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
 // Pure viewport-width detection (no device/user-agent sniffing) — recalculates
@@ -7049,8 +7050,357 @@ function PortalAdminScreen({ bookings, onBack }) {
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
       {tab === "times"     && <PortalAccessTimes />}
       {tab === "suppliers" && <PortalSupplierDirectory />}
-      {tab === "room"      && <PortalRoomEditor />}
+      {tab === "room"      && <><PortalRoomEditor /><PortalLayouts /></>}
       {tab === "templates" && <PortalTemplates bookings={bookings} />}
+    </div>
+  );
+}
+
+// ─── layouts Toby has already worked out ─────────────────────────────────────
+//
+// Most couples do not want to place twenty tables one at a time. They want the
+// room the way it usually is. So the arrangements are built here once, named
+// for what they seat, and a couple loads one instead of dragging.
+//
+// A preset is NOT rows in wp_layout_tables — it belongs to nobody's wedding.
+// Loading one COPIES the positions in, which is why deleting a layout later
+// cannot disturb a wedding that used it.
+//
+// The same snapping as the couple's plan, from the shared module, so an
+// arrangement built here behaves exactly as theirs does and two tables butt
+// together properly. See src/shared/tableSnap.js for why a 250mm grid made that
+// arithmetically impossible.
+
+const PRESET_SNAP = 25;
+
+function PortalLayouts() {
+  const [room, setRoom] = useState(null);
+  const [list, setList] = useState(null);
+  const [editing, setEditing] = useState(null);   // { id, name, note, tables[] }
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  async function load(keepId) {
+    setErr("");
+    try {
+      const r = await sbRpc("wp_admin_rooms");
+      const live = (r.rooms || []).find(function(x){ return x.id === r.live_room_id; }) || (r.rooms || [])[0];
+      setRoom(live || null);
+      const p = await sbRpc("wp_admin_presets");
+      const ps = (p.presets || []).filter(function(x){ return !live || x.room_id === live.id; });
+      setList(ps);
+      if (keepId) {
+        const k = ps.find(function(x){ return x.id === keepId; });
+        if (k) setEditing({ id:k.id, name:k.name, note:k.note || "", tables:(k.tables || []).slice() });
+      }
+    } catch (e) { setErr(e.message || String(e)); setList([]); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  if (list === null) return null;
+
+  if (!room) {
+    return (
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+        <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Suggested layouts</div>
+        <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:0, maxWidth:660 }}>
+          Set the room up first, on the <b>The room</b> tab. A layout is an arrangement of
+          tables inside a room, so there has to be a room to arrange them in.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Suggested layouts</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
+        Arrangements a couple can load in one press instead of dragging twenty tables in
+        one at a time. Name them for what they seat — <i>98 seated, long tables</i> — since
+        that is what somebody is choosing by.
+      </p>
+      {err && <ErrBanner text={err} />}
+      {note && <div style={{ background:T.greenBg, border:`1px solid ${T.green}33`, color:T.green,
+        borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{note}</div>}
+
+      {!editing && (
+        <>
+          {list.length === 0 && (
+            <p style={{ fontSize:13, color:T.textLight, padding:"6px 0" }}>
+              None yet, so couples start with an empty room.
+            </p>
+          )}
+          {list.map(function(p){
+            return (
+              <div key={p.id} style={{ borderTop:`1px solid ${T.border}`, padding:"11px 0",
+                display:"flex", gap:12, alignItems:"center", justifyContent:"space-between", flexWrap:"wrap" }}>
+                <div style={{ minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:T.text }}>
+                    {p.name}
+                    <span style={{ fontWeight:400, color:T.textLight }}>
+                      {" · "}{p.seats} seated on {p.table_count} table{p.table_count === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  {p.note && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>{p.note}</div>}
+                </div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button style={btnQuiet}
+                    onClick={function(){ setEditing({ id:p.id, name:p.name, note:p.note || "", tables:(p.tables||[]).slice() }); setNote(""); }}>
+                    Open
+                  </button>
+                  <button style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55` })}
+                    onClick={async function(){
+                      if (!window.confirm("Remove “" + p.name + "”? Any wedding that already loaded it keeps its tables.")) return;
+                      setBusy(true);
+                      try { await sbRpc("wp_admin_delete_preset", { p_id: p.id }); await load(); setNote("Removed."); }
+                      catch (e) { setErr(e.message || String(e)); }
+                      finally { setBusy(false); }
+                    }}>Remove</button>
+                </div>
+              </div>
+            );
+          })}
+
+          <div style={{ marginTop:14 }}>
+            <button style={btnQuiet} disabled={busy}
+              onClick={function(){ setEditing({ id:null, name:"", note:"", tables:[] }); setNote(""); }}>
+              + Build a layout
+            </button>
+          </div>
+        </>
+      )}
+
+      {editing && (
+        <PresetBuilder
+          room={room}
+          preset={editing}
+          onCancel={function(){ setEditing(null); setErr(""); }}
+          onSaved={function(id, msg){ setEditing(null); setNote(msg); load(id); }}
+          onError={setErr}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── building one ────────────────────────────────────────────────────────────
+function PresetBuilder({ room, preset, onCancel, onSaved, onError }) {
+  const [name, setName] = useState(preset.name || "");
+  const [note, setNote] = useState(preset.note || "");
+  const [tables, setTables] = useState((preset.tables || []).map(function(t, i){
+    return { key: "t" + i, x_mm: Number(t.x_mm)||1000, y_mm: Number(t.y_mm)||1000,
+             rotation: Number(t.rotation)||0, one_side: !!t.one_side };
+  }));
+  const [sel, setSel] = useState(-1);
+  const [busy, setBusy] = useState(false);
+  const planRef = useRef(null);
+  const dragRef = useRef(null);
+
+  const size = {
+    L: room.table_length_mm || 1830, D: room.table_depth_mm || 760,
+    chair: room.chair_depth_mm == null ? 450 : room.chair_depth_mm,
+    clear: room.clearance_mm == null ? 450 : room.clearance_mm,
+  };
+  const PLAN_W = 760;
+  const scale = PLAN_W / room.width_mm;
+  const planH = Math.max(140, Math.round(room.height_mm * scale));
+  const nogo = (room.shapes || []).filter(function(s){ return s.kind === "nogo"; });
+  const seats = tables.reduce(function(n, t){ return n + (t.one_side ? 3 : 6); }, 0);
+
+  function allowedAt(key, one_side, rotation) {
+    return function(x, y) {
+      const box = tableFootprint({ x_mm:x, y_mm:y, rotation:rotation, one_side:one_side }, size);
+      if (box.x < 0 || box.y < 0 ||
+          box.x + box.w > room.width_mm || box.y + box.h > room.height_mm) return false;
+      if (nogo.some(function(z){ return boxesOverlap(box, { x:z.x, y:z.y, w:z.w, h:z.h }); })) return false;
+      return !tables.some(function(t){
+        return t.key !== key && boxesOverlap(box, tableFootprint(Object.assign({ id:t.key }, t), size));
+      });
+    };
+  }
+
+  function mmPerPx() {
+    const el = planRef.current;
+    if (!el) return 1;
+    return room.width_mm / el.getBoundingClientRect().width;
+  }
+
+  function startDrag(e, i) {
+    e.preventDefault(); e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { i:i, px:e.clientX, py:e.clientY, x:tables[i].x_mm, y:tables[i].y_mm };
+    setSel(i);
+  }
+
+  function onDrag(e) {
+    const d = dragRef.current;
+    if (!d) return;
+    const k = mmPerPx();
+    const me = tables[d.i];
+    const loose = {
+      x: Math.round((d.x + (e.clientX - d.px) * k) / PRESET_SNAP) * PRESET_SNAP,
+      y: Math.round((d.y + (e.clientY - d.py) * k) / PRESET_SNAP) * PRESET_SNAP,
+    };
+    const held = snapToNeighbours(loose, Object.assign({ id: me.key }, me),
+      tables.map(function(t){ return Object.assign({ id:t.key }, t); }), size,
+      { isAllowed: allowedAt(me.key, me.one_side, me.rotation) });
+    setTables(function(list){
+      const n = list.slice();
+      n[d.i] = Object.assign({}, n[d.i], { x_mm: held.x, y_mm: held.y });
+      return n;
+    });
+  }
+
+  function endDrag(e) {
+    if (dragRef.current) {
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (e2) {}
+      dragRef.current = null;
+    }
+  }
+
+  function addTable() {
+    // Somewhere free, rather than always the middle — twenty tables stacked on
+    // one spot is not a starting point anybody wants to untangle.
+    const step = Math.max(size.L, size.D) + size.chair + size.clear;
+    let x = size.L, y = size.D + size.chair + size.clear, guard = 0;
+    const fits = allowedAt("new", false, 0);
+    while (!fits(x, y) && guard++ < 400) {
+      x += step;
+      if (x > room.width_mm - size.L / 2) { x = size.L; y += step / 2; }
+      if (y > room.height_mm) break;
+    }
+    setTables(function(list){
+      return list.concat([{ key:"t" + Date.now() + list.length, x_mm:Math.round(x), y_mm:Math.round(y),
+                            rotation:0, one_side:false }]);
+    });
+    setSel(tables.length);
+  }
+
+  function editSel(patch) {
+    setTables(function(list){
+      const n = list.slice();
+      n[sel] = Object.assign({}, n[sel], patch);
+      return n;
+    });
+  }
+
+  async function save() {
+    if (!name.trim()) { onError("Give the layout a name — a couple chooses by it."); return; }
+    setBusy(true); onError("");
+    try {
+      const r = await sbRpc("wp_admin_save_preset", {
+        p_id: preset.id, p_name: name, p_note: note || "",
+        p_room_id: room.id,
+        p_tables: tables.map(function(t, i){
+          return { x_mm: t.x_mm, y_mm: t.y_mm, rotation: t.rotation,
+                   one_side: t.one_side, label: "Table " + (i + 1) };
+        }),
+      });
+      onSaved(r.id || preset.id, "Saved. Couples will see “" + name.trim() + "” as a suggestion.");
+    } catch (e) {
+      onError(e.code === "needs_name" ? "Give the layout a name."
+        : e.code === "too_many_tables" ? "That is more tables than the room can sensibly hold."
+        : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  const s = sel >= 0 ? tables[sel] : null;
+
+  return (
+    <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:14 }}>
+      <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap", marginBottom:12 }}>
+        <Field label="Called" width={240}>
+          <input value={name} onChange={function(e){ setName(e.target.value); }}
+            placeholder="98 seated, long tables" style={inputCss} />
+        </Field>
+        <Field label="Note to yourself" width={280}>
+          <input value={note} onChange={function(e){ setNote(e.target.value); }}
+            placeholder="optional — couples never see this" style={inputCss} />
+        </Field>
+        <button onClick={addTable} style={btnQuiet}>+ Add a table</button>
+        <div style={{ fontSize:12, color:T.textLight, paddingBottom:9 }}>
+          <b style={{ color:T.text }}>{seats}</b> seated on {tables.length} table{tables.length === 1 ? "" : "s"}
+        </div>
+      </div>
+
+      <div style={{ overflowX:"auto", paddingBottom:6 }}>
+        <div ref={planRef}
+          onPointerMove={onDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
+          onPointerDown={function(){ setSel(-1); }}
+          style={{ position:"relative", width:PLAN_W, height:planH,
+            background:"#fbfaf7", border:`2px solid ${T.text}`, borderRadius:2,
+            backgroundImage:`linear-gradient(${T.border}55 1px, transparent 1px), linear-gradient(90deg, ${T.border}55 1px, transparent 1px)`,
+            backgroundSize:`${1000*scale}px ${1000*scale}px`, touchAction:"none", userSelect:"none" }}>
+
+          {/* the room's own fixtures, so an arrangement is built around them */}
+          {(room.shapes || []).map(function(sh, i){
+            if (sh.kind === "text" || sh.kind === "door") return null;
+            const fixed = sh.kind !== "nogo";
+            return (
+              <div key={i} style={{ position:"absolute", left:sh.x*scale, top:sh.y*scale,
+                width:sh.w*scale, height:sh.h*scale, boxSizing:"border-box",
+                background: fixed ? T.midBlueBg : "#fee2e2aa",
+                border:`1px ${fixed ? "solid" : "dashed"} ${fixed ? T.midBlue : T.red}`,
+                borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:10, color: fixed ? T.midBlue : T.red, pointerEvents:"none", overflow:"hidden" }}>
+                {sh.label}
+              </div>
+            );
+          })}
+
+          {tables.map(function(t, i){
+            const long = t.rotation === 90 || t.rotation === 270;
+            const w = (long ? size.D : size.L) * scale;
+            const h = (long ? size.L : size.D) * scale;
+            const pad = (size.chair + size.clear) * scale;
+            const on = i === sel;
+            return (
+              <div key={t.key} onPointerDown={function(e){ startDrag(e, i); }}
+                style={{ position:"absolute", cursor:"move",
+                  left: t.x_mm*scale - w/2, top: t.y_mm*scale - h/2, width:w, height:h,
+                  background:"#fff", border:`${on?2:1.5}px solid ${on ? T.accent : T.textLight}`,
+                  borderRadius:3, boxSizing:"border-box",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  fontSize:10, color:T.textMid,
+                  boxShadow: `0 0 0 ${pad}px ${on ? T.accent + "18" : "rgba(0,0,0,.035)"}` }}>
+                {i + 1}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ fontSize:11, color:T.textLight, marginTop:6 }}>
+        Grid squares are 1 metre. The faint halo is the room needed to pull the chairs
+        back — tables snap together when their edges get close.
+      </div>
+
+      {s && (
+        <div style={{ marginTop:14, background:T.bg, border:`1px solid ${T.border}`, borderRadius:9, padding:12,
+          display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+          <span style={{ fontSize:12, fontWeight:700, color:T.text }}>Table {sel + 1}</span>
+          <button style={btnQuiet}
+            onClick={function(){ editSel({ rotation: ((s.rotation || 0) + 90) % 360 }); }}>Turn 90°</button>
+          <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, cursor:"pointer" }}>
+            <input type="checkbox" checked={!!s.one_side}
+              onChange={function(e){ editSel({ one_side: e.target.checked }); }} />
+            One side only (top table)
+          </label>
+          <button style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55` })}
+            onClick={function(){ setTables(function(l){ return l.filter(function(_, j){ return j !== sel; }); }); setSel(-1); }}>
+            Remove
+          </button>
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14, flexWrap:"wrap" }}>
+        <button onClick={save} disabled={busy}
+          style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,
+            cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : preset.id ? "Save this layout" : "Save as a new layout"}
+        </button>
+        <button onClick={onCancel} style={btnQuiet}>Cancel</button>
+      </div>
     </div>
   );
 }
