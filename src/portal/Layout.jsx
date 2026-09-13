@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { rpc } from './supabase.js'
+import { snapToNeighbours, boxesOverlap, tableFootprint } from '../shared/tableSnap.js'
 
 // The table plan.
 //
@@ -16,7 +17,11 @@ import { rpc } from './supabase.js'
 // Everything is drawn in millimetres inside an SVG viewBox, so the browser does
 // the scaling and no pixel maths appears anywhere below.
 
-const GRID = 250        // snap
+// Fine enough that the grid is no longer what decides whether two tables meet
+// — that is what snapping to the neighbours is for. 1830 is not a multiple of
+// any round number, so a coarse grid made butting two tables together simply
+// unreachable: see src/shared/tableSnap.js.
+const GRID = 25
 const DEFAULT_SIZE = { length_mm: 1830, depth_mm: 760, chair_depth_mm: 450, clearance_mm: 450 }
 
 function sizeOf(data) {
@@ -39,34 +44,7 @@ function seatOffset(i, z) {
   return { x, y }
 }
 
-function rotatePoint(p, deg) {
-  const r = (deg * Math.PI) / 180
-  return { x: p.x * Math.cos(r) - p.y * Math.sin(r), y: p.x * Math.sin(r) + p.y * Math.cos(r) }
-}
 
-// The floor a table actually needs: the top itself, plus — on whichever sides
-// have chairs — the chair and the room to pull it back and stand up.
-//
-// This is the difference between a plan that works and one that only looks
-// right. Two tables drawn 200mm apart fit on screen and trap everybody sitting
-// between them. A top table ticked "one side only" is padded on ONE side, so it
-// can still go hard against a wall, which is the whole point of that tick.
-function tableFootprint(t, z) {
-  const pad = z.chair + z.clear
-  const front = pad
-  const back = t.one_side ? 0 : pad
-  const w = z.L
-  const h = z.D + front + back
-  const cy = (front - back) / 2      // the top stays put; the pad grows one way
-  const long = t.rotation === 90 || t.rotation === 270
-  const off = rotatePoint({ x: 0, y: -cy }, t.rotation)
-  return {
-    x: t.x_mm + off.x - (long ? h : w) / 2,
-    y: t.y_mm + off.y - (long ? w : h) / 2,
-    w: long ? h : w,
-    h: long ? w : h,
-  }
-}
 
 // A door. Two drawings, and which one depends on the thing that matters to a
 // table plan: whether it eats floor.
@@ -100,9 +78,9 @@ function doorPath(s) {
   }
 }
 
-function overlaps(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
-}
+// Touching is not overlapping — see TOUCH_SLACK_MM in the shared module for
+// why a millimetre of slack matters here.
+const overlaps = boxesOverlap
 
 const snap = (v) => Math.round(v / GRID) * GRID
 
@@ -251,10 +229,30 @@ function RoomCanvas({ room, size, tables, selected, readOnly, onSelect, onMoved,
     setDrag({ id: t.id, dx: p.x - t.x_mm, dy: p.y - t.y_mm, x: t.x_mm, y: t.y_mm })
   }
 
+  // Would this table be allowed here? The same question the drop asks, so a
+  // snap can never offer a position that is then refused.
+  function allowedAt(id, one_side, rotation) {
+    return (x, y) => {
+      const box = tableFootprint({ x_mm: x, y_mm: y, rotation, one_side }, size)
+      if (box.x < 0 || box.y < 0 ||
+          box.x + box.w > room.width_mm || box.y + box.h > room.height_mm) return false
+      if (nogo.some((z) => overlaps(box, { x: z.x, y: z.y, w: z.w, h: z.h }))) return false
+      return !tables.some((t) => t.id !== id && overlaps(box, tableFootprint(t, size)))
+    }
+  }
+
   function onPointerMove(e) {
     if (!drag) return
     const p = toMm(e)
-    setDrag((d) => ({ ...d, x: snap(p.x - d.dx), y: snap(p.y - d.dy) }))
+    const me = tables.find((t) => t.id === drag.id)
+    if (!me) return
+    const loose = { x: snap(p.x - drag.dx), y: snap(p.y - drag.dy) }
+    // Then let it take hold of whatever it is nearly touching, so two tables
+    // can be butted into one long one — which the old 250mm grid made
+    // arithmetically impossible.
+    const held = snapToNeighbours(loose, me, tables, size,
+      { isAllowed: allowedAt(me.id, me.one_side, me.rotation) })
+    setDrag((d) => ({ ...d, x: held.x, y: held.y }))
   }
 
   async function onPointerUp() {
