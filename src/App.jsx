@@ -7309,97 +7309,128 @@ function PresetBuilder({ room, preset, onCancel, onSaved, onError }) {
 
   return (
     <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:14 }}>
-      <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap", marginBottom:12 }}>
-        <Field label="Called" width={240}>
-          <input value={name} onChange={function(e){ setName(e.target.value); }}
-            placeholder="98 seated, long tables" style={inputCss} />
-        </Field>
-        <Field label="Note to yourself" width={280}>
-          <input value={note} onChange={function(e){ setNote(e.target.value); }}
-            placeholder="optional — couples never see this" style={inputCss} />
-        </Field>
-        <button onClick={addTable} style={btnQuiet}>+ Add a table</button>
-        <div style={{ fontSize:12, color:T.textLight, paddingBottom:9 }}>
-          <b style={{ color:T.text }}>{seats}</b> seated on {tables.length} table{tables.length === 1 ? "" : "s"}
+      {/* Plan on the left, everything you press on the right. Underneath, on a
+          room this size, the controls sat below the fold and every change meant
+          scrolling away from the thing being changed. */}
+      <div style={{ display:"flex", gap:16, alignItems:"flex-start", flexWrap:"wrap" }}>
+        <div style={{ overflowX:"auto", paddingBottom:6, flex:"0 1 auto" }}>
+          <div ref={planRef}
+            onPointerMove={onDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
+            onPointerDown={function(){ setSel(-1); }}
+            style={{ position:"relative", width:PLAN_W, height:planH,
+              background:"#fbfaf7", border:`2px solid ${T.text}`, borderRadius:2,
+              backgroundImage:`linear-gradient(${T.border}55 1px, transparent 1px), linear-gradient(90deg, ${T.border}55 1px, transparent 1px)`,
+              backgroundSize:`${1000*scale}px ${1000*scale}px`, touchAction:"none", userSelect:"none" }}>
+
+            {/* the room's own fixtures, so an arrangement is built around them */}
+            {(room.shapes || []).map(function(sh, i){
+              if (sh.kind === "text" || sh.kind === "door") return null;
+              const fixed = sh.kind !== "nogo";
+              return (
+                <div key={i} style={{ position:"absolute", left:sh.x*scale, top:sh.y*scale,
+                  width:sh.w*scale, height:sh.h*scale, boxSizing:"border-box",
+                  background: fixed ? T.midBlueBg : "#fee2e2aa",
+                  border:`1px ${fixed ? "solid" : "dashed"} ${fixed ? T.midBlue : T.red}`,
+                  borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center",
+                  fontSize:10, color: fixed ? T.midBlue : T.red, pointerEvents:"none", overflow:"hidden" }}>
+                  {sh.label}
+                </div>
+              );
+            })}
+
+            {/* The room to pull the chairs back, drawn from the SAME footprint the
+                rules use. It pads only the sides that HAVE chairs — never the
+                ends, where nobody sits, and only one side of a top table. That
+                asymmetry is also how you can see which way a top table faces. */}
+            {tables.map(function(t, i){
+              const fp = tableFootprint(Object.assign({ id:t.key }, t), size);
+              return (
+                <div key={"halo" + t.key} style={{ position:"absolute",
+                  left: fp.x*scale, top: fp.y*scale, width: fp.w*scale, height: fp.h*scale,
+                  background: i === sel ? T.accent + "18" : "rgba(0,0,0,.035)",
+                  borderRadius:3, pointerEvents:"none", boxSizing:"border-box" }} />
+              );
+            })}
+
+            {tables.map(function(t, i){
+              const long = t.rotation === 90 || t.rotation === 270;
+              const w = (long ? size.D : size.L) * scale;
+              const h = (long ? size.L : size.D) * scale;
+              const on = i === sel;
+              return (
+                <div key={t.key} onPointerDown={function(e){ startDrag(e, i); }}
+                  style={{ position:"absolute", cursor:"move",
+                    left: t.x_mm*scale - w/2, top: t.y_mm*scale - h/2, width:w, height:h,
+                    background:"#fff", border:`${on?2:1.5}px solid ${on ? T.accent : T.textLight}`,
+                    borderRadius:3, boxSizing:"border-box",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    fontSize:10, color:T.textMid }}>
+                  {i + 1}{t.one_side ? " ▲" : ""}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:T.textLight, marginTop:6, maxWidth:PLAN_W }}>
+            Grid squares are 1 metre. The shading is the room needed to pull the chairs
+            back — it sits only where people actually sit, so a top table is shaded on one
+            side and the ends are never shaded. Tables snap together when their edges get
+            close.
+          </div>
         </div>
-      </div>
 
-      <div style={{ overflowX:"auto", paddingBottom:6 }}>
-        <div ref={planRef}
-          onPointerMove={onDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
-          onPointerDown={function(){ setSel(-1); }}
-          style={{ position:"relative", width:PLAN_W, height:planH,
-            background:"#fbfaf7", border:`2px solid ${T.text}`, borderRadius:2,
-            backgroundImage:`linear-gradient(${T.border}55 1px, transparent 1px), linear-gradient(90deg, ${T.border}55 1px, transparent 1px)`,
-            backgroundSize:`${1000*scale}px ${1000*scale}px`, touchAction:"none", userSelect:"none" }}>
+        {/* ── the controls, beside the plan ─────────────────────────────── */}
+        <div style={{ flex:"1 1 260px", minWidth:250, maxWidth:360, position:"sticky", top:12,
+          display:"flex", flexDirection:"column", gap:12 }}>
+          <Field label="Called">
+            <input value={name} onChange={function(e){ setName(e.target.value); }}
+              placeholder="98 seated, long tables" style={inputCss} />
+          </Field>
+          <Field label="Note to yourself">
+            <input value={note} onChange={function(e){ setNote(e.target.value); }}
+              placeholder="optional — couples never see this" style={inputCss} />
+          </Field>
 
-          {/* the room's own fixtures, so an arrangement is built around them */}
-          {(room.shapes || []).map(function(sh, i){
-            if (sh.kind === "text" || sh.kind === "door") return null;
-            const fixed = sh.kind !== "nogo";
-            return (
-              <div key={i} style={{ position:"absolute", left:sh.x*scale, top:sh.y*scale,
-                width:sh.w*scale, height:sh.h*scale, boxSizing:"border-box",
-                background: fixed ? T.midBlueBg : "#fee2e2aa",
-                border:`1px ${fixed ? "solid" : "dashed"} ${fixed ? T.midBlue : T.red}`,
-                borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center",
-                fontSize:10, color: fixed ? T.midBlue : T.red, pointerEvents:"none", overflow:"hidden" }}>
-                {sh.label}
-              </div>
-            );
-          })}
+          <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 12px",
+            fontSize:12, color:T.textMid }}>
+            <b style={{ color:T.text, fontSize:16 }}>{seats}</b> seated on {tables.length}{" "}
+            table{tables.length === 1 ? "" : "s"}
+          </div>
 
-          {tables.map(function(t, i){
-            const long = t.rotation === 90 || t.rotation === 270;
-            const w = (long ? size.D : size.L) * scale;
-            const h = (long ? size.L : size.D) * scale;
-            const pad = (size.chair + size.clear) * scale;
-            const on = i === sel;
-            return (
-              <div key={t.key} onPointerDown={function(e){ startDrag(e, i); }}
-                style={{ position:"absolute", cursor:"move",
-                  left: t.x_mm*scale - w/2, top: t.y_mm*scale - h/2, width:w, height:h,
-                  background:"#fff", border:`${on?2:1.5}px solid ${on ? T.accent : T.textLight}`,
-                  borderRadius:3, boxSizing:"border-box",
-                  display:"flex", alignItems:"center", justifyContent:"center",
-                  fontSize:10, color:T.textMid,
-                  boxShadow: `0 0 0 ${pad}px ${on ? T.accent + "18" : "rgba(0,0,0,.035)"}` }}>
-                {i + 1}
-              </div>
-            );
-          })}
+          <button onClick={addTable} style={btnQuiet}>+ Add a table</button>
+
+          {s ? (
+            <div style={{ background:"#fff", border:`1.5px solid ${T.accent}`, borderRadius:9, padding:12,
+              display:"flex", flexDirection:"column", gap:10 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:T.text }}>Table {sel + 1}</div>
+              <button style={btnQuiet}
+                onClick={function(){ editSel({ rotation: ((s.rotation || 0) + 90) % 360 }); }}>
+                Turn 90°
+              </button>
+              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, cursor:"pointer" }}>
+                <input type="checkbox" checked={!!s.one_side}
+                  onChange={function(e){ editSel({ one_side: e.target.checked }); }} />
+                One side only (top table)
+              </label>
+              <button style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55` })}
+                onClick={function(){ setTables(function(l){ return l.filter(function(_, j){ return j !== sel; }); }); setSel(-1); }}>
+                Remove this table
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize:12, color:T.textLight, lineHeight:1.6 }}>
+              Click a table to turn it, make it a top table, or take it out.
+            </div>
+          )}
+
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:2 }}>
+            <button onClick={save} disabled={busy}
+              style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 18px", borderRadius:8,
+                cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+              {busy ? "Saving…" : preset.id ? "Save this layout" : "Save as a new layout"}
+            </button>
+            <button onClick={onCancel} style={btnQuiet}>Cancel</button>
+          </div>
         </div>
-      </div>
-      <div style={{ fontSize:11, color:T.textLight, marginTop:6 }}>
-        Grid squares are 1 metre. The faint halo is the room needed to pull the chairs
-        back — tables snap together when their edges get close.
-      </div>
-
-      {s && (
-        <div style={{ marginTop:14, background:T.bg, border:`1px solid ${T.border}`, borderRadius:9, padding:12,
-          display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
-          <span style={{ fontSize:12, fontWeight:700, color:T.text }}>Table {sel + 1}</span>
-          <button style={btnQuiet}
-            onClick={function(){ editSel({ rotation: ((s.rotation || 0) + 90) % 360 }); }}>Turn 90°</button>
-          <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, cursor:"pointer" }}>
-            <input type="checkbox" checked={!!s.one_side}
-              onChange={function(e){ editSel({ one_side: e.target.checked }); }} />
-            One side only (top table)
-          </label>
-          <button style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55` })}
-            onClick={function(){ setTables(function(l){ return l.filter(function(_, j){ return j !== sel; }); }); setSel(-1); }}>
-            Remove
-          </button>
-        </div>
-      )}
-
-      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14, flexWrap:"wrap" }}>
-        <button onClick={save} disabled={busy}
-          style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,
-            cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
-          {busy ? "Saving…" : preset.id ? "Save this layout" : "Save as a new layout"}
-        </button>
-        <button onClick={onCancel} style={btnQuiet}>Cancel</button>
       </div>
     </div>
   );
