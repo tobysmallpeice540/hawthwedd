@@ -6617,6 +6617,37 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [confirmDlg, setConfirmDlg] = useState(null);
   const askConfirm = (message, subMessage, onConfirm) => setConfirmDlg({ message, subMessage, onConfirm });
 
+  // Live pencils overlapping a date range, read from the server rather than
+  // from this tab's copy — a date pencilled on a phone five minutes ago has to
+  // be able to warn about this save.
+  //
+  // A failed read falls back to what this tab holds and says so in the
+  // console. The pencil check is advisory: refusing to save because we could
+  // not check would be the worse failure, and silently reporting "no pencils"
+  // when we never looked would be worse still.
+  const pencilsForDates = useCallback(async (date, endDate, ignoreEnquiryId) => {
+    if (!isValidEventDate(date)) return [];
+    const today = new Date().toISOString().slice(0, 10);
+    let list = enquiries;
+    try {
+      const fresh = await sbGet(ENQUIRIES_STORAGE);
+      if (Array.isArray(fresh)) { list = fresh; setEnquiries(fresh); }
+    } catch (e) {
+      console.warn("Pencil check fell back to this tab's copy of the enquiries:", e.message || e);
+    }
+    return overlappingPencils(list, date, endDate, ignoreEnquiryId, today);
+  }, [enquiries]);
+
+  // The same sentence wherever a pencilled date is about to be booked over.
+  const pencilConfirmText = (hits) => hits.slice(0, 4).map(function(r) {
+      const end = pencilEndDate(r.pencil);
+      return "“" + (r.enq.name || "(no name)") + "” on " + fmtDate(r.pencil.date)
+        + (end && end > r.pencil.date ? "–" + fmtDate(end) : "")
+        + " (" + pencilAgeLabel(r.days) + ")";
+    }).join(", ")
+    + (hits.length > 4 ? ", and " + (hits.length - 4) + " more" : "")
+    + ". Booking this does not clear the pencil — do that on the enquiry. Carry on?";
+
   // Holds the in-flight "create this brand-new event" promise so two autosaves
   // racing each other can't each mint a record. Cleared whenever we move to a
   // different event, or the next new event would be glued to the last one's id.
@@ -6638,8 +6669,25 @@ export default function App({ role = "admin", onSignOut } = {}) {
   };
   // stayOpen: save and remain on the form, so several tabs can be filled in
   // without bouncing back to the list each time.
-  const handleSubmit = async (stayOpen, force)=>{
+  const handleSubmit = async (stayOpen, force, pencilAcked)=>{
     if(!formData.couple||!formData.date){ alert("Event name and date are required."); return; }
+
+    // Somebody is holding these dates. Not a double booking — nothing else is
+    // in the diary — but a promise made to a couple who have not signed, and
+    // the only reason to write a pencil down is to be told about it here.
+    // Asked before the write rather than inside it, because it is advisory and
+    // because the enquiries live in their own record, not in the events array.
+    if (!pencilAcked) {
+      const pencilHits = await pencilsForDates(formData.date, formData.endDate, formData.fromEnquiryId);
+      if (pencilHits.length) {
+        askConfirm(
+          pencilHits.length === 1 ? "That date is pencilled for somebody else" : "Those dates are pencilled for somebody else",
+          pencilConfirmText(pencilHits),
+          function() { setConfirmDlg(null); handleSubmit(stayOpen, force, true); }
+        );
+        return;
+      }
+    }
 
     // Double-booking the venue is now stopped at the save, not merely noted on
     // screen. EventClashWarning has always drawn an amber banner on the form,
@@ -6679,7 +6727,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
           }).join(", ")
           + (e.clashes.length > 4 ? ", and " + (e.clashes.length - 4) + " more" : "")
           + ". Save anyway?",
-          function() { setConfirmDlg(null); handleSubmit(stayOpen, true); }
+          function() { setConfirmDlg(null); handleSubmit(stayOpen, true, true); }
         );
         return;
       }
@@ -6715,10 +6763,29 @@ export default function App({ role = "admin", onSignOut } = {}) {
     // Pick up an ISO date (YYYY-MM-DD) if the date preference happens to contain one
     const dateMatch = (enq.datePreference||"").match(/\d{4}-\d{2}-\d{2}/);
 
+    // Failing that, the date they are holding. A pencil is a real date picked
+    // from a date field, not prose read for something date-shaped, so it can be
+    // used as a fact — and it is almost always the date being converted.
+    //
+    // isPencilLive is deliberately NOT used here. The enquiry screen sets the
+    // outcome to Booked before it calls this, which is exactly what releases
+    // the pencil — so asking whether it is still live would always say no and
+    // the date would be dropped on the one route that most needs it. Only the
+    // date itself is checked.
+    const today0 = new Date().toISOString().slice(0, 10);
+    const heldPencil = enquiryPencils(enq)
+      .filter(function(p) { return (pencilEndDate(p) || p.date) >= today0; })
+      .sort(function(a, z) { return a.date > z.date ? 1 : -1; })[0] || null;
+    if (heldPencil && !dateMatch) {
+      extraLines.push("Date taken from the pencil held for this enquiry"
+        + (heldPencil.note ? " — " + heldPencil.note : ""));
+    }
+
     const newBooking = {
       ...emptyBooking(),
       couple: enq.name || "",
-      date: dateMatch ? dateMatch[0] : "",
+      date: dateMatch ? dateMatch[0] : (heldPencil ? heldPencil.date : ""),
+      endDate: (!dateMatch && heldPencil && pencilEndDate(heldPencil) !== heldPencil.date) ? pencilEndDate(heldPencil) : "",
       email: enq.email || "",
       phone: enq.phone || "",
       notes: notesParts.join("\n\n"),
@@ -6745,9 +6812,23 @@ export default function App({ role = "admin", onSignOut } = {}) {
     // rather than relying on the banner that appears once the form is open —
     // by then the event has already been saved. Like the manual save, the
     // check runs against the server's array inside the write.
-    const make = async function(force) {
+    const make = async function(force, pencilAcked) {
+      // Somebody else's pencil on the date this enquiry is converting onto.
+      // This enquiry's own pencil is left out — it is the one becoming the
+      // booking, and it releases itself when the outcome goes to Booked.
+      if (!pencilAcked && newBooking.date) {
+        const pencilHits = await pencilsForDates(newBooking.date, newBooking.endDate, enq.id);
+        if (pencilHits.length) {
+          askConfirm(
+            pencilHits.length === 1 ? "That date is pencilled for somebody else" : "Those dates are pencilled for somebody else",
+            pencilConfirmText(pencilHits),
+            function() { setConfirmDlg(null); make(force, true); }
+          );
+          return;
+        }
+      }
       const guard = (force || !newBooking.date) ? null : function(base) {
-        const clashes = overlappingEvents(base, newBooking.date, "", null);
+        const clashes = overlappingEvents(base, newBooking.date, newBooking.endDate, null);
         if (clashes.length) { const err = new Error("CLASH"); err.clashes = clashes; throw err; }
       };
       try {
@@ -6768,7 +6849,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
             }).join("; ")
             + (e.clashes.length > 4 ? "; and " + (e.clashes.length - 4) + " more" : "")
             + ". Convert anyway?",
-            function() { setConfirmDlg(null); make(true); }
+            function() { setConfirmDlg(null); make(true, true); }
           );
           return;
         }
@@ -6776,7 +6857,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
       }
     };
 
-    make(false);
+    make(false, false);
   };
 
   const emptyStaff = ()=>({ id:"", name:"", email:"", phone:"", rate:"", dob:"", role:"Bar Staff", active:true, notes:"" });
@@ -6943,10 +7024,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
       <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
       <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
-        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")}/>}
+        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent}
+        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -6988,7 +7069,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onPurgeOrphan={removeStaffFromRotas} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
         {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)} onOpenEvent={goToEvent}/>}
-        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)}/>}
+        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)} bookings={bookings} onEnquiriesChanged={setEnquiries}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
@@ -9522,6 +9603,117 @@ function eventEndDate(b) {
   return isValidEventDate(b.date) ? b.date : null;
 }
 
+// ── Pencils ──────────────────────────────────────────────────────────────────
+// A date held for an enquiry, without the enquiry becoming a booking.
+//
+// A couple asks us to hold a weekend while they make their minds up. Before
+// this that was either written down nowhere, or entered as a Holding event —
+// which puts a half-real booking in the diary, in the reports, and in the
+// brochure availability. A pencil is neither. It lives on the enquiry, it
+// warns when the same dates are booked to somebody else, and it never turns
+// into a booking on its own.
+//
+// It records the day it was added, because the point of a pencil is being able
+// to see which ones have been sitting there too long and clear them.
+const PENCIL_STALE_DAYS = 28;
+
+// The last day a pencil holds — a single date unless an end date was given.
+function pencilEndDate(p) {
+  if (!p) return null;
+  if (isValidEventDate(p.endDate) && isValidEventDate(p.date) && p.endDate > p.date) return p.endDate;
+  return isValidEventDate(p.date) ? p.date : null;
+}
+
+// Every pencil on an enquiry that has a date worth comparing against.
+// Anything half-typed is dropped here rather than everywhere else.
+function enquiryPencils(e) {
+  return (((e && e.pencils) || [])).filter(function(p) { return p && isValidEventDate(p.date); });
+}
+
+// Is this pencil still holding its date?
+//
+// Two things retire one without anybody deleting it: the enquiry reaching an
+// outcome — converting to a booking sets it to Booked, so a pencil never warns
+// against the very event it turned into — and the date itself going past.
+// Neither erases the record, so a pencil can be seen again by putting the
+// enquiry back to Undecided.
+function isPencilLive(e, p, today) {
+  if (!p || !isValidEventDate(p.date)) return false;
+  const outcome = String((e && e.outcome) || "undecided");
+  if (outcome === "booked" || outcome === "didnotbook") return false;
+  return (pencilEndDate(p) || p.date) >= today;
+}
+
+// Every live pencil across every enquiry, soonest first, each with how many
+// days it has been outstanding. days is null on a pencil written before the
+// stamp existed, which reads as "unknown" rather than as "added today".
+function outstandingPencils(enquiries, today) {
+  const day = today || new Date().toISOString().slice(0, 10);
+  const out = [];
+  (enquiries || []).forEach(function(e) {
+    enquiryPencils(e).forEach(function(p) {
+      if (!isPencilLive(e, p, day)) return;
+      out.push({ enq: e, pencil: p, days: daysSince(p.addedAt, day) });
+    });
+  });
+  return out.sort(function(a, b) { return a.pencil.date > b.pencil.date ? 1 : -1; });
+}
+
+// Live pencils sharing one or more days with the given range.
+//
+// Used to warn — never to block — when a date somebody is holding gets booked
+// to another couple. ignoreEnquiryId leaves out the enquiry being converted,
+// so its own pencil doesn't warn about the booking it is becoming.
+function overlappingPencils(enquiries, date, endDate, ignoreEnquiryId, today) {
+  if (!isValidEventDate(date)) return [];
+  const start = date;
+  const end = (isValidEventDate(endDate) && endDate > date) ? endDate : date;
+  return outstandingPencils(enquiries, today).filter(function(r) {
+    if (ignoreEnquiryId != null && String(r.enq.id) === String(ignoreEnquiryId)) return false;
+    const pStart = r.pencil.date;
+    const pEnd = pencilEndDate(r.pencil) || r.pencil.date;
+    return pStart <= end && pEnd >= start;
+  });
+}
+
+// Graphite while it is fresh, amber once it has been outstanding longer than
+// PENCIL_STALE_DAYS, red at twice that. Deliberately the same three-step
+// scale the contract chaser uses, so "this needs a decision" looks the same
+// wherever it appears.
+function pencilTone(days) {
+  if (days !== null && days >= PENCIL_STALE_DAYS * 2) return { bg:"#fef2f2", text:"#b91c1c", border:"#fecaca" };
+  if (days !== null && days >= PENCIL_STALE_DAYS)     return { bg:"#fffbeb", text:"#92400e", border:"#fde68a" };
+  return { bg:"#f1f5f9", text:"#475569", border:"#cbd5e1" };
+}
+
+function pencilAgeLabel(days) {
+  if (days === null) return "date added not recorded";
+  if (days === 0) return "added today";
+  if (days === 1) return "added yesterday";
+  return "added " + days + " days ago";
+}
+
+// One pencil, as it appears on the enquiries list, the events list and the
+// year calendar.
+function PencilChip({ rec, onClick, showName }) {
+  const c = pencilTone(rec.days);
+  const end = pencilEndDate(rec.pencil);
+  const range = fmtDate(rec.pencil.date) + (end && end > rec.pencil.date ? "–" + fmtDate(end) : "");
+  return (
+    <span onClick={onClick ? function(ev){ ev.stopPropagation(); onClick(rec); } : undefined}
+      title={(rec.enq.name || "an enquiry") + " — " + range + " · " + pencilAgeLabel(rec.days)
+        + (rec.pencil.note ? " · " + rec.pencil.note : "")}
+      style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:10.5, fontWeight:700,
+        whiteSpace:"nowrap", borderRadius:4, padding:"2px 6px", background:c.bg, color:c.text,
+        border:"1px solid " + c.border, cursor: onClick ? "pointer" : "default" }}>
+      <span>✏</span>
+      <span>{range}</span>
+      {showName && <span style={{ fontWeight:600, opacity:.85 }}>{rec.enq.name || "(no name)"}</span>}
+      {rec.days !== null && <span style={{ fontWeight:600, opacity:.75 }}>· {rec.days}d</span>}
+    </span>
+  );
+}
+
 // Buckets are exhaustive: every booking lands in exactly one, so nothing can
 // disappear from the Events tab. Previously an event whose date was missing or
 // null matched neither `date >= today` nor `date < today` (both comparisons are
@@ -10028,7 +10220,7 @@ function findOrphanedEventLinks(bookings, accomBookings) {
   return Object.keys(byEvent).map(function(k) { return byEvent[k]; });
 }
 
-function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom, xeroToken, onOpenInvoices, invoiceDueCount, onOpenPortal }) {
+function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff, accomBookings, onOpenAccom, xeroToken, onOpenInvoices, invoiceDueCount, onOpenPortal, enquiries, onOpenEnquiry }) {
   const today = new Date().toISOString().slice(0,10);
   const upcoming = bookings.filter(b => classifyEventRow(b, today) === "upcoming");
   const past     = bookings.filter(b => classifyEventRow(b, today) === "past");
@@ -10045,6 +10237,11 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
     .filter(function(c){ return (c.stay.checkOut || "") >= today; });
   const eventClashes = findAllEventClashes(bookings)
     .filter(function(c){ return (eventEndDate(c.a) || c.a.date || "") >= today; });
+  // Dates being held for an enquiry. Not a problem to fix — which is why this
+  // is graphite rather than red — but it is the list to run down when somebody
+  // asks whether a weekend is free.
+  const pencils = outstandingPencils(enquiries, today);
+  const stalePencils = pencils.filter(function(r){ return r.days !== null && r.days >= PENCIL_STALE_DAYS; });
 
   return (
     <div>
@@ -10126,6 +10323,48 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
           <div style={{ fontSize:11, color:"#b91c1c", marginTop:6, lineHeight:1.6 }}>
             Often a genuine duplicate — the same event entered twice, or converted from an enquiry more than
             once. If one is a leftover, delete it; if both are real, this can be ignored.
+          </div>
+        </div>
+      )}
+
+      {/* Dates pencilled against an enquiry */}
+      {pencils.length > 0 && !search && (
+        <div style={{ background:"#f8fafc", border:"1px solid #cbd5e1", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#334155", marginBottom:5 }}>
+            ✏ {pencils.length} date{pencils.length!==1?"s":""} pencilled
+            {stalePencils.length > 0 && (
+              <span style={{ color:"#92400e" }}>
+                {" — " + stalePencils.length + " outstanding more than " + PENCIL_STALE_DAYS + " days"}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize:12, color:"#334155", lineHeight:1.9 }}>
+            {pencils.slice(0, 10).map(function(r) {
+              const end = pencilEndDate(r.pencil);
+              const stale = r.days !== null && r.days >= PENCIL_STALE_DAYS;
+              return (
+                <div key={r.pencil.id}>
+                  <strong>{fmtDate(r.pencil.date)}{end && end > r.pencil.date ? "–" + fmtDate(end) : ""}</strong>
+                  {" — " + (r.enq.name || "(no name)")}
+                  <span style={{ color: stale ? "#92400e" : "#64748b", fontWeight: stale ? 700 : 400 }}>
+                    {" · " + pencilAgeLabel(r.days)}
+                  </span>
+                  {r.pencil.note ? <span style={{ color:"#64748b" }}>{" · " + r.pencil.note}</span> : null}
+                  {onOpenEnquiry && (
+                    <button onClick={function(){ onOpenEnquiry(r.enq.id); }}
+                      style={{ marginLeft:8, background:"none", border:"1px solid #cbd5e1", color:"#334155", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                      Open enquiry
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {pencils.length > 10 && <div>…and {pencils.length - 10} more</div>}
+          </div>
+          <div style={{ fontSize:11, color:"#64748b", marginTop:6, lineHeight:1.6 }}>
+            A pencil holds a date for an enquiry without booking it. Booking these dates to somebody else
+            still works — it asks first. Clear a pencil from the enquiry page when it has been outstanding
+            too long, or convert the enquiry and it releases itself.
           </div>
         </div>
       )}
@@ -10264,10 +10503,10 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
         </div>
       )}
 
-      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken}/> : <>
-        {problem.length>0 && <BookingTable rows={problem} onEdit={onEdit} onDelete={onDelete} label="Needs a valid date" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken}/>}
-        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken}/>
-        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken}/>}
+      {search ? <BookingTable rows={bookings} onEdit={onEdit} onDelete={onDelete} label="Results" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken} pencils={pencils} onOpenEnquiry={onOpenEnquiry}/> : <>
+        {problem.length>0 && <BookingTable rows={problem} onEdit={onEdit} onDelete={onDelete} label="Needs a valid date" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken} pencils={pencils} onOpenEnquiry={onOpenEnquiry}/>}
+        <BookingTable rows={upcoming} onEdit={onEdit} onDelete={onDelete} label="Upcoming" staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken} pencils={pencils} onOpenEnquiry={onOpenEnquiry}/>
+        {past.length>0 && <BookingTable rows={past} onEdit={onEdit} onDelete={onDelete} label="Past" dimmed staff={staff} accomBookings={accomBookings} onOpenAccom={onOpenAccom} xeroToken={xeroToken} pencils={pencils} onOpenEnquiry={onOpenEnquiry}/>}
       </>}
 
       {/* Safety net: if the buckets ever fail to account for every record, say so
@@ -10341,7 +10580,7 @@ function BookingViewingsList({ b }) {
       </div>;
 }
 
-function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings, onOpenAccom, xeroToken }) {
+function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBookings, onOpenAccom, xeroToken, pencils, onOpenEnquiry }) {
   if(rows.length===0) return null;
 
   // Bulk-fetch Xero invoices (one request covering every contact ID on this
@@ -10402,7 +10641,18 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
       }).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
       return { id: ab.id, labels: labels };
     });
-    return { b: b, total: total, payment: payment, accomBadges: accomBadges };
+    // Any date held for an enquiry that overlaps this event. Its own enquiry
+    // is left out — a converted enquiry releases its pencil anyway, but an
+    // event created from one before that would otherwise flag against itself.
+    const rowPencils = (pencils || []).filter(function(r) {
+      if (b.fromEnquiryId != null && String(r.enq.id) === String(b.fromEnquiryId)) return false;
+      if (!isValidEventDate(b.date)) return false;
+      const bEnd = eventEndDate(b) || b.date;
+      const pStart = r.pencil.date;
+      const pEnd = pencilEndDate(r.pencil) || r.pencil.date;
+      return pStart <= bEnd && pEnd >= b.date;
+    });
+    return { b: b, total: total, payment: payment, accomBadges: accomBadges, rowPencils: rowPencils };
   });
 
   if (isMobile) {
@@ -10410,7 +10660,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
       <div style={{ marginBottom:28 }}>
         <h3 style={{ color:T.midBlue, fontSize:11, letterSpacing:2, textTransform:"uppercase", marginBottom:10, fontWeight:700 }}>{label} ({rows.length})</h3>
         <div style={{ display:"flex", flexDirection:"column", gap:10, opacity:dimmed?.65:1 }}>
-          {rowsData.map(function({ b, total, payment, accomBadges }) {
+          {rowsData.map(function({ b, total, payment, accomBadges, rowPencils }) {
             return (
               <div key={b.id} onClick={()=>onEdit(b.id)}
                 style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:"0 2px 8px rgba(37,99,235,.06)", padding:"12px 14px", cursor:"pointer" }}>
@@ -10434,6 +10684,11 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                   <div onClick={e=>e.stopPropagation()}><AccomBadgeList accomBadges={accomBadges} onOpenAccom={onOpenAccom}/></div>
                   <BookingPaymentBadge payment={payment}/>
                 </div>
+                {rowPencils.length>0 && (
+                  <div style={{ marginTop:8, display:"flex", flexWrap:"wrap", gap:5 }} onClick={e=>e.stopPropagation()}>
+                    {rowPencils.map(function(r){ return <PencilChip key={r.pencil.id} rec={r} showName onClick={onOpenEnquiry ? function(){ onOpenEnquiry(r.enq.id); } : null}/>; })}
+                  </div>
+                )}
                 {(b.viewings||[]).length>0 && <div style={{ marginTop:8 }}><BookingViewingsList b={b}/></div>}
                 <div style={{ marginTop:8 }}><BookingFileTicks b={b}/></div>
               </div>
@@ -10451,13 +10706,13 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
             <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
-              {["Date","Day","Couple / Event","Event Type","Day Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Viewings","Files"].map(h=>(
+              {["Date","Day","Couple / Event","Event Type","Day Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Pencil","Viewings","Files"].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rowsData.map(function({ b, total, payment, accomBadges }, i) {
+            {rowsData.map(function({ b, total, payment, accomBadges, rowPencils }, i) {
               return (
                 <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s", cursor:"pointer" }}
                   onClick={()=>onEdit(b.id)}
@@ -10492,6 +10747,18 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                   </td>
                   <td style={{ padding:"10px 12px" }}>
                     <BookingPaymentBadge payment={payment}/>
+                  </td>
+                  <td style={{ padding:"10px 12px" }} onClick={e=>e.stopPropagation()}>
+                    {rowPencils.length === 0
+                      ? <span style={{ color:T.textLight, fontSize:11 }}>—</span>
+                      : (
+                        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                          {rowPencils.map(function(r){
+                            return <PencilChip key={r.pencil.id} rec={r} showName
+                              onClick={onOpenEnquiry ? function(){ onOpenEnquiry(r.enq.id); } : null}/>;
+                          })}
+                        </div>
+                      )}
                   </td>
                   <td style={{ padding:"10px 12px", minWidth:120 }}>
                     <BookingViewingsList b={b}/>
@@ -11390,6 +11657,43 @@ function XeroContactField({ formData, update }) {
   );
 }
 
+// Dates somebody is holding that this event would sit on top of.
+//
+// Graphite rather than amber: a pencil is not a double booking, it is a
+// promise to a couple who have not signed. Saving over one is allowed and is
+// sometimes right — the point is that it stops being a surprise.
+function PencilClashWarning({ enquiries, formData, onOpenEnquiry }) {
+  if (!formData || !isValidEventDate(formData.date)) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const hits = overlappingPencils(enquiries, formData.date, formData.endDate, formData.fromEnquiryId, today);
+  if (!hits.length) return null;
+  return (
+    <div style={{ background:"#f8fafc", border:"1px solid #cbd5e1", borderRadius:8, padding:"9px 13px", marginTop:6 }}>
+      <div style={{ fontSize:12, fontWeight:700, color:"#334155", marginBottom:3 }}>
+        ✏ {hits.length === 1 ? "This date is pencilled" : "These dates are pencilled"} for somebody else
+      </div>
+      {hits.slice(0, 5).map(function(r) {
+        const end = pencilEndDate(r.pencil);
+        return (
+          <div key={r.pencil.id} style={{ fontSize:12, color:"#334155", lineHeight:1.55 }}>
+            {(r.enq.name || "(no name)")} — {fmtDate(r.pencil.date)}{end && end > r.pencil.date ? " to " + fmtDate(end) : ""}
+            <span style={{ color:"#64748b" }}>{" · " + pencilAgeLabel(r.days)}</span>
+            {r.pencil.note ? <span style={{ color:"#64748b" }}>{" · " + r.pencil.note}</span> : null}
+            {onOpenEnquiry && (
+              <button type="button" onClick={function(){ onOpenEnquiry(r.enq.id); }}
+                style={{ marginLeft:8, background:"none", border:"1px solid #cbd5e1", color:"#334155", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                Open enquiry
+              </button>
+            )}
+          </div>
+        );
+      })}
+      {hits.length > 5 && <div style={{ fontSize:11, color:"#334155" }}>…and {hits.length-5} more</div>}
+      <div style={{ fontSize:11, color:"#64748b", marginTop:4, fontStyle:"italic" }}>You can still save — it will ask first.</div>
+    </div>
+  );
+}
+
 function EventClashWarning({ bookings, formData }) {
   if (!formData || !isValidEventDate(formData.date)) return null;
   var clashes = overlappingEvents(bookings, formData.date, formData.endDate, formData.id);
@@ -11414,7 +11718,7 @@ function EventClashWarning({ bookings, formData }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onUpdateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom }) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onUpdateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom, enquiries, onOpenEnquiry }) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -11753,6 +12057,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                         )}
                       </div>
                       <EventClashWarning bookings={allBookings} formData={formData}/>
+                      <PencilClashWarning enquiries={enquiries} formData={formData} onOpenEnquiry={onOpenEnquiry}/>
                     </div>
                   ) : field.type==="select" ? (
                     <select value={formData[field.key]||""} onChange={e=>update(field.key,e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
@@ -12264,6 +12569,7 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
   const [showViewings, setShowViewings] = useState(true);
+  const [showPencils, setShowPencils] = useState(true);
   const [tooltip, setTooltip] = useState(null);
   const today = new Date().toISOString().slice(0,10);
 
@@ -12310,6 +12616,27 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
     });
   });
 
+  // Pencilled dates — a date held against an enquiry that is not a booking.
+  // Only live ones appear: a pencil on an enquiry that went on to book, or one
+  // whose date has passed, has stopped holding anything (see isPencilLive), and
+  // drawing it would make the calendar say the date is spoken for when it isn't.
+  // Like a multi-day event, a pencilled range fills every day it covers.
+  const pencilsByDate = {};
+  outstandingPencils(enquiries, today).forEach(function(rec) {
+    var start = rec.pencil.date;
+    var end = pencilEndDate(rec.pencil) || start;
+    var cur = new Date(start + "T00:00:00");
+    var endD = new Date(end + "T00:00:00");
+    while (cur <= endD) {
+      var ds = cur.getFullYear() + "-" + String(cur.getMonth()+1).padStart(2,"0") + "-" + String(cur.getDate()).padStart(2,"0");
+      if (ds.startsWith(year)) {
+        pencilsByDate[ds] = pencilsByDate[ds] || [];
+        pencilsByDate[ds].push(rec);
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+  });
+
   const prevYear = allYears[allYears.indexOf(year)-1];
   const nextYear = allYears[allYears.indexOf(year)+1];
   // Allow scrolling to years not yet in allYears
@@ -12353,6 +12680,10 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
           <div style={{ width:8, height:8, borderRadius:"50%", background:"#7c3aed" }}/>
           <span style={{ fontSize:12, color:T.textMid }}>Viewing</span>
         </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <span style={{ fontSize:12 }}>✏</span>
+          <span style={{ fontSize:12, color:T.textMid }}>Pencilled (held, not booked)</span>
+        </div>
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
           <label style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:13, color:T.textMid, userSelect:"none" }}>
             <input type="checkbox" checked={showViewings} onChange={e=>setShowViewings(e.target.checked)} style={{ accentColor:"#7c3aed", width:15, height:15, cursor:"pointer" }}/>
@@ -12360,6 +12691,10 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
               <span style={{ width:10, height:10, borderRadius:"50%", background:"#7c3aed", display:"inline-block" }}/>
               Show Viewings
             </span>
+          </label>
+          <label style={{ display:"flex", alignItems:"center", gap:7, cursor:"pointer", fontSize:13, color:T.textMid, userSelect:"none" }}>
+            <input type="checkbox" checked={showPencils} onChange={e=>setShowPencils(e.target.checked)} style={{ accentColor:"#475569", width:15, height:15, cursor:"pointer" }}/>
+            <span style={{ display:"flex", alignItems:"center", gap:5 }}>✏ Show Pencils</span>
           </label>
         </div>
       </div>
@@ -12404,20 +12739,26 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
                     const isSat = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 5;
 
                     const hasViewing = showViewings && (viewingsByDate[dateStr]||[]).length > 0;
+                    const dayPencils = showPencils ? (pencilsByDate[dateStr]||[]) : [];
+                    const hasPencil = dayPencils.length > 0;
                     return (
                       <div key={day}
                         onMouseEnter={function(e) {
-                          if (!hasAny && !hasViewing) return;
+                          if (!hasAny && !hasViewing && !hasPencil) return;
                           var rect = e.currentTarget.getBoundingClientRect();
-                          setTooltip({ x: rect.left + rect.width/2, y: rect.bottom + 6, dateStr: dateStr, dayBookings: dayBookings, views: showViewings ? (viewingsByDate[dateStr]||[]) : [] });
+                          setTooltip({ x: rect.left + rect.width/2, y: rect.bottom + 6, dateStr: dateStr, dayBookings: dayBookings, views: showViewings ? (viewingsByDate[dateStr]||[]) : [], pencils: dayPencils });
                         }}
                         onMouseLeave={function() { setTooltip(null); }}
-                        style={{ position:"relative", textAlign:"center", padding:"4px 1px 10px", borderRadius:4, background:cellBg, border:`1px solid ${cellBorder}`, cursor:hasAny||hasViewing?"pointer":"default", outline:isToday?`2px solid ${T.accent}`:"none" }}>
+                        style={{ position:"relative", textAlign:"center", padding:"4px 1px 10px", borderRadius:4, background:cellBg, border:`1px solid ${cellBorder}`, cursor:hasAny||hasViewing||hasPencil?"pointer":"default", outline:isToday?`2px solid ${T.accent}`:"none" }}>
                         <span style={{ fontSize:11, fontWeight:isToday||hasAny?700:400, color:isSat||isSun?T.textLight:cellText }}>
                           {day}
                         </span>
                         {hasViewing && (
                           <div style={{ position:"absolute", top:1, left:2, width:5, height:5, borderRadius:"50%", background:"#7c3aed" }}/>
+                        )}
+                        {hasPencil && (
+                          <div title="Date pencilled" style={{ position:"absolute", top:0, right:1, fontSize:8, lineHeight:1,
+                            color: pencilTone(dayPencils[0].days).text }}>✏</div>
                         )}
                         {hasAny && (
                           <div style={{ position:"absolute", bottom:2, left:"50%", transform:"translateX(-50%)", width:dayBookings.length>1?20:14, height:6, borderRadius:3, background:lozengeBg, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -12437,6 +12778,19 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
                         style={{ marginTop:4, padding:"2px 6px", borderRadius:4, background:s.bg, border:`1px solid ${s.border}`, display:"flex", alignItems:"center", gap:4, cursor:"pointer" }}>
                         <span style={{ fontSize:10, fontWeight:700, color:s.text, flexShrink:0 }}>{new Date(d+"T00:00:00").getDate()}</span>
                         <span style={{ fontSize:10, color:s.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.couple||"(no name)"}</span>
+                      </div>
+                    );
+                  })
+                ))}
+                {showPencils && Object.entries(pencilsByDate).filter(([d])=>d.startsWith(`${year}-${monthNum}`)).sort().map(([d, recs])=>(
+                  recs.filter(function(r){ return r.pencil.date === d; }).map(function(r) {
+                    const c = pencilTone(r.days);
+                    return (
+                      <div key={"pen"+r.pencil.id} onClick={()=>openEnquiry(r.enq.id)} title={`Open ${r.enq.name||"enquiry"} — pencilled, ${pencilAgeLabel(r.days)}`}
+                        style={{ marginTop:3, padding:"2px 6px", borderRadius:4, background:c.bg, border:"1px solid "+c.border, display:"flex", alignItems:"center", gap:4, cursor:"pointer" }}>
+                        <span style={{ fontSize:9, flexShrink:0 }}>✏</span>
+                        <span style={{ fontSize:10, fontWeight:700, color:c.text, flexShrink:0 }}>{new Date(d+"T00:00:00").getDate()}</span>
+                        <span style={{ fontSize:10, color:c.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.enq.name||"(no name)"}</span>
                       </div>
                     );
                   })
@@ -12473,6 +12827,18 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
                   <div style={{ fontSize:11, color:T.accent, marginTop:3 }}>{props.join(" + ")}</div>
                 )}
                 <div style={{ fontSize:11, color: b.status==="Holding" ? "#d97706" : b.date < tooltip.dateStr.slice(0,10) ? T.textLight : T.green, marginTop:2, fontWeight:600 }}>{b.status}</div>
+              </div>
+            );
+          })}
+          {(tooltip.pencils||[]).map(function(r, i) {
+            const c = pencilTone(r.days);
+            return (
+              <div key={"p"+i} style={{ display:"flex", alignItems:"flex-start", gap:6, marginBottom:4 }}>
+                <span style={{ fontSize:11, flexShrink:0 }}>✏</span>
+                <span style={{ fontSize:11, color:c.text }}>
+                  <strong>{r.enq.name || "(no name)"}</strong> <span style={{ opacity:.75 }}>pencilled · {pencilAgeLabel(r.days)}</span>
+                  {r.pencil.note ? <span style={{ display:"block", color:T.textMid }}>{r.pencil.note}</span> : null}
+                </span>
               </div>
             );
           })}
@@ -17339,6 +17705,183 @@ function BookingViewingsSection({ formData, update, onAutoSave }) {
 }
 
 // Viewings section inside EnquiryDetail
+// ── Pencils on one enquiry ───────────────────────────────────────────────────
+// Adding or removing a pencil writes immediately, like a viewing does: a date
+// somebody has been promised should not depend on remembering to press Save
+// Changes afterwards. The day it was added is stamped by the machine, not
+// typed, so "how long has this been outstanding" is always answerable.
+function EnquiryPencilsSection({ form, setForm, onSave, onSavePencils, bookings, enquiries }) {
+  const [adding, setAdding]   = useState(false);
+  const [newP, setNewP]       = useState({ date:"", endDate:"", note:"" });
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [busy, setBusy]       = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const pencils = enquiryPencils(form).slice().sort(function(a, z) { return a.date > z.date ? 1 : -1; });
+
+  // onSavePencils writes this one enquiry's pencils against the server's copy
+  // of the list. onSave — the whole record from this screen's snapshot — is
+  // only the fallback, so the section still works wherever it is dropped in.
+  const persist = async function(updated) {
+    setBusy(true);
+    try {
+      if (onSavePencils) await onSavePencils(updated.id, updated.pencils || []);
+      else await onSave(updated);
+      setSavedFlash(true);
+      setTimeout(function(){ setSavedFlash(false); }, 2000);
+    } catch (e) {
+      alert("The pencil could not be saved: " + (e.message || e));
+    }
+    setBusy(false);
+  };
+
+  const addPencil = async function() {
+    if (!isValidEventDate(newP.date)) { alert("Pick a date to pencil."); return; }
+    const p = {
+      id: "pen_" + Date.now(),
+      date: newP.date,
+      endDate: isValidEventDate(newP.endDate) && newP.endDate > newP.date ? newP.endDate : "",
+      note: (newP.note || "").trim(),
+      addedAt: new Date().toISOString()
+    };
+    const updated = Object.assign({}, form, { pencils: (form.pencils || []).concat([p]) });
+    setForm(updated);
+    setNewP({ date:"", endDate:"", note:"" }); setAdding(false);
+    await persist(updated);
+  };
+
+  const removePencil = async function(id) {
+    const updated = Object.assign({}, form, {
+      pencils: (form.pencils || []).filter(function(p) { return String(p.id) !== String(id); })
+    });
+    setForm(updated);
+    await persist(updated);
+  };
+
+  // What the date being typed would sit on top of. Advisory only — pencilling
+  // a date that is already booked is sometimes exactly what is meant (a second
+  // marquee, an enquiry for a date we expect to fall through), so this reports
+  // and the decision stays here.
+  const clashEvents = isValidEventDate(newP.date)
+    ? overlappingEvents(bookings, newP.date, newP.endDate, null) : [];
+  const clashPencils = isValidEventDate(newP.date)
+    ? overlappingPencils(enquiries, newP.date, newP.endDate, form.id, today) : [];
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.border}`, paddingBottom:10, marginBottom:14 }}>
+        <h3 style={{ margin:0, color:"#475569", fontWeight:700, fontSize:15 }}>
+          Pencilled dates <span style={{ fontSize:12, color:T.textLight, fontWeight:400 }}>({pencils.length})</span>
+        </h3>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          {savedFlash && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ Saved to cloud</span>}
+          {!adding && (
+            <button onClick={function(){ setAdding(true); }}
+              style={{ background:"#f1f5f9", border:"none", color:"#475569", padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
+              + Pencil a date
+            </button>
+          )}
+        </div>
+      </div>
+
+      {adding && (
+        <div style={{ background:"#f8fafc", border:`1.5px solid #cbd5e1`, borderRadius:8, padding:14, marginBottom:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Date</label>
+              <input type="date" value={newP.date} onChange={function(e){ const v=e.target.value; setNewP(function(n){ return Object.assign({}, n, { date:v }); }); }}
+                style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
+            </div>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>End date (optional)</label>
+              <input type="date" value={newP.endDate} onChange={function(e){ const v=e.target.value; setNewP(function(n){ return Object.assign({}, n, { endDate:v }); }); }}
+                style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
+            </div>
+          </div>
+          <input type="text" value={newP.note} onChange={function(e){ const v=e.target.value; setNewP(function(n){ return Object.assign({}, n, { note:v }); }); }}
+            placeholder="Note — what was agreed, and until when…"
+            style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 9px", outline:"none", boxSizing:"border-box", marginBottom:10 }}/>
+
+          {clashEvents.length > 0 && (
+            <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:6, padding:"8px 11px", marginBottom:10 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:"#92400e", marginBottom:2 }}>
+                Already {clashEvents.length === 1 ? "an event" : clashEvents.length + " events"} on these dates
+              </div>
+              {clashEvents.slice(0, 4).map(function(c) {
+                return <div key={c.id} style={{ fontSize:12, color:"#92400e" }}>{(c.couple || "(no name)") + " — " + fmtDate(c.date) + (c.status ? " (" + c.status + ")" : "")}</div>;
+              })}
+              <div style={{ fontSize:11, color:"#b45309", marginTop:3, fontStyle:"italic" }}>You can still pencil it — this is only a warning.</div>
+            </div>
+          )}
+          {clashPencils.length > 0 && (
+            <div style={{ background:"#f1f5f9", border:"1px solid #cbd5e1", borderRadius:6, padding:"8px 11px", marginBottom:10 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:"#475569", marginBottom:3 }}>
+                Somebody else is already holding {clashPencils.length === 1 ? "this date" : "these dates"}
+              </div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                {clashPencils.slice(0, 5).map(function(r) { return <PencilChip key={r.pencil.id} rec={r} showName/>; })}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={addPencil} disabled={busy}
+              style={{ background:"#475569", color:"#fff", border:"none", padding:"7px 18px", borderRadius:5, cursor: busy ? "default" : "pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, opacity: busy ? .6 : 1 }}>
+              {busy ? "Saving…" : "Pencil it"}
+            </button>
+            <button onClick={function(){ setAdding(false); }}
+              style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"7px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {pencils.length === 0 && !adding && (
+        <p style={{ color:T.textLight, fontSize:13, padding:"10px 0", margin:0 }}>
+          No dates pencilled. A pencil holds a date against this enquiry and warns if the same dates are
+          booked to somebody else — it never becomes a booking on its own.
+        </p>
+      )}
+
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {pencils.map(function(p) {
+          const live = isPencilLive(form, p, today);
+          const days = daysSince(p.addedAt, today);
+          const c = live ? pencilTone(days) : { bg:"#f8fafc", text:T.textLight, border:"#e2e8f0" };
+          const end = pencilEndDate(p);
+          const outcome = String(form.outcome || "undecided");
+          const why = live ? "" :
+            (outcome === "booked" ? "Released — this enquiry is marked Booked"
+             : outcome === "didnotbook" ? "Released — this enquiry is marked Did Not Book"
+             : "Released — the date has passed");
+          return (
+            <div key={p.id} style={{ display:"flex", alignItems:"flex-start", gap:10, background:c.bg, border:"1px solid " + c.border, borderRadius:8, padding:"9px 12px" }}>
+              <span style={{ fontSize:15, lineHeight:1.2 }}>✏</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13.5, fontWeight:700, color:c.text }}>
+                  {fmtDate(p.date)}{end && end > p.date ? " – " + fmtDate(end) : ""}
+                  <span style={{ marginLeft:8, fontWeight:600, fontSize:11.5, opacity:.85 }}>{pencilAgeLabel(days)}</span>
+                </div>
+                {p.note && <div style={{ fontSize:12.5, color:T.textMid, marginTop:3, whiteSpace:"pre-wrap" }}>{p.note}</div>}
+                {!live && <div style={{ fontSize:11.5, color:T.textLight, marginTop:3, fontStyle:"italic" }}>{why}</div>}
+                {live && days !== null && days >= PENCIL_STALE_DAYS && (
+                  <div style={{ fontSize:11.5, color:c.text, marginTop:3, fontWeight:600 }}>
+                    Outstanding more than {PENCIL_STALE_DAYS} days — worth chasing or clearing.
+                  </div>
+                )}
+              </div>
+              <button onClick={function(){ removePencil(p.id); }} disabled={busy}
+                title="Remove this pencil"
+                style={{ background:"none", border:"1px solid " + c.border, color:c.text, padding:"3px 9px", borderRadius:5, cursor: busy ? "default" : "pointer", fontFamily:"inherit", fontSize:12, flexShrink:0 }}>
+                Clear
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function EnquiryViewingsSection({ form, setForm, setDirty, onSave }) {
   const [adding, setAdding] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
@@ -18842,6 +19385,23 @@ function lastContactFrom(e, emailSeen, todayStr) {
 // lists all of them and marks which have already happened. The legacy text is
 // still shown when there is no structured viewing, because on older enquiries
 // it is the only record there is.
+// The dates this enquiry is holding. Released pencils (booked, did not book,
+// or simply gone past) are not shown here — the enquiry page still lists them.
+function EnquiryPencilCell({ enq }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const live = enquiryPencils(enq)
+    .filter(function(p) { return isPencilLive(enq, p, today); })
+    .sort(function(a, z) { return a.date > z.date ? 1 : -1; });
+  if (!live.length) return <span style={{ color:T.textLight, fontSize:12 }}>—</span>;
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+      {live.map(function(p) {
+        return <PencilChip key={p.id} rec={{ enq: enq, pencil: p, days: daysSince(p.addedAt, today) }}/>;
+      })}
+    </div>
+  );
+}
+
 function EnquiryViewingsCell({ enq }) {
   const today = new Date().toISOString().slice(0, 10);
   const vs = (enq.viewings || []).filter(function(v) { return v && v.date; })
@@ -18875,7 +19435,7 @@ function EnquiryViewingsCell({ enq }) {
   );
 }
 
-function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFocus }) {
+function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFocus, bookings, onEnquiriesChanged }) {
   const [enquiries, setEnquiries] = useState([]);
   const [loaded, setLoaded]       = useState(false);
   const [selected, setSelected]   = useState(null); // id of open enquiry
@@ -18993,11 +19553,41 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
 
   const save = async data => {
     setEnquiries(data);
+    // The app holds its own copy of the enquiries, loaded once on startup, and
+    // it is the one the year calendar, the events list and the save-time
+    // pencil check read. Without this a pencil added here would not be seen by
+    // any of them until the page was reloaded.
+    if (onEnquiriesChanged) onEnquiriesChanged(data);
     try { await sbSet(ENQUIRIES_STORAGE, data); } catch(e) { console.error(e); }
   };
 
   const updateEnquiry = async updated => {
     await save(enquiries.map(e => e.id === updated.id ? updated : e));
+  };
+
+  // Pencils are written on their own, against the array the server actually
+  // holds, rather than by saving the whole enquiry from this screen's copy.
+  //
+  // Everything else on this page still writes the snapshot — that is the
+  // existing behaviour and changing it wholesale is a separate job — but a
+  // pencil is a date somebody has been promised, it can be added from a phone
+  // while this tab sits open, and it is the one field the events screen reads
+  // back. So it re-reads first and touches only this enquiry's pencils.
+  const savePencils = async (id, pencils) => {
+    let base = enquiries;
+    try {
+      const fresh = await sbGet(ENQUIRIES_STORAGE);
+      // Only trust the server's copy if it actually contains this enquiry —
+      // a brand-new one may not have landed yet, and mapping over an array
+      // without it would drop the pencil on the floor and report success.
+      if (Array.isArray(fresh) && fresh.some(function(e){ return String(e.id) === String(id); })) base = fresh;
+    } catch (e) {
+      console.warn("Pencil save fell back to this tab's copy of the enquiries:", e.message || e);
+    }
+    const next = base.map(function(e) {
+      return String(e.id) === String(id) ? Object.assign({}, e, { pencils: pencils }) : e;
+    });
+    await save(next);
   };
 
   const deleteEnquiry = id => {
@@ -19011,7 +19601,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
 
   const addNew = () => {
     const id = `enq_${Date.now()}`;
-    const blank = { id, name:"", eventType:"Wedding", numbers:"", datePreference:"", email:"", phone:"", source:"", firstViewing:"", viewingTime:"", viewingForm:"", outcome:"undecided", didNotBookReason:"", temperature:"cold", contacts:[] };
+    const blank = { id, name:"", eventType:"Wedding", numbers:"", datePreference:"", email:"", phone:"", source:"", firstViewing:"", viewingTime:"", viewingForm:"", outcome:"undecided", didNotBookReason:"", temperature:"cold", contacts:[], pencils:[] };
     save([...enquiries, blank]);
     setSelected(id);
     setAdding(true);
@@ -19034,6 +19624,9 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         setConfirmDlg={setConfirmDlg}
         gmailToken={gmailToken}
         onConvertToBooking={onConvertToBooking}
+        bookings={bookings || []}
+        enquiries={enquiries}
+        onSavePencils={savePencils}
       />
     );
   }
@@ -19131,7 +19724,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr style={{ background:"#eef4fd" }}>
-              {["Name","Event","Date Preference","Viewings","Last contact","Temp","Outcome",""].map(h=>{
+              {["Name","Event","Date Preference","Pencil","Viewings","Last contact","Temp","Outcome",""].map(h=>{
                 const sortable = h === "Last contact";
                 const active = sortable && sortBy === "contact";
                 return (
@@ -19153,7 +19746,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
           </thead>
           <tbody>
             {filtered.length===0 && (
-              <tr><td colSpan={8} style={{ padding:40, textAlign:"center", color:T.textLight }}>No enquiries match this filter.</td></tr>
+              <tr><td colSpan={9} style={{ padding:40, textAlign:"center", color:T.textLight }}>No enquiries match this filter.</td></tr>
             )}
             {filtered.map((e,i)=>{
               const lastContact = lastContactOf(e);
@@ -19171,6 +19764,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
                   </td>
                   <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.eventType||"—"}</td>
                   <td style={{ padding:"11px 14px", fontSize:13, color:T.textMid }}>{e.datePreference||"—"}</td>
+                  <td style={{ padding:"11px 14px" }}><EnquiryPencilCell enq={e}/></td>
                   <td style={{ padding:"11px 14px" }}><EnquiryViewingsCell enq={e}/></td>
                   <td style={{ padding:"11px 14px", fontSize:13, whiteSpace:"nowrap" }}>
                     {lastContact ? (
@@ -19216,7 +19810,7 @@ function FRow({ label, children }) {
   );
 }
 
-function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking }) {
+function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking, bookings, enquiries, onSavePencils }) {
   const [form, setForm]         = useState({...enq});
   const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"phone", note:"" });
   const [addingContact, setAddingContact] = useState(false);
@@ -19475,6 +20069,12 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
           </div>
         </div>
 
+        {/* Pencils card */}
+        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Pencil</div>
+          <EnquiryPencilsSection form={form} setForm={setForm} onSave={onUpdate} onSavePencils={onSavePencils}
+            bookings={bookings || []} enquiries={enquiries || []}/>
+        </div>
         {/* Viewings card */}
         <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
           <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Viewings</div>

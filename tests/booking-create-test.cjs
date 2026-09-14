@@ -219,7 +219,9 @@ console.log("\n— the contract writeback wiring (2026-09-08d) —");
 console.log("\n— enquiries and the annual report (2026-09-08e) —");
 {
   ok("the enquiries column is titled Viewings, not First Viewing",
-     /"Date Preference","Viewings","Last contact"/.test(SRC));
+     // Tolerant of columns added between the two since (Pencil, 2026-09-14);
+     // what this pins is the heading, not its neighbours.
+     /"Date Preference",(?:"[^"]*",)*"Viewings","Last contact"/.test(SRC));
   ok("and renders every viewing rather than the legacy text field",
      /<EnquiryViewingsCell enq=\{e\}\/>/.test(SRC) && /^function EnquiryViewingsCell\(/m.test(SRC));
   ok("the legacy free-text field is still shown when there is nothing better",
