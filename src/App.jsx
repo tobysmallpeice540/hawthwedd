@@ -1439,12 +1439,16 @@ function EmailHistoryPanel({ title, emptyLabel, bookingId, emails, typeFilter })
 // What can be logged, in one place, because two screens render this same list
 // and a vocabulary defined twice is a vocabulary that will disagree with itself.
 //
-// Only a call or a meeting can be ADDED. Email is deliberately not offered: it
-// is already tracked from the mailbox, and logging it twice by hand is how two
-// records come to contradict each other. The heading stays "Contact History"
-// because the log still holds 81 emails, and calling it a call log would
-// mislabel almost everything in it.
-const CONTACT_METHODS = [["phone", "Call"], ["other", "Meeting"]];
+// Email was taken off this list once, on the grounds that the mailbox already
+// tracks it and logging it twice by hand is how two records come to contradict
+// each other. It is back by request (14 September): the mailbox only knows what
+// went through this Gmail account, so an email sent from a phone, forwarded on,
+// or written by somebody else has nowhere else to be recorded.
+//
+// The duplicate it was meant to prevent is cosmetic — the Last contact column
+// takes the most recent of the hand-logged entries and the mailbox, so the same
+// email counted twice still reads as one date.
+const CONTACT_METHODS = [["phone", "Call"], ["email", "Email"], ["other", "Meeting"]];
 
 // Stored values are untouched — only what they are called. 'other' and
 // 'inperson' both read as Meeting; 'email' keeps its own label, because the
