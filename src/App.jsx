@@ -10824,7 +10824,7 @@ const TEXT_FIELDS = [
   { key:"eventType",       label:"Event Type",            type:"select",   section:"core",     options:EVENT_TYPES },
   { key:"pets",            label:"Pets",                  type:"text",     section:"core" },
   { key:"notes",           label:"Internal Notes",        type:"textarea", section:"core" },
-  { key:"venueFee",        label:"Venue Fee (£)",         type:"number",   section:"financials" },
+  { key:"venueFee",        label:"Venue Fee (£, inc VAT)", type:"number",   section:"financials" },
   { key:"deposit",         label:"Deposit (£)",           type:"number",   section:"financials" },
   // 2nd and Final payments are no longer entered by hand — they are computed
   // from the invoice stages (50% venue + 50% accom, less deposit on stage 2)
@@ -10855,9 +10855,9 @@ const TEXT_FIELDS = [
   { key:"paSystem",        label:"PA System",             type:"text",     section:"vendors" },
   { key:"hairdresser",     label:"Hairdresser",           type:"text",     section:"vendors" },
   { key:"makeup",          label:"Makeup",                type:"text",     section:"vendors" },
-  { key:"corkage",          label:"Corkage",               type:"text",     section:"financials" },
-  { key:"barTakeGross",     label:"Bar Take Gross (£)",    type:"number",   section:"financials" },
-  { key:"circaCommission",  label:"Circa Commission (£)",  type:"number",   section:"financials" },
+  { key:"corkage",          label:"Corkage (inc VAT)",     type:"text",     section:"financials" },
+  { key:"barTakeGross",     label:"Bar Take Gross (£, inc VAT)", type:"number",   section:"financials" },
+  { key:"circaCommission",  label:"Circa Commission (£, inc VAT)", type:"number",   section:"financials" },
 ];
 
 const FORM_SECTIONS = {
@@ -11968,7 +11968,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
               {/* Core financials */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"14px 22px" }}>
                 <div>
-                  <FLabel>Venue Fee (£)</FLabel>
+                  <FLabel>Venue Fee (£, inc VAT)</FLabel>
                   <FInput type="number" value={formData.venueFee||""} onChange={v=>update("venueFee",v)}/>
                 </div>
                 <div>
@@ -11982,21 +11982,21 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   </div>
                 </div>
                 <div>
-                  <FLabel>Corkage</FLabel>
+                  <FLabel>Corkage (inc VAT)</FLabel>
                   <FInput type="text" value={formData.corkage||""} onChange={v=>update("corkage",v)}/>
                 </div>
                 <div>
-                  <FLabel>Final Total Corkage Amount (£)</FLabel>
+                  <FLabel>Final Total Corkage Amount (£, inc VAT)</FLabel>
                   <FInput type="number" value={formData.corkageTotal||""} onChange={v=>update("corkageTotal",v)}/>
                 </div>
                 <div>
-                  <FLabel>Bar Take Gross (£)</FLabel>
+                  <FLabel>Bar Take Gross (£, inc VAT)</FLabel>
                   <FInput type="number" value={formData.barTakeGross||""} onChange={v=>update("barTakeGross",v)}/>
                   <BarTakeSuggestion eventDate={formData.date} value={formData.barTakeGross}
                     onApply={function(v){ update("barTakeGross", v); }}/>
                 </div>
                 <div>
-                  <FLabel>Circa Commission (£)</FLabel>
+                  <FLabel>Circa Commission (£, inc VAT)</FLabel>
                   <FInput type="number" value={formData.circaCommission||""} onChange={v=>update("circaCommission",v)}/>
                 </div>
               </div>
@@ -23612,10 +23612,39 @@ function CField({ label, k, type, hint, f, up }) {
   );
 }
 
+// Contract fields that ARE the event's own values. Editing one of these on the
+// Contract tab edits the event itself (and so autosaves with it), and the tab
+// always reads them fresh from the event — never from an old snapshot. Before
+// this, the tab kept its edits in local state only, so a changed venue fee or
+// cottage price vanished on leaving the tab, and once a contract had been
+// created its snapshot overrode whatever the event said from then on.
+const CONTRACT_EVENT_KEYS = {
+  venueFee:      "venueFee",
+  amlyFee:       "amlyFee",
+  hamletFee:     "hamletFee",
+  glampingFeePd: "campingFee",
+  glamping2Fee:  "glamping2Fee",
+};
+
+// What the Contract tab shows on opening: prefills from the event, then the
+// values last sent (so customised access times etc. survive), then any unsent
+// edits (`contract.draft`). The event-backed keys skip both overlays.
+function initialContractFields(fd) {
+  const c = (fd && fd.contract) || {};
+  const out = buildContractDefaults(fd);
+  [c.fields || {}, c.draft || {}].forEach(function(layer) {
+    Object.keys(layer).forEach(function(k) {
+      if (CONTRACT_EVENT_KEYS[k]) return;
+      out[k] = layer[k];
+    });
+  });
+  return out;
+}
+
 function ContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings, onUpdateAccomBookings }) {
   const saved = formData.contract || {};
   const [f, setF] = useState(function() {
-    return Object.assign(buildContractDefaults(formData), saved.fields || {});
+    return initialContractFields(formData);
   });
   const [busy, setBusy]   = useState(false);
   const [err, setErr]     = useState("");
@@ -23631,8 +23660,26 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
   // rather than silently double booking.
   const [forceAccom, setForceAccom] = useState(false);
 
-  function up(k, v) { setF(function(p) { return Object.assign({}, p, { [k]: v }); }); }
-  function reset() { setF(buildContractDefaults(formData)); setMsg("Prefills restored."); }
+  // Every edit is written onto the event record, so the form's autosave keeps
+  // it. Event-backed values go to the event field itself; the rest are kept as
+  // an unsent draft on the contract, and a value put back to its prefill is
+  // dropped from the draft so it follows the event again.
+  function up(k, v) {
+    setF(function(p) { return Object.assign({}, p, { [k]: v }); });
+    if (CONTRACT_EVENT_KEYS[k]) { update(CONTRACT_EVENT_KEYS[k], v); return; }
+    const c = formData.contract || {};
+    const draft = Object.assign({}, c.draft || {});
+    const base = initialContractFields(Object.assign({}, formData, { contract: Object.assign({}, c, { draft: {} }) }));
+    if (v === base[k]) delete draft[k]; else draft[k] = v;
+    update("contract", Object.assign({}, c, { draft: draft }));
+  }
+  function reset() {
+    const c = Object.assign({}, formData.contract || {});
+    delete c.draft;
+    setF(initialContractFields(Object.assign({}, formData, { contract: c })));
+    update("contract", c);
+    setMsg("Prefills restored.");
+  }
 
   const sent = saved.documentId;
 
@@ -24196,7 +24243,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         <CField f={f} up={up} label="Event type" k="eventType"/>
         <CField f={f} up={up} label="Event date" k="eventDate" type="date"/>
         <CField f={f} up={up} label="Max guests" k="maxGuests"/>
-        <CField f={f} up={up} label="Venue fee" k="venueFee"/>
+        <CField f={f} up={up} label="Venue fee (inc VAT)" k="venueFee" hint="Saved to the event's Financials."/>
       </div>
 
       {/* Full width — these run to a few lines and are the one place the
@@ -24219,16 +24266,16 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
         <CField f={f} up={up} label="Amly from" k="amlyFrom" type="date"/>
         <CField f={f} up={up} label="Amly to" k="amlyTo" type="date"/>
-        <CField f={f} up={up} label="Amly fee" k="amlyFee"/>
+        <CField f={f} up={up} label="Amly fee" k="amlyFee" hint="Saved to the event."/>
         <CField f={f} up={up} label="Hamlet from" k="hamletFrom" type="date"/>
         <CField f={f} up={up} label="Hamlet to" k="hamletTo" type="date"/>
-        <CField f={f} up={up} label="Hamlet fee" k="hamletFee"/>
+        <CField f={f} up={up} label="Hamlet fee" k="hamletFee" hint="Saved to the event."/>
         <CField f={f} up={up} label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
         <CField f={f} up={up} label="Glamping, 1 night — to" k="glampingTo" type="date"/>
-        <CField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night."/>
+        <CField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night. Saved to the event."/>
         <CField f={f} up={up} label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
         <CField f={f} up={up} label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
-        <CField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights."/>
+        <CField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights. Saved to the event."/>
       </div>
       <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
         All four choices — Amly, Hamlet, and the two glamping options — are the client's to make on the form.
