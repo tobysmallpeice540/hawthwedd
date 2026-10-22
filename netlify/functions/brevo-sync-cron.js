@@ -1,5 +1,5 @@
 // netlify/functions/brevo-sync-cron.js
-// The nightly trigger for brevo-sync.
+// The weekly trigger for brevo-sync (Sundays; the schedule is in netlify.toml).
 //
 // It exists only because Netlify returns 403 to any HTTP request aimed at a
 // function that carries a `schedule` — so a scheduled function can never be

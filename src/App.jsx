@@ -2018,7 +2018,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-09-08f";
+const APP_BUILD = "2026-10-22a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -22734,7 +22734,7 @@ function BoxBrevoPanel() {
       <BoxBtn onClick={run} disabled={busy}>{busy ? "Syncing…" : "Sync now"}</BoxBtn>
     }>
       <p style={{ fontSize:13, color:T.textMid, margin:"0 0 10px", lineHeight:1.65 }}>
-        Ticket buyers, weddings booked, event enquiries and cottage guests are pushed to their Brevo lists overnight.
+        Ticket buyers, weddings booked, event enquiries and cottage guests are pushed to their Brevo lists weekly, early on Sunday morning. Use Sync now to push straight away.
         Each contact carries a <code>RECORD_DATE</code> of when they actually came in — their order, enquiry or booking
         date — not when the sync ran.
       </p>
