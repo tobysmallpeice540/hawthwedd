@@ -83,6 +83,27 @@ own header.
   grid tracks must be `minmax(0, 1fr)`. Any flex row that must not wrap has to
   say `nowrap`, because the stylesheet forces wrap onto every row that does not.
 
+### Layout (sidebar redesign, 22 Oct 2026)
+
+- Two layouts, chosen per browser by `localStorage.hbf_ui_classic`: the
+  sidebar layout (default) and the classic top menu. `T` is `T_NEW` or
+  `T_CLASSIC`. Pre-redesign code is tagged `pre-sidebar-layout`.
+- **Colours go through `T`.** Never hard-code a hex for chrome. But a colour
+  that is **data** — a property's `colour`, an event type's colour, anything
+  saved to the database or used as a key — stays a literal: Hamlet is blue in
+  the stored records, whatever the theme.
+- Every page opens with `<PageHeader title sub actions back onBack/>`; every
+  tab row on a page is `<TabStrip tabs value onChange/>`.
+- Lettings, Box Office, Bar and Viewings keep their sub-page in `useNavTab()`
+  (a small module store), not `useState`, so the sidebar can show and change
+  it. Side effects of a sidebar click go in `useNavTab`'s second argument,
+  which runs **inside the click** — an effect afterwards is one render too
+  late (it let Bar mount a "new stocktake" holding the order being edited).
+- Sections hide their own tab strip when `useContext(SidebarNavContext)` is
+  true (sidebar layout, desktop). Phones and the bar/cleaner logins still show it.
+- Sticky panels inside a page use `top: var(--hb-sticky-top, 0px)` so they sit
+  under the sidebar layout's top bar and at 0 everywhere else.
+
 ### Product
 
 - **Double bookings warn, never block.** Every override takes a second press.

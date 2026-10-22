@@ -1,4 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import "@fontsource/barlow/400.css";
+import "@fontsource/barlow/500.css";
+import "@fontsource/barlow/600.css";
+import "@fontsource/barlow/700.css";
+import "@fontsource/barlow/800.css";
+import "@fontsource/barlow-condensed/500.css";
+import "@fontsource/barlow-condensed/600.css";
+import "@fontsource/barlow-condensed/700.css";
 import { dayOrder } from "./shared/dayOrder.js";
 import { snapToNeighbours, boxesOverlap, tableFootprint } from "./shared/tableSnap.js";
 
@@ -290,7 +298,32 @@ if (typeof document !== "undefined" && !document.getElementById("hbf-print-style
   document.head.appendChild(style);
 }
 
-const T = {
+// ─── THEME ───────────────────────────────────────────────────────────────────
+// Two palettes. The new one is built from the logo: the slate green of the
+// sign (#2e3837) for the sidebar, a field green for anything you press, brass
+// for "you are here", and a pale stone page. The classic one is exactly the
+// blue the app used before October 2026, kept so the layout can be switched
+// back per browser (sidebar footer → "Classic layout") without a deploy.
+//
+// The switch lives in localStorage and is read once, at load. Changing it
+// reloads the page, so nothing has to cope with the palette moving under it.
+// Status colours — red, amber, green — are the same in both: they mean things.
+const UI_CLASSIC_KEY = "hbf_ui_classic";
+const UI_CLASSIC = (function() {
+  try { return typeof window !== "undefined" && window.localStorage.getItem(UI_CLASSIC_KEY) === "1"; }
+  catch (e) { return false; }
+})();
+function setClassicUi(on) {
+  // Switching reloads the page, which drops anything typed and not yet saved.
+  if (!window.confirm("Switch to the " + (on ? "classic" : "new") + " layout? The page will reload, so save anything you are working on first.")) return;
+  try {
+    if (on) window.localStorage.setItem(UI_CLASSIC_KEY, "1");
+    else window.localStorage.removeItem(UI_CLASSIC_KEY);
+  } catch (e) {}
+  window.location.reload();
+}
+
+const T_CLASSIC = {
   bg:          "#f0f6ff",
   bgCard:      "#ffffff",
   bgHeader:    "#ffffff",
@@ -317,7 +350,339 @@ const T = {
   navInactive: "#5a7a9a",
   chipBgs:     ["#dbeafe","#d1fae5","#fce7f3","#e0e7ff","#fef3c7","#f3e8ff","#ffedd5","#e0f2fe"],
   chipTexts:   ["#1e40af","#065f46","#9d174d","#3730a3","#92400e","#6b21a8","#9a3412","#075985"],
+  // Colours that used to be written out by hand across the app, now named.
+  tint:        "#eef4fd",
+  tintSoft:    "#f5f9ff",
+  infoBg:      "#eff6ff",
+  infoBorder:  "#bfdbfe",
+  infoText:    "#1d4ed8",
+  shadowRgb:   "37,99,235",
+  midRgb:      "30,77,140",
+  accentRgb:   "59,130,246",
+  shadowCard:  "0 2px 8px rgba(37,99,235,.06)",
+  // Shell
+  slate:       "#1e4d8c",
+  brass:       "#2563eb",
+  fontUi:      "system-ui,-apple-system,sans-serif",
+  fontDisplay: "system-ui,-apple-system,sans-serif",
 };
+
+const T_NEW = {
+  bg:          "#f1f2ee",
+  bgCard:      "#ffffff",
+  bgHeader:    "#ffffff",
+  bgInput:     "#f8f9f6",
+  border:      "#dcdfd8",
+  borderFocus: "#2f6b52",
+  text:        "#1d2724",
+  textMid:     "#4a5752",
+  textLight:   "#86908b",
+  accent:      "#2f6b52",
+  accentHov:   "#245640",
+  accentLight: "#e1ede6",
+  accentMid:   "#4f8c6d",
+  midBlue:     "#2e3837",
+  midBlueBg:   "#e7ebe8",
+  green:       "#16a34a",
+  greenBg:     "#dcfce7",
+  red:         "#dc2626",
+  redBg:       "#fee2e2",
+  amber:       "#d97706",
+  amberBg:     "#fef3c7",
+  headerText:  "#1d2724",
+  navActive:   "#2f6b52",
+  navInactive: "#6b7772",
+  chipBgs:     T_CLASSIC.chipBgs,
+  chipTexts:   T_CLASSIC.chipTexts,
+  tint:        "#eef0eb",
+  tintSoft:    "#f6f7f4",
+  infoBg:      "#eef3f5",
+  infoBorder:  "#cfdbe1",
+  infoText:    "#2c5363",
+  shadowRgb:   "29,39,36",
+  midRgb:      "46,56,55",
+  accentRgb:   "47,107,82",
+  shadowCard:  "0 1px 2px rgba(29,39,36,.05)",
+  slate:       "#2e3837",
+  brass:       "#c99a3b",
+  fontUi:      "'Barlow', system-ui, -apple-system, sans-serif",
+  fontDisplay: "'Barlow Condensed', 'Barlow', system-ui, sans-serif",
+};
+
+const T = UI_CLASSIC ? T_CLASSIC : T_NEW;
+
+// ─── SECTION NAVIGATION ──────────────────────────────────────────────────────
+// Lettings, Box Office, Bar, Viewings and the client portal admin each have
+// their own sub-pages. They used to draw their own menu strip under the page
+// heading, each in a different style. The sub-pages now live in the sidebar,
+// which means the sidebar and the section have to agree on which one is open.
+//
+// That agreement is this small store rather than state lifted into App, so
+// each section still owns its sub-page exactly as before — it just reads and
+// writes it through useNavTab() instead of useState(). Two rules keep the old
+// behaviour:
+//   · arriving at a section from anywhere except its own sidebar entry lands
+//     on its first sub-page, as remounting used to (App clears the others
+//     whenever the view changes — see navResetExcept)
+//   · a sidebar click also runs whatever the section's own tab button used to
+//     do on click (Bar clears the record being edited, Box Office closes an
+//     open event). It runs inside the same click, before the sub-page changes,
+//     so React applies both in one render — exactly as the old buttons did.
+//     (Doing it afterwards, in an effect, let Bar mount a blank "New
+//     stocktake" form with the order being edited still loaded into it.)
+const NAV_DEFAULTS = { lettings:"calendar", boxoffice:"events", bar:"stock", viewings:"viewings", portal:"logins" };
+const navState = {};
+const navHandlers = {};
+const navSubs = new Set();
+function navNotify() { navSubs.forEach(function(f) { f(); }); }
+function navGet(section) { return navState[section] != null ? navState[section] : NAV_DEFAULTS[section]; }
+function navSet(section, value) {
+  if (navState[section] === value) return;
+  navState[section] = value;
+  navNotify();
+}
+function navClick(section, value) {
+  if (navHandlers[section]) navHandlers[section](value);
+  navState[section] = value;
+  navNotify();
+}
+function navResetExcept(section) {
+  var changed = false;
+  Object.keys(navState).forEach(function(k) { if (k !== section) { delete navState[k]; changed = true; } });
+  if (changed) navNotify();
+}
+function useNavTab(section, onNavClick) {
+  const [, force] = useState(0);
+  const onClickRef = useRef(onNavClick);
+  onClickRef.current = onNavClick;
+  useEffect(function() {
+    function f() { force(function(n) { return n + 1; }); }
+    navSubs.add(f);
+    function h(v) { if (onClickRef.current) onClickRef.current(v); }
+    navHandlers[section] = h;
+    return function() {
+      navSubs.delete(f);
+      if (navHandlers[section] === h) delete navHandlers[section];
+    };
+  }, [section]);
+  const set = useCallback(function(v) {
+    navSet(section, typeof v === "function" ? v(navGet(section)) : v);
+  }, [section]);
+  return [navGet(section), set];
+}
+
+// True inside the sidebar layout, where a section's sub-pages are in the
+// sidebar and the section must not draw its own strip as well. The bar and
+// housekeeping logins have no sidebar, so there the strip still shows.
+const SidebarNavContext = createContext(false);
+
+// ─── ICONS ───────────────────────────────────────────────────────────────────
+// Line icons for the sidebar, drawn on a 24px grid with one stroke weight.
+const NAV_ICON_PATHS = {
+  home:      ["M3.5 10.5 12 3.5l8.5 7", "M5.5 9v11h4.5v-6h4v6h4.5V9"],
+  calendar:  ["M4 6.5h16v13.5H4z", "M4 10.5h16", "M8.5 4v4", "M15.5 4v4"],
+  events:    ["M9.5 19.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11z", "M14.5 19.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11z", "M10.5 5.5 12 3.5l1.5 2"],
+  enquiries: ["M3.5 6h17v12.5h-17z", "m3.5 7 8.5 6 8.5-6"],
+  viewings:  ["M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z", "M12 14.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5z"],
+  lettings:  ["M3.5 19V6", "M3.5 14.5h17V19", "M20.5 14.5v-2a3 3 0 0 0-3-3h-7v5", "M7 12.25a1.75 1.75 0 1 0 0-3.5 1.75 1.75 0 0 0 0 3.5z"],
+  boxoffice: ["M3.5 7h17v3a2 2 0 0 0 0 4v3h-17v-3a2 2 0 0 0 0-4z", "M14 7.5v1.5", "M14 11.25v1.5", "M14 15v1.5"],
+  bar:       ["M7 3.5h10l-1 6.5a4 4 0 0 1-8 0z", "M12 14v6.5", "M8.5 20.5h7"],
+  reports:   ["M4 20h16", "M6.5 20v-8", "M12 20V5", "M17.5 20v-5"],
+  settings:  ["M4 7h9", "M17 7h3", "M4 12h3", "M11 12h9", "M4 17h11", "M19 17h1", "M15 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z", "M9 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z", "M17 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"],
+  menu:      ["M4 7h16", "M4 12h16", "M4 17h16"],
+  close:     ["M6 6l12 12", "M18 6 6 18"],
+  back:      ["M14.5 6 8.5 12l6 6"],
+};
+function NavIcon({ name, size }) {
+  const paths = NAV_ICON_PATHS[name] || [];
+  return (
+    <svg width={size || 18} height={size || 18} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths.map(function(d, i) { return <path key={i} d={d}/>; })}
+    </svg>
+  );
+}
+
+// ─── PAGE FURNITURE ──────────────────────────────────────────────────────────
+// Every page opens the same way: a title, an optional line under it, and the
+// page's own buttons on the right. Before this each page drew its own heading
+// — different sizes, weights and colours, and two pages had none at all.
+function PageHeader({ title, sub, actions, back, onBack }) {
+  return (
+    <div className="hb-page-head">
+      <div className="hb-page-head-text">
+        {onBack && (
+          <button type="button" className="hb-page-back" onClick={onBack}>
+            <NavIcon name="back" size={15}/>{back || "Back"}
+          </button>
+        )}
+        <h1 className="hb-title">{title}</h1>
+        {sub && <div className="hb-sub">{sub}</div>}
+      </div>
+      {actions && <div className="hb-actions">{actions}</div>}
+    </div>
+  );
+}
+
+// One style of tab strip for every tab row that stays on the page — tabs
+// inside a record, the portal admin, and the sections the restricted logins
+// see. `tabs` is [[id, label], ...]; a third element, when present, is a count.
+function TabStrip({ tabs, value, onChange, style }) {
+  return (
+    <div className="hb-tabs" role="tablist" style={style}>
+      {tabs.map(function(t) {
+        const on = value === t[0];
+        return (
+          <button key={t[0]} type="button" role="tab" aria-selected={on ? "true" : "false"}
+            className="hb-tab" onClick={function() { onChange(t[0]); }}>
+            {t[1]}
+            {t[2] ? <span className="hb-tab-count">{t[2]}</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Shared component CSS — page header and tab strip — in both layouts, coloured
+// from whichever palette is live. The sidebar layout adds NewUiStyles on top.
+function AppThemeStyles() {
+  return (
+    <style>{`
+      .hb-page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px 24px; flex-wrap:wrap; margin:0 0 22px; }
+      .hb-page-head-text { min-width:0; }
+      .hb-title { margin:0; font-family:${T.fontDisplay}; font-size:${UI_CLASSIC ? "22px" : "34px"}; font-weight:${UI_CLASSIC ? 700 : 600}; line-height:1.05; color:${T.midBlue}; letter-spacing:${UI_CLASSIC ? "0" : ".003em"}; }
+      .hb-sub { margin-top:6px; font-size:13.5px; color:${T.textMid}; line-height:1.5; }
+      .hb-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .hb-page-back { display:inline-flex; align-items:center; gap:3px; background:none; border:0; padding:0; margin:0 0 8px -3px; font:inherit; font-size:13px; font-weight:500; color:${T.textMid}; cursor:pointer; }
+      .hb-page-back:hover { color:${T.text}; }
+      .hb-tabs { display:flex; flex-wrap:wrap; gap:2px; margin:0 0 20px; border-bottom:1px solid ${T.border}; }
+      .hb-tabs::-webkit-scrollbar { display:none; }
+      .hb-tab { flex:0 0 auto; background:none; border:0; border-bottom:2px solid transparent; margin-bottom:-1px; padding:8px 14px 11px; font:inherit; font-size:14px; font-weight:500; color:${T.navInactive}; cursor:pointer; white-space:nowrap; display:inline-flex; align-items:center; gap:7px; }
+      .hb-tab:hover { color:${T.text}; }
+      .hb-tab[aria-selected="true"] { color:${T.text}; font-weight:600; border-bottom-color:${T.accent}; }
+      .hb-tab-count { font-size:11px; font-weight:700; background:${T.accentLight}; color:${T.accent}; border-radius:999px; padding:1px 7px; }
+      @media (max-width: ${MOBILE_BREAKPOINT}px) {
+        .hb-tabs { flex-wrap:nowrap !important; overflow-x:auto; scrollbar-width:none; }
+        .hb-mini-build { display:none; }
+        .hb-mini-build + button { margin-left:auto; }
+        .hb-title { font-size:${UI_CLASSIC ? "20px" : "28px"}; }
+        .hb-page-head { margin-bottom:16px; }
+      }
+    `}</style>
+  );
+}
+
+// The sidebar layout's own stylesheet. Mounted only when the new layout is on,
+// so the classic layout renders exactly as it did.
+function NewUiStyles() {
+  return (
+    <style>{`
+      html, body { margin:0; background:${T.bg}; }
+      body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+      ::selection { background:${T.accentLight}; color:${T.text}; }
+
+      /* Buttons are inline-styled throughout, so hover and press can only come
+         from here. A slight darkening reads on white and coloured buttons alike. */
+      button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, filter .15s ease, box-shadow .15s ease; }
+      button:not(:disabled):hover { filter: brightness(.95); }
+      button:not(:disabled):active { filter: brightness(.9); }
+      .hb-side button:not(:disabled):hover, .hb-tab:not(:disabled):hover, .hb-page-back:hover { filter:none; }
+      :focus-visible { outline:2px solid ${T.accent}; outline-offset:2px; }
+      input:focus, select:focus, textarea:focus { border-color:${T.accent} !important; box-shadow:0 0 0 3px rgba(${T.accentRgb},.14) !important; }
+      td, th { font-variant-numeric: tabular-nums; }
+      tbody tr { transition: background-color .12s ease; }
+      tbody tr:hover > td { background-image: linear-gradient(rgba(${T.accentRgb},.035), rgba(${T.accentRgb},.035)); }
+
+      /* Sticky panels inside a page sit below the top bar. Only this layout has
+         one, so only this layout sets the offset; elsewhere it falls back to 0. */
+      .hb-app { --hb-sticky-top: 66px; }
+      .hb-app { display:flex; min-height:100vh; background:${T.bg}; color:${T.text}; font-family:${T.fontUi}; font-size:14px; }
+
+      /* ── sidebar ── */
+      .hb-side { position:sticky; top:0; align-self:flex-start; height:100vh; width:236px; flex:0 0 236px; box-sizing:border-box;
+        background:${T.slate}; color:#d9e0dd; display:flex; flex-direction:column; overflow-y:auto; overscroll-behavior:contain;
+        scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.18) transparent; z-index:60; }
+      .hb-side-brand { display:flex; align-items:center; justify-content:space-between; padding:22px 22px 18px; }
+      .hb-side-brand img { display:block; height:74px; width:auto; }
+      .hb-side-close { display:none; }
+      .hb-new { display:flex; align-items:center; justify-content:center; gap:6px; margin:0 16px 10px; padding:10px 14px; border:0; border-radius:8px;
+        background:${T.brass}; color:#221d12; font:inherit; font-size:14px; font-weight:700; cursor:pointer; }
+      .hb-new:hover { background:#d5a948; }
+      .hb-nav { padding:4px 0 16px; }
+      .hb-nav-group { padding:18px 24px 6px; font-size:12px; font-weight:500; color:rgba(255,255,255,.42); letter-spacing:.02em; }
+      .hb-nav-item { display:flex; align-items:center; gap:12px; width:calc(100% - 20px); margin:1px 10px; padding:8px 12px; box-sizing:border-box;
+        border:0; border-radius:8px; background:none; color:#cfd8d4; font:inherit; font-size:15px; font-weight:500; text-align:left; cursor:pointer; }
+      .hb-nav-item svg { flex:0 0 auto; opacity:.75; }
+      .hb-nav-item:hover { background:rgba(255,255,255,.06); color:#fff; }
+      .hb-nav-item[aria-current="page"] { background:rgba(255,255,255,.08); color:#fff; box-shadow:inset 3px 0 0 ${T.brass}; }
+      .hb-nav-item[aria-current="page"] svg { opacity:1; color:${T.brass}; }
+      .hb-nav-sub { margin:2px 0 8px; }
+      .hb-nav-subitem { display:flex; align-items:center; width:calc(100% - 20px); margin:0 10px; padding:6px 12px 6px 42px; box-sizing:border-box;
+        border:0; border-radius:7px; background:none; color:rgba(255,255,255,.6); font:inherit; font-size:14px; text-align:left; cursor:pointer; }
+      .hb-nav-subitem:hover { color:#fff; background:rgba(255,255,255,.05); }
+      .hb-nav-subitem[aria-current="true"] { color:#f1dcab; font-weight:600; }
+      .hb-badge { margin-left:auto; min-width:20px; box-sizing:border-box; text-align:center; background:${T.brass}; color:#221d12; font-size:11px; font-weight:700; border-radius:999px; padding:1px 7px; }
+      .hb-side-foot { margin-top:auto; padding:14px 22px 18px; border-top:1px solid rgba(255,255,255,.08); font-size:12.5px; color:rgba(255,255,255,.5); }
+      .hb-side-foot button { background:none; border:0; padding:4px 0; font:inherit; color:rgba(255,255,255,.72); cursor:pointer; display:block; }
+      .hb-side-foot button:hover { color:#fff; }
+      .hb-side-build { margin-top:8px; font-size:11.5px; color:rgba(255,255,255,.35); }
+
+      /* ── page area ── */
+      .hb-main { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+      .hb-top { position:sticky; top:0; z-index:40; display:flex; flex-wrap:nowrap; align-items:center; gap:12px; min-height:58px; padding:0 32px; box-sizing:border-box;
+        background:rgba(241,242,238,.9); -webkit-backdrop-filter:saturate(1.4) blur(10px); backdrop-filter:saturate(1.4) blur(10px); border-bottom:1px solid ${T.border}; }
+      .hb-top-back { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:8px; border:1px solid ${T.border}; background:#fff; color:${T.textMid}; cursor:pointer; flex:0 0 auto; }
+      .hb-top-menu { display:none; }
+      .hb-top-logo { display:none; }
+      .hb-crumbs { display:flex; align-items:center; gap:8px; min-width:0; font-size:14px; color:${T.textLight}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .hb-crumbs strong { color:${T.text}; font-weight:600; }
+      .hb-crumb-sep { color:${T.border}; }
+      .hb-top-right { margin-left:auto; display:flex; flex-wrap:nowrap; align-items:center; gap:8px; }
+      .hb-conn { display:inline-flex; align-items:center; gap:7px; padding:6px 11px; border-radius:999px; border:1px solid ${T.border}; background:#fff;
+        font:inherit; font-size:12.5px; font-weight:500; color:${T.textMid}; cursor:pointer; white-space:nowrap; }
+      .hb-conn-dot { width:7px; height:7px; border-radius:50%; background:#b9c0bc; }
+      .hb-conn[data-on="true"] .hb-conn-dot { background:${T.green}; box-shadow:0 0 0 3px rgba(22,163,74,.15); }
+      .hb-conn[data-on="false"] { color:${T.text}; border-style:dashed; }
+      .hb-top-new { display:none; }
+      .hb-content { width:100%; max-width:1600px; box-sizing:border-box; padding:30px 32px 72px; }
+      /* The page area is narrower than it was under a top menu, so a wide table
+         in a rounded card would lose its last columns to the card's clipping.
+         Let it scroll sideways instead. */
+      .hb-content div[style*="overflow: hidden"]:has(> table) { overflow-x:auto !important; }
+      /* Pages were written to sit under a top menu and most open with their own
+         28px of space; here the page area provides it. */
+      .hb-content > div[style*="padding-top"], .hb-mini > div[style*="padding-top"] { padding-top:0 !important; }
+      .hb-scrim { display:none; }
+
+      @media (max-width: 1100px) {
+        .hb-side { width:224px; flex-basis:224px; }
+        .hb-top, .hb-content { padding-left:24px; padding-right:24px; }
+      }
+
+      /* ── phones: the sidebar becomes a drawer ── */
+      @media (max-width: ${MOBILE_BREAKPOINT}px) {
+        .hb-side { position:fixed; left:0; top:0; bottom:0; height:100%; width:284px; max-width:86vw; transform:translateX(-100%);
+          visibility:hidden; transition:transform .22s ease, visibility 0s linear .22s; box-shadow:none; }
+        .hb-app[data-nav-open="true"] .hb-side { transform:none; visibility:visible; transition:transform .22s ease; box-shadow:0 0 40px rgba(0,0,0,.35); }
+        .hb-app[data-nav-open="true"] .hb-scrim { display:block; position:fixed; inset:0; background:rgba(20,26,24,.45); z-index:55; }
+        .hb-side-brand img { height:58px; }
+        .hb-side-close { display:inline-flex; background:none; border:0; color:#fff; padding:6px; cursor:pointer; }
+        .hb-app { --hb-sticky-top: 64px; }
+        .hb-top { padding:0 12px; min-height:56px; gap:8px; }
+        .hb-top-menu { display:inline-flex; align-items:center; justify-content:center; width:38px; height:38px; border:0; border-radius:8px; background:none; color:${T.text}; cursor:pointer; }
+        .hb-top-logo { display:block; height:34px; width:auto; border-radius:3px; }
+        .hb-crumbs { display:none; }
+        .hb-conn { display:none; }
+        .hb-top-new { display:inline-flex; align-items:center; padding:8px 13px; border:0; border-radius:8px; background:${T.accent}; color:#fff; font:inherit; font-size:13.5px; font-weight:600; cursor:pointer; }
+        .hb-content { padding:18px 12px 60px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .hb-side, button, tbody tr { transition:none !important; }
+      }
+    `}</style>
+  );
+}
 
 // ─── CONFIRM DIALOG ───────────────────────────────────────────────────────────
 function ConfirmDialog({ message, subMessage, confirmLabel="Delete", cancelLabel="Cancel", onConfirm, onCancel, icon="🗑", iconBg, confirmColor }) {
@@ -965,7 +1330,7 @@ function StaffPicker({ label, value=[], onChange, staff }) {
   return (
     <div style={{ position:"relative" }}>
       <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>{label}</label>
-      <div onClick={()=>setOpen(!open)} style={{ minHeight:36, background:T.bgInput, border:`1.5px solid ${open?T.borderFocus:T.border}`, borderRadius:6, padding:"4px 10px", cursor:"pointer", display:"flex", flexWrap:"wrap", alignItems:"center", gap:2, boxShadow:open?"0 0 0 3px #dbeafe":"none", transition:"all .15s" }}>
+      <div onClick={()=>setOpen(!open)} style={{ minHeight:36, background:T.bgInput, border:`1.5px solid ${open?T.borderFocus:T.border}`, borderRadius:6, padding:"4px 10px", cursor:"pointer", display:"flex", flexWrap:"wrap", alignItems:"center", gap:2, boxShadow:open?`0 0 0 3px ${T.accentLight}`:"none", transition:"all .15s" }}>
         {value.length===0 && <span style={{ color:T.textLight, fontSize:13 }}>Select staff…</span>}
         {value.map(id=><StaffChip key={id} initials={id} staff={staff}/>)}
         <span style={{ marginLeft:"auto", color:T.textLight, fontSize:10 }}>▾</span>
@@ -976,7 +1341,7 @@ function StaffPicker({ label, value=[], onChange, staff }) {
             const sel = value.includes(s.id);
             return (
               <div key={s.id} onClick={()=>toggle(s.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", cursor:"pointer", background:sel?T.accentLight:"none", borderBottom:`1px solid ${T.border}` }}
-                onMouseEnter={e=>e.currentTarget.style.background=sel?T.accentLight:"#f0f6ff"}
+                onMouseEnter={e=>e.currentTarget.style.background=sel?T.accentLight:T.bg}
                 onMouseLeave={e=>e.currentTarget.style.background=sel?T.accentLight:"none"}>
                 <span style={{ width:18, height:18, border:`2px solid ${sel?T.accent:T.border}`, borderRadius:4, background:sel?T.accent:"none", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, color:"#fff", flexShrink:0 }}>{sel?"✓":""}</span>
                 <StaffChip initials={s.id} staff={staff}/>
@@ -992,7 +1357,7 @@ function StaffPicker({ label, value=[], onChange, staff }) {
 }
 
 // ─── INPUT HELPERS ────────────────────────────────────────────────────────────
-const IS = (f) => ({ width:"100%", background:T.bgInput, border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box", boxShadow:f?"0 0 0 3px #dbeafe":"none", transition:"all .15s" });
+const IS = (f) => ({ width:"100%", background:T.bgInput, border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box", boxShadow:f?`0 0 0 3px ${T.accentLight}`:"none", transition:"all .15s" });
 // Static input style used in settings/editor components (no focus state needed)
 const inpStyle = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px", outline:"none", boxSizing:"border-box" };
 function FLabel({ children, required }) {
@@ -1037,7 +1402,7 @@ function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData,
             <span style={{ fontSize:13, color:T.textMid, fontWeight:500 }}>Fee: £</span>
             <input type="number" value={formData[feeKey]||""} onChange={e=>update(feeKey,e.target.value)} placeholder="0"
               onFocus={()=>setF(true)} onBlur={()=>setF(false)}
-              style={{ width:90, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"6px 10px", outline:"none", boxShadow:f?"0 0 0 3px #dbeafe":"none" }} />
+              style={{ width:90, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"6px 10px", outline:"none", boxShadow:f?`0 0 0 3px ${T.accentLight}`:"none" }} />
           </div>
         )}
         {isYes && paid50Key && (
@@ -1998,7 +2363,7 @@ function LInput({ label, value, onChange, type="text", placeholder="", width, mo
         onChange={e=>onChange(e.target.value)} onFocus={()=>setF(true)} onBlur={()=>setF(false)}
         style={{ background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:7, color:T.text,
           fontFamily: mono ? "ui-monospace,monospace" : "inherit", fontSize:14, padding:"9px 11px", outline:"none",
-          boxShadow: f ? "0 0 0 3px #dbeafe" : "none" }} />
+          boxShadow: f ? `0 0 0 3px ${T.accentLight}` : "none" }} />
     </label>
   );
 }
@@ -2023,7 +2388,7 @@ const APP_BUILD = "2026-10-22c";
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
 // diagonals as well just competed with them.
-const CAL_LIGHT = "#bfdbfe";   // arrival / departure
+const CAL_LIGHT = T.infoBorder;   // arrival / departure
 const CAL_DARK  = "#1e40af";   // outgoing half of a changeover
 
 // Grace period before an unpaid invoice is called overdue on the dashboard.
@@ -2264,9 +2629,9 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
             for (let i=0; i<firstDow; i++) allCells.push({ type:"pad", key:"p"+i });
             for (let d=1; d<=nD; d++) allCells.push({ type:"day", day:d });
             return (
-              <div key={mName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div key={mName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
                 <div onClick={()=>{ setCursor(new Date(year,mIdx,1)); setMode("month"); }}
-                  style={{ padding:"8px 12px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  style={{ padding:"8px 12px", background:T.tint, borderBottom:`1px solid ${T.border}`, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                   <span style={{ fontSize:15, fontWeight:700, color:T.midBlue }}>{mName}</span>
                   <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>View &#8594;</span>
                 </div>
@@ -2529,7 +2894,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
               const wknd = d.getDay()===0 || d.getDay()===6;
               return (
                 <div key={i} style={{ width:dayW, flexShrink:0, textAlign:"center", padding:"6px 0", fontSize:11,
-                  color: wknd ? T.accent : T.textLight, fontWeight: wknd?700:500, background: wknd ? "#f0f6ff" : "transparent" }}>
+                  color: wknd ? T.accent : T.textLight, fontWeight: wknd?700:500, background: wknd ? T.bg : "transparent" }}>
                   <div>{"SMTWTFS".charAt(d.getDay())}</div>
                   <div style={{ fontSize:12, color:T.text }}>{i+1}</div>
                 </div>
@@ -2562,7 +2927,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                     const isChgDay = isCI && isCO;
                     return (
                       <div key={i} style={{ position:"absolute", left:i*dayW, top:0, width:dayW, height:"100%",
-                        background: wknd ? "#f6faff" : "transparent", borderRight:`1px solid #eef3fa`, overflow:"hidden" }}>
+                        background: wknd ? T.tintSoft : "transparent", borderRight:`1px solid ${T.tint}`, overflow:"hidden" }}>
                         {isCO && <div style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
                           background: isChgDay ? darkenHex(p.colour, 55) : p.colour,
                           opacity: isChgDay ? 0.75 : 0.28,
@@ -2601,11 +2966,11 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
         <span><span style={{ display:"inline-block", width:20, height:10, background:T.accentLight, border:`1.5px solid ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Direct / manual</span>
         <span><span style={{ display:"inline-block", width:20, height:10, background:"#fff", border:`1.5px dashed ${T.accent}`, borderRadius:3, verticalAlign:"middle", marginRight:5 }}/>Airbnb block</span>
         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
-          <span style={{ display:"inline-block", width:14, height:14, background:"#2563eb", opacity:.3, clipPath:"polygon(0 0, 0% 100%, 100% 100%)", verticalAlign:"middle" }}/>
+          <span style={{ display:"inline-block", width:14, height:14, background:T.accent, opacity:.3, clipPath:"polygon(0 0, 0% 100%, 100% 100%)", verticalAlign:"middle" }}/>
           <span>Checkout day</span>
         </span>
         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
-          <span style={{ display:"inline-block", width:14, height:14, background:"#2563eb", opacity:.3, clipPath:"polygon(100% 0, 0 0, 100% 100%)", verticalAlign:"middle" }}/>
+          <span style={{ display:"inline-block", width:14, height:14, background:T.accent, opacity:.3, clipPath:"polygon(100% 0, 0 0, 100% 100%)", verticalAlign:"middle" }}/>
           <span>Checkin day</span>
         </span>
         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
@@ -2614,7 +2979,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           </span>
           <span>+</span>
           <span style={{ display:"inline-flex", width:14, height:14, verticalAlign:"middle", overflow:"hidden" }}>
-            <span style={{ display:"inline-block", width:"100%", height:"100%", background:"#2563eb", opacity:.35, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
+            <span style={{ display:"inline-block", width:"100%", height:"100%", background:T.accent, opacity:.35, clipPath:"polygon(100% 0, 0 0, 100% 100%)" }}/>
           </span>
           <span>Changeover day</span>
         </span>
@@ -2720,7 +3085,7 @@ function AccomListRow({ b, primary, properties, gridTemplate, onOpen }) {
   const srcLabel = accomSourceLabel(b);
   const srcMeta = ACCOM_SOURCE_META[srcLabel] || ACCOM_SOURCE_META.Manual;
   return (
-    <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:gridTemplate, borderBottom:`1px solid #eef3fa`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
+    <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:gridTemplate, borderBottom:`1px solid ${T.tint}`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
       <div style={{ padding:"11px 12px", fontWeight:600 }}>
         {accomGuestLabel(b)}
         {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
@@ -2762,7 +3127,7 @@ function AccomListCard({ b, primary, properties, onOpen }) {
   const props = properties.filter(function(p){ return bProps.has(p.id); });
   return (
     <div onClick={()=>onOpen(b)}
-      style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:"0 2px 8px rgba(37,99,235,.06)", padding:"12px 14px", cursor:"pointer" }}>
+      style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:T.shadowCard, padding:"12px 14px", cursor:"pointer" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10, marginBottom:6 }}>
         <div style={{ minWidth:0 }}>
           <div style={{ fontWeight:700, color:T.text, fontSize:15, wordBreak:"break-word" }}>{accomGuestLabel(b)}</div>
@@ -3301,13 +3666,13 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           invoices (50% on the 1 Dec invoice, 50% on the final one), so it must
           not also have its own deposit/balance requests or payment links. */}
       {form.linkedEventId ? (
-        <div style={{ border:"1px solid #bfdbfe", background:"#eff6ff", borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
-          <div style={{ fontSize:13, fontWeight:700, color:"#1d4ed8", marginBottom:4 }}>Billed through the linked event</div>
-          <div style={{ fontSize:12, color:"#1d4ed8", lineHeight:1.6 }}>
+        <div style={{ border:`1px solid ${T.infoBorder}`, background:T.infoBg, borderRadius:9, padding:"12px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:T.infoText, marginBottom:4 }}>Billed through the linked event</div>
+          <div style={{ fontSize:12, color:T.infoText, lineHeight:1.6 }}>
             This accommodation is invoiced with{" "}
             {onOpenEvent ? (
               <button type="button" onClick={function(){ onOpenEvent(form.linkedEventId); }}
-                style={{ background:"none", border:"none", padding:0, color:"#1d4ed8", fontFamily:"inherit",
+                style={{ background:"none", border:"none", padding:0, color:T.infoText, fontFamily:"inherit",
                   fontSize:12, fontWeight:700, cursor:"pointer", textDecoration:"underline" }}>
                 event #{form.linkedEventId}
               </button>
@@ -3806,7 +4171,7 @@ function AccomReport({ properties, bookings }) {
               {fmtMoney(val)} <span style={{ fontSize:11, fontWeight:500, color:T.textLight }}>· {count}</span>
             </span>
           </div>
-          <div style={{ background:"#f0f6ff", borderRadius:4, height:10, overflow:"hidden" }}>
+          <div style={{ background:T.bg, borderRadius:4, height:10, overflow:"hidden" }}>
             <div style={{ width:pct, minWidth:val>0?4:0, height:"100%", background:colour, borderRadius:4 }}/>
           </div>
         </div>
@@ -3816,7 +4181,7 @@ function AccomReport({ properties, bookings }) {
     return (
       <div key={label} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
         <span style={{ width:160, color:T.textMid, fontSize:13 }}>{label}</span>
-        <div style={{ flex:1, background:"#f0f6ff", borderRadius:4, height:24, overflow:"hidden" }}>
+        <div style={{ flex:1, background:T.bg, borderRadius:4, height:24, overflow:"hidden" }}>
           <div style={{ width:pct, minWidth:val>0?40:0, height:"100%",
             background:colour, borderRadius:4, display:"flex", alignItems:"center", paddingLeft:8 }}>
             {val>0 && <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{fmtMoney(val)}</span>}
@@ -3850,7 +4215,7 @@ function AccomReport({ properties, bookings }) {
       </div>
 
       {/* Revenue by source bar chart */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", marginBottom:20, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", marginBottom:20, boxShadow:T.shadowCard }}>
         <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15 }}>Revenue by source — {year}</h3>
         {srcRow("Direct lettings", direct, T.accent)}
         {srcRow("Airbnb lettings", airbnbEst, T.amber)}
@@ -3861,7 +4226,7 @@ function AccomReport({ properties, bookings }) {
       </div>
 
       {/* Revenue by property */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:T.shadowCard }}>
         <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15 }}>Revenue by property — {year}</h3>
         <div style={{ overflowX:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
@@ -3997,7 +4362,7 @@ function PropertyEditor({ properties, setProperties, onSave }) {
       {properties.map(p => {
         const open = openId === p.id;
         return (
-          <div key={p.id} style={{ border:`1px solid ${T.border}`, borderRadius:10, marginBottom:12, overflow:"hidden", boxShadow:"0 2px 6px rgba(37,99,235,.05)" }}>
+          <div key={p.id} style={{ border:`1px solid ${T.border}`, borderRadius:10, marginBottom:12, overflow:"hidden", boxShadow:`0 2px 6px rgba(${T.shadowRgb},.05)` }}>
             <div onClick={() => setOpenId(open ? null : p.id)}
               style={{ display:"flex", alignItems:"center", gap:10, padding:"13px 16px", background:T.bgInput, cursor:"pointer", userSelect:"none" }}>
               <span style={{ width:13, height:13, borderRadius:3, background:p.colour, flexShrink:0 }}/>
@@ -4312,7 +4677,7 @@ function DiscountCodesEditor({ codes, setCodes, onSave }) {
             ))}
           </div>
           {codes.map(c => (
-            <div key={c.id} style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr 1.5fr 1fr 0.7fr 0.6fr", borderBottom:`1px solid #eef3fa`, fontSize:13, color:T.text, alignItems:"center", opacity: c.active ? 1 : .55 }}>
+            <div key={c.id} style={{ display:"grid", gridTemplateColumns:"1.2fr 0.8fr 0.8fr 1.5fr 1fr 0.7fr 0.6fr", borderBottom:`1px solid ${T.tint}`, fontSize:13, color:T.text, alignItems:"center", opacity: c.active ? 1 : .55 }}>
               <div style={{ padding:"10px 12px", fontWeight:700, letterSpacing:.5, color:T.midBlue }}>{c.code}</div>
               <div style={{ padding:"10px 12px" }}>{c.type === "pct" ? "% off" : "£ off"}</div>
               <div style={{ padding:"10px 12px" }}>{c.type === "pct" ? c.value + "%" : fmtMoney(c.value)}</div>
@@ -4441,7 +4806,7 @@ function ICalSettings({ properties, setProperties, onSave }) {
         const exportUrl = SITE_URL + "/ical/" + p.id + ".ics";
         const ss = syncState[p.id] || {};
         return (
-          <div key={p.id} style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", marginBottom:14, background:"#fff", boxShadow:"0 2px 6px rgba(37,99,235,.04)" }}>
+          <div key={p.id} style={{ border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", marginBottom:14, background:"#fff", boxShadow:`0 2px 6px rgba(${T.shadowRgb},.04)` }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
               <span style={{ width:13, height:13, borderRadius:3, background:p.colour, flexShrink:0 }}/>
               <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{p.name}</span>
@@ -4779,18 +5144,7 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
   const tabs = [["pricing","Pricing & Rules"],["codes","Discount Codes"],["ical","Airbnb Sync"],["emails","Email Templates"],["terms","Terms & Conditions"]];
   return (
     <div>
-      <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}` }}>
-        {tabs.map(function([id, label]) {
-          return (
-            <button key={id} onClick={function() { setSetupTab(id); }}
-              style={{ background:"none", border:"none", borderBottom: setupTab===id ? `3px solid ${T.midBlue}` : "3px solid transparent",
-                color: setupTab===id ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13, fontWeight: setupTab===id ? 700 : 500,
-                padding:"6px 16px 10px", cursor:"pointer" }}>
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      <TabStrip tabs={tabs} value={setupTab} onChange={setSetupTab}/>
       {setupTab === "pricing" && <PropertyEditor properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
       {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
@@ -4904,7 +5258,7 @@ function TodoBox() {
   }
 
   return (
-    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 }}>
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:T.shadowCard, marginBottom:18 }}>
       <div style={{ display:"flex", alignItems:"center", marginBottom:12, gap:10, flexWrap:"wrap" }}>
         <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>To do</h3>
         {overdue.length > 0 && (
@@ -5189,7 +5543,7 @@ function BackupPanel() {
 
   return (
     <div>
-      <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:9, padding:"12px 16px", marginBottom:18, fontSize:13, color:"#1d4ed8", lineHeight:1.6 }}>
+      <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"12px 16px", marginBottom:18, fontSize:13, color:T.infoText, lineHeight:1.6 }}>
         A snapshot of everything is taken automatically each night and the last 30 are kept.
         Download a copy to keep in Google Drive, and restore from either a file or a snapshot if something goes wrong.
       </div>
@@ -5268,7 +5622,7 @@ function BackupPanel() {
       )}
 
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
-        <div style={{ padding:"11px 16px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        <div style={{ padding:"11px 16px", background:T.tint, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>Snapshots {index ? "(" + index.length + ")" : ""}</span>
           {(function() {
             if (!index || !index.length) return null;
@@ -5534,7 +5888,7 @@ function CleanerHome({ properties, accom, events }) {
     const map = {
       out:   { text: "Check-out",  bg: "#fff7ed", fg: "#9a3412", bd: "#fdba74" },
       in:    { text: "Check-in",   bg: T.greenBg, fg: T.green,   bd: "#bbf7d0" },
-      event: { text: "Farm event", bg: "#eef4fd", fg: T.midBlue, bd: "#bfdbfe" }
+      event: { text: "Farm event", bg: T.tint, fg: T.midBlue, bd: T.infoBorder }
     };
     const c = map[kind];
     return (
@@ -5640,19 +5994,7 @@ function CleanerView() {
 
   return (
     <div>
-      <div style={{ display:"flex", gap:4, marginBottom:20, borderBottom:`1px solid ${T.border}` }}>
-        {tabs.map(function(t) {
-          return (
-            <button key={t[0]} onClick={function(){ setTab(t[0]); }}
-              style={{ background:"none", border:"none",
-                borderBottom: tab===t[0] ? `3px solid ${T.accent}` : "3px solid transparent",
-                color: tab===t[0] ? T.accent : T.navInactive, fontFamily:"inherit", fontSize:14,
-                fontWeight: tab===t[0] ? 700 : 500, padding:"8px 16px 12px", cursor:"pointer" }}>
-              {t[1]}
-            </button>
-          );
-        })}
-      </div>
+      <TabStrip tabs={tabs} value={tab} onChange={setTab}/>
 
       {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events}/>}
       {/* onOpen is deliberately a no-op — clicking a booking must not open an
@@ -5678,9 +6020,21 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   const [discountCodes, setDiscountCodes]   = useState([]);
   const [emailTemplates, setEmailTemplates] = useState(DEFAULT_EMAIL_TEMPLATES);
   const [loaded, setLoaded]                 = useState(false);
-  const [tab, setTab]               = useState("calendar");
-  // Jump to calendar sub-tab when the Calendar nav item is clicked
-  useEffect(function() { if (calendarTrigger > 0) setTab("calendar"); }, [calendarTrigger]);
+  // The sub-page lives in the shared nav store so the sidebar can show and
+  // change it (see useNavTab). "form" is the booking editor, not a sub-page.
+  // A sidebar sub-page chosen while a booking is open leaves the booking, the
+  // same way the booking form's own exit does.
+  const [tab, setTab]               = useNavTab("lettings", function() { setForm(null); setEditId(null); });
+  const inSidebar = useContext(SidebarNavContext);
+  // Jump to calendar sub-tab when the Calendar nav item is clicked. Only on a
+  // click made while this screen is open: arriving here already lands on the
+  // calendar, and reacting on mount would undo a sidebar choice of sub-page.
+  const lastCalTrigger = useRef(calendarTrigger);
+  useEffect(function() {
+    if (calendarTrigger === lastCalTrigger.current) return;
+    lastCalTrigger.current = calendarTrigger;
+    if (calendarTrigger > 0) setTab("calendar");
+  }, [calendarTrigger]);
   const [cursor, setCursor]         = useState(()=> new Date());
   const [form, setForm]             = useState(null);
   const [editId, setEditId]         = useState(null);
@@ -5949,7 +6303,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   const subTabs = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"],["settings","Settings"]];
 
   return (
-    <div className="app-shell" style={{ maxWidth:1200, margin:"0 auto", padding:"24px 28px" }}>
+    <div className={UI_CLASSIC ? "app-shell" : undefined} style={UI_CLASSIC ? { maxWidth:1200, margin:"0 auto", padding:"24px 28px" } : undefined}>
       {askSendConfirm && (
         <ConfirmDialog
           message="Send booking confirmation email?"
@@ -6036,26 +6390,15 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
           onCancel={()=>setAskDeleteBooking(false)}
         />
       )}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
-        <div>
-          <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0 }}>Lettings</h2>
-          <div style={{ fontSize:13, color:T.textMid, marginTop:3 }}>Holiday lets across {properties.map(p=>p.name).join(", ")} · read-only alongside Bookalet</div>
-        </div>
-        <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+      <PageHeader title="Lettings"
+        sub={"Holiday lets across " + properties.map(p=>p.name).join(", ") + " · read-only alongside Bookalet"}
+        actions={<>
           {flash && <span style={{ fontSize:12, fontWeight:600, color:T.green }}>{flash}</span>}
           <button onClick={openNewBlock} style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"10px 16px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>+ Block dates</button>
           <button onClick={openNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>+ New booking</button>
-        </div>
-      </div>
+        </>}/>
 
-      {tab!=="form" && (
-        <div style={{ display:"flex", gap:4, marginBottom:20, borderBottom:`1px solid ${T.border}` }}>
-          {subTabs.map(([id,label])=>(
-            <button key={id} onClick={()=>setTab(id)} style={{ background:"none", border:"none", borderBottom: tab===id?`3px solid ${T.accent}`:"3px solid transparent",
-              color: tab===id?T.accent:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight: tab===id?700:500, padding:"8px 16px 12px", cursor:"pointer" }}>{label}</button>
-          ))}
-        </div>
-      )}
+      {tab!=="form" && !inSidebar && <TabStrip tabs={LETTINGS_TABS} value={tab} onChange={setTab}/>}
 
       {!loaded && <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>}
 
@@ -6093,6 +6436,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [view, setViewRaw]      = useState("home");
   const [viewHistory, setViewHistory] = useState([]);
   const goingBackRef = useRef(false);
+  // A section reached any way other than its own sidebar entry opens on its
+  // first sub-page, as it did when each section kept its own tab state.
+  useEffect(function() { navResetExcept(view); }, [view]);
 
   const setView = useCallback(function(next) {
     setViewRaw(function(current) {
@@ -6944,7 +7290,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
     return n;
   })();
 
-  if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:"system-ui,sans-serif",fontSize:20 }}>Loading…</div>;
+  if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:T.fontUi,fontSize:20 }}>Loading…</div>;
 
   // Restricted logins: their own section, and nothing else reachable.
   if (barOnly || cleanerOnly) {
@@ -6955,8 +7301,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
     // this screen tries to ask for.
     const barTabs = [["bar","Bar Management"],["door","Ticket Check-in"]];
     return (
-      <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
+      <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:T.fontUi }}>
         <MobileGlobalStyles/>
+        <AppThemeStyles/>
+        {!UI_CLASSIC && <NewUiStyles/>}
       <DataFailureBanner/>
         {staleBuild && (
           <div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9999, background:"#dc2626", color:"#fff",
@@ -6968,31 +7316,27 @@ export default function App({ role = "admin", onSignOut } = {}) {
             </button>
           </div>
         )}
-        <header style={{ background:"#fff", borderBottom:`2px solid ${T.border}`, padding:"14px 24px", display:"flex", alignItems:"center", gap:14 }}>
-          <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:40, width:"auto" }} />
-          <span style={{ fontSize:16, fontWeight:700, color:T.midBlue }}>{shellTitle}</span>
-          <span style={{ marginLeft:"auto", fontSize:11, color:T.textLight }}>build {APP_BUILD}</span>
+        {/* The restricted logins have one section each, so no sidebar: the same
+            slate as the main layout's sidebar, as a bar across the top. */}
+        <header style={UI_CLASSIC
+          ? { background:"#fff", borderBottom:`2px solid ${T.border}`, padding:"14px 24px", display:"flex", flexWrap:"nowrap", alignItems:"center", gap:14 }
+          : { background:T.slate, padding:"12px 20px", display:"flex", flexWrap:"nowrap", alignItems:"center", gap:14 }}>
+          <img src={`data:image/jpeg;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:UI_CLASSIC ? 40 : 44, width:"auto", flexShrink:0 }} />
+          <span style={UI_CLASSIC
+            ? { fontSize:16, fontWeight:700, color:T.midBlue }
+            : { fontFamily:T.fontDisplay, fontSize:22, fontWeight:600, color:"#fff", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{shellTitle}</span>
+          <span className="hb-mini-build" style={{ marginLeft:"auto", fontSize:11, color:UI_CLASSIC ? T.textLight : "rgba(255,255,255,.4)", whiteSpace:"nowrap" }}>build {APP_BUILD}</span>
           {onSignOut && (
             <button onClick={onSignOut}
-              style={{ background:"none", border:`1.5px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
+              style={UI_CLASSIC
+                ? { background:"none", border:`1.5px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }
+                : { background:"none", border:"1px solid rgba(255,255,255,.28)", color:"#fff", padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:500, whiteSpace:"nowrap", flexShrink:0 }}>
               Sign out
             </button>
           )}
         </header>
-        <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
-          {barOnly && (
-            <div style={{ display:"flex", gap:2, marginBottom:20, borderBottom:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-              {barTabs.map(function([id, lbl]) {
-                const on = barSection === id;
-                return (
-                  <button key={id} onClick={function() { setBarSection(id); }}
-                    style={{ background:"none", border:"none", borderBottom: on ? `3px solid ${T.midBlue}` : "3px solid transparent",
-                      color: on ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13.5,
-                      fontWeight: on ? 700 : 500, padding:"6px 18px 10px", cursor:"pointer" }}>{lbl}</button>
-                );
-              })}
-            </div>
-          )}
+        <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-mini"} style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
+          {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
           {cleanerOnly && <CleanerView/>}
           {barOnly && barSection === "bar"  && <BarView/>}
           {barOnly && barSection === "door" && <BoxDoorScreen/>}
@@ -7001,9 +7345,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
     );
   }
 
-  return (
-    <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
-      <MobileGlobalStyles/>
+  const shellBanners = (
+    <>
       <DataFailureBanner/>
 
       {/* An out-of-date tab is dangerous, not just inconvenient — saving from
@@ -7025,8 +7368,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
         </div>
       )}
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
-      <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
-      <div className="app-shell" style={{ maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" }}>
+    </>
+  );
+
+  const pageArea = (
+      <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-content"} style={UI_CLASSIC ? { maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" } : undefined}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
@@ -7085,7 +7431,40 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties}/>}
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
       </div>
-    </div>
+  );
+
+  if (UI_CLASSIC) {
+    return (
+      <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
+        <MobileGlobalStyles/>
+        <AppThemeStyles/>
+        {shellBanners}
+        <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
+        {pageArea}
+        {/* The way back to the sidebar layout, at the foot of every page. Not in
+            the old top bar, which is already full at laptop width, and not
+            floating, where it would sit over the bar's sticky Save button. */}
+        <div style={{ textAlign:"center", padding:"0 0 28px" }}>
+          <button onClick={function(){ setClassicUi(false); }} title="Switch this browser to the sidebar layout"
+            style={{ background:"#2e3837", color:"#fff", border:"none", padding:"8px 16px", borderRadius:999, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>
+            Switch to new layout
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <SidebarLayout view={view} setView={setView} reportType={reportType} setReportType={setReportType}
+      onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}
+      invoiceDueCount={invoiceDueCount}
+      pendingViewings={(viewingRequests||[]).filter(function(r){ return r.status==="pending"; }).length}
+      onNew={handleNew} onSignOut={onSignOut} onBack={goBack} canGoBack={viewHistory.length > 0}
+      xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect}
+      gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}>
+      {shellBanners}
+      {pageArea}
+    </SidebarLayout>
   );
 }
 
@@ -7112,25 +7491,10 @@ const PORTAL_TABS = [
 function PortalAdminScreen({ bookings, onBack }) {
   const [tab, setTab] = useState("logins");
   return (
-    <div style={{ padding:"0 4px" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18, flexWrap:"wrap" }}>
-        <button onClick={onBack}
-          style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:7, padding:"7px 14px",
-            cursor:"pointer", fontFamily:"inherit", fontSize:13, color:T.textMid }}>← Events</button>
-        <h2 style={{ margin:0, fontSize:20, color:T.text }}>Client portal</h2>
-      </div>
-
-      <div style={{ display:"flex", gap:4, borderBottom:`2px solid ${T.border}`, marginBottom:18, flexWrap:"wrap" }}>
-        {PORTAL_TABS.map(function(t) {
-          const on = tab === t.id;
-          return (
-            <button key={t.id} onClick={function(){ setTab(t.id); }}
-              style={{ background:"none", border:"none", borderBottom: on?`3px solid ${T.accent}`:"3px solid transparent",
-                color:on?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:on?700:400,
-                padding:"9px 14px", cursor:"pointer" }}>{t.label}</button>
-          );
-        })}
-      </div>
+    <div style={{ padding: UI_CLASSIC ? "28px 4px 0" : 0 }}>
+      <PageHeader title="Client portal" back="Events" onBack={onBack}
+        sub="Wedding couples' logins, access times, the supplier directory, the room and templates"/>
+      <TabStrip tabs={PORTAL_TABS.map(function(t){ return [t.id, t.label]; })} value={tab} onChange={setTab}/>
 
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
       {tab === "times"     && <PortalAccessTimes />}
@@ -7464,7 +7828,7 @@ function PresetBuilder({ room, preset, onCancel, onSaved, onError }) {
         </div>
 
         {/* ── the controls, beside the plan ─────────────────────────────── */}
-        <div style={{ flex:"1 1 260px", minWidth:250, maxWidth:360, position:"sticky", top:12,
+        <div style={{ flex:"1 1 260px", minWidth:250, maxWidth:360, position:"sticky", top:"calc(var(--hb-sticky-top, 0px) + 12px)",
           display:"flex", flexDirection:"column", gap:12 }}>
           <Field label="Called">
             <input value={name} onChange={function(e){ setName(e.target.value); }}
@@ -9370,6 +9734,224 @@ function PortalSupplierForm({ onDone }) {
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
+// ─── SIDEBAR LAYOUT ──────────────────────────────────────────────────────────
+// Sub-page lists, shared by the sidebar and by the sections themselves (which
+// still draw them as a tab strip for the restricted logins and the classic
+// layout). Ids are the sections' own tab ids, unchanged.
+const LETTINGS_TABS = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"],["settings","Settings"]];
+const BOX_TABS      = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
+const VIEWINGS_TABS = [["viewings","Viewings"],["blocks","Blocks"]];
+const BAR_TABS = [
+  ["stock","Current Stock"], ["order","+ New Order"], ["stocktake","+ New Stocktake"], ["history","History"],
+  ["report","Usage Report"], ["reconcile","Till Reconciliation"], ["products","Products"],
+  ["rota","Rota Overview"], ["eventrota","Event Rota"],
+];
+// "accommodation" is not a report of its own — it opens Lettings, as it always has.
+const REPORT_TYPES = [
+  {id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"accommodation",label:"Accommodation"},
+  {id:"staffing",label:"Rota Overview"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Event Rota"},
+];
+
+// The sidebar's contents, worked out from where the app is. Each entry's `go`
+// does exactly what the old top-menu tab or section tab did.
+function buildSidebarNav(o) {
+  const view = o.view, setView = o.setView;
+  function sectionKids(section, tabs, current) {
+    return tabs.map(function(t) {
+      return { label: t[1], on: o.view === section && current === t[0], badge: t[2],
+        go: function() { navClick(section, t[0]); setView(section); } };
+    });
+  }
+  const reportOn = REPORT_TYPES.some(function(r) { return r.id === o.reportType; }) ? o.reportType : "summary";
+  return [
+    { id:"home", icon:"home", label:"Home", on: view === "home", go: function() { setView("home"); } },
+    { id:"calendar", icon:"calendar", label:"Calendar", on: false, go: o.onCalendarTab },
+    { group:"Venue" },
+    { id:"events", icon:"events", label:"Events", on: ["list","form","invoices","portal"].indexOf(view) !== -1,
+      go: function() { setView("list"); },
+      children: [
+        { label:"All events", on: view === "list" || view === "form", go: function() { setView("list"); } },
+        { label:"Invoices", badge: o.invoiceDueCount, on: view === "invoices", go: function() { setView("invoices"); } },
+        { label:"Client portal", on: view === "portal", go: function() { setView("portal"); } },
+      ] },
+    { id:"enquiries", icon:"enquiries", label:"Enquiries", on: view === "enquiries", go: function() { setView("enquiries"); } },
+    { id:"viewings", icon:"viewings", label:"Viewings", badge: o.pendingViewings, on: view === "viewings",
+      go: function() { setView("viewings"); },
+      children: sectionKids("viewings", [["viewings","Viewings",o.pendingViewings],["blocks","Blocks"]], o.tabs.viewings) },
+    { group:"Stays" },
+    { id:"lettings", icon:"lettings", label:"Lettings", on: view === "lettings",
+      go: function() { setView("lettings"); }, children: sectionKids("lettings", LETTINGS_TABS, o.tabs.lettings) },
+    { group:"Grain Store" },
+    { id:"boxoffice", icon:"boxoffice", label:"Box Office", on: view === "boxoffice",
+      go: function() { setView("boxoffice"); }, children: sectionKids("boxoffice", BOX_TABS, o.tabs.boxoffice) },
+    { id:"bar", icon:"bar", label:"Bar", on: view === "bar",
+      go: function() { setView("bar"); }, children: sectionKids("bar", BAR_TABS.map(function(t) { return [t[0], t[1].replace(/^\+ /, "")]; }), o.tabs.bar) },
+    { group:"Admin" },
+    { id:"reports", icon:"reports", label:"Reports", on: view === "reports",
+      go: function() { setView("reports"); },
+      children: REPORT_TYPES.map(function(r) {
+        return { label: r.label, on: view === "reports" && reportOn === r.id,
+          go: function() { if (r.id === "accommodation") { setView("lettings"); } else { o.setReportType(r.id); setView("reports"); } } };
+      }) },
+    { id:"settings", icon:"settings", label:"Settings", on: view === "settings" || view === "staff",
+      go: function() { setView("settings"); },
+      children: [
+        { label:"General", on: view === "settings", go: function() { setView("settings"); } },
+        { label:"Staff", on: view === "staff", go: function() { setView("staff"); } },
+      ] },
+  ];
+}
+
+// Where you are, for the bar along the top: section, then sub-page.
+function sidebarCrumbs(nav, view) {
+  const item = nav.filter(function(n) { return n.id && n.on; })[0];
+  if (!item) return [];
+  const kid = (item.children || []).filter(function(c) { return c.on; })[0];
+  const out = [item.label];
+  if (view === "form") out.push("Event");
+  else if (kid && kid.label !== "All events" && kid.label !== "General") out.push(kid.label);
+  return out;
+}
+
+function AppSidebar({ nav, onNew, onSignOut, onClose }) {
+  return (
+    <aside className="hb-side" aria-label="Main menu">
+      <div className="hb-side-brand">
+        <img src={`data:image/jpeg;base64,${LOGO_B64}`} alt="Hawthbush Farm"/>
+        <button type="button" className="hb-side-close" onClick={onClose} aria-label="Close menu"><NavIcon name="close" size={22}/></button>
+      </div>
+      <button type="button" className="hb-new" onClick={onNew}>+ New booking</button>
+      <nav className="hb-nav">
+        {nav.map(function(n, i) {
+          if (n.group) return <div key={"g" + i} className="hb-nav-group">{n.group}</div>;
+          return (
+            <div key={n.id}>
+              <button type="button" className="hb-nav-item" aria-current={n.on ? "page" : undefined} onClick={n.go}>
+                <NavIcon name={n.icon}/>
+                <span>{n.label}</span>
+                {n.badge > 0 && !n.on && <span className="hb-badge">{n.badge}</span>}
+              </button>
+              {n.on && n.children && (
+                <div className="hb-nav-sub">
+                  {n.children.map(function(c) {
+                    return (
+                      <button key={c.label} type="button" className="hb-nav-subitem" aria-current={c.on ? "true" : undefined} onClick={c.go}>
+                        <span>{c.label}</span>
+                        {c.badge > 0 && <span className="hb-badge">{c.badge}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </nav>
+      <div className="hb-side-foot">
+        {onSignOut && <button type="button" onClick={onSignOut}>Sign out</button>}
+        <button type="button" onClick={function() { setClassicUi(true); }} title="Go back to the old top-menu layout in this browser. You can switch back from there.">
+          Switch to classic layout
+        </button>
+        <div className="hb-side-build">build {APP_BUILD}</div>
+      </div>
+    </aside>
+  );
+}
+
+function AppTopBar({ crumbs, canGoBack, onBack, onOpenMenu, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
+  return (
+    <div className="hb-top">
+      <button type="button" className="hb-top-menu" onClick={onOpenMenu} aria-label="Open menu"><NavIcon name="menu" size={22}/></button>
+      <img className="hb-top-logo" src={`data:image/jpeg;base64,${LOGO_B64}`} alt="Hawthbush Farm"/>
+      {canGoBack && onBack && (
+        <button type="button" className="hb-top-back" onClick={onBack} title="Back to the previous page" aria-label="Back"><NavIcon name="back" size={17}/></button>
+      )}
+      <div className="hb-crumbs">
+        {crumbs.map(function(c, i) {
+          return (
+            <span key={i} style={{ display:"inline-flex", alignItems:"center", gap:8 }}>
+              {i > 0 && <span className="hb-crumb-sep">/</span>}
+              {i === crumbs.length - 1 ? <strong>{c}</strong> : <span>{c}</span>}
+            </span>
+          );
+        })}
+      </div>
+      <div className="hb-top-right">
+        <button type="button" className="hb-conn" data-on={xeroToken ? "true" : "false"}
+          onClick={xeroToken ? onXeroDisconnect : onXeroConnect} title={xeroToken ? "Xero is connected. Click to disconnect." : "Connect Xero"}>
+          <span className="hb-conn-dot"/>{xeroToken ? "Xero" : "Connect Xero"}
+        </button>
+        <button type="button" className="hb-conn" data-on={gmailToken ? "true" : "false"}
+          onClick={gmailToken ? onGmailDisconnect : onGmailConnect} title={gmailToken ? "Gmail is connected. Click to disconnect." : "Connect Gmail"}>
+          <span className="hb-conn-dot"/>{gmailToken ? "Gmail" : "Connect Gmail"}
+        </button>
+        <button type="button" className="hb-top-new" onClick={onNew}>+ New</button>
+      </div>
+    </div>
+  );
+}
+
+// The whole sidebar layout: menu, top bar and page. Holds only the phone
+// drawer's open/closed state; everything else comes from App unchanged.
+function SidebarLayout(props) {
+  const [navOpen, setNavOpen] = useState(false);
+  // On a phone the menu is a drawer that closes on every tap, so reaching a
+  // sub-page through it would mean opening it twice. Sections therefore keep
+  // their own tab strip on phones; the drawer lists the sub-pages as well.
+  const isMobile = useIsMobile();
+  const [lettingsTab] = useNavTab("lettings");
+  const [boxTab]      = useNavTab("boxoffice");
+  const [barTab]      = useNavTab("bar");
+  const [viewingsTab] = useNavTab("viewings");
+
+  // Close the drawer on Escape, and whenever the page changes underneath it.
+  useEffect(function() { setNavOpen(false); }, [props.view]);
+  useEffect(function() {
+    if (!navOpen) return;
+    function onKey(e) { if (e.key === "Escape") setNavOpen(false); }
+    window.addEventListener("keydown", onKey);
+    return function() { window.removeEventListener("keydown", onKey); };
+  }, [navOpen]);
+
+  const nav = buildSidebarNav({
+    view: props.view, setView: props.setView, onCalendarTab: props.onCalendarTab,
+    reportType: props.reportType, setReportType: props.setReportType,
+    invoiceDueCount: props.invoiceDueCount, pendingViewings: props.pendingViewings,
+    tabs: { lettings: lettingsTab, boxoffice: boxTab, bar: barTab, viewings: viewingsTab },
+  });
+  // A tap in the drawer always closes it, including a sub-page of the page
+  // already showing (which does not change the view).
+  const closing = nav.map(function(n) {
+    if (!n.go) return n;
+    return Object.assign({}, n, {
+      go: function() { setNavOpen(false); n.go(); },
+      children: n.children && n.children.map(function(c) {
+        return Object.assign({}, c, { go: function() { setNavOpen(false); c.go(); } });
+      }),
+    });
+  });
+  function onNew() { setNavOpen(false); props.onNew(); }
+
+  return (
+    <SidebarNavContext.Provider value={!isMobile}>
+      <div className="hb-app" data-nav-open={navOpen ? "true" : "false"}>
+        <MobileGlobalStyles/>
+        <AppThemeStyles/>
+        <NewUiStyles/>
+        <div className="hb-scrim" onClick={function() { setNavOpen(false); }}/>
+        <AppSidebar nav={closing} onNew={onNew} onSignOut={props.onSignOut} onClose={function() { setNavOpen(false); }}/>
+        <div className="hb-main">
+          <AppTopBar crumbs={sidebarCrumbs(nav, props.view)} canGoBack={props.canGoBack} onBack={props.onBack}
+            onOpenMenu={function() { setNavOpen(true); }} onNew={onNew}
+            xeroToken={props.xeroToken} onXeroConnect={props.onXeroConnect} onXeroDisconnect={props.onXeroDisconnect}
+            gmailToken={props.gmailToken} onGmailConnect={props.onGmailConnect} onGmailDisconnect={props.onGmailDisconnect}/>
+          {props.children}
+        </div>
+      </div>
+    </SidebarNavContext.Provider>
+  );
+}
+
 function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab, onBack, canGoBack }) {
   // "calendar" is a virtual tab that maps to view="lettings" (calendar sub-tab)
   const tabs = [
@@ -9409,7 +9991,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
 
   if (isMobile) {
     return (
-      <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, boxShadow:"0 2px 12px rgba(37,99,235,.08)", position:"relative" }}>
+      <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, boxShadow:`0 2px 12px rgba(${T.shadowRgb},.08)`, position:"relative" }}>
         <div style={{ padding:"0 14px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
           <div style={{ display:"flex", alignItems:"center", padding:"8px 0" }}>
             <img src={`data:image/png;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height:38, width:"auto", imageRendering:"crisp-edges" }} />
@@ -9448,7 +10030,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
   }
 
   return (
-    <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:"0 2px 12px rgba(37,99,235,.08)" }}>
+    <header style={{ background:"#ffffff", borderBottom:`2px solid ${T.border}`, padding:"0 28px", display:"flex", alignItems:"center", gap:0, boxShadow:`0 2px 12px rgba(${T.shadowRgb},.08)` }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginRight:36, padding:"8px 0", flexShrink:0 }}>
         {canGoBack && onBack && (
           <button onClick={onBack} title="Back to the previous page"
@@ -9469,7 +10051,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
           {connectButtons}
         </div>
       </nav>
-      <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)", flexShrink:0 }}>
+      <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:`0 2px 8px rgba(${T.midRgb},.25)`, flexShrink:0 }}>
         + New Booking
       </button>
     </header>
@@ -9821,7 +10403,7 @@ function XeroInvoiceSummary({ linked, xeroInv, onUnlink }) {
   const paidAmt = xeroInv ? Number(xeroInv.AmountPaid || 0) : null;
 
   let badge;
-  if (!xeroInv)                       badge = { t:"In Xero",    bg:"#eef4fd", c:T.midBlue, b:T.border };
+  if (!xeroInv)                       badge = { t:"In Xero",    bg:T.tint, c:T.midBlue, b:T.border };
   else if (status === "PAID")         badge = { t:"Paid",       bg:T.greenBg, c:T.green,   b:"#86efac" };
   else if (status === "DRAFT")        badge = { t:"Draft",      bg:"#f1f5f9", c:"#64748b", b:"#cbd5e1" };
   else if (status === "VOIDED")       badge = { t:"Voided",     bg:"#fef2f2", c:"#dc2626", b:"#fecaca" };
@@ -10101,30 +10683,29 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
   }
 
   return (
-    <div style={{ paddingTop:24 }}>
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
-        <button onClick={onBack} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>&#8592; Back to events</button>
-        <h2 style={{ margin:0, fontSize:20, fontWeight:700, color:T.text }}>Invoice worklist</h2>
-        <label style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:7, fontSize:12, color:T.textMid, cursor:"pointer" }}>
+    <div style={{ paddingTop: UI_CLASSIC ? 24 : 0 }}>
+      <PageHeader title="Invoice worklist" back="Events" onBack={onBack}
+        actions={
+        <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:12, color:T.textMid, cursor:"pointer" }}>
           <input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
           Show everything (future stages and already-raised invoices)
         </label>
-      </div>
+        }/>
 
-      <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:"#1d4ed8", lineHeight:1.6 }}>
+      <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.infoText, lineHeight:1.6 }}>
         Invoices are created in Xero as <strong>drafts</strong> — nothing is sent to the client until you approve and send it in Xero.
         All figures are treated as VAT-inclusive. Only events that haven’t happened yet are shown.
       </div>
 
       {preCutoverCount > 0 && (
-        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid, lineHeight:1.6 }}>
+        <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid, lineHeight:1.6 }}>
           <strong>{preCutoverCount}</strong> event{preCutoverCount!==1?"s":""} before {INVOICE_FIRST_EVENT_YEAR} {preCutoverCount!==1?"are":"is"} excluded — those were invoiced manually in Xero and are confirmed correct.
           Everything from {INVOICE_FIRST_EVENT_YEAR} onwards is generated and linked here.
         </div>
       )}
 
       {xeroByContact === null && (
-        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid }}>
+        <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12, color:T.textMid }}>
           Checking Xero for invoices that already exist…
         </div>
       )}
@@ -10177,8 +10758,8 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
                 Nothing in this stage.
               </div>
             ) : (
-              <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-                <div style={{ padding:"8px 16px", background:"#f5f9ff", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
+              <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
+                <div style={{ padding:"8px 16px", background:T.tintSoft, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
                   fontSize:10, letterSpacing:1, textTransform:"uppercase", fontWeight:700, color:T.textMid }}>
                   <span style={{ flex:1, minWidth:150 }}>Event</span>
                   <span style={{ width:95, flexShrink:0 }}>Event date</span>
@@ -10249,25 +10830,29 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
 
   return (
     <div>
-      <div style={{ padding:"28px 0 18px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-        {onOpenPortal && (
-          <button onClick={onOpenPortal}
-            style={{ background:"#4a5d4e", color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
-            Manage Client Portal
-          </button>
-        )}
+      <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}>
+        <PageHeader title="Events" sub={bookings.length + " event" + (bookings.length!==1?"s":"")}
+          actions={<>
+          {onOpenPortal && (
+            <button onClick={onOpenPortal}
+              style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.border}`, padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+              Manage Client Portal
+            </button>
+          )}
+          {onOpenInvoices && (
+            <button onClick={onOpenInvoices}
+              style={{ background:T.midBlue, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, display:"flex", alignItems:"center", gap:8, whiteSpace:"nowrap" }}>
+              Invoices
+              {invoiceDueCount > 0 && (
+                <span style={{ background:"#fff", color:T.midBlue, borderRadius:10, padding:"1px 8px", fontSize:11, fontWeight:800 }}>{invoiceDueCount}</span>
+              )}
+            </button>
+          )}
+          </>}/>
+      </div>
+      <div style={{ padding:"0 0 18px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name, email or date…"
-          style={{ flex:1, minWidth:180, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 14px", outline:"none", boxShadow:"0 1px 3px rgba(37,99,235,.06)" }}/>
-        {onOpenInvoices && (
-          <button onClick={onOpenInvoices}
-            style={{ background:T.midBlue, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, display:"flex", alignItems:"center", gap:8, whiteSpace:"nowrap" }}>
-            Invoices
-            {invoiceDueCount > 0 && (
-              <span style={{ background:"#fff", color:T.midBlue, borderRadius:10, padding:"1px 8px", fontSize:11, fontWeight:800 }}>{invoiceDueCount}</span>
-            )}
-          </button>
-        )}
-        <span style={{ color:T.textLight, fontSize:13, flexShrink:0 }}>{bookings.length} event{bookings.length!==1?"s":""}</span>
+          style={{ flex:1, minWidth:180, background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:8, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 14px", outline:"none", boxShadow:`0 1px 3px rgba(${T.shadowRgb},.06)` }}/>
       </div>
 
       {/* Missing events: accommodation still pointing at an event that's gone */}
@@ -10667,7 +11252,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
           {rowsData.map(function({ b, total, payment, accomBadges, rowPencils }) {
             return (
               <div key={b.id} onClick={()=>onEdit(b.id)}
-                style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:"0 2px 8px rgba(37,99,235,.06)", padding:"12px 14px", cursor:"pointer" }}>
+                style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:T.shadowCard, padding:"12px 14px", cursor:"pointer" }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
                   <div>
                     <div style={{ fontWeight:700, color:T.text, fontSize:15 }}>{b.couple||"—"}</div>
@@ -10706,10 +11291,10 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
   return (
     <div style={{ marginBottom:36 }}>
       <h3 style={{ color:T.midBlue, fontSize:11, letterSpacing:2, textTransform:"uppercase", marginBottom:10, fontWeight:700 }}>{label} ({rows.length})</h3>
-      <div style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, overflow:"hidden", boxShadow:T.shadowCard }}>
         <table style={{ width:"100%", borderCollapse:"collapse", opacity:dimmed?.65:1 }}>
           <thead>
-            <tr style={{ background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
+            <tr style={{ background:T.tint, borderBottom:`1px solid ${T.border}` }}>
               {["Date","Day","Couple / Event","Event Type","Day Guests","Eve Guests","Venue Fee","Accommodation","Status","Payment","Pencil","Viewings","Files"].map(h=>(
                 <th key={h} style={{ color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", padding:"10px 12px", textAlign:"left", fontWeight:700 }}>{h}</th>
               ))}
@@ -10720,7 +11305,7 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
               return (
                 <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", transition:"background .12s", cursor:"pointer" }}
                   onClick={()=>onEdit(b.id)}
-                  onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"}
+                  onMouseEnter={e=>e.currentTarget.style.background=T.bg}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                   {/* Multi-day events stack the end date under the start date,
                       keeping this column narrow so the file icons stay inside
@@ -11178,7 +11763,7 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
                 </div>
               </div>
               {isOpen && (
-                <div style={{ borderTop:`1px solid ${T.border}`, background:"#f8fafd" }}>
+                <div style={{ borderTop:`1px solid ${T.border}`, background:T.bgInput }}>
                   {(fullMessages || thread.messages || []).map((msg, mi) => {
                     const atts = getAttachments(msg?.payload?.parts);
                     const msgs = fullMessages || thread.messages || [];
@@ -11430,7 +12015,7 @@ function BarTakeSuggestion({ eventDate, value, onApply }) {
       )}
       {state === "error" && <div style={{ fontSize:11, color:T.red, marginTop:4 }}>{err}</div>}
       {state === "ok" && data && (
-        <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:7, padding:"8px 11px", fontSize:11, color:T.textMid, lineHeight:1.7 }}>
+        <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7, padding:"8px 11px", fontSize:11, color:T.textMid, lineHeight:1.7 }}>
           <div>
             Till take {fmtDate(dayBefore)} – {fmtDate(eventDate)}:{" "}
             <strong style={{ color:T.text, fontSize:13 }}>{money(data.revenue)}</strong>
@@ -11509,7 +12094,7 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
   const money = function(n) { return "£" + Number(n).toLocaleString("en-GB",{minimumFractionDigits:2, maximumFractionDigits:2}); };
 
   return (
-    <div style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:9, padding:"14px 16px", marginBottom:14 }}>
+    <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:9, padding:"14px 16px", marginBottom:14 }}>
       <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>
         Invoice schedule <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:T.textLight }}>— computed, VAT inclusive</span>
       </div>
@@ -11544,7 +12129,7 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
               {linked ? (
                 <span style={{ display:"flex", alignItems:"center", gap:6 }}>
                   <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9,
-                    background: linked.source==="push" ? T.greenBg : "#eef4fd",
+                    background: linked.source==="push" ? T.greenBg : T.tint,
                     color: linked.source==="push" ? T.green : T.midBlue }}>
                     {linked.source==="push" ? "Invoiced" : "In Xero"} {linked.invoiceNumber||""}
                   </span>
@@ -11807,10 +12392,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
   return (
     <div style={{ paddingTop:28 }}>
-      <div style={{ position:"sticky", top:0, zIndex:50, background:"#f0f6ff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 18px", marginBottom:18, boxShadow:"0 2px 8px rgba(37,99,235,.10)", display:"flex", alignItems:"center", gap:14 }}>
+      <div style={{ position:"sticky", top:"var(--hb-sticky-top, 0px)", zIndex:30, background:UI_CLASSIC ? T.bg : "#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 18px", marginBottom:18, boxShadow:`0 2px 8px rgba(${T.shadowRgb},.10)`, display:"flex", alignItems:"center", gap:14 }}>
         <button onClick={onCancel} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, cursor:"pointer", fontSize:13, fontFamily:"inherit", padding:"6px 14px", borderRadius:6, flexShrink:0 }}>← Back</button>
         <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ fontWeight:700, fontSize:18, color:T.midBlue, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          <div style={{ fontWeight:UI_CLASSIC ? 700 : 600, fontSize:UI_CLASSIC ? 18 : 25, lineHeight:1.15, fontFamily:T.fontDisplay, color:T.midBlue, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {formData.couple || (isEdit ? "Edit Booking" : "New Booking")}
           </div>
           {(formData.date || formData.eventType) && (
@@ -11823,11 +12408,11 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"200px 1fr", gap:20 }}>
         <div>
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
             {Object.keys(FORM_SECTIONS).map(s=>{
               const filled=countFilled(s), total=countTotal(s), active=activeSection===s;
               return (
-                <button key={s} onClick={()=>setActiveSection(s)} style={{ display:"block", width:"100%", textAlign:"left", padding:"11px 14px", background:active?"#eef4fd":"none", border:"none", borderLeft:active?`3px solid ${T.accent}`:"3px solid transparent", borderBottom:`1px solid ${T.border}`, color:active?T.accent:T.textMid, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:active?700:400 }}>
+                <button key={s} onClick={()=>setActiveSection(s)} style={{ display:"block", width:"100%", textAlign:"left", padding:"11px 14px", background:active?T.tint:"none", border:"none", borderLeft:active?`3px solid ${T.accent}`:"3px solid transparent", borderBottom:`1px solid ${T.border}`, color:active?T.accent:T.textMid, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:active?700:400 }}>
                   <span style={{ display:"block" }}>{FORM_SECTIONS[s].label}</span>
                   <span style={{ fontSize:10, opacity:.65, color:active?T.accent:T.textLight }}>{filled}/{total} filled</span>
                 </button>
@@ -11838,7 +12423,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             {/* The sidebar is on screen for every section, so these are
                 available from whichever tab you happen to be on. */}
             <button onClick={function(){ onSubmit(true); }}
-              style={{ background:T.midBlue, color:"#fff", border:"none", padding:"12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>
+              style={{ background:T.midBlue, color:"#fff", border:"none", padding:"12px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, boxShadow:`0 2px 8px rgba(${T.midRgb},.25)` }}>
               {isEdit?"Save":"Create booking"}
             </button>
             <button onClick={function(){ onSubmit(false); }}
@@ -11858,7 +12443,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           </div>
         </div>
 
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:28, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:28, boxShadow:T.shadowCard }}>
           <h3 style={{ margin:"0 0 22px", color:T.midBlue, fontWeight:700, fontSize:17, borderBottom:`2px solid ${T.border}`, paddingBottom:12 }}>{FORM_SECTIONS[activeSection].label}</h3>
 
           {activeSection==="staffing" && (
@@ -11945,7 +12530,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           )}
 
           {activeSection==="contract" && (
-            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
               <ContractSection formData={formData} update={update} onAutoSave={onAutoSave}
                 accomProperties={accomProperties||[]}
                 accomBookings={accomBookings||[]} onCreateAccomBookings={onCreateAccomBookings}
@@ -12167,17 +12752,17 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 
   return (
     <div style={{ paddingTop:28 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:22 }}>
-        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Staff Database</h2>
-        <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>+ Add Staff Member</button>
-      </div>
+      <PageHeader title="Staff Database"
+        actions={
+          <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:`0 2px 8px rgba(${T.midRgb},.25)` }}>+ Add Staff Member</button>
+        }/>
 
       {/* Logins live beside the staff records, because they are the same
           people and the two go out of step otherwise. */}
       <StaffLogins/>
 
       {/* Minimum wage bands — include rolled-up holiday pay, and change each April */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, boxShadow:T.shadowCard }}>
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap" }}>
           <span style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Minimum wage (incl. holiday)</span>
           {wageSaved && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>Saved</span>}
@@ -12236,7 +12821,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
       )}
 
       {staffForm && (
-        <div style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:26, marginBottom:26, boxShadow:"0 4px 16px rgba(59,130,246,.1)" }}>
+        <div style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:26, marginBottom:26, boxShadow:`0 4px 16px rgba(${T.accentRgb},.1)` }}>
           <h3 style={{ margin:"0 0 18px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{editStaffId?"Edit Staff Member":"New Staff Member"}</h3>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"14px 22px" }}>
             {[{k:"id",l:"Initials / Code",required:true,hint:"e.g. TM, BeW"},{k:"name",l:"Full Name",required:true},{k:"email",l:"Email"},{k:"phone",l:"Phone"},{k:"rate",l:"Pay Rate"}].map(({k,l,required,hint})=>(
@@ -12274,7 +12859,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
         {staff.map(s=>{
           const upcoming=upcomingFor(s.id), total=bookingCount[s.id]||0;
           return (
-            <div key={s.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:18, opacity:s.active?1:.55, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div key={s.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:18, opacity:s.active?1:.55, boxShadow:T.shadowCard }}>
               <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:10 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                   <StaffChip initials={s.id} staff={[s]} size="lg"/>
@@ -12316,17 +12901,18 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
 function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry, accomBookings, accomProperties }) {
-  const types = [{id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"accommodation",label:"Accommodation"},{id:"staffing",label:"Rota Overview"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Event Rota"}];
+  const types = REPORT_TYPES;
+  const inSidebar = useContext(SidebarNavContext);
   // If an old/removed report type is still selected, fall back to summary
   const activeType = types.some(t=>t.id===reportType) ? reportType : "summary";
+  const activeLabel = (types.filter(function(t){ return t.id === activeType; })[0] || {}).label;
   return (
-    <div style={{ paddingTop:28 }}>
-      <div style={{ marginBottom:22, display:"flex", gap:8, flexWrap:"wrap" }}>
-        {types.map(t=>(
-          <button key={t.id} onClick={()=>{ if(t.id==="accommodation"){ setView("lettings"); } else { setReportType(t.id); } }}
-            style={{ background:activeType===t.id?T.midBlue:"#fff", color:activeType===t.id?"#fff":T.textMid, border:`1.5px solid ${activeType===t.id?T.midBlue:T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:activeType===t.id?700:400 }}>{t.label}</button>
-        ))}
-      </div>
+    <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}>
+      <PageHeader title="Reports" sub={inSidebar ? activeLabel : null}/>
+      {!inSidebar && (
+        <TabStrip tabs={types.map(function(t){ return [t.id, t.label]; })} value={activeType}
+          onChange={function(id){ if(id==="accommodation"){ setView("lettings"); } else { setReportType(id); } }}/>
+      )}
       {activeType==="summary"   && <SummaryReport bookings={bookings}/>}
       {activeType==="calendar"  && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
       {activeType==="staffing"  && <StaffingRota bookings={bookings} staff={staff}/>}
@@ -12338,7 +12924,7 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
 
 function StatCard({ label, value, sub }) {
   return (
-    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:T.shadowCard }}>
       <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, marginBottom:8, fontWeight:600 }}>{label}</div>
       <div style={{ fontSize:28, color:T.midBlue, fontWeight:700 }}>{value}</div>
       {sub&&<div style={{ fontSize:12, color:T.textLight, marginTop:4 }}>{sub}</div>}
@@ -12417,7 +13003,7 @@ function SummaryReport({ bookings }) {
   if(printMode) return (
     <div>
       <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
     </div>
   );
 
@@ -12448,7 +13034,7 @@ function SummaryReport({ bookings }) {
         <StatCard label="Holding" value={yearBookings.filter(b=>b.status==="Holding").length} sub="Holding bookings"/>
         <StatCard label="Amly / Hamlet / Camping" value={`${yearBookings.filter(b=>b.amlyBooked==="yes").length} / ${yearBookings.filter(b=>b.hamletBooked==="yes").length} / ${yearBookings.filter(b=>b.campingBooked==="yes").length}`} sub="Accommodation bookings"/>
       </div>
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, boxShadow:T.shadowCard }}>
         <h3 style={{ margin:"0 0 4px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Bookings by Month</h3>
 
         {/* Legend first: the bars are meaningless without it, and a legend
@@ -12511,7 +13097,7 @@ function SummaryReport({ bookings }) {
       {byType.length>0 && (()=>{
         const maxCount = Math.max(...byType.map(t=>t.count), 1);
         return (
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, marginTop:16, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:24, marginTop:16, boxShadow:T.shadowCard }}>
             <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{year} Events by Type</h3>
             {byType.slice().sort((a,b)=>b.count-a.count).map(t=>(
               <div key={t.type} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
@@ -12673,7 +13259,7 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
       {/* Legend + toggle */}
       <div style={{ display:"flex", gap:16, marginBottom:20, flexWrap:"wrap", alignItems:"center" }}>
         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-          <div style={{ width:12, height:5, borderRadius:3, background:"#3b82f6" }}/>
+          <div style={{ width:12, height:5, borderRadius:3, background:T.accentMid }}/>
           <span style={{ fontSize:12, color:T.textMid }}>Wedding booked</span>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
@@ -12717,8 +13303,8 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
           for (let d=1; d<=daysInMonth; d++) cells.push(d);
 
           return (
-            <div key={monthName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-              <div style={{ padding:"10px 14px", background:"#eef4fd", borderBottom:`1px solid ${T.border}` }}>
+            <div key={monthName} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
+              <div style={{ padding:"10px 14px", background:T.tint, borderBottom:`1px solid ${T.border}` }}>
                 <span style={{ fontSize:14, fontWeight:700, color:T.midBlue }}>{monthName} {year}</span>
               </div>
               <div style={{ padding:"8px 10px" }}>
@@ -12735,10 +13321,10 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
                     const isToday = dateStr === today;
                     const hasOverdue = dayBookings.some(b=>(b.schedule||[]).some(s=>!s.paid&&s.dueDate&&s.dueDate<today));
                     const hasAny = dayBookings.length > 0;
-                    const cellBg = hasAny ? (hasOverdue ? "#fce7f3" : "#dbeafe") : "transparent";
-                    const cellBorder = hasAny ? (hasOverdue ? "#f9a8d4" : "#93c5fd") : "transparent";
-                    const cellText = hasAny ? (hasOverdue ? "#be185d" : "#1d4ed8") : T.text;
-                    const lozengeBg = hasOverdue ? "#ec4899" : "#3b82f6";
+                    const cellBg = hasAny ? (hasOverdue ? "#fce7f3" : T.accentLight) : "transparent";
+                    const cellBorder = hasAny ? (hasOverdue ? "#f9a8d4" : T.infoBorder) : "transparent";
+                    const cellText = hasAny ? (hasOverdue ? "#be185d" : T.infoText) : T.text;
+                    const lozengeBg = hasOverdue ? "#ec4899" : T.accentMid;
                     const isSun = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 6;
                     const isSat = (cells.slice(0,ci).filter(Boolean).length + startDow) % 7 === 5;
 
@@ -12817,14 +13403,14 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
 
       {/* Hover tooltip */}
       {tooltip && (
-        <div style={{ position:"fixed", left: Math.max(8, Math.min(tooltip.x - 130, (typeof window!=="undefined"?window.innerWidth:800) - 270)), top: tooltip.y, zIndex:9999, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 14px", boxShadow:"0 8px 28px rgba(37,99,235,.18)", minWidth:220, maxWidth:280, pointerEvents:"none" }}>
-          <div style={{ fontSize:10, fontWeight:700, color:T.textMid, marginBottom:7, paddingBottom:6, borderBottom:`1px solid #eef3fa`, textTransform:"uppercase", letterSpacing:.4 }}>
+        <div style={{ position:"fixed", left: Math.max(8, Math.min(tooltip.x - 130, (typeof window!=="undefined"?window.innerWidth:800) - 270)), top: tooltip.y, zIndex:9999, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 14px", boxShadow:`0 8px 28px rgba(${T.shadowRgb},.18)`, minWidth:220, maxWidth:280, pointerEvents:"none" }}>
+          <div style={{ fontSize:10, fontWeight:700, color:T.textMid, marginBottom:7, paddingBottom:6, borderBottom:`1px solid ${T.tint}`, textTransform:"uppercase", letterSpacing:.4 }}>
             {new Date(tooltip.dateStr+"T00:00:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long", year:"numeric" })}
           </div>
           {tooltip.dayBookings.map(function(b) {
             var props = getBookedProps(b);
             return (
-              <div key={b.id} style={{ marginBottom:8, paddingBottom:8, borderBottom:`1px solid #f0f4fb` }}>
+              <div key={b.id} style={{ marginBottom:8, paddingBottom:8, borderBottom:`1px solid ${T.tintSoft}` }}>
                 <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{b.couple||"(no name)"}</div>
                 <div style={{ fontSize:11, color:T.textMid, marginTop:2 }}>{b.eventType || "Event"}</div>
                 {props.length > 0 && (
@@ -12903,8 +13489,8 @@ function AccommodationReport({ bookings, accomBookings, accomProperties }) {
       </div>
 
       {/* Per-event table */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-        <div style={{ padding:"10px 14px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:1 }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
+        <div style={{ padding:"10px 14px", background:T.tint, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:1 }}>
           Events and linked lettings bookings
         </div>
         {rowsWithAccom.map(function(row, i) {
@@ -12981,7 +13567,7 @@ function StaffingRota({ bookings, staff }) {
   if(printMode) return (
     <div>
       <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
     </div>
   );
   return (
@@ -12990,9 +13576,9 @@ function StaffingRota({ bookings, staff }) {
         <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
     <div style={{ overflowX:"auto" }}>
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ background:"#eef4fd" }}>{["Date","Couple","Friday Set-Up","Day Manager","Bar Sup","Day Staff","Bar","Day Handy","Eve Handy"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background:T.tint }}>{["Date","Couple","Friday Set-Up","Day Manager","Bar Sup","Day Staff","Bar","Day Handy","Eve Handy"].map(h=><th key={h} style={{ padding:"10px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}</tr></thead>
           <tbody>
             {rows.map((b,i)=>(
               <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
@@ -13028,7 +13614,7 @@ function PipelineReport({ bookings }) {
   if(printMode) return (
     <div>
       <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
     </div>
   );
   return (
@@ -13041,7 +13627,7 @@ function PipelineReport({ bookings }) {
         {rows.map(b=>{
           const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep),pct=fee>0?Math.min(100,Math.round((dep/fee)*100)):0;
           return (
-            <div key={b.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div key={b.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:T.shadowCard }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
                 <div><div style={{ fontWeight:600, color:T.text }}>{b.couple}</div><div style={{ fontSize:12, color:T.textLight }}>{fmtDate(b.date)}</div></div>
                 <div style={{ textAlign:"right" }}><div style={{ fontSize:18, color:T.midBlue, fontWeight:700 }}>£{fee.toLocaleString()}</div><div style={{ fontSize:11, color:T.textLight }}>{dep>0?`Deposit: £${dep.toLocaleString()}`:"No deposit"}</div></div>
@@ -13078,7 +13664,7 @@ function StaffWorkloadReport({ bookings, staff }) {
   if(printMode) return (
     <div>
       <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
     </div>
   );
   return (
@@ -13089,7 +13675,7 @@ function StaffWorkloadReport({ bookings, staff }) {
       <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings per active staff member</p>
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
         {workload.map(w=>(
-          <div key={w.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div key={w.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", boxShadow:T.shadowCard }}>
             <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
               <StaffChip initials={w.id} staff={staff} size="lg"/>
               <div style={{ flex:1 }}>
@@ -13219,7 +13805,7 @@ function HoursRow({ s, hw, updateHours, highlighted, expectedHrs }) {
           onFocus={() => setF(true)}
           onBlur={() => setF(false)}
           placeholder="0"
-          style={{ width:70, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 8px", outline:"none", textAlign:"center", boxShadow:f?"0 0 0 3px #dbeafe":"none" }}
+          style={{ width:70, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 8px", outline:"none", textAlign:"center", boxShadow:f?`0 0 0 3px ${T.accentLight}`:"none" }}
         />
         <span style={{ fontSize:12, color:T.textLight }}>hrs</span>
       </div>
@@ -13424,8 +14010,8 @@ function HoursReport({ bookings, staff }) {
           </div>
         </div>
 
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-          <div style={{ padding:"16px 20px", borderBottom:`1px solid ${T.border}`, background:"#eef4fd" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
+          <div style={{ padding:"16px 20px", borderBottom:`1px solid ${T.border}`, background:T.tint }}>
             <div style={{ fontSize:16, fontWeight:800, color:T.midBlue }}>Payroll</div>
             <div style={{ fontSize:13, color:T.textMid, marginTop:2 }}>{fmtDate(from)} to {fmtDate(to)}</div>
           </div>
@@ -13434,7 +14020,7 @@ function HoursReport({ bookings, staff }) {
           ) : (
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
               <thead>
-                <tr style={{ background:"#f5f9ff" }}>
+                <tr style={{ background:T.tintSoft }}>
                   {["Name","Pay rate","Hours worked"].map(function(h,i){
                     return <th key={h} style={{ padding:"10px 20px", textAlign: i===2?"right":"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>;
                   })}
@@ -13456,7 +14042,7 @@ function HoursReport({ bookings, staff }) {
         </div>
 
         <textarea id="payroll-text" readOnly value={payrollText} onFocus={e=>e.target.select()}
-          style={{ width:"100%", minHeight:170, marginTop:14, background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8,
+          style={{ width:"100%", minHeight:170, marginTop:14, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8,
             padding:"14px 18px", fontSize:13, fontFamily:"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
             lineHeight:1.6, color:T.text, resize:"vertical", outline:"none", whiteSpace:"pre" }}/>
       </div>
@@ -13474,7 +14060,7 @@ function HoursReport({ bookings, staff }) {
         </div>
         <textarea id="hours-report-text" readOnly value={reportText}
           onFocus={e=>e.target.select()}
-          style={{ width:"100%", minHeight:460, background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8,
+          style={{ width:"100%", minHeight:460, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8,
             padding:"16px 20px", fontSize:13, fontFamily:"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
             lineHeight:1.6, color:T.text, resize:"vertical", outline:"none", whiteSpace:"pre" }}/>
         <p style={{ fontSize:12, color:T.textLight, marginTop:8 }}>Select all and copy, or use the button above, then paste into your email.</p>
@@ -13489,7 +14075,7 @@ function HoursReport({ bookings, staff }) {
         <button onClick={()=>setPayrollMode(true)} style={{ marginLeft:8, background:T.midBlue, border:"none", color:"#fff", padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Payroll</button>
       </div>
       {/* Date range controls */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", boxShadow:T.shadowCard }}>
         <span style={{ fontSize:13, color:T.textMid, fontWeight:600 }}>Date range:</span>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <label style={{ fontSize:12, color:T.textLight }}>From</label>
@@ -13554,14 +14140,14 @@ function HoursReport({ bookings, staff }) {
 
           {/* Monthly breakdown table (if multiple months) */}
           {allMonths.length > 1 && (
-            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:22, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-              <div style={{ padding:"14px 20px", borderBottom:`1px solid ${T.border}`, background:"#eef4fd" }}>
+            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:22, overflow:"hidden", boxShadow:T.shadowCard }}>
+              <div style={{ padding:"14px 20px", borderBottom:`1px solid ${T.border}`, background:T.tint }}>
                 <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>Monthly Summary</span>
               </div>
               <div style={{ overflowX:"auto" }}>
                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
                   <thead>
-                    <tr style={{ background:"#f5f9ff" }}>
+                    <tr style={{ background:T.tintSoft }}>
                       <th style={{ padding:"10px 16px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>Staff Member</th>
                       {allMonths.map(m=><th key={m} style={{ padding:"10px 12px", textAlign:"center", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{monthLabel(m)}</th>)}
                       <th style={{ padding:"10px 12px", textAlign:"center", color:T.midBlue, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>Total</th>
@@ -13570,7 +14156,7 @@ function HoursReport({ bookings, staff }) {
                   <tbody>
                     {sortedStaff.map((s,i)=>(
                       <tr key={s.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}
-                        onMouseEnter={e=>e.currentTarget.style.background="#f5f9ff"}
+                        onMouseEnter={e=>e.currentTarget.style.background=T.tintSoft}
                         onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                         <td style={{ padding:"10px 16px" }}>
                           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -13587,7 +14173,7 @@ function HoursReport({ bookings, staff }) {
                     ))}
                   </tbody>
                   <tfoot>
-                    <tr style={{ borderTop:`2px solid ${T.border}`, background:"#eef4fd" }}>
+                    <tr style={{ borderTop:`2px solid ${T.border}`, background:T.tint }}>
                       <td style={{ padding:"10px 16px", fontSize:13, fontWeight:700, color:T.midBlue }}>Month total</td>
                       {allMonths.map(m=>{
                         const mTotal = Object.values(monthlyBreakdown).reduce((sum, byMonth)=>sum+(byMonth[m]||0),0);
@@ -13612,7 +14198,7 @@ function HoursReport({ bookings, staff }) {
               const estPay = rate > 0 ? (total * rate).toFixed(2) : null;
 
               return (
-                <div key={s.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+                <div key={s.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
                   <div style={{ padding:"14px 20px", display:"flex", alignItems:"center", gap:12, cursor:"pointer" }} onClick={()=>setExpandedStaff(isExpanded?null:s.id)}>
                     <StaffChip initials={s.id} staff={[s]} size="lg"/>
                     <div style={{ flex:1 }}>
@@ -13636,7 +14222,7 @@ function HoursReport({ bookings, staff }) {
                     <div style={{ borderTop:`1px solid ${T.border}`, background:T.bg }}>
                       <table style={{ width:"100%", borderCollapse:"collapse" }}>
                         <thead>
-                          <tr style={{ background:"#eef4fd" }}>
+                          <tr style={{ background:T.tint }}>
                             {["Date","Event","Hours","Est. Pay"].map(h=><th key={h} style={{ padding:"8px 16px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>)}
                           </tr>
                         </thead>
@@ -13653,7 +14239,7 @@ function HoursReport({ bookings, staff }) {
                               </tr>
                             );
                           })}
-                          <tr style={{ borderTop:`1.5px solid ${T.border}`, background:"#eef4fd" }}>
+                          <tr style={{ borderTop:`1.5px solid ${T.border}`, background:T.tint }}>
                             <td colSpan={2} style={{ padding:"8px 16px", fontSize:12, fontWeight:700, color:T.midBlue }}>Total</td>
                             <td style={{ padding:"8px 16px", fontSize:14, fontWeight:700, color:T.midBlue }}>{total}h</td>
                             <td style={{ padding:"8px 16px", fontSize:13, fontWeight:700, color:T.green }}>{estPay?`£${estPay}`:"—"}</td>
@@ -13830,7 +14416,7 @@ function NewLettings({ bookings, properties, onOpen, events, onOpenEvent }) {
 
   return (
     <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px",
-      marginBottom:20, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      marginBottom:20, boxShadow:T.shadowCard }}>
       <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10, flexWrap:"wrap" }}>
         <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:T.accent }}>New bookings</h3>
         <span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:9, background:T.accentLight, color:T.accent }}>
@@ -13851,7 +14437,7 @@ function NewLettings({ bookings, properties, onOpen, events, onOpenEvent }) {
               style={{ borderTop:`1px solid ${T.border}`, padding:"9px 0", display:"flex", gap:10,
                 alignItems:"center", flexWrap:"wrap", cursor: onOpenEvent ? "pointer" : "default" }}>
               <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:9,
-                background:"#eef4fd", color:T.midBlue, border:"1px solid #bfdbfe", whiteSpace:"nowrap", flexShrink:0 }}>
+                background:T.tint, color:T.midBlue, border:`1px solid ${T.infoBorder}`, whiteSpace:"nowrap", flexShrink:0 }}>
                 Event
               </span>
               <span style={{ fontSize:13, fontWeight:600, color:T.text, minWidth:130 }}>{e.couple || "(no name)"}</span>
@@ -14167,7 +14753,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const overdueTotal = overdueInvoiceTotal + overdueAccomTotal + overdueBoxTotal;
   const overdueCount = overdueInvoices.length + overdueAccom.length + overdueBox.length;
 
-  const sectionStyle = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 };
+  const sectionStyle = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:T.shadowCard, marginBottom:18 };
   const secHead = (label, count, colour) => (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
       <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>{label}</h3>
@@ -14178,12 +14764,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const fmtDay = (d) => d ? new Date(d+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—";
 
   return (
-    <div style={{ maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" }}>
-      <h2 style={{ fontSize:22, fontWeight:800, color:T.text, margin:"0 0 6px" }}>Home</h2>
-      <p style={{ color:T.textMid, fontSize:13, margin:"0 0 24px" }}>
-        Today: {fmtDay(today)}
-        <span style={{ color:T.textLight, marginLeft:10, fontSize:11 }}>build {APP_BUILD}</span>
-      </p>
+    <div style={UI_CLASSIC ? { maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" } : { maxWidth:1100 }}>
+      <PageHeader title="Home"
+        sub={<>Today: {fmtDay(today)}{UI_CLASSIC && <span style={{ color:T.textLight, marginLeft:10, fontSize:11 }}>build {APP_BUILD}</span>}</>}/>
 
       {/* Payment status can only come from Xero — say so rather than letting an
           empty list read as "nothing outstanding". */}
@@ -14211,7 +14794,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
           {loaded && upcomingEvents.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No events this week.</div>}
           {upcomingEvents.map(b=>(
-            <div key={b.id} onClick={()=>setView("list")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+            <div key={b.id} onClick={()=>setView("list")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
               <span style={{ fontSize:11, fontWeight:700, color:T.accent, background:T.accentLight, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(b.date)}</span>
               <span style={{ fontSize:13, fontWeight:600, color:T.text }}>{b.couple}</span>
               {b.eventType && <span style={{ fontSize:10, color:T.textLight }}>{b.eventType}</span>}
@@ -14227,7 +14810,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {currentlyStaying.map(b=>{
             const stay = (b.stays||[]).filter(s=>s.checkIn&&s.checkOut&&s.checkIn<today&&s.checkOut>=today).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
             return (
-              <div key={"staying-"+b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+              <div key={"staying-"+b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span title={stay ? "Checked in "+fmtDay(stay.checkIn)+" · leaves "+fmtDay(stay.checkOut) : "Currently staying"}
                   style={{ fontSize:11, fontWeight:700, color:T.midBlue, background:T.midBlueBg, padding:"2px 8px", borderRadius:6, flexShrink:0, whiteSpace:"nowrap" }}>In house</span>
                 <div style={{ flex:1, minWidth:0 }}>
@@ -14240,7 +14823,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {upcomingCheckIns.map(b=>{
             const nextStay = (b.stays||[]).filter(s=>s.checkIn&&s.checkIn>=today&&s.checkIn<=in7).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
             return (
-              <div key={b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+              <div key={b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(nextStay&&nextStay.checkIn)}</span>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"}</div>
@@ -14256,7 +14839,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {secHead("Viewing Requests", pendingViewings.length, pendingViewings.length?T.amber:null)}
           {pendingViewings.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No unresponded requests.</div>}
           {pendingViewings.slice(0,6).map((r,i)=>(
-            <div key={r.id||i} onClick={()=>setView("viewings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+            <div key={r.id||i} onClick={()=>setView("viewings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
               <span style={{ fontSize:11, fontWeight:700, color:T.amber, background:T.amberBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>Pending</span>
               <div style={{ flex:1 }}>
                 <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{r.name||"(no name)"}</div>
@@ -14279,7 +14862,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
             const when = r.submittedAt ? new Date(r.submittedAt) : null;
             return (
               <div key={r.id||i} onClick={()=>setView("enquiries")}
-                style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"9px 0", borderBottom:`1px solid #f0f6ff`, cursor:"pointer" }}>
+                style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span title={r.emailSent === false ? "The brochure email did not go out — see Recent Automated Emails" : "Brochure emailed"}
                   style={{ fontSize:11, fontWeight:700, flexShrink:0, padding:"2px 8px", borderRadius:6,
                     color: r.emailSent === false ? T.red : "#6b21a8",
@@ -14432,7 +15015,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
         )}
         {emailLog.slice().reverse().slice(0,10).map(e=>(
           <div key={e.id} onClick={()=>setViewEmail(e)} title="Click to read the full email"
-            style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:`1px solid #f0f6ff`, fontSize:13, cursor:"pointer" }}>
+            style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:`1px solid ${T.bg}`, fontSize:13, cursor:"pointer" }}>
             <span style={{ color:T.textLight, fontSize:11, flexShrink:0 }}>{e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : "—"}</span>
             <span style={{ fontWeight:600, color:T.text, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.subject||"(no subject)"}</span>
             <span style={{ color:T.textLight, fontSize:11 }}>{e.to||""}</span>
@@ -14454,7 +15037,9 @@ function BarView() {
   const [farmEvents, setFarmEvents] = useState([]);
   const [staff, setStaff]       = useState([]);
   const [loaded, setLoaded]     = useState(false);
-  const [barView, setBarView]   = useState("stock");
+  // A sidebar click does what the section's own tab buttons do.
+  const [barView, setBarView] = useNavTab("bar", function() { setEditingEvent(null); });
+  const inSidebar = useContext(SidebarNavContext);
   const [editProduct, setEditProduct] = useState(null);
   const [productForm, setProductForm] = useState(null);
   const [editingEvent, setEditingEvent] = useState(null);
@@ -14519,19 +15104,13 @@ function BarView() {
 
   return (
     <div style={{ paddingTop:28 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:22 }}>
-        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Bar Management</h2>
-      </div>
+      <PageHeader title="Bar Management"/>
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
 
-      {/* Sub-navigation */}
-      <div style={{ display:"flex", gap:6, marginBottom:24, flexWrap:"wrap" }}>
-        {subTabs.map(t => (
-          <button key={t.id} onClick={() => { setEditingEvent(null); setBarView(t.id); }} style={{ background: barView===t.id ? T.midBlue : "#fff", color: barView===t.id ? "#fff" : T.textMid, border:`1.5px solid ${barView===t.id ? T.midBlue : T.border}`, padding:"8px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:barView===t.id?700:400 }}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {!inSidebar && (
+        <TabStrip tabs={BAR_TABS} value={barView}
+          onChange={function(id) { setEditingEvent(null); setBarView(id); }}/>
+      )}
 
       {barView === "stock"     && <StockView products={products} stock={stock} events={events}/>}
       {barView === "order"     && <EventEntryView type="order"     products={products} stock={stock} events={events} staff={staff} editingEvent={editingEvent} onSave={handleSaveEvent} onCancel={() => { setEditingEvent(null); setBarView("history"); }}/>}
@@ -14554,17 +15133,17 @@ function StockView({ products, stock, events }) {
   return (
     <div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:24 }}>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Last Stocktake</div>
           <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{lastStocktake ? lastStocktake.date : "None yet"}</div>
           {lastStocktake && <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>{lastStocktake.label || ""}</div>}
         </div>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Last Order</div>
           <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{lastOrder ? lastOrder.date : "None yet"}</div>
           {lastOrder && <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>{lastOrder.label || ""}</div>}
         </div>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Stock Value (Cost)</div>
           <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>
             {fmt2(products.reduce((s,p) => s + (stock[p.id]||0) * (p.costUnit||0), 0))}
@@ -14577,7 +15156,7 @@ function StockView({ products, stock, events }) {
         if (!prods.length) return null;
         const cc = CAT_COLOURS[cat];
         return (
-          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:16, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:16, overflow:"hidden", boxShadow:T.shadowCard }}>
             <div style={{ padding:"12px 20px", background:cc.bg, borderBottom:`1px solid ${cc.border}`, display:"flex", alignItems:"center", gap:10 }}>
               <CatBadge cat={cat}/>
               <span style={{ fontSize:12, color:cc.text, fontWeight:500 }}>{prods.length} products</span>
@@ -14587,7 +15166,7 @@ function StockView({ products, stock, events }) {
             </div>
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
               <thead>
-                <tr style={{ background:"#f5f9ff" }}>
+                <tr style={{ background:T.tintSoft }}>
                   {["Product","Supplier","Buy Price","Multiple","Est. Sale Price","Current Stock","Stock Value"].map(h => (
                     <th key={h} style={{ padding:"8px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
                   ))}
@@ -14840,7 +15419,7 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
   return (
     <div>
       {/* Header */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:20, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:20, boxShadow:T.shadowCard }}>
         <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:17 }}>{title}</h3>
         <p style={{ margin:"0 0 16px", fontSize:13, color:T.textMid }}>{hint}</p>
         <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"flex-end" }}>
@@ -14924,7 +15503,7 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
             if (!supplierProds.length) return null;
             const cats = [...new Set(supplierProds.map(p => p.category))];
             return (
-              <div key={supplier} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+              <div key={supplier} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:T.shadowCard }}>
                 <div style={{ padding:"10px 18px", background:T.midBlueBg, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10 }}>
                   <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>{supplier}</span>
                   <span style={{ fontSize:11, color:T.textLight }}>{supplierProds.length} product{supplierProds.length!==1?"s":""}</span>
@@ -14954,13 +15533,13 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
           if (!prods.length) return null;
           const cc = CAT_COLOURS[cat];
           return (
-            <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:T.shadowCard }}>
               <div style={{ padding:"10px 18px", background:cc.bg, borderBottom:`1px solid ${cc.border}` }}>
                 <CatBadge cat={cat}/>
               </div>
               {/* Column headings, so the four figures either side of the count
                   box are labelled once rather than only under each number. */}
-              <div style={{ padding:"6px 18px", display:"flex", alignItems:"center", gap:10, background:"#f8fafd", borderBottom:`1px solid ${T.border}`,
+              <div style={{ padding:"6px 18px", display:"flex", alignItems:"center", gap:10, background:T.bgInput, borderBottom:`1px solid ${T.border}`,
                 fontSize:9, letterSpacing:.6, textTransform:"uppercase", fontWeight:700, color:T.textLight }}>
                 <span style={{ flex:1, minWidth:0 }}>Product</span>
                 <span style={{ width:62, textAlign:"center", flexShrink:0 }}>Last check</span>
@@ -14981,7 +15560,7 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
       )}
 
       <div style={{ display:"flex", gap:12, marginTop:8, position:"sticky", bottom:20 }}>
-        <button onClick={handleSave} disabled={saving} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"13px 36px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:700, boxShadow:"0 2px 8px rgba(30,77,140,.25)" }}>
+        <button onClick={handleSave} disabled={saving} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"13px 36px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:700, boxShadow:`0 2px 8px rgba(${T.midRgb},.25)` }}>
           {saving ? "Saving…" : isEditing ? "Save Changes" : isOrder ? "Save Order" : "Save Stocktake"}
         </button>
         {onCancel && (
@@ -15013,7 +15592,7 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
   if(printMode) return (
     <div>
       <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText||"No history yet."}</pre>
+      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText||"No history yet."}</pre>
     </div>
   );
 
@@ -15031,15 +15610,15 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
         <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       <div style={{ display:"flex", gap:16, marginBottom:18 }}>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:4 }}>Stocktakes</div>
           <div style={{ fontSize:24, fontWeight:700, color:T.midBlue }}>{sorted.filter(e=>e.type==="stocktake").length}</div>
         </div>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:4 }}>Orders</div>
           <div style={{ fontSize:24, fontWeight:700, color:T.midBlue }}>{sorted.filter(e=>e.type==="order").length}</div>
         </div>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", flex:1, boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:4 }}>Total Est. Ordered</div>
           <div style={{ fontSize:24, fontWeight:700, color:T.midBlue }}>
             {fmt2(sorted.filter(e=>e.type==="order").reduce((sum,ev) =>
@@ -15060,7 +15639,7 @@ function EventHistoryView({ events, products, onEdit, onDelete }) {
             : { bg:T.greenBg,   text:T.green,   border:"#86efac", label:"Stocktake" };
 
           return (
-            <div key={ev.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div key={ev.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
               {/* Row header */}
               <div style={{ display:"flex", alignItems:"center", gap:14, padding:"14px 18px", cursor:"pointer" }}
                 onClick={() => setExpanded(isExpanded ? null : ev.id)}>
@@ -15382,7 +15961,7 @@ function BarReconcileView({ products, events }) {
   return (
     <div>
       {/* Period picker */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:18, display:"flex", alignItems:"flex-end", gap:16, flexWrap:"wrap", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:18, display:"flex", alignItems:"flex-end", gap:16, flexWrap:"wrap", boxShadow:T.shadowCard }}>
         <div>
           <FLabel>From stocktake</FLabel>
           <select value={fromIdx} onChange={e=>setFromIdx(Number(e.target.value))} style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 10px" }}>
@@ -15412,7 +15991,7 @@ function BarReconcileView({ products, events }) {
       )}
 
       {!sales && !catalogue && !loading && !catLoading && !err && (
-        <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:9, padding:"12px 16px", fontSize:13, color:"#1d4ed8", lineHeight:1.6 }}>
+        <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"12px 16px", fontSize:13, color:T.infoText, lineHeight:1.6 }}>
           Load the full till catalogue to map your products and recipes up front, or pick two stocktakes
           and load the sales for that period. Stock usage is compared against what Zettle actually rang up.
         </div>
@@ -15451,8 +16030,8 @@ function BarReconcileView({ products, events }) {
           period's sales have been loaded, so mapping can be done up front. */}
       {posLines.length > 0 && (
         <>
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:18, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-            <div style={{ padding:"12px 16px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:18, overflow:"hidden", boxShadow:T.shadowCard }}>
+            <div style={{ padding:"12px 16px", background:T.tint, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
               <span style={{ fontSize:13, fontWeight:700, color:T.midBlue }}>Till products &amp; recipes</span>
               {unmapped.length > 0 && <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:"#fef2f2", color:"#dc2626", border:"1px solid #fecaca" }}>{unmapped.length} unmapped</span>}
               {suggestedCount > 0 && <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:10, background:"#fffbeb", color:"#92400e", border:"1px solid #fde68a" }}>{suggestedCount} suggested</span>}
@@ -15547,14 +16126,14 @@ function BarReconcileView({ products, events }) {
 
           {/* Product level table — only meaningful once sales are loaded */}
           {sales && (
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
-            <div style={{ padding:"12px 18px", background:"#eef4fd", borderBottom:`1px solid ${T.border}`, fontSize:13, fontWeight:700, color:T.midBlue }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
+            <div style={{ padding:"12px 18px", background:T.tint, borderBottom:`1px solid ${T.border}`, fontSize:13, fontWeight:700, color:T.midBlue }}>
               Product detail
             </div>
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
-                  <tr style={{ background:"#f5f9ff" }}>
+                  <tr style={{ background:T.tintSoft }}>
                     {["Product","Used (containers)","Container ml","Sold (ml)","Sold (units)","Implied containers","Difference","Till value"].map(h=>(
                       <th key={h} style={{ padding:"9px 12px", textAlign:"left", color:T.textMid, fontSize:10, letterSpacing:1, textTransform:"uppercase", fontWeight:700, whiteSpace:"nowrap" }}>{h}</th>
                     ))}
@@ -15603,7 +16182,7 @@ function BarReportView({ products, events }) {
 
   if (stocktakes.length < 2) {
     return (
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:48, textAlign:"center", color:T.textLight, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:48, textAlign:"center", color:T.textLight, boxShadow:T.shadowCard }}>
         <div style={{ fontSize:32, marginBottom:12 }}>📦</div>
         <p style={{ fontSize:16, fontWeight:600, color:T.textMid, marginBottom:8 }}>At least two stocktakes needed</p>
         <p style={{ fontSize:13 }}>Record two stocktakes to see usage between them. Any orders placed between stocktakes will be accounted for automatically.</p>
@@ -15695,7 +16274,7 @@ function BarReportView({ products, events }) {
         <button onClick={handlePrint} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
       </div>
       {/* Controls */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:22, boxShadow:T.shadowCard }}>
         <h3 style={{ margin:"0 0 14px", color:T.midBlue, fontWeight:700, fontSize:16 }}>Compare Stocktakes</h3>
         <div style={{ display:"flex", gap:24, flexWrap:"wrap", alignItems:"flex-end" }}>
           <div>
@@ -15720,15 +16299,15 @@ function BarReportView({ products, events }) {
 
       {/* Summary cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:22 }}>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Products Used</div>
           <div style={{ fontSize:28, fontWeight:700, color:T.midBlue }}>{totUsed}</div>
         </div>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Est. Cost of Stock Used</div>
           <div style={{ fontSize:28, fontWeight:700, color:T.midBlue }}>{fmt2(totCost)}</div>
         </div>
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:T.shadowCard }}>
           <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:600, marginBottom:6 }}>Est. Sale Value</div>
           <div style={{ fontSize:28, fontWeight:700, color:T.green }}>{fmt2(totSale)}</div>
           {totCost > 0 && <div style={{ fontSize:12, color:T.textLight, marginTop:3 }}>Implied margin: {Math.round((1-totCost/totSale)*100)}%</div>}
@@ -15743,14 +16322,14 @@ function BarReportView({ products, events }) {
         const catCost = catRows.reduce((s,r)=>s+(r.costVal||0),0);
         const catSale = catRows.reduce((s,r)=>s+(r.saleVal||0),0);
         return (
-          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div key={cat} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:14, overflow:"hidden", boxShadow:T.shadowCard }}>
             <div style={{ padding:"12px 20px", background:cc.bg, borderBottom:`1px solid ${cc.border}`, display:"flex", alignItems:"center", gap:12 }}>
               <CatBadge cat={cat}/>
               <span style={{ marginLeft:"auto", fontSize:12, color:cc.text, fontWeight:600 }}>Cost: {fmt2(catCost)} · Est. sale: {fmt2(catSale)}</span>
             </div>
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
               <thead>
-                <tr style={{ background:"#f5f9ff" }}>
+                <tr style={{ background:T.tintSoft }}>
                   {["Product","Opening","Ordered","Closing","Used","Buy Price","Cost of Usage","Est. Sale Value"].map(h=>(
                     <th key={h} style={{ padding:"8px 12px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.1, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
                   ))}
@@ -15825,7 +16404,7 @@ function ProductsView({ products, onSave }) {
 
       {/* Edit/Add form */}
       {form && (
-        <div style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:24, marginBottom:20, boxShadow:"0 4px 16px rgba(59,130,246,.1)" }}>
+        <div style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:24, marginBottom:20, boxShadow:`0 4px 16px rgba(${T.accentRgb},.1)` }}>
           <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{editId==="new"?"New Product":"Edit Product"}</h3>
           <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr", gap:"12px 18px" }}>
             <div><FLabel required>Product Name</FLabel><FInput value={form.name} onChange={v=>updateForm("name",v)}/></div>
@@ -15851,10 +16430,10 @@ function ProductsView({ products, onSave }) {
         </div>
       )}
 
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
-            <tr style={{ background:"#eef4fd" }}>
+            <tr style={{ background:T.tint }}>
               {["Product","Category","Supplier","Buy Price","Multiple","Est. Sale",""].map(h=>(
                 <th key={h} style={{ padding:"10px 14px", textAlign:"left", color:T.textMid, fontSize:11, letterSpacing:1.2, textTransform:"uppercase", fontWeight:700 }}>{h}</th>
               ))}
@@ -15863,7 +16442,7 @@ function ProductsView({ products, onSave }) {
           <tbody>
             {filtered.map((p,i)=>(
               <tr key={p.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}
-                onMouseEnter={e=>e.currentTarget.style.background="#f5f9ff"}
+                onMouseEnter={e=>e.currentTarget.style.background=T.tintSoft}
                 onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                 <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600, color:T.text }}>{p.name}</td>
                 <td style={{ padding:"10px 14px" }}><CatBadge cat={p.category}/></td>
@@ -17131,7 +17710,7 @@ const LEGACY_TEMP_CONFIG = {
   hot: { label:"Hot", bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
 };
 const OUTCOME_CONFIG = {
-  undecided:    { label:"Undecided",    bg:"#f5f9ff", text:"#3d5a7a", border:"#c8d9ef" },
+  undecided:    { label:"Undecided",    bg:T.tintSoft, text:"#3d5a7a", border:T.border },
   booked:       { label:"Booked",       bg:"#dcfce7", text:"#166534", border:"#86efac" },
   didnotbook:   { label:"Did Not Book", bg:"#fee2e2", text:"#991b1b", border:"#fca5a5" },
 };
@@ -17161,7 +17740,7 @@ const TIMELINE_COLOURS = [
   { bg:"#0f766e", text:"#ffffff" }, // teal
   { bg:"#dc2626", text:"#ffffff" }, // red
   { bg:"#d97706", text:"#ffffff" }, // amber
-  { bg:"#2563eb", text:"#ffffff" }, // blue
+  { bg:T.accent, text:"#ffffff" }, // blue
   { bg:"#7c3aed", text:"#ffffff" }, // purple
   { bg:"#db2777", text:"#ffffff" }, // pink
   { bg:"#16a34a", text:"#ffffff" }, // green
@@ -17326,7 +17905,7 @@ function StaffTimelineReport({ bookings, staff }) {
   if(printMode) return (
     <div>
       <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:"#f8fafd", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
+      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
     </div>
   );
   return (
@@ -17375,7 +17954,7 @@ function StaffTimelineReport({ bookings, staff }) {
                 {downloading ? "Preparing…" : "⬇ Download as JPG"}
               </button>
             </div>
-            <div ref={timelineRef} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div ref={timelineRef} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard }}>
               <div style={{ marginBottom:20, paddingBottom:14, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
                 <div>
                   <div style={{ fontSize:18, fontWeight:700, color:T.midBlue }}>{booking.couple}</div>
@@ -17593,7 +18172,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
             <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               {blobUrls[file.url]
                 ? <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
-                    <img src={blobUrls[file.url]} alt={file.name} style={{ width:"100%", maxHeight:360, objectFit:"contain", background:"#f8fafd", display:"block", cursor:"pointer" }}/>
+                    <img src={blobUrls[file.url]} alt={file.name} style={{ width:"100%", maxHeight:360, objectFit:"contain", background:T.bgInput, display:"block", cursor:"pointer" }}/>
                   </a>
                 : fileErrs[file.url]
                   ? <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px", background:T.redBg, color:T.red, fontSize:12, lineHeight:1.5 }}>
@@ -17602,7 +18181,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                       <button onClick={()=>setFileErrs(p=>{ const n={...p}; delete n[file.url]; return n; })}
                         style={{ background:"#fff", border:`1px solid #fca5a5`, color:T.red, borderRadius:5, padding:"4px 10px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>Retry</button>
                     </div>
-                  : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading preview…</div>
+                  : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:T.bgInput, color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading preview…</div>
               }
               <FooterBar file={file} idx={idx} tight/>
             </div>
@@ -17610,7 +18189,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
           if (isPdf(file)) return (
             <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               {pdfUrls[file.url]
-                ? <iframe src={pdfUrls[file.url]} title={file.name} style={{ width:"100%", height:500, border:"none", background:"#f8fafd", display:"block" }}/>
+                ? <iframe src={pdfUrls[file.url]} title={file.name} style={{ width:"100%", height:500, border:"none", background:T.bgInput, display:"block" }}/>
                 : fileErrs[file.url]
                   ? <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px", background:T.redBg, color:T.red, fontSize:12, lineHeight:1.5 }}>
                       <span>&#9888;</span>
@@ -17618,7 +18197,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                       <button onClick={()=>setFileErrs(p=>{ const n={...p}; delete n[file.url]; return n; })}
                         style={{ background:"#fff", border:`1px solid #fca5a5`, color:T.red, borderRadius:5, padding:"4px 10px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>Retry</button>
                     </div>
-                  : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:"#f8fafd", color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading PDF…</div>
+                  : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:T.bgInput, color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading PDF…</div>
               }
               <FooterBar file={file} idx={idx} tight/>
             </div>
@@ -18067,7 +18646,7 @@ function BlockCalendar({ blocks, requests, bookings, from, to, onPick }) {
     if (blk && blk.kind === "open") return { bg: T.greenBg, fg: T.green, title: "Open" + (blk.slot ? " " + blk.slot : " all day") + (blk.note ? " — " + blk.note : "") };
     if (blk) return { bg: "#fef2f2", fg: T.red, title: (blk.slot ? "Blocked " + blk.slot : "Blocked all day") + (blk.note ? " — " + blk.note : "") };
     if (eventDates[ds]) return { bg: "#f4f6f9", fg: T.textLight, title: "Farm event — automatically blocked" };
-    if (viewingDates[ds]) return { bg: "#eef4fd", fg: T.midBlue, title: "Viewing booked" };
+    if (viewingDates[ds]) return { bg: T.tint, fg: T.midBlue, title: "Viewing booked" };
     return null;
   };
 
@@ -18138,7 +18717,7 @@ function BlockCalendar({ blocks, requests, bookings, from, to, onPick }) {
       </div>
 
       <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8, fontSize:11, color:T.textMid }}>
-        {[["#fef2f2", T.red, "Blocked"], [T.greenBg, T.green, "Opened"], ["#eef4fd", T.midBlue, "Viewing booked"],
+        {[["#fef2f2", T.red, "Blocked"], [T.greenBg, T.green, "Opened"], [T.tint, T.midBlue, "Viewing booked"],
           ["#f4f6f9", T.textLight, "Farm event"], [T.accent, "#fff", "Selected"]].map(function(x, i) {
           return (
             <span key={i} style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
@@ -18375,7 +18954,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   const renderReqCard = (req) => {
     const niceDate = fmtDate(req.date);
     return (
-      <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:"0 2px 6px rgba(37,99,235,.06)" }}>
+      <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:`0 2px 6px rgba(${T.shadowRgb},.06)` }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
@@ -18756,7 +19335,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
 
 function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, patchBooking }) {
   const [filter,    setFilter]    = useState("upcoming");
-  const [viewTab,   setViewTab]   = useState("viewings");
+  const [viewTab,   setViewTab]   = useNavTab("viewings");
+  const inSidebar = useContext(SidebarNavContext);
   const [refreshing, setRefreshing] = useState(false);
   const [editKey, setEditKey]     = useState(null); // `${sourceType}:${sourceId}:${vIndex}` currently being edited
   const [editV,   setEditV]       = useState(null);
@@ -18848,28 +19428,23 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
   return (
     <div style={{ paddingTop:28 }}>
       {vFlash && <div style={{ position:"fixed", top:20, right:20, zIndex:9999, background:T.green, color:"#fff", padding:"10px 20px", borderRadius:8, fontWeight:600, fontSize:13, boxShadow:"0 4px 12px rgba(0,0,0,.2)" }}>✓ Saved</div>}
-      {/* Tabs: Viewings | Blocks | Year Calendar */}
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24, flexWrap:"wrap" }}>
-        <h2 style={{ margin:0, color:"#6d28d9", fontWeight:700, fontSize:22, marginRight:8 }}>Viewings</h2>
-        {[["viewings","Viewings"],["blocks","Blocks"]].map(([v,l])=>{
-          const pendCount = (viewingRequests||[]).filter(r=>r.status==="pending").length;
-          return (
-          <button key={v} onClick={()=>setViewTab(v)} style={{ background:viewTab===v?T.midBlue:"#fff", color:viewTab===v?"#fff":T.textMid, border:`1.5px solid ${viewTab===v?T.midBlue:T.border}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:viewTab===v?700:400 }}>
-            {v==="viewings" && pendCount>0 ? "Viewings ("+pendCount+")" : l}
+      <PageHeader title="Viewings"
+        actions={<>
+          {setReportType && (
+            <button onClick={()=>{ setReportType("calendar"); setView("reports"); }}
+              style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+              📅 Year Calendar →
+            </button>
+          )}
+          <button onClick={()=>refreshRequests(true)} disabled={refreshing}
+            style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, opacity:refreshing?0.5:1 }}>
+            {refreshing ? "…" : "↻ Refresh"}
           </button>
-          );
-        })}
-        {setReportType && (
-          <button onClick={()=>{ setReportType("calendar"); setView("reports"); }}
-            style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.midBlue}`, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-            📅 Year Calendar →
-          </button>
-        )}
-        <button onClick={()=>refreshRequests(true)} disabled={refreshing}
-          style={{ marginLeft:"auto", background:"none", border:`1px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, opacity:refreshing?0.5:1 }}>
-          {refreshing ? "…" : "↻ Refresh"}
-        </button>
-      </div>
+        </>}/>
+      {!inSidebar && (
+        <TabStrip value={viewTab} onChange={setViewTab}
+          tabs={[["viewings","Viewings",(viewingRequests||[]).filter(r=>r.status==="pending").length],["blocks","Blocks"]]}/>
+      )}
 
       {viewTab==="blocks" && (
         <ViewingRequestsInbox mode="blocks"
@@ -18901,7 +19476,7 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
           const key = `${v.sourceType}:${v.sourceId}:${v.vIndex}`;
           const isEditing = editKey===key;
           return (
-          <div key={key} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 18px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", alignItems:"flex-start", gap:16 }}>
+          <div key={key} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 18px", boxShadow:T.shadowCard, display:"flex", alignItems:"flex-start", gap:16 }}>
             <div style={{ flexShrink:0, background:"#f3e8ff", border:"1px solid #c4b5fd", borderRadius:8, padding:"10px 14px", textAlign:"center", minWidth:60 }}>
               <div style={{ fontSize:18, fontWeight:700, color:"#6d28d9", lineHeight:1 }}>{v.date ? new Date(v.date+"T00:00:00").getDate() : "—"}</div>
               <div style={{ fontSize:10, color:"#7c3aed", fontWeight:600, marginTop:2 }}>{v.date ? new Date(v.date+"T00:00:00").toLocaleDateString("en-GB",{month:"short"}) : ""}</div>
@@ -19234,10 +19809,10 @@ function BrochureSettingsPanel() {
 function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, setView }) {
   const [feedCopied, setFeedCopied] = useState(false);
   const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
-  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard, marginBottom:20 };
   return (
     <div style={{ paddingTop:28, maxWidth:820 }}>
-      <h2 style={{ margin:"0 0 20px", color:T.midBlue, fontWeight:700, fontSize:22 }}>Settings</h2>
+      <PageHeader title="Settings"/>
 
       {/* Backup & restore — belongs on the main Settings page, not buried in
           the Lettings sub-settings where it was easy to miss. */}
@@ -19679,10 +20254,10 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
     <div style={{ paddingTop:28 }}>
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
 
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
-        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Enquiries</h2>
-        <button onClick={addNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>+ New Enquiry</button>
-      </div>
+      <PageHeader title="Enquiries"
+        actions={
+          <button onClick={addNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>+ New Enquiry</button>
+        }/>
 
       {/* Filters */}
       <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
@@ -19724,10 +20299,10 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
       </div>
 
       {/* List */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
-            <tr style={{ background:"#eef4fd" }}>
+            <tr style={{ background:T.tint }}>
               {["Name","Event","Date Preference","Pencil","Viewings","Last contact","Temp","Outcome",""].map(h=>{
                 const sortable = h === "Last contact";
                 const active = sortable && sortBy === "contact";
@@ -19757,7 +20332,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
               const days = daysSinceContact(e);
               const tc = TEMP_CONFIG[e.temperature];
               const rowBg = tc ? tc.bg : "transparent";
-              const rowHover = tc ? tc.bg : "#f0f6ff";
+              const rowHover = tc ? tc.bg : T.bg;
               return (
                 <tr key={e.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none", cursor:"pointer", transition:"background .12s", background:rowBg }}
                   onClick={()=>{ setSelected(e.id); setAdding(false); }}
@@ -19883,21 +20458,20 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
     <div style={{ paddingTop:28 }}>
       {confirmDlg && <ConfirmDialog message={confirmDlg.message} subMessage={confirmDlg.subMessage} onConfirm={confirmDlg.onConfirm} onCancel={()=>setConfirmDlg(null)}/>}
 
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22 }}>
-        <button onClick={onBack} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, cursor:"pointer", fontSize:13, padding:"6px 14px", borderRadius:6, fontFamily:"inherit" }}>← Back</button>
-        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:20, flex:1 }}>{form.name||"New Enquiry"}</h2>
+      <PageHeader title={form.name||"New Enquiry"} back="Enquiries" onBack={onBack}
+        actions={<>
         <TempBadge temp={form.temperature}/>
         <OutcomeBadge outcome={form.outcome}/>
         {dirty && <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save Changes</button>}
         {onConvertToBooking && <button onClick={handleConvertClick} style={{ background:T.green, color:"#fff", border:"none", padding:"9px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Convert to Booking</button>}
         <button onClick={onDelete} style={{ background:T.redBg, border:"none", color:T.red, padding:"9px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Delete</button>
-      </div>
+        </>}/>
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20 }}>
         {/* Left column: core info */}
         <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
           {/* Core details */}
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
             <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Enquiry Details</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
               <FRow label="Name"><input value={form.name||""} onChange={e=>update("name",e.target.value)} placeholder="Full name" style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
@@ -19928,7 +20502,7 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
           </div>
 
           {/* Outcome */}
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
             <h3 style={{ margin:"0 0 16px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Status</h3>
 
             {/* Temperature - radio buttons */}
@@ -19969,13 +20543,13 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
         <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
           {/* Gmail threads */}
           {form.email && (
-            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+            <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
               <h3 style={{ margin:"0 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Gmail</h3>
               <GmailThreadPanel emails={[form.email].filter(Boolean)} gmailToken={gmailToken} formData={form} update={(k,v)=>{ setForm(f=>({...f,[k]:v})); setDirty(true); }} onAutoSave={onUpdate} entityId={form.id||form.name?.replace(/[^a-z0-9]/gi,"_").toLowerCase()} entityType="enquiry"/>
             </div>
           )}
           {/* Contact history */}
-          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)", display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard, display:"flex", flexDirection:"column", gap:14 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.border}`, paddingBottom:10, marginBottom:4 }}>
             <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Contact History <span style={{ fontSize:12, color:T.textLight, fontWeight:400 }}>({(form.contacts||[]).length})</span></h3>
             <button onClick={()=>setAddingContact(true)} style={{ background:T.accentLight, border:"none", color:T.accent, padding:"5px 14px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>+ Add Contact</button>
@@ -20074,18 +20648,18 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
         </div>
 
         {/* Pencils card */}
-        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
           <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Pencil</div>
           <EnquiryPencilsSection form={form} setForm={setForm} onSave={onUpdate} onSavePencils={onSavePencils}
             bookings={bookings || []} enquiries={enquiries || []}/>
         </div>
         {/* Viewings card */}
-        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
           <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Viewings</div>
           <EnquiryViewingsSection form={form} setForm={setForm} setDirty={setDirty} onSave={onUpdate}/>
         </div>
         {/* Files card */}
-        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" }}>
+        <div style={{ gridColumn:"1/-1", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
           <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Files</div>
           <BookingFilesSection
             formData={form}
@@ -20286,7 +20860,7 @@ const BOX_STATUS = {
 // ── Small shared pieces ──────────────────────────────────────────────────────
 function BoxCard({ title, children, right, style }) {
   return (
-    <div style={Object.assign({ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 }, style || {})}>
+    <div style={Object.assign({ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"20px 22px", boxShadow:T.shadowCard, marginBottom:18 }, style || {})}>
       {(title || right) && (
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14, flexWrap:"wrap" }}>
           <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>{title}</div>
@@ -20372,8 +20946,10 @@ function BoxStat({ label, value, sub, tone }) {
 
 // ── The tab itself ───────────────────────────────────────────────────────────
 function BoxOfficeView({ bookings }) {
-  const [tab, setTab]       = useState("events");
+  // A sidebar click does what the Events/Orders/Door/Settings tabs did.
+  const [tab, setTab] = useNavTab("boxoffice", function(id) { if (id !== "events") setOpenEventId(null); });
   const [openEventId, setOpenEventId] = useState(null);
+  const inSidebar = useContext(SidebarNavContext);
 
   const tabs = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
 
@@ -20382,24 +20958,13 @@ function BoxOfficeView({ bookings }) {
   // stronger claim than a shared secret sitting in localStorage.
 
   return (
-    <div style={{ paddingTop:24 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:16, flexWrap:"wrap" }}>
-        <h2 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:22 }}>Box Office</h2>
-        <div style={{ fontSize:12, color:T.textLight }}>Ticketed events in the Grain Store</div>
-      </div>
+    <div style={{ paddingTop: UI_CLASSIC ? 24 : 0 }}>
+      <PageHeader title="Box Office" sub="Ticketed events in the Grain Store"/>
 
-      <div style={{ display:"flex", gap:2, marginBottom:22, borderBottom:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-        {tabs.map(function([id, label]) {
-          return (
-            <button key={id} onClick={function() { setTab(id); if (id !== "events") setOpenEventId(null); }}
-              style={{ background:"none", border:"none", borderBottom: tab===id ? `3px solid ${T.midBlue}` : "3px solid transparent",
-                color: tab===id ? T.midBlue : T.navInactive, fontFamily:"inherit", fontSize:13, fontWeight: tab===id ? 700 : 500,
-                padding:"6px 16px 10px", cursor:"pointer" }}>
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      {!inSidebar && (
+        <TabStrip tabs={BOX_TABS} value={tab}
+          onChange={function(id) { setTab(id); if (id !== "events") setOpenEventId(null); }}/>
+      )}
 
       {tab === "events" && (openEventId
         ? <BoxEventEditor eventId={openEventId} weddings={bookings} onBack={()=>setOpenEventId(null)}/>
@@ -20506,7 +21071,7 @@ function BoxEventRow({ ev, onOpen }) {
   return (
     <div onClick={()=>onOpen(ev.id)}
       style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 18px",
-        boxShadow:"0 2px 8px rgba(37,99,235,.06)", cursor:"pointer", display:"flex", gap:16, alignItems:"center", flexWrap:"wrap" }}>
+        boxShadow:T.shadowCard, cursor:"pointer", display:"flex", gap:16, alignItems:"center", flexWrap:"wrap" }}>
       <div style={{ flex:"1 1 220px", minWidth:0 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <span style={{ fontSize:16, fontWeight:700, color:T.text }}>{ev.name}</span>
@@ -20781,16 +21346,7 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
         </div>
       )}
 
-      <div style={{ display:"flex", gap:2, marginBottom:18, borderBottom:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-        {panes.map(function([id, label]) {
-          return (
-            <button key={id} onClick={()=>setPane(id)}
-              style={{ background:"none", border:"none", borderBottom: pane===id ? `3px solid ${T.accent}` : "3px solid transparent",
-                color: pane===id ? T.accent : T.navInactive, fontFamily:"inherit", fontSize:12.5, fontWeight: pane===id ? 700 : 500,
-                padding:"5px 14px 9px", cursor:"pointer" }}>{label}</button>
-          );
-        })}
-      </div>
+      <TabStrip tabs={panes} value={pane} onChange={setPane}/>
 
       {pane === "details" && <BoxEventDetails form={form} update={update}/>}
 
@@ -22179,9 +22735,9 @@ function BoxDoorScreen() {
     <div>
       {/* The running count, pinned. On the door this is the number that
           matters and it should never need scrolling to. */}
-      <div style={{ position:"sticky", top:0, zIndex:40, background:T.midBlue, color:"#fff", borderRadius:10,
+      <div style={{ position:"sticky", top:"var(--hb-sticky-top, 0px)", zIndex:30, background:T.midBlue, color:"#fff", borderRadius:10,
         padding:"14px 18px", marginBottom:16, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap",
-        boxShadow:"0 4px 14px rgba(30,77,140,.3)" }}>
+        boxShadow:`0 4px 14px rgba(${T.midRgb},.3)` }}>
         <div style={{ fontSize:30, fontWeight:800, lineHeight:1 }}>{totalIn} / {totalTickets}</div>
         <div style={{ fontSize:12.5, opacity:.9, flex:1, minWidth:140 }}>
           in · {(door && door.event && door.event.name) || ""}
@@ -22924,7 +23480,7 @@ function BoxOfficeDashboardCard({ setView }) {
   if (!events || !events.length) return null;
 
   return (
-    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:18 }}>
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px", boxShadow:T.shadowCard, marginBottom:18 }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
         <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Box Office</h3>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -23155,7 +23711,7 @@ function StaffLogins() {
     setForm(function(f) { return Object.assign({}, f, { password: w() + "-" + w() + "-" + Math.floor(10 + Math.random() * 90) }); });
   }
 
-  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", marginBottom:22, boxShadow:"0 2px 8px rgba(37,99,235,.06)" };
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", marginBottom:22, boxShadow:T.shadowCard };
 
   return (
     <div style={card}>
@@ -23312,7 +23868,7 @@ function ActivityLogPanel() {
   }
   useEffect(function() { load(); }, []);
 
-  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard, marginBottom:20 };
 
   // hbf_app_build_v1 is the deploy marker, written once by whichever browser
   // loads a new build first. It is a fact about the app, not a change to the
@@ -23463,7 +24019,7 @@ function SignWellPanel() {
     setBusy("");
   }
 
-  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:"0 2px 8px rgba(37,99,235,.06)", marginBottom:20 };
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard, marginBottom:20 };
 
   return (
     <div style={card}>
@@ -24624,3 +25180,6 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
     </div>
   );
 }
+
+// The sign-in screen (main.jsx) is drawn before App, so it borrows these.
+export { UI_CLASSIC, LOGO_B64, T as THEME };

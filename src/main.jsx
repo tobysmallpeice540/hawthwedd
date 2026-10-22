@@ -1,7 +1,7 @@
 import { StrictMode, useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createClient } from '@supabase/supabase-js'
-import App, { setSessionToken } from './App.jsx'
+import App, { setSessionToken, UI_CLASSIC, LOGO_B64, THEME } from './App.jsx'
 
 // Polyfill for Claude artifact storage API — maps to localStorage when running outside Claude
 if (typeof window.storage === 'undefined') {
@@ -60,14 +60,18 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
 })
 
-const T = { blue: '#1e4d8c', border: '#c8d9ef', text: '#1a2d4a', muted: '#7a9bbf', red: '#dc2626' }
+// Same switch as the app itself: the classic blue, or the sidebar layout's
+// slate and field green (see the THEME section of App.jsx).
+const T = UI_CLASSIC
+  ? { blue: '#1e4d8c', border: '#c8d9ef', text: '#1a2d4a', muted: '#7a9bbf', red: '#dc2626', page: '#f0f6ff', label: '#3d5a7a', input: '#f8fafd', font: 'system-ui, -apple-system, sans-serif' }
+  : { blue: THEME.accent, border: THEME.border, text: THEME.text, muted: THEME.textLight, red: THEME.red, page: THEME.slate, label: THEME.textMid, input: THEME.bgInput, font: THEME.fontUi }
 
 const field = (bad) => ({
   width: '100%', padding: '10px 13px', border: `1.5px solid ${bad ? T.red : T.border}`,
-  borderRadius: 8, fontSize: 15, color: T.text, background: '#f8fafd',
+  borderRadius: 8, fontSize: 15, color: T.text, background: T.input, fontFamily: 'inherit',
   outline: 'none', boxSizing: 'border-box',
 })
-const label = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: '#3d5a7a', marginBottom: 6 }
+const label = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.label, marginBottom: 6 }
 
 function LoginScreen({ onAuth }) {
   const [email, setEmail]   = useState('')
@@ -110,16 +114,17 @@ function LoginScreen({ onAuth }) {
 
   return (
     <div style={{
-      minHeight: '100vh', background: '#f0f6ff',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontFamily: 'system-ui, -apple-system, sans-serif', padding: 20,
+      minHeight: '100vh', background: T.page,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      fontFamily: T.font, padding: 20,
     }}>
+      {!UI_CLASSIC && <img src={`data:image/jpeg;base64,${LOGO_B64}`} alt="Hawthbush Farm" style={{ height: 104, width: 'auto', marginBottom: 28 }} />}
       <div style={{
-        background: '#fff', borderRadius: 16, padding: '48px 44px',
-        boxShadow: '0 8px 40px rgba(37,99,235,.12)', width: '100%', maxWidth: 400,
-        border: `1px solid ${T.border}`,
+        background: '#fff', borderRadius: UI_CLASSIC ? 16 : 14, padding: UI_CLASSIC ? '48px 44px' : '36px 36px 30px',
+        boxShadow: UI_CLASSIC ? '0 8px 40px rgba(37,99,235,.12)' : '0 20px 60px rgba(0,0,0,.28)', width: '100%', maxWidth: 400,
+        border: UI_CLASSIC ? `1px solid ${T.border}` : 'none', boxSizing: 'border-box',
       }}>
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+        {UI_CLASSIC && <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <div style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             background: T.blue, borderRadius: 12, width: 64, height: 64, marginBottom: 16,
@@ -134,7 +139,13 @@ function LoginScreen({ onAuth }) {
           </div>
           <div style={{ fontSize: 20, fontWeight: 700, color: T.text }}>Hawthbush Farm</div>
           <div style={{ fontSize: 13, color: T.muted, marginTop: 4 }}>Management</div>
-        </div>
+        </div>}
+        {!UI_CLASSIC && (
+          <div style={{ marginBottom: 26 }}>
+            <div style={{ fontFamily: THEME.fontDisplay, fontSize: 30, fontWeight: 600, color: THEME.midBlue, lineHeight: 1.1 }}>Sign in</div>
+            <div style={{ fontSize: 14, color: THEME.textMid, marginTop: 6 }}>Hawthbush Farm management</div>
+          </div>
+        )}
 
         {sent ? (
           <div>
@@ -180,7 +191,7 @@ function LoginScreen({ onAuth }) {
             <button
               onClick={mode === 'reset' ? sendReset : attempt}
               disabled={busy}
-              style={{ width: '100%', padding: 12, background: T.blue, color: '#fff', border: 'none', borderRadius: 8, fontSize: 15, fontWeight: 700, cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1, boxShadow: '0 2px 8px rgba(30,77,140,.25)', letterSpacing: .3 }}
+              style={{ width: '100%', padding: 12, background: T.blue, color: '#fff', border: 'none', borderRadius: 8, fontSize: 15, fontWeight: 700, cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1, boxShadow: UI_CLASSIC ? '0 2px 8px rgba(30,77,140,.25)' : 'none', letterSpacing: .3, fontFamily: 'inherit' }}
             >
               {busy ? 'Please wait…' : mode === 'reset' ? 'Email me a reset link' : 'Sign in'}
             </button>
@@ -200,7 +211,7 @@ function LoginScreen({ onAuth }) {
 
 function Splash({ children }) {
   return (
-    <div style={{ minHeight: '100vh', background: '#f0f6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif', color: T.muted, fontSize: 14 }}>
+    <div style={{ minHeight: '100vh', background: T.page, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: T.font, color: UI_CLASSIC ? T.muted : 'rgba(255,255,255,.6)', fontSize: 14 }}>
       {children}
     </div>
   )
