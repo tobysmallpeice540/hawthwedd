@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Stripe setup | Hawthbush Farm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #f9f6f1; color: #2d2a25; font-family: Jost, Helvetica, Arial, sans-serif; font-weight: 400; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 56px 20px; }
+  .panel { background: #fff; border: 1px solid #e8e2d9; border-radius: 14px; padding: 32px 28px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
+  h1 { font-family: "Cormorant Garamond", Georgia, serif; font-weight: 600; font-size: 28px; margin: 0 0 12px; }
+  p { line-height: 1.65; margin: 0 0 12px; color: #2d2a25; }
+  .muted { color: #7a7060; font-size: 14px; }
+  .brand { text-align: center; margin-bottom: 22px; }
+  .brand img { height: 56px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><a href="https://www.hawthbushfarm.co.uk"><img src="/email-logo.png" alt="Hawthbush Farm"></a></div>
+  <div class="panel" id="done">
+    <h1>Thank you</h1>
+    <p>Stripe has sent your details back to us. We'll check that your account is ready to take payments and let you know.</p>
+    <p class="muted">If Stripe still needs something from you, it will email you directly. You can also sign in to your Stripe dashboard at any time to finish setting up.</p>
+  </div>
+  <div class="panel" id="expired" style="display:none">
+    <h1>That link has expired</h1>
+    <p>Stripe setup links only work once and for a short time. Please ask Hawthbush Farm to send you a fresh one.</p>
+  </div>
+</div>
+<script>
+  if (/[?&]expired=1/.test(location.search)) {
+    document.getElementById("done").style.display = "none";
+    document.getElementById("expired").style.display = "block";
+  }
+</script>
+</body>
+</html>

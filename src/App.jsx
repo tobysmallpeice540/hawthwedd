@@ -20513,6 +20513,7 @@ function BoxEventRow({ ev, onOpen }) {
           {statusPill}
           {ev.access_code && <BoxPill bg="#f3e8ff" fg="#6b21a8">Private</BoxPill>}
           {ev.payment_mode === "deposit" && <BoxPill bg={T.amberBg} fg={T.amber}>Deposit</BoxPill>}
+          {ev.payee_id && <BoxPill>Chef</BoxPill>}
         </div>
         <div style={{ fontSize:12.5, color:T.textLight, marginTop:4 }}>
           {boxWhen(ev.starts_at)} · {ev.venue_name}
@@ -20546,6 +20547,7 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
   const [dirty, setDirty]     = useState(false);
   const [pane, setPane]       = useState("details");
   const [askDelete, setAskDelete] = useState(false);
+  const [payees, setPayees]   = useState([]);
 
   async function load() {
     setLoading(true); setErr("");
@@ -20556,23 +20558,53 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
         starts_local: isoToLondonLocal(r.event.starts_at),
         ends_local:   isoToLondonLocal(r.event.ends_at),
         deposit_pounds: penceToPounds(r.event.deposit_pence),
+        commission_pct: bpsToPct(r.event.commission_bps),
       }));
       setDirty(false);
     } catch (e) { setErr(e.message); }
+    // The list of chefs is a nicety for the seller picker. If it can't be read
+    // (the chef migration hasn't been run yet) the event still edits normally.
+    try { const pr = await boxAdmin("payees.list"); setPayees(pr.payees || []); }
+    catch (e) { setPayees([]); }
     setLoading(false);
   }
   useEffect(function() { load(); }, [eventId]);
 
   function update(k, v) { setForm(function(f) { return Object.assign({}, f, { [k]: v }); }); setDirty(true); }
 
+  // Choosing a chef also settles the payment option: chef events are full
+  // payment only, and the server refuses anything else.
+  function setSeller(payeeId) {
+    setForm(function(f) {
+      return Object.assign({}, f, {
+        payee_id: payeeId || null,
+        commission_pct: payeeId ? f.commission_pct : "",
+        payment_mode: payeeId ? "full" : f.payment_mode,
+      });
+    });
+    setDirty(true);
+  }
+
   async function save(extra) {
     setSaving(true); setErr("");
     try {
-      const payload = Object.assign({}, form, extra || {}, {
+      // Only send the seller fields if this event actually has them. They exist
+      // only once the chef migration has been run; sending them before that
+      // would make Supabase reject the whole save.
+      const hasChefCols = form.payee_id !== undefined;
+      const commissionBps = hasChefCols && form.payee_id ? pctToBps(form.commission_pct) : null;
+      if (hasChefCols && form.payee_id && Number.isNaN(commissionBps)) {
+        setErr("The commission needs to be a number, like 15."); setSaving(false); return;
+      }
+      const chefFields = hasChefCols
+        ? { payee_id: form.payee_id || null, commission_bps: commissionBps }
+        : {};
+      const chefLocks = hasChefCols && form.payee_id ? { payment_mode: "full", deposit_pounds: "" } : {};
+      const payload = Object.assign({}, form, extra || {}, chefFields, chefLocks, {
         id: eventId,
         starts_at: londonToIso((extra && extra.starts_local) || form.starts_local),
         ends_at:   londonToIso((extra && extra.ends_local) || form.ends_local),
-        deposit_pence: poundsToPence((extra && extra.deposit_pounds) || form.deposit_pounds),
+        deposit_pence: hasChefCols && form.payee_id ? 0 : poundsToPence((extra && extra.deposit_pounds) || form.deposit_pounds),
         capacity:      form.capacity === "" || form.capacity == null ? null : Number(form.capacity),
         min_per_order: form.min_per_order === "" || form.min_per_order == null ? null : Number(form.min_per_order),
         access_code:   String(form.access_code || "").trim() || null,
@@ -20883,8 +20915,57 @@ function BoxEventSettings({ form, update }) {
         </BoxField>
       </BoxCard>
 
+      {form.payee_id !== undefined && (() => {
+        const chef = payees.find(function(p) { return p.id === form.payee_id; });
+        const effPct = form.commission_pct !== "" && form.commission_pct != null
+          ? form.commission_pct : (chef ? bpsToPct(chef.default_commission_bps) : "");
+        return (
+          <BoxCard title="Who sells these tickets">
+            <BoxField label="Seller" width={340}>
+              <select value={form.payee_id || ""} onChange={e=>setSeller(e.target.value)} style={boxInput}>
+                <option value="">Hawthbush Farm — we sell them</option>
+                {payees.map(function(p) {
+                  return <option key={p.id} value={p.id}>{p.legal_name}{p.charges_enabled ? "" : " (Stripe not ready)"}</option>;
+                })}
+              </select>
+            </BoxField>
+            {!chef && (
+              <p style={{ fontSize:12, color:T.textLight, margin:"10px 0 0", lineHeight:1.6 }}>
+                Payments go to Hawthbush Farm's own ticketing Stripe account, as for any other event. Chefs are added
+                under Box Office {"→"} Settings.
+              </p>
+            )}
+            {chef && (
+              <div style={{ marginTop:14, display:"grid", gap:12 }}>
+                <div style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", fontSize:12.5, color:T.textMid, lineHeight:1.7 }}>
+                  <strong style={{ color:T.midBlue }}>Sold by {chef.legal_name}.</strong> Customers pay them directly and the
+                  tickets, terms and emails name them as the seller. Hawthbush Farm's commission ({effPct || "0"}%, VAT
+                  included) is taken automatically from each payment, and is returned if a ticket is refunded.
+                  <br/>Chef events are full payment only.
+                </div>
+                {!chef.charges_enabled && (
+                  <div style={{ background:T.amberBg, border:`1px solid ${T.amber}`, color:T.amber, borderRadius:8, padding:"10px 13px", fontSize:12.5, lineHeight:1.6 }}>
+                    {chef.legal_name} hasn't finished setting up Stripe, so this event can only be saved as a draft. Send
+                    their link or check their status under Box Office {"→"} Settings.
+                  </div>
+                )}
+                <BoxField label="Commission for this event (%)" width={230}
+                  hint={"Leave blank to use " + bpsToPct(chef.default_commission_bps) + "%, the rate set for this chef."}>
+                  <BoxInput value={form.commission_pct} onChange={v=>update("commission_pct", v)} placeholder={bpsToPct(chef.default_commission_bps)}/>
+                </BoxField>
+              </div>
+            )}
+          </BoxCard>
+        );
+      })()}
+
       <BoxCard title="Payment">
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+        {form.payee_id && (
+          <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.65 }}>
+            Events sold by a chef are <strong>full payment only</strong> — no deposits.
+          </div>
+        )}
+        <div style={{ display: form.payee_id ? "none" : "flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
           {[["full","Pay in full"],["deposit","Deposit now, balance later"]].map(function([v, l]) {
             const on = form.payment_mode === v;
             return (
@@ -20895,7 +20976,7 @@ function BoxEventSettings({ form, update }) {
             );
           })}
         </div>
-        {form.payment_mode === "deposit" && (
+        {form.payment_mode === "deposit" && !form.payee_id && (
           <div>
             <div style={{ display:"flex", gap:14, flexWrap:"wrap" }}>
               <BoxField label="Deposit per ticket (£)" width={170}>
@@ -22489,6 +22570,8 @@ function BoxSettingsScreen() {
         </div>
       </BoxCard>
 
+      <BoxChefsPanel/>
+
       <BoxCard title="Emails" right={<div style={{ display:"flex", gap:10, alignItems:"center" }}>
         {flash && <span style={{ fontSize:12, color:T.green, fontWeight:700 }}>{flash}</span>}
         <BoxBtn onClick={saveTemplates}>Save templates</BoxBtn>
@@ -22509,6 +22592,187 @@ function BoxSettingsScreen() {
         </div>
       </BoxCard>
     </div>
+  );
+}
+
+// ── Chefs: who can be the legal seller of a ticketed event ───────────────────
+// A chef event is sold BY the chef: the customer pays their Stripe account
+// directly, tickets and terms name them, and Hawthbush Farm takes a commission
+// as an application fee. This is where chefs are added and sent their Stripe
+// onboarding link. The legal name matters — it is the contracting party.
+// Commission is held in basis points (1500 = 15%), shown here as a percentage.
+function bpsToPct(bps) { return bps == null || bps === "" ? "" : String(Number(bps) / 100); }
+function pctToBps(pct) {
+  const s = String(pct == null ? "" : pct).trim();
+  if (s === "") return null;
+  const n = Number(s);
+  return Number.isNaN(n) ? NaN : Math.round(n * 100);
+}
+const BOX_ENTITY_LABELS = { sole_trader: "Sole trader", company: "Company", other: "Other" };
+const BLANK_CHEF = { legal_name: "", trading_name: "", entity_type: "sole_trader", email: "", commission_pct: "15" };
+
+function BoxChefsPanel() {
+  const [payees, setPayees]   = useState(null);   // null = not loaded yet
+  const [err, setErr]         = useState("");
+  const [form, setForm]       = useState(null);   // null = not editing
+  const [saving, setSaving]   = useState(false);
+  const [busyId, setBusyId]   = useState(null);
+  const [link, setLink]       = useState(null);   // { id, url } — the latest onboarding link
+  const [copied, setCopied]   = useState(false);
+  const [notice, setNotice]   = useState("");
+
+  async function load() {
+    try { const r = await boxAdmin("payees.list"); setPayees(r.payees || []); setErr(""); }
+    catch (e) {
+      setPayees([]);
+      setErr(e.status === 401
+        ? "This device hasn't been given the admin key yet — enter it and try again."
+        : e.message);
+    }
+  }
+  useEffect(function() { load(); }, []);
+
+  function edit(p) {
+    setForm(p ? {
+      id: p.id, legal_name: p.legal_name, trading_name: p.trading_name || "",
+      entity_type: p.entity_type, email: p.email || "", commission_pct: bpsToPct(p.default_commission_bps),
+    } : Object.assign({}, BLANK_CHEF));
+    setErr(""); setNotice("");
+  }
+  function upd(k, v) { setForm(function(f) { return Object.assign({}, f, { [k]: v }); }); }
+
+  async function save() {
+    const bps = pctToBps(form.commission_pct);
+    if (bps === null || Number.isNaN(bps)) { setErr("Enter the commission as a number, like 15."); return; }
+    setSaving(true); setErr("");
+    try {
+      await boxAdmin("payees.save", { payee: {
+        id: form.id, legal_name: form.legal_name, trading_name: form.trading_name,
+        entity_type: form.entity_type, email: form.email, default_commission_bps: bps,
+      } });
+      setForm(null);
+      await load();
+    } catch (e) { setErr(e.message); }
+    setSaving(false);
+  }
+
+  async function invite(p) {
+    setBusyId(p.id); setErr(""); setLink(null); setNotice("");
+    try {
+      const r = await boxAdmin("payees.invite", { id: p.id });
+      setLink({ id: p.id, url: r.url });
+      await load();
+    } catch (e) { setErr(e.message); }
+    setBusyId(null);
+  }
+
+  async function check(p) {
+    setBusyId(p.id); setErr(""); setNotice("");
+    try {
+      const r = await boxAdmin("payees.refresh", { id: p.id });
+      setNotice(p.legal_name + (r.payee && r.payee.charges_enabled
+        ? " is ready to take payments."
+        : " hasn't finished setting up Stripe yet."));
+      await load();
+    } catch (e) { setErr(e.message); }
+    setBusyId(null);
+  }
+
+  async function remove(p) {
+    setBusyId(p.id); setErr("");
+    try { await boxAdmin("payees.delete", { id: p.id }); await load(); }
+    catch (e) { setErr(e.message); }
+    setBusyId(null);
+  }
+
+  return (
+    <BoxCard title="Chefs" right={!form && <BoxBtn onClick={()=>edit(null)}>Add a chef</BoxBtn>}>
+      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.65 }}>
+        For supper clubs and other nights where a chef is the legal seller. Customers pay the chef's own Stripe account
+        directly; Hawthbush Farm's commission is taken automatically. Choose a chef as the seller on the event itself.
+        Use the chef's <strong>legal name</strong> — it appears to customers as who the contract is with.
+      </p>
+
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12, lineHeight:1.55 }}>{err}</div>}
+      {notice && <div style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.textMid, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{notice}</div>}
+
+      {form && (
+        <div style={{ border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 16px 14px", marginBottom:14, display:"grid", gap:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:12 }}>
+            <BoxField label="Legal name"><BoxInput value={form.legal_name} onChange={v=>upd("legal_name", v)} placeholder="As on their contract"/></BoxField>
+            <BoxField label="Trading name (optional)"><BoxInput value={form.trading_name} onChange={v=>upd("trading_name", v)}/></BoxField>
+            <BoxField label="They trade as">
+              <select value={form.entity_type} onChange={e=>upd("entity_type", e.target.value)} style={boxInput}>
+                <option value="sole_trader">Sole trader</option>
+                <option value="company">Company</option>
+                <option value="other">Other</option>
+              </select>
+            </BoxField>
+            <BoxField label="Email"><BoxInput type="email" value={form.email} onChange={v=>upd("email", v)} placeholder="Used to start their Stripe account"/></BoxField>
+            <BoxField label="Commission (%)" hint="Default for this chef, VAT included. Each event can override it.">
+              <BoxInput value={form.commission_pct} onChange={v=>upd("commission_pct", v)}/>
+            </BoxField>
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <BoxBtn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save chef"}</BoxBtn>
+            <BoxBtn tone="ghost" onClick={()=>{ setForm(null); setErr(""); }}>Cancel</BoxBtn>
+          </div>
+        </div>
+      )}
+
+      {payees === null && <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>}
+      {payees && !payees.length && !form && !err && (
+        <div style={{ fontSize:13, color:T.textLight }}>No chefs yet.</div>
+      )}
+
+      {(payees || []).map(function(p) {
+        const state = p.charges_enabled ? "ready" : p.stripe_account_id ? "pending" : "new";
+        const busy = busyId === p.id;
+        return (
+          <div key={p.id} style={{ borderTop:`1px solid ${T.border}`, padding:"13px 0" }}>
+            <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+              <div style={{ flex:"1 1 240px", minWidth:0 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{p.legal_name}</div>
+                <div style={{ fontSize:12, color:T.textLight, marginTop:2 }}>
+                  {[p.trading_name, BOX_ENTITY_LABELS[p.entity_type], bpsToPct(p.default_commission_bps) + "% commission",
+                    p.event_count ? p.event_count + " event" + (p.event_count === 1 ? "" : "s") : ""].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+              {state === "ready" && <BoxPill bg={T.greenBg} fg={T.green}>Ready for payments</BoxPill>}
+              {state === "pending" && <BoxPill bg={T.amberBg} fg={T.amber}>Stripe setup incomplete</BoxPill>}
+              {state === "new" && <BoxPill>Not invited</BoxPill>}
+            </div>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:10 }}>
+              {state !== "ready" && (
+                <BoxBtn onClick={()=>invite(p)} disabled={busy}>
+                  {busy ? "Working…" : state === "new" ? "Get Stripe onboarding link" : "Get a fresh link"}
+                </BoxBtn>
+              )}
+              {p.stripe_account_id && <BoxBtn tone="ghost" onClick={()=>check(p)} disabled={busy}>Check Stripe status</BoxBtn>}
+              <BoxBtn tone="ghost" onClick={()=>edit(p)} disabled={busy}>Edit</BoxBtn>
+              {!p.event_count && <BoxBtn tone="danger" onClick={()=>remove(p)} disabled={busy}>Remove</BoxBtn>}
+            </div>
+
+            {link && link.id === p.id && (
+              <div style={{ marginTop:12, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px" }}>
+                <div style={{ fontSize:12, color:T.textMid, lineHeight:1.6, marginBottom:8 }}>
+                  Send this link to {p.legal_name}. It works <strong>once</strong> and expires within a few minutes, so
+                  send it straight away — or press the button again for a new one. It opens Stripe's own form for
+                  <em> their</em> account, so don't fill it in on their behalf.
+                </div>
+                <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                  <code style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:6, padding:"7px 10px", fontSize:11.5, color:T.text,
+                    maxWidth:"100%", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", display:"block", flex:"1 1 260px" }}>{link.url}</code>
+                  <BoxBtn tone={copied ? "green" : "ghost"} onClick={function() {
+                    try { navigator.clipboard.writeText(link.url); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch (e) {}
+                  }}>{copied ? "✓ Copied" : "Copy"}</BoxBtn>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </BoxCard>
   );
 }
 

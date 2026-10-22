@@ -153,6 +153,28 @@ exports.handler = async function(event) {
   }
 
   try {
+    // ── 0. Chef events are not payable through this path yet ────────────────
+    // A chef-run event must be charged on the CHEF's Stripe account, with
+    // Hawthbush's commission taken as an application fee. This function does
+    // not do that yet, and letting it carry on would take a chef's ticket money
+    // into Hawthbush's own account — the one outcome this whole feature exists
+    // to prevent. So it refuses, loudly in the log and politely to the buyer.
+    // Remove this guard only in the change that adds the chef charge itself.
+    //
+    // If the chef columns do not exist yet (migration not run) no event can be
+    // a chef event, so a failed read here is fine to ignore.
+    try {
+      var chefGuard = await sbRest("box_events?slug=eq." + encodeURIComponent(slug) + "&select=payee_id");
+      if (chefGuard && chefGuard[0] && chefGuard[0].payee_id) {
+        console.error("create-ticket-checkout REFUSED: " + slug + " is a chef event and chef checkout is not enabled yet");
+        return {
+          statusCode: 503,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ error: "Tickets for this event aren't on sale just yet. Please check back soon." })
+        };
+      }
+    } catch (guardErr) { /* no chef columns yet — nothing to guard */ }
+
     // ── 1. Reserve. This either succeeds completely or changes nothing. ──────
     var reserved = await sbRpc("box_reserve_order", {
       p_slug: slug,

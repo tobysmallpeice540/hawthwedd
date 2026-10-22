@@ -32,6 +32,22 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const ADMIN_TOKEN  = process.env.HBF_ADMIN_TOKEN;
 const SITE_ORIGIN  = "https://hawthbushfarm.netlify.app";
 
+// Stripe is needed only for the chef actions (payees.invite / payees.refresh),
+// and this function also runs the door, so it must never fail to LOAD because a
+// key is missing. The client is built on first use instead.
+//
+// Ticketing's own Stripe account, never the lettings one — the same key and the
+// same pinned API version as create-ticket-checkout.js, for the same reasons
+// (see the long note there). Do not fall back to STRIPE_SECRET_KEY.
+var stripeClient = null;
+function getStripe() {
+  if (!process.env.STRIPE_TICKET_SECRET_KEY) return null;
+  if (!stripeClient) {
+    stripeClient = require("stripe")(process.env.STRIPE_TICKET_SECRET_KEY, { apiVersion: "2024-06-20" });
+  }
+  return stripeClient;
+}
+
 // Columns the app is allowed to write. Anything else in the payload is
 // ignored rather than trusted — including qr_token, admitted and paid_at,
 // which are not the app's to set.
@@ -40,8 +56,17 @@ const EVENT_COLS = [
   "description","header_image","page_image","capacity","buy_button_label",
   "hide_map","access_code","listed","show_remaining","low_threshold",
   "min_per_order","payment_mode","deposit_pence","balance_days","waitlist_on",
-  "waitlist_cta","waitlist_text","waitlist_confirmation"
+  "waitlist_cta","waitlist_text","waitlist_confirmation",
+  // Who sells the tickets: null payee = Hawthbush, otherwise a chef (box_payees)
+  // and an optional per-event commission override in basis points.
+  "payee_id","commission_bps"
 ];
+// What the office may edit about a chef. Deliberately NOT stripe_account_id or
+// charges_enabled — those come from Stripe, never from the browser.
+const PAYEE_COLS = [
+  "legal_name","trading_name","entity_type","email","default_commission_bps"
+];
+const ENTITY_TYPES = ["sole_trader","company","other"];
 const TYPE_COLS = [
   "event_id","name","description","quantity","price_pence",
   "min_per_order","max_per_order","sort_order","hidden",
@@ -209,6 +234,147 @@ exports.handler = async function(event) {
       case "ping":
         return ok({ ok: true, role: caller.role, who: caller.who });
 
+      // ── CHEFS (who can be the legal seller of an event) ───────────────────
+      // Admin only: none of these are in DOOR_ACTIONS, so a bar login cannot
+      // reach a chef's name, email or Stripe account.
+      case "payees.list": {
+        var payees = await sbRest("box_payees?select=*&order=legal_name.asc");
+        var usedBy = await sbRest("box_events?payee_id=not.is.null&select=payee_id");
+        var counts = {};
+        (usedBy || []).forEach(function(r) { counts[r.payee_id] = (counts[r.payee_id] || 0) + 1; });
+        return ok({
+          payees: (payees || []).map(function(p) {
+            return Object.assign({}, p, { event_count: counts[p.id] || 0 });
+          })
+        });
+      }
+
+      case "payees.save": {
+        var pPayload = pick(body.payee || {}, PAYEE_COLS);
+        pPayload.legal_name = String(pPayload.legal_name == null ? "" : pPayload.legal_name).trim();
+        if (!pPayload.legal_name) return bad("A chef needs a legal name — it is the name tickets are sold under.");
+        if (pPayload.entity_type !== undefined && ENTITY_TYPES.indexOf(pPayload.entity_type) < 0) {
+          return bad("Choose sole trader, company or other.");
+        }
+        if (pPayload.email != null) {
+          pPayload.email = String(pPayload.email).trim();
+          if (pPayload.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(pPayload.email)) {
+            return bad("That email address doesn't look right.");
+          }
+        }
+        if (pPayload.default_commission_bps !== undefined) {
+          var dBps = Number(pPayload.default_commission_bps);
+          if (!Number.isInteger(dBps) || dBps < 0 || dBps > 10000) {
+            return bad("The commission must be a percentage between 0 and 100.");
+          }
+          pPayload.default_commission_bps = dBps;
+        }
+        var pSaved;
+        if (body.payee && body.payee.id) {
+          pSaved = await sbRest("box_payees?id=eq." + body.payee.id, { method: "PATCH", body: pPayload });
+        } else {
+          pSaved = await sbRest("box_payees", { method: "POST", body: pPayload });
+        }
+        return ok({ payee: pSaved && pSaved[0] });
+      }
+
+      case "payees.delete": {
+        var inUse = await sbRest("box_events?payee_id=eq." + body.id + "&select=id&limit=1");
+        if (inUse && inUse.length) {
+          return bad("That chef is attached to an event, so they can't be removed. Change the event's seller first.", 409);
+        }
+        await sbRest("box_payees?id=eq." + body.id, { method: "DELETE", prefer: "return=minimal" });
+        return ok({ ok: true });
+      }
+
+      // Create the chef's connected Stripe account (once) and mint an onboarding
+      // link for it. Links are single-use and short-lived, so a fresh one is
+      // made every time this is called; the account itself is created only once.
+      //
+      // The account is created with the controller settings that match a
+      // Standard account: the chef gets their own full Stripe dashboard, Stripe
+      // collects whatever it needs from them, the chef pays Stripe's fees and
+      // carries payment losses and disputes. That is what makes them, and not
+      // Hawthbush, the seller. Do not change these to Express-style values
+      // without reading claude/scope-chef-ticketing.md first — losses.payments
+      // = application would put the refund and dispute risk on Hawthbush.
+      case "payees.invite": {
+        var stripeI = getStripe();
+        if (!stripeI) return bad("Ticketing's Stripe key isn't set in Netlify yet (STRIPE_TICKET_SECRET_KEY), so no link can be made.", 500);
+        var iRows = await sbRest("box_payees?id=eq." + body.id + "&select=*");
+        var iPayee = iRows && iRows[0];
+        if (!iPayee) return bad("Chef not found", 404);
+
+        try {
+          var acctId = iPayee.stripe_account_id;
+          if (!acctId) {
+            var acctParams = {
+              country: "GB",
+              controller: {
+                stripe_dashboard: { type: "full" },
+                fees: { payer: "account" },
+                losses: { payments: "stripe" },
+                requirement_collection: "stripe"
+              },
+              metadata: { hbf_payee_id: iPayee.id, hbf_legal_name: iPayee.legal_name }
+            };
+            if (iPayee.email) acctParams.email = iPayee.email;
+            if (iPayee.entity_type === "sole_trader") acctParams.business_type = "individual";
+            if (iPayee.entity_type === "company") acctParams.business_type = "company";
+
+            var newAcct = await stripeI.accounts.create(acctParams);
+
+            // Only claim it if nobody else has in the meantime (a double click).
+            // Losing that race just means using the account that won.
+            var claimed = await sbRest("box_payees?id=eq." + iPayee.id + "&stripe_account_id=is.null", {
+              method: "PATCH", body: { stripe_account_id: newAcct.id }
+            });
+            if (claimed && claimed.length) {
+              acctId = newAcct.id;
+            } else {
+              var reread = await sbRest("box_payees?id=eq." + iPayee.id + "&select=stripe_account_id");
+              acctId = reread && reread[0] && reread[0].stripe_account_id;
+            }
+          }
+
+          var link = await stripeI.accountLinks.create({
+            account: acctId,
+            type: "account_onboarding",
+            // Single-use links expire, and this page says so plainly rather
+            // than minting a new one for whoever holds an old URL.
+            refresh_url: SITE_ORIGIN + "/chef-connected.html?expired=1",
+            return_url:  SITE_ORIGIN + "/chef-connected.html"
+          });
+          return ok({ url: link.url, expires_at: link.expires_at, account: acctId });
+        } catch (se) {
+          console.error("payees.invite stripe error:", se && se.type ? "[" + se.type + "] " : "", se && se.message);
+          return bad("Stripe said: " + (se && se.message ? se.message : "something went wrong") +
+            " — if this mentions Connect, check it is switched on for the ticketing account.", 502);
+        }
+      }
+
+      // Ask Stripe where the chef's setup has got to. The Connect webhook will
+      // do this automatically once it is wired; until then this is the button.
+      case "payees.refresh": {
+        var stripeR = getStripe();
+        if (!stripeR) return bad("Ticketing's Stripe key isn't set in Netlify yet (STRIPE_TICKET_SECRET_KEY).", 500);
+        var rRows = await sbRest("box_payees?id=eq." + body.id + "&select=*");
+        var rPayee = rRows && rRows[0];
+        if (!rPayee) return bad("Chef not found", 404);
+        if (!rPayee.stripe_account_id) return bad("No Stripe account has been created for this chef yet — send them an onboarding link first.", 409);
+        try {
+          var acctNow = await stripeR.accounts.retrieve(rPayee.stripe_account_id);
+          var rSaved = await sbRest("box_payees?id=eq." + rPayee.id, {
+            method: "PATCH",
+            body: { charges_enabled: !!acctNow.charges_enabled, details_submitted: !!acctNow.details_submitted }
+          });
+          return ok({ payee: rSaved && rSaved[0] });
+        } catch (se2) {
+          console.error("payees.refresh stripe error:", se2 && se2.message);
+          return bad("Stripe said: " + (se2 && se2.message ? se2.message : "something went wrong"), 502);
+        }
+      }
+
       // ── EVENTS ─────────────────────────────────────────────────────────────
       case "events.list": {
         var events = await sbRest("box_events?select=*&order=starts_at.desc.nullslast");
@@ -284,6 +450,68 @@ exports.handler = async function(event) {
         if (!payload.name) return bad("An event needs a name.");
         if (!payload.slug) payload.slug = slugify(payload.name);
         payload.slug = slugify(payload.slug);
+
+        // ── Who sells the tickets ─────────────────────────────────────────────
+        // An empty selection means Hawthbush sells, so normalise "" to null.
+        if (payload.payee_id === "") payload.payee_id = null;
+        if (payload.commission_bps === "") payload.commission_bps = null;
+        if (payload.commission_bps != null) {
+          var bps = Number(payload.commission_bps);
+          if (!Number.isInteger(bps) || bps < 0 || bps > 10000) {
+            return bad("The commission must be a percentage between 0 and 100.");
+          }
+          payload.commission_bps = bps;
+        }
+        // A commission on an event Hawthbush sells itself means nothing.
+        if (payload.payee_id === null) payload.commission_bps = null;
+
+        // Work out what the event WILL look like once saved, because a partial
+        // payload may omit fields the rules below depend on.
+        var current = null;
+        if (body.event && body.event.id) {
+          var curRows;
+          try {
+            curRows = await sbRest("box_events?id=eq." + body.event.id +
+              "&select=payee_id,payment_mode,deposit_pence,status");
+          } catch (colErr) {
+            // The chef columns arrive with supabase/2026-10-22-chef-payees.sql.
+            // Until that has been run, saving an ordinary event must keep
+            // working exactly as it did, so fall back to what always existed.
+            curRows = await sbRest("box_events?id=eq." + body.event.id +
+              "&select=payment_mode,deposit_pence,status");
+          }
+          current = curRows && curRows[0];
+        }
+        var effPayee   = payload.payee_id !== undefined ? payload.payee_id : (current && current.payee_id) || null;
+        var effMode    = payload.payment_mode !== undefined ? payload.payment_mode : (current && current.payment_mode) || "full";
+        var effDeposit = payload.deposit_pence !== undefined ? Number(payload.deposit_pence) : Number(current && current.deposit_pence) || 0;
+        var effStatus  = payload.status !== undefined ? payload.status : (current && current.status) || "draft";
+
+        // Once anyone has paid, who the seller is must not change under them —
+        // their tickets, receipt and refund all name the original seller.
+        if (current && payload.payee_id !== undefined && (payload.payee_id || null) !== (current.payee_id || null)) {
+          var paidRows = await sbRest("box_orders?event_id=eq." + body.event.id +
+            "&status=in.(paid,deposit_paid)&select=id&limit=1");
+          if (paidRows && paidRows.length) {
+            return bad("Tickets have already been sold for this event, so who sells them can't be changed. Cancel and refund those bookings first, or create a new event.");
+          }
+        }
+
+        if (effPayee) {
+          var payeeRows = await sbRest("box_payees?id=eq." + effPayee + "&select=id,legal_name,charges_enabled");
+          var payeeRow = payeeRows && payeeRows[0];
+          if (!payeeRow) return bad("That chef could not be found.", 404);
+
+          // Chef events are full payment only. The database refuses it too.
+          if (effMode === "deposit" || effDeposit > 0) {
+            return bad("Events sold by a chef are full payment only — switch the payment option back to full, or choose Hawthbush Farm as the seller.");
+          }
+          // Never put tickets on sale that cannot pay out.
+          if (effStatus === "published" && !payeeRow.charges_enabled) {
+            return bad(payeeRow.legal_name + " has not finished setting up Stripe yet, so this event can't be published. Save it as a draft until their account is ready.");
+          }
+        }
+
         // Note: "setting an access code takes the event out of /whats-on" is
         // applied in the app, where the tickbox visibly moves and can be put
         // back deliberately. Doing it here would change a setting invisibly.
