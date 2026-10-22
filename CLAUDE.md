@@ -87,7 +87,7 @@ own header.
 
 - Two layouts, chosen per browser by `localStorage.hbf_ui_classic`: the
   sidebar layout (default) and the classic top menu. `T` is `T_NEW` or
-  `T_CLASSIC`. Pre-redesign code is tagged `pre-sidebar-layout`.
+  `T_CLASSIC`. The last commit before the redesign is `2866c5a`.
 - **Colours go through `T`.** Never hard-code a hex for chrome. But a colour
   that is **data** — a property's `colour`, an event type's colour, anything
   saved to the database or used as a key — stays a literal: Hamlet is blue in
