@@ -2018,7 +2018,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-22a";
+const APP_BUILD = "2026-10-22b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -20759,7 +20759,7 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
         </div>
       )}
 
-      {pane === "settings" && <BoxEventSettings form={form} update={update} onSave={save}/>}
+      {pane === "settings" && <BoxEventSettings form={form} update={update} onSave={save} payees={payees} setSeller={setSeller}/>}
 
       {pane === "orders" && (
         <BoxEventOrders event={data.event} types={data.ticket_types || []} orders={data.orders || []}
@@ -20844,7 +20844,7 @@ function BoxEventDetails({ form, update }) {
   );
 }
 
-function BoxEventSettings({ form, update }) {
+function BoxEventSettings({ form, update, payees, setSeller }) {
   return (
     <div>
       <BoxCard title="Access code">
