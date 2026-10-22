@@ -92,6 +92,15 @@ function fmtDateLondon(ts) {
     ", " + d.toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" });
 }
 
+// True only for "that column doesn't exist" — what Postgres/PostgREST say before
+// the chef migration has been run. Any OTHER failure (a timeout, a 5xx) must not
+// be mistaken for "no chef columns, so this is a Hawthbush sale": that mistake
+// would charge a chef's ticket to Hawthbush's own Stripe account.
+function isMissingColumn(err) {
+  var m = String(err && err.message || "");
+  return /42703|PGRST204|column .* does not exist/i.test(m);
+}
+
 function isEmail(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "")); }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -153,27 +162,68 @@ exports.handler = async function(event) {
   }
 
   try {
-    // ── 0. Chef events are not payable through this path yet ────────────────
-    // A chef-run event must be charged on the CHEF's Stripe account, with
-    // Hawthbush's commission taken as an application fee. This function does
-    // not do that yet, and letting it carry on would take a chef's ticket money
-    // into Hawthbush's own account — the one outcome this whole feature exists
-    // to prevent. So it refuses, loudly in the log and politely to the buyer.
-    // Remove this guard only in the change that adds the chef charge itself.
-    //
-    // If the chef columns do not exist yet (migration not run) no event can be
-    // a chef event, so a failed read here is fine to ignore.
+    // ── 0. Who is selling these tickets? ─────────────────────────────────────
+    // Most events are Hawthbush's own and go exactly as they always have. A
+    // chef-run event is different: the chef is the legal seller, so the charge
+    // is made ON THE CHEF'S Stripe account (a "direct charge") and Hawthbush's
+    // commission comes off it as an application fee. Getting this wrong in the
+    // one direction that matters — a chef's ticket money landing in Hawthbush's
+    // own account — is what every check below exists to prevent, so each one
+    // refuses the sale rather than falling back to the ordinary path.
+    var chef = null;   // { payeeId, account, legalName, bps } for a chef event
+    var notOnSale = {
+      statusCode: 503,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Tickets for this event aren't on sale just yet. Please check back soon." })
+    };
+
+    var sellerRows = null;
     try {
-      var chefGuard = await sbRest("box_events?slug=eq." + encodeURIComponent(slug) + "&select=payee_id");
-      if (chefGuard && chefGuard[0] && chefGuard[0].payee_id) {
-        console.error("create-ticket-checkout REFUSED: " + slug + " is a chef event and chef checkout is not enabled yet");
-        return {
-          statusCode: 503,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ error: "Tickets for this event aren't on sale just yet. Please check back soon." })
-        };
+      sellerRows = await sbRest("box_events?slug=eq." + encodeURIComponent(slug) + "&select=payee_id,commission_bps");
+    } catch (colErr) {
+      // Only "the chef columns don't exist yet" means no event can be a chef
+      // event. Anything else fails the sale (caught below as a 500).
+      if (!isMissingColumn(colErr)) throw colErr;
+      sellerRows = null;
+    }
+    var sellerEv = sellerRows && sellerRows[0];
+
+    if (sellerEv && sellerEv.payee_id) {
+      // A paid chef order is confirmed ONLY by the Connect webhook. Without it
+      // the order would sit pending and be swept away after two hours by
+      // box_expire_holds() — with the customer's money already taken. So no
+      // chef ticket is sold until that webhook's secret is configured.
+      if (!process.env.STRIPE_TICKET_CONNECT_WEBHOOK_SECRET) {
+        console.error("create-ticket-checkout REFUSED " + slug +
+          ": chef event, but STRIPE_TICKET_CONNECT_WEBHOOK_SECRET is not set — add the Connect webhook endpoint in Stripe first");
+        return notOnSale;
       }
-    } catch (guardErr) { /* no chef columns yet — nothing to guard */ }
+      var payeeRows = await sbRest("box_payees?id=eq." + sellerEv.payee_id +
+        "&select=id,legal_name,stripe_account_id,charges_enabled,default_commission_bps");
+      var payee = payeeRows && payeeRows[0];
+      if (!payee || !payee.stripe_account_id || !payee.charges_enabled) {
+        console.error("create-ticket-checkout REFUSED " + slug + ": chef's Stripe account is missing or not able to take charges");
+        return notOnSale;
+      }
+      var bps = sellerEv.commission_bps != null ? sellerEv.commission_bps : payee.default_commission_bps;
+      bps = Number(bps);
+      if (!Number.isInteger(bps) || bps < 0 || bps >= 10000) {
+        console.error("create-ticket-checkout REFUSED " + slug + ": commission " + bps + " bps is not usable");
+        return notOnSale;
+      }
+      chef = { payeeId: payee.id, account: payee.stripe_account_id, legalName: payee.legal_name, bps: bps };
+
+      // The buyer must be told who the seller is before paying. The public page
+      // can only do that once the 2026-10-22b database change (seller_name on
+      // box_public_event) has been run — until then it would show Hawthbush's
+      // own terms. So no chef ticket is sold until it has.
+      var pub = await sbRpc("box_public_event", { p_slug: slug, p_code: body.accessCode || null });
+      if (!pub || !pub.ok || pub.gated || !pub.seller_name) {
+        console.error("create-ticket-checkout REFUSED " + slug +
+          ": public page cannot name the seller yet — run supabase/2026-10-22b-chef-seller-name.sql");
+        return notOnSale;
+      }
+    }
 
     // ── 1. Reserve. This either succeeds completely or changes nothing. ──────
     var reserved = await sbRpc("box_reserve_order", {
@@ -201,6 +251,47 @@ exports.handler = async function(event) {
           remaining: reserved && reserved.remaining
         })
       };
+    }
+
+    // ── 1b. Record who sold it, the fee, and the marketing answer ───────────
+    // Snapshotted onto the order so that a later edit to the event can never
+    // send a refund to the wrong account, and so reporting reads what actually
+    // happened rather than what the settings say today.
+    var payNowPence = Number(reserved.pay_now_pence) || 0;
+    var feePence = 0;
+    if (chef) {
+      // Chef events are full payment only (the database refuses anything
+      // else). If a deposit has somehow appeared, stop before any money moves.
+      if (Number(reserved.deposit_pence) > 0) {
+        await sbRest("box_orders?id=eq." + reserved.order_id + "&status=eq.pending", { method: "DELETE", prefer: "return=minimal" });
+        console.error("create-ticket-checkout REFUSED " + slug + ": a chef event produced a deposit order");
+        return notOnSale;
+      }
+      // VAT-inclusive commission on what is actually charged, after any
+      // discount. Stripe insists the fee is above zero and below the charge.
+      feePence = Math.round(payNowPence * chef.bps / 10000);
+      if (feePence >= payNowPence) feePence = 0;
+    }
+
+    var optIn = body.marketingOptIn === true;
+    var snapshot = { marketing_opt_in: optIn, marketing_opt_in_at: optIn ? new Date().toISOString() : null };
+    if (chef) {
+      snapshot.payee_id = chef.payeeId;
+      snapshot.stripe_account_id = chef.account;
+      snapshot.commission_bps = chef.bps;
+      snapshot.application_fee_pence = feePence;
+    }
+    try {
+      await sbRest("box_orders?id=eq." + reserved.order_id, { method: "PATCH", prefer: "return=minimal", body: snapshot });
+    } catch (snapErr) {
+      // For a chef order this snapshot is what routes refunds and fees, so it
+      // is not optional: abandon the order rather than take money without it.
+      if (chef) {
+        await sbRest("box_orders?id=eq." + reserved.order_id + "&status=eq.pending", { method: "DELETE", prefer: "return=minimal" });
+        throw snapErr;
+      }
+      // Before the migration the columns don't exist; a Hawthbush sale carries on.
+      console.warn("order snapshot skipped:", snapErr.message);
     }
 
     // ── 2. Nothing to pay? Then don't send anyone to Stripe ─────────────────
@@ -271,7 +362,12 @@ exports.handler = async function(event) {
         return {
           price_data: {
             currency: "gbp",
-            product_data: { name: name + " — " + ev.name, description: fmtDateLondon(ev.starts_at) },
+            product_data: {
+              name: name + " — " + ev.name,
+              // For a chef event the receipt itself says who sold the ticket.
+              description: fmtDateLondon(ev.starts_at) +
+                (chef ? " · sold by " + chef.legalName + " · at Hawthbush Farm" : "")
+            },
             unit_amount: l.unit_price_pence
           },
           quantity: l.qty
@@ -282,12 +378,14 @@ exports.handler = async function(event) {
       // into the ticket price, so the receipt tells the truth about what was
       // charged and why.
       if (reserved.discount_pence > 0) {
+        // On a chef event the charge lives on the chef's account, so the
+        // coupon has to live there too or Stripe won't find it.
         var coupon = await stripe.coupons.create({
           amount_off: reserved.discount_pence,
           currency: "gbp",
           duration: "once",
           name: "Discount " + (body.discountCode || "").toUpperCase()
-        });
+        }, chef ? { stripeAccount: chef.account } : undefined);
         discounts = [{ coupon: coupon.id }];
       }
     }
@@ -295,24 +393,44 @@ exports.handler = async function(event) {
     var origin = (event.headers["origin"] || SITE_ORIGIN).replace(/\/$/, "");
     var backTo = origin + "/tickets/" + encodeURIComponent(slug);
 
-    var session = await stripe.checkout.sessions.create({
+    var sessionMeta = {
+      // Its own booking type, on its own webhook endpoint, so nothing from
+      // the cottage flow can ever be mistaken for a ticket order.
+      bookingType: "box_ticket",
+      orderId:     reserved.order_id,
+      orderRef:    reserved.order_ref,
+      eventSlug:   slug
+    };
+    var sessionParams = {
       mode: "payment",
       payment_method_types: ["card"],
       customer_email: body.email,
       line_items: lineItems,
       discounts: discounts.length ? discounts : undefined,
       expires_at: Math.floor(Date.now() / 1000) + SESSION_MINUTES * 60,
-      metadata: {
-        // Its own booking type, on its own webhook endpoint, so nothing from
-        // the cottage flow can ever be mistaken for a ticket order.
-        bookingType: "box_ticket",
-        orderId:     reserved.order_id,
-        orderRef:    reserved.order_ref,
-        eventSlug:   slug
-      },
+      metadata: sessionMeta,
       success_url: backTo + "?ref=" + encodeURIComponent(reserved.order_ref) + "&t=" + encodeURIComponent(reserved.qr_token),
       cancel_url:  backTo
-    });
+    };
+
+    var session;
+    if (chef) {
+      // A direct charge: made on the chef's account (the Stripe-Account header
+      // that `stripeAccount` sets), so the chef is the merchant of record, pays
+      // Stripe's processing fee and carries any dispute. Hawthbush's commission
+      // is the application fee, which Stripe moves to Hawthbush's ticketing
+      // balance when the payment succeeds.
+      sessionMeta.payeeId = chef.payeeId;
+      sessionParams.payment_intent_data = {
+        description: ev.name + " · " + reserved.order_ref + " · sold by " + chef.legalName,
+        metadata: { bookingType: "box_ticket", orderId: reserved.order_id, orderRef: reserved.order_ref }
+      };
+      // Stripe refuses a fee of zero, so a 0% commission sends none at all.
+      if (feePence > 0) sessionParams.payment_intent_data.application_fee_amount = feePence;
+      session = await stripe.checkout.sessions.create(sessionParams, { stripeAccount: chef.account });
+    } else {
+      session = await stripe.checkout.sessions.create(sessionParams);
+    }
 
     await sbRest("box_orders?id=eq." + reserved.order_id, {
       method: "PATCH", prefer: "return=minimal",

@@ -2018,7 +2018,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-22b";
+const APP_BUILD = "2026-10-22c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -20188,7 +20188,7 @@ const DEFAULT_BOX_TEMPLATES = [
 ];
 
 const BOX_TOKENS = ["firstName","eventName","eventDate","eventTime","venue","orderRef","qty",
-  "totalAmount","depositAmount","balanceAmount","balanceDueDate","payLink","ticketsLink"];
+  "totalAmount","depositAmount","balanceAmount","balanceDueDate","payLink","ticketsLink","sellerName"];
 
 // ── Talking to box-admin.js ──────────────────────────────────────────────────
 function boxKey() {
@@ -20527,12 +20527,62 @@ function BoxEventRow({ ev, onOpen }) {
           <div style={{ fontSize:11, color:T.textLight }}>tickets{ev.stat_capacity ? ` · ${pct}%` : ""}</div>
         </div>
         <div style={{ textAlign:"right", minWidth:80 }}>
-          <div style={{ fontSize:17, fontWeight:700, color:T.green }}>{boxMoney(ev.stat_revenue)}</div>
-          <div style={{ fontSize:11, color:T.textLight }}>taken</div>
+          {/* On a chef event the takings are the chef's money; what Hawthbush
+              earns is the commission, so that is the headline figure. */}
+          <div style={{ fontSize:17, fontWeight:700, color:T.green }}>{boxMoney(ev.payee_id ? ev.stat_commission : ev.stat_revenue)}</div>
+          <div style={{ fontSize:11, color:T.textLight }}>{ev.payee_id ? "commission" : "taken"}</div>
         </div>
         <span style={{ color:T.textLight, fontSize:18 }}>›</span>
       </div>
     </div>
+  );
+}
+
+// ── Who sells an event's tickets ─────────────────────────────────────────────
+// Module scope, not inside BoxEventEditor: it renders inputs, and a component
+// defined inside another is rebuilt on every keystroke (CLAUDE.md, React).
+function BoxSellerCard({ form, payees, setSeller, update }) {
+  const chef = payees.find(function(p) { return p.id === form.payee_id; });
+  const effPct = form.commission_pct !== "" && form.commission_pct != null
+    ? form.commission_pct : (chef ? bpsToPct(chef.default_commission_bps) : "");
+  return (
+    <BoxCard title="Who sells these tickets">
+      <BoxField label="Seller" width={340}>
+        <select value={form.payee_id || ""} onChange={e=>setSeller(e.target.value)} style={boxInput}>
+          <option value="">Hawthbush Farm {"\u2014"} we sell them</option>
+          {payees.map(function(p) {
+            return <option key={p.id} value={p.id}>{p.legal_name}{p.charges_enabled ? "" : " (Stripe not ready)"}</option>;
+          })}
+        </select>
+      </BoxField>
+      {!chef && (
+        <p style={{ fontSize:12, color:T.textLight, margin:"10px 0 0", lineHeight:1.6 }}>
+          Payments go to Hawthbush Farm's own ticketing Stripe account, as for any other event. Chefs are added
+          under Box Office {"\u2192"} Settings.
+        </p>
+      )}
+      {chef && (
+        <div style={{ marginTop:14, display:"grid", gap:12 }}>
+          <div style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", fontSize:12.5, color:T.textMid, lineHeight:1.7 }}>
+            <strong style={{ color:T.midBlue }}>Sold by {chef.legal_name}.</strong> Customers pay them directly and the
+            ticket page, receipt, ticket and emails name them as the seller. Hawthbush Farm's commission ({effPct || "0"}%,
+            VAT included) is taken automatically from each payment, and is returned if a ticket is refunded.
+            <br/>Chef events are full payment only.
+          </div>
+          {!chef.charges_enabled && (
+            <div style={{ background:T.amberBg, border:`1px solid ${T.amber}`, color:T.amber, borderRadius:8, padding:"10px 13px", fontSize:12.5, lineHeight:1.6 }}>
+              {chef.legal_name} hasn't finished setting up Stripe. You can still publish the event {"\u2014"} the page
+              shows {"\u201C"}on sale soon{"\u201D"} and nobody can buy a ticket until their account is ready. Send their
+              link or check their status under Box Office {"\u2192"} Settings.
+            </div>
+          )}
+          <BoxField label="Commission for this event (%)" width={230}
+            hint={"Leave blank to use " + bpsToPct(chef.default_commission_bps) + "%, the rate set for this chef."}>
+            <BoxInput value={form.commission_pct} onChange={v=>update("commission_pct", v)} placeholder={bpsToPct(chef.default_commission_bps)}/>
+          </BoxField>
+        </div>
+      )}
+    </BoxCard>
   );
 }
 
@@ -20915,49 +20965,9 @@ function BoxEventSettings({ form, update, payees, setSeller }) {
         </BoxField>
       </BoxCard>
 
-      {form.payee_id !== undefined && (() => {
-        const chef = payees.find(function(p) { return p.id === form.payee_id; });
-        const effPct = form.commission_pct !== "" && form.commission_pct != null
-          ? form.commission_pct : (chef ? bpsToPct(chef.default_commission_bps) : "");
-        return (
-          <BoxCard title="Who sells these tickets">
-            <BoxField label="Seller" width={340}>
-              <select value={form.payee_id || ""} onChange={e=>setSeller(e.target.value)} style={boxInput}>
-                <option value="">Hawthbush Farm — we sell them</option>
-                {payees.map(function(p) {
-                  return <option key={p.id} value={p.id}>{p.legal_name}{p.charges_enabled ? "" : " (Stripe not ready)"}</option>;
-                })}
-              </select>
-            </BoxField>
-            {!chef && (
-              <p style={{ fontSize:12, color:T.textLight, margin:"10px 0 0", lineHeight:1.6 }}>
-                Payments go to Hawthbush Farm's own ticketing Stripe account, as for any other event. Chefs are added
-                under Box Office {"→"} Settings.
-              </p>
-            )}
-            {chef && (
-              <div style={{ marginTop:14, display:"grid", gap:12 }}>
-                <div style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", fontSize:12.5, color:T.textMid, lineHeight:1.7 }}>
-                  <strong style={{ color:T.midBlue }}>Sold by {chef.legal_name}.</strong> Customers pay them directly and the
-                  tickets, terms and emails name them as the seller. Hawthbush Farm's commission ({effPct || "0"}%, VAT
-                  included) is taken automatically from each payment, and is returned if a ticket is refunded.
-                  <br/>Chef events are full payment only.
-                </div>
-                {!chef.charges_enabled && (
-                  <div style={{ background:T.amberBg, border:`1px solid ${T.amber}`, color:T.amber, borderRadius:8, padding:"10px 13px", fontSize:12.5, lineHeight:1.6 }}>
-                    {chef.legal_name} hasn't finished setting up Stripe, so this event can only be saved as a draft. Send
-                    their link or check their status under Box Office {"→"} Settings.
-                  </div>
-                )}
-                <BoxField label="Commission for this event (%)" width={230}
-                  hint={"Leave blank to use " + bpsToPct(chef.default_commission_bps) + "%, the rate set for this chef."}>
-                  <BoxInput value={form.commission_pct} onChange={v=>update("commission_pct", v)} placeholder={bpsToPct(chef.default_commission_bps)}/>
-                </BoxField>
-              </div>
-            )}
-          </BoxCard>
-        );
-      })()}
+      {form.payee_id !== undefined && (
+        <BoxSellerCard form={form} payees={payees} setSeller={setSeller} update={update}/>
+      )}
 
       <BoxCard title="Payment">
         {form.payee_id && (
@@ -21343,6 +21353,7 @@ function BoxWaitlistPanel({ eventId, waitlist, onReload, waitlistOn }) {
 function BoxEventOrders({ event, types, orders, lines, onReload }) {
   const [adding, setAdding]   = useState(false);
   const [cancelling, setCancelling] = useState(null);
+  const [refunding, setRefunding]   = useState(null);   // a chef order being refunded
   const [busy, setBusy]       = useState(false);
   const [err, setErr]         = useState("");
   const [msg, setMsg]         = useState("");
@@ -21397,6 +21408,23 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
     setBusy(false);
   }
 
+  // Chef orders only: the payment is on the chef's Stripe account, so the app
+  // refunds it (and returns Hawthbush's commission) rather than sending anyone
+  // to a dashboard where it can't be found.
+  async function doRefund(order) {
+    if (busy) return;   // a second press on the confirm button does nothing
+    setBusy(true); setErr("");
+    try {
+      const r = await boxAdmin("orders.refund", { id: order.id, notify: true });
+      setRefunding(null);
+      setMsg(order.order_ref + " refunded " + boxMoney(order.total_pence) + " — tickets void, stock back, commission returned" +
+        (order.email ? (r.emailed ? ", and " + order.email + " has been told." : ". The email to the buyer didn't send — let them know.") : "."));
+      setTimeout(()=>setMsg(""), 8000);
+      await onReload();
+    } catch (e) { setErr(e.message); setRefunding(null); }
+    setBusy(false);
+  }
+
   async function markPaid(order) {
     setBusy(true); setErr("");
     try { await boxAdmin("orders.markPaid", { id: order.id, method: "taken by hand" }); await onReload(); }
@@ -21435,6 +21463,17 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
           onSaved={async function() { setAdding(false); await onReload(); }}/>
       )}
 
+      {refunding && (
+        <ConfirmDialog
+          message={`Refund ${refunding.order_ref}?`}
+          subMessage={`${refunding.first_name} ${refunding.last_name} · ${refunding.total_qty} tickets. Refunds ${boxMoney(refunding.total_pence)} to their card from the chef's Stripe account, returns our ${boxMoney(refunding.application_fee_pence || 0)} commission, voids the tickets and puts the stock back. The buyer is emailed.`}
+          confirmLabel={busy ? "Refunding…" : "Refund and cancel"}
+          icon="↩"
+          onConfirm={()=>doRefund(refunding)}
+          onCancel={()=>setRefunding(null)}
+        />
+      )}
+
       {cancelling && (
         <ConfirmDialog
           message={`Cancel ${cancelling.order_ref}?`}
@@ -21464,9 +21503,12 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
                 <span style={{ fontSize:12.5, color:"#92400e" }}>{o.email}</span>
                 <span style={{ fontSize:12.5, color:"#92400e" }}>{o.total_qty} × {boxMoney(o.total_pence)}</span>
                 <span style={{ fontSize:11.5, color:"#92400e" }}>{boxDate(o.created_at)} {boxTime(o.created_at)}</span>
-                {o.stripe_session_id && (
+                {o.stripe_session_id && !o.stripe_account_id && (
                   <a href={stripeDashboardUrl(BOX_STRIPE_ACCOUNT, o.stripe_session_id)} target="_blank" rel="noreferrer"
                     style={{ fontSize:12.5, fontWeight:600, color:"#635bff" }}>Check Stripe ↗</a>
+                )}
+                {o.stripe_account_id && (
+                  <span style={{ fontSize:11.5, color:"#92400e" }}>Chef's payment — the chef can check it in their Stripe</span>
                 )}
                 <BoxBtn tone="green" onClick={()=>markPaid(o)} disabled={busy}
                   title="They did pay — record it and issue the tickets">Mark paid</BoxBtn>
@@ -21534,13 +21576,17 @@ function BoxEventOrders({ event, types, orders, lines, onReload }) {
                     Mark balance paid
                   </BoxBtn>
                 )}
-                {o.stripe_session_id && (
+                {o.stripe_session_id && !o.stripe_account_id && (
                   <a href={stripeDashboardUrl(BOX_STRIPE_ACCOUNT, o.stripe_session_id)}
                     target="_blank" rel="noreferrer"
                     style={{ padding:"9px 15px", borderRadius:7, border:`1.5px solid ${T.border}`, color:"#635bff",
                       fontSize:13, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>Stripe ↗</a>
                 )}
-                {o.status !== "cancelled" && o.status !== "refunded" && (
+                {o.status === "paid" && o.stripe_account_id && (
+                  <BoxBtn tone="danger" onClick={()=>setRefunding(o)} disabled={busy}
+                    title="Refund from the chef's Stripe account, return our commission, void the tickets">Refund</BoxBtn>
+                )}
+                {o.status !== "cancelled" && o.status !== "refunded" && !(o.status === "paid" && o.stripe_account_id) && (
                   <BoxBtn tone="danger" onClick={()=>setCancelling(o)} disabled={busy}>Cancel</BoxBtn>
                 )}
                 <BoxBtn tone="ghost" onClick={()=>setOpenOrder(openOrder === o.id ? null : o.id)}>
@@ -21718,7 +21764,12 @@ function BoxEventSummary({ eventId }) {
     <BoxCard title="Sales summary">
       <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:16 }}>
         <BoxStat label="Tickets" value={s.tickets} sub={`${s.orders} orders`}/>
-        <BoxStat label="Taken" value={boxMoney(s.taken_pence)} tone={T.green}/>
+        {s.chef_event
+          ? <>
+              <BoxStat label="Taken by the chef" value={boxMoney(s.taken_pence)} tone={T.midBlue}/>
+              <BoxStat label="Our commission" value={boxMoney(s.commission_pence)} tone={T.green} sub="VAT included"/>
+            </>
+          : <BoxStat label="Taken" value={boxMoney(s.taken_pence)} tone={T.green}/>}
         <BoxStat label="Still due" value={boxMoney(s.due_pence)} tone={s.due_pence ? T.amber : T.midBlue}/>
         <BoxStat label="Discounts" value={boxMoney(s.discount_pence)}/>
         <BoxStat label="Checked in" value={s.admitted} sub={`of ${s.tickets}`}/>
@@ -22556,6 +22607,10 @@ function BoxSettingsScreen() {
 
   return (
     <div style={{ maxWidth:880 }}>
+      {/* First on the page: adding a chef and sending their Stripe link is the
+          thing people come to Settings for. */}
+      <BoxChefsPanel/>
+
       <BoxCard title="What's On page">
         <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
           Every published event with “Show on What's On” ticked appears here. Link to it from the website, or embed it
@@ -22569,8 +22624,6 @@ function BoxSettingsScreen() {
           <a href={whatsOn} target="_blank" rel="noreferrer" style={{ fontSize:12.5, color:T.accent, fontWeight:600 }}>Open ↗</a>
         </div>
       </BoxCard>
-
-      <BoxChefsPanel/>
 
       <BoxCard title="Emails" right={<div style={{ display:"flex", gap:10, alignItems:"center" }}>
         {flash && <span style={{ fontSize:12, color:T.green, fontWeight:700 }}>{flash}</span>}
@@ -22745,7 +22798,7 @@ function BoxChefsPanel() {
             <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:10 }}>
               {state !== "ready" && (
                 <BoxBtn onClick={()=>invite(p)} disabled={busy}>
-                  {busy ? "Working…" : state === "new" ? "Get Stripe onboarding link" : "Get a fresh link"}
+                  {busy ? "Working…" : state === "new" ? "Get Stripe setup link" : "Get the setup link again"}
                 </BoxBtn>
               )}
               {p.stripe_account_id && <BoxBtn tone="ghost" onClick={()=>check(p)} disabled={busy}>Check Stripe status</BoxBtn>}
@@ -22756,9 +22809,10 @@ function BoxChefsPanel() {
             {link && link.id === p.id && (
               <div style={{ marginTop:12, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px" }}>
                 <div style={{ fontSize:12, color:T.textMid, lineHeight:1.6, marginBottom:8 }}>
-                  Send this link to {p.legal_name}. It works <strong>once</strong> and expires within a few minutes, so
-                  send it straight away — or press the button again for a new one. It opens Stripe's own form for
-                  <em> their</em> account, so don't fill it in on their behalf.
+                  Send this link to {p.legal_name} by email or message. It works for <strong>two weeks</strong> and can be
+                  opened as many times as they need until they've finished. It takes them to Stripe's own form for
+                  <em> their</em> account, so don't fill it in on their behalf. Their status here updates by itself once
+                  Stripe has approved them.
                 </div>
                 <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
                   <code style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:6, padding:"7px 10px", fontSize:11.5, color:T.text,
@@ -22905,8 +22959,10 @@ function BoxOfficeDashboardCard({ setView }) {
             <div style={{ fontSize:12.5, color:T.textMid, minWidth:78, textAlign:"right" }}>
               {e.stat_sold}{e.stat_capacity ? " / " + e.stat_capacity : ""} sold
             </div>
-            <div style={{ fontSize:13, fontWeight:700, color:T.green, minWidth:70, textAlign:"right" }}>
-              {boxMoney(e.stat_revenue)}
+            <div style={{ fontSize:13, fontWeight:700, color:T.green, minWidth:70, textAlign:"right" }}
+              title={e.payee_id ? "Our commission on a chef-run event" : "Taken"}>
+              {boxMoney(e.payee_id ? e.stat_commission : e.stat_revenue)}
+              {e.payee_id && <span style={{ fontSize:10.5, fontWeight:600, color:T.textLight, marginLeft:4 }}>comm.</span>}
             </div>
           </div>
         );

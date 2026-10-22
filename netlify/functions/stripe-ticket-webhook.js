@@ -7,6 +7,17 @@
 // SECOND webhook endpoint:
 //   https://hawthbushfarm.netlify.app/.netlify/functions/stripe-ticket-webhook
 // listening for: checkout.session.completed, checkout.session.expired
+// signing secret in STRIPE_TICKET_WEBHOOK_SECRET.
+//
+// Chef-run events need a THIRD endpoint at the SAME URL, created as a Connect
+// endpoint ("Events on connected accounts"), listening for ALL FOUR of:
+//   checkout.session.completed   — a chef ticket is paid
+//   checkout.session.expired     — an abandoned chef checkout frees its seats
+//   account.updated              — a chef's Stripe setup is approved
+//   charge.refunded              — a chef refund, so the commission goes back
+// signing secret in STRIPE_TICKET_CONNECT_WEBHOOK_SECRET. Missing
+// charge.refunded means a refund made in the chef's own dashboard never
+// returns Hawthbush's commission and never voids the tickets.
 //
 // Two payment flows land here, told apart by session.metadata.bookingType:
 //   "box_ticket"  — a new order from create-ticket-checkout.js. Either paid in
@@ -111,6 +122,103 @@ async function flagIfOversold(order) {
   } catch (e) { console.error("oversold check failed:", e.message); }
 }
 
+// ── Refunds on a chef's account ──────────────────────────────────────────────
+// Either side may refund a chef order: Hawthbush from the app (box-admin.js
+// orders.refund), or the chef from their own Stripe dashboard. Whichever it
+// was, Stripe reports it here, and two things follow.
+//
+// 1. Hawthbush's commission goes back. Toby's rule: a refunded ticket earns no
+//    commission. A refund made from the app already returns the fee
+//    (refund_application_fee), but Stripe does NOT return it when the chef
+//    refunds from their dashboard — so the shortfall is worked out here and
+//    refunded. Worked out, not assumed: what should have come back
+//    (proportional to how much of the charge has been refunded) minus what
+//    already has. That makes a retry, or an app refund arriving here too,
+//    simply find nothing left to do.
+//
+// 2. A fully refunded booking stops being a booking: tickets void, stock back,
+//    and the buyer told — unless the app already did all that.
+async function findOrderForCharge(charge, account) {
+  var pi = typeof charge.payment_intent === "string" ? charge.payment_intent
+    : (charge.payment_intent && charge.payment_intent.id);
+  if (pi) {
+    var byPi = await sbRest("box_orders?stripe_payment_intent_id=eq." + encodeURIComponent(pi) + "&select=*");
+    if (byPi && byPi[0]) return byPi[0];
+    // The payment intent is only stored once checkout.session.completed has
+    // been processed. Fall back to asking Stripe which session it came from.
+    try {
+      var sessions = await stripe.checkout.sessions.list({ payment_intent: pi, limit: 1 }, { stripeAccount: account });
+      var s = sessions && sessions.data && sessions.data[0];
+      if (s) {
+        var bySession = await sbRest("box_orders?stripe_session_id=eq." + encodeURIComponent(s.id) + "&select=*");
+        if (bySession && bySession[0]) return bySession[0];
+      }
+    } catch (e) { console.error("session lookup for refund failed:", e.message); }
+  }
+  return null;
+}
+
+async function handleChefRefund(charge, account) {
+  // 1. The commission.
+  var feeId = typeof charge.application_fee === "string" ? charge.application_fee
+    : (charge.application_fee && charge.application_fee.id);
+  if (feeId && charge.amount > 0) {
+    // Application fees live on Hawthbush's own account — no stripeAccount here.
+    var fee = await stripe.applicationFees.retrieve(feeId);
+    var shouldBeBack = charge.refunded
+      ? fee.amount
+      : Math.floor(fee.amount * (charge.amount_refunded || 0) / charge.amount);
+    // Known limit: two PARTIAL refunds processed at the same instant could each
+    // read the same amount_refunded and together return slightly more than
+    // the proportional share. Full refunds — the normal case — cannot, because
+    // the target is the whole fee and the key below is the same every time.
+    var owed = shouldBeBack - (fee.amount_refunded || 0);
+    if (owed > 0) {
+      await stripe.applicationFees.createRefund(feeId, {
+        amount: owed,
+        metadata: { reason: "ticket refunded", charge: charge.id }
+      }, { idempotencyKey: "hbf-fee-refund-" + charge.id + "-" + (charge.refunded ? "full" : (charge.amount_refunded || 0)) });
+      console.log("Returned £" + (owed / 100).toFixed(2) + " commission on " + charge.id);
+    }
+  }
+
+  // 2. The booking.
+  var order = await findOrderForCharge(charge, account);
+  if (!order) {
+    console.warn("charge.refunded on " + account + " with no matching box order:", charge.id);
+    return;
+  }
+  if (order.stripe_account_id !== account) {
+    console.error("charge.refunded account mismatch for " + order.order_ref);
+    return;
+  }
+
+  var refundedSoFar = "£" + ((charge.amount_refunded || 0) / 100).toFixed(2);
+  if (!charge.refunded) {
+    // A partial refund — a goodwill gesture, say. The booking stands.
+    if ((order.notes || "").indexOf("Partly refunded " + refundedSoFar) === -1) {
+      await sbRest("box_orders?id=eq." + order.id, {
+        method: "PATCH", prefer: "return=minimal",
+        body: { notes: (order.notes ? order.notes + "\n" : "") + "Partly refunded " + refundedSoFar + " in Stripe on " + new Date().toISOString().slice(0, 10) }
+      });
+    }
+    return;
+  }
+
+  if (order.status === "refunded" || order.status === "cancelled") return;   // the app already handled it
+
+  await sbRest("box_orders?id=eq." + order.id, {
+    method: "PATCH", prefer: "return=minimal",
+    body: {
+      status: "refunded",
+      tickets_issued_at: null,
+      notes: (order.notes ? order.notes + "\n" : "") + "Refunded in full (" + refundedSoFar + ") from the seller's Stripe account on " +
+        new Date().toISOString().slice(0, 10) + " — tickets voided, commission returned."
+    }
+  });
+  if (order.email) await sendEmail("booking_cancelled", order.id);
+}
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") {
@@ -118,14 +226,65 @@ exports.handler = async function(event) {
   }
 
   const sig = event.headers["stripe-signature"];
-  const webhookSecret = process.env.STRIPE_TICKET_WEBHOOK_SECRET;
 
-  let stripeEvent;
-  try {
-    stripeEvent = stripe.webhooks.constructEvent(event.body, sig, webhookSecret);
-  } catch (err) {
-    console.error("Webhook signature verification failed:", err.message);
+  // Two Stripe endpoints point at this one URL, each with its own signing
+  // secret:
+  //   STRIPE_TICKET_WEBHOOK_SECRET          events on Hawthbush's own ticketing
+  //                                         account (the original endpoint)
+  //   STRIPE_TICKET_CONNECT_WEBHOOK_SECRET  events on CONNECTED accounts — the
+  //                                         chefs. Their payments happen on
+  //                                         their accounts, so Stripe only ever
+  //                                         reports them to a Connect endpoint.
+  // A genuine event verifies against exactly one of them. Which one tells us
+  // where the money is, and that is checked against the order below.
+  let stripeEvent = null;
+  let viaConnect = false;
+  const secrets = [
+    { secret: process.env.STRIPE_TICKET_WEBHOOK_SECRET, connect: false },
+    { secret: process.env.STRIPE_TICKET_CONNECT_WEBHOOK_SECRET, connect: true }
+  ];
+  for (var si = 0; si < secrets.length && !stripeEvent; si++) {
+    if (!secrets[si].secret) continue;
+    try {
+      stripeEvent = stripe.webhooks.constructEvent(event.body, sig, secrets[si].secret);
+      viaConnect = secrets[si].connect;
+    } catch (err) { /* try the next secret */ }
+  }
+  if (!stripeEvent) {
+    console.error("Webhook signature verification failed against every configured secret");
     return { statusCode: 400, body: "Webhook signature verification failed" };
+  }
+
+  // Set by Stripe on every event that happened on a connected account.
+  const connectedAccount = stripeEvent.account || null;
+  if (viaConnect !== !!connectedAccount) {
+    // A Connect-signed event without an account, or the reverse, is not
+    // something Stripe sends. Refuse rather than guess where the money is.
+    console.error("Webhook endpoint/account mismatch:", stripeEvent.type, stripeEvent.id);
+    return { statusCode: 400, body: "Unexpected event for this endpoint" };
+  }
+
+  try {
+    // ── A chef's Stripe account has changed state ───────────────────────────
+    // Keeps "Ready for payments" in the app true without anyone pressing
+    // Check Stripe status.
+    if (stripeEvent.type === "account.updated" && connectedAccount) {
+      var acct = stripeEvent.data.object;
+      await sbRest("box_payees?stripe_account_id=eq." + encodeURIComponent(acct.id), {
+        method: "PATCH", prefer: "return=minimal",
+        body: { charges_enabled: !!acct.charges_enabled, details_submitted: !!acct.details_submitted }
+      });
+      return { statusCode: 200, body: JSON.stringify({ received: true }) };
+    }
+
+    // ── A refund on a chef's account ────────────────────────────────────────
+    if (stripeEvent.type === "charge.refunded" && connectedAccount) {
+      await handleChefRefund(stripeEvent.data.object, connectedAccount);
+      return { statusCode: 200, body: JSON.stringify({ received: true }) };
+    }
+  } catch (err) {
+    console.error("stripe-ticket-webhook error:", stripeEvent.type, err);
+    return { statusCode: 500, body: "Internal error — Stripe will retry" };
   }
 
   const session  = stripeEvent.data.object;
@@ -139,6 +298,16 @@ exports.handler = async function(event) {
     // ── An abandoned checkout: let the seats go straight away ───────────────
     if (stripeEvent.type === "checkout.session.expired") {
       var expId = session.metadata && session.metadata.orderId;
+      // On a chef's account the metadata is not proof of anything: a chef has
+      // their own API keys and could make a session carrying any order id. So
+      // only the exact session we created for that order may release it.
+      if (connectedAccount && metaType === "box_ticket" && expId) {
+        var expRows = await sbRest("box_orders?id=eq." + expId + "&select=stripe_session_id,stripe_account_id");
+        var expOrd = expRows && expRows[0];
+        if (!expOrd || expOrd.stripe_session_id !== session.id || expOrd.stripe_account_id !== connectedAccount) {
+          return { statusCode: 200, body: JSON.stringify({ received: true, warning: "Session does not match order" }) };
+        }
+      }
       if (metaType === "box_ticket" && expId) {
         await sbRest("box_orders?id=eq." + expId + "&status=eq.pending", {
           method: "DELETE", prefer: "return=minimal"
@@ -160,6 +329,21 @@ exports.handler = async function(event) {
     if (!order) {
       console.warn("No box order found for Stripe session:", session.id, metaType);
       return { statusCode: 200, body: JSON.stringify({ received: true, warning: "Order not found" }) };
+    }
+
+    // The money must have landed where the order says it should. A chef order
+    // is paid on that chef's account; a Hawthbush order on Hawthbush's. If they
+    // disagree, record nothing and shout — this is never a normal state.
+    if ((order.stripe_account_id || null) !== connectedAccount) {
+      console.error("Payment account mismatch for " + order.order_ref + ": order expects " +
+        (order.stripe_account_id || "Hawthbush's account") + ", event came from " + (connectedAccount || "Hawthbush's account"));
+      return { statusCode: 200, body: JSON.stringify({ received: true, warning: "Account mismatch — not recorded" }) };
+    }
+    // Same reasoning as for an expired session: on a chef's account only the
+    // session this app created for the order can confirm it.
+    if (connectedAccount && order.stripe_session_id !== session.id) {
+      console.error("Chef session " + session.id + " does not match order " + order.order_ref + " — not recorded");
+      return { statusCode: 200, body: JSON.stringify({ received: true, warning: "Session does not match order" }) };
     }
 
     var nowIso = new Date().toISOString();
@@ -188,14 +372,29 @@ exports.handler = async function(event) {
     if (order.status === "paid" || order.status === "deposit_paid") {
       return { statusCode: 200, body: JSON.stringify({ received: true, note: "already recorded" }) };
     }
+    // A refund or cancellation can land before this message does (Stripe
+    // retries a failed delivery for hours). Never bring a refunded or cancelled
+    // booking back to life by issuing its tickets.
+    if (order.status === "refunded" || order.status === "cancelled") {
+      console.error("checkout.session.completed for " + order.order_ref + " arrived after it was " + order.status + " — left as it is");
+      return { statusCode: 200, body: JSON.stringify({ received: true, note: "order already " + order.status }) };
+    }
 
     var isDeposit = Number(order.deposit_pence) > 0;
 
+    var paidFields = isDeposit
+      ? { status: "deposit_paid", paid_at: nowIso, stripe_session_id: session.id }
+      : { status: "paid", paid_at: nowIso, tickets_issued_at: nowIso, stripe_session_id: session.id };
+    // Kept so a refund can be made from the app. Only written for chef orders:
+    // the column arrives with the chef migration, and Hawthbush's own orders
+    // are refunded in its own dashboard as before.
+    if (order.stripe_account_id && session.payment_intent) {
+      paidFields.stripe_payment_intent_id = typeof session.payment_intent === "string"
+        ? session.payment_intent : session.payment_intent.id;
+    }
     await sbRest("box_orders?id=eq." + order.id, {
       method: "PATCH", prefer: "return=minimal",
-      body: isDeposit
-        ? { status: "deposit_paid", paid_at: nowIso, stripe_session_id: session.id }
-        : { status: "paid", paid_at: nowIso, tickets_issued_at: nowIso, stripe_session_id: session.id }
+      body: paidFields
     });
 
     await flagIfOversold(order);

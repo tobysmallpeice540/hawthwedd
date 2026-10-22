@@ -212,7 +212,21 @@ exports.handler = async function(event) {
 
     // ── 1. Ticket buyers ────────────────────────────────────────────────────
     // Only people who actually bought: an abandoned checkout is not a customer.
-    var orders = await sbRest("box_orders?status=in.(paid,deposit_paid)&select=email,first_name,last_name,created_at");
+    // Buyers at a chef-run event are the CHEF's customers, not Hawthbush's, so
+    // they join Hawthbush's list only if they ticked the marketing box. Buyers
+    // at Hawthbush's own events are included as before. Falls back to the old
+    // query if the chef columns don't exist yet.
+    var orders;
+    try {
+      orders = await sbRest("box_orders?status=in.(paid,deposit_paid)&or=(payee_id.is.null,marketing_opt_in.is.true)" +
+        "&select=email,first_name,last_name,created_at");
+    } catch (colErr) {
+      // Fall back ONLY when the chef columns don't exist yet. Any other failure
+      // must not fall through to the old query, which would put chef-event
+      // buyers who said no on Hawthbush's list.
+      if (!/42703|PGRST204|column .* does not exist/i.test(String(colErr && colErr.message || ""))) throw colErr;
+      orders = await sbRest("box_orders?status=in.(paid,deposit_paid)&select=email,first_name,last_name,created_at");
+    }
     var boxOffice = collect((orders || []).map(function(o) {
       return { email: o.email, first: o.first_name, last: o.last_name, date: asDate(o.created_at) };
     }));

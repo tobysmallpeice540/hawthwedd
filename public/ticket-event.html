@@ -217,6 +217,7 @@
   var errorMsg = "";
   var busy = false;
   var termsOk = false;
+  var optIn = false;             // marketing consent — unticked unless they tick it
   var waitlistDone = false;
   var ticketTerms = false;       // whether ticket terms have been published
 
@@ -339,6 +340,22 @@
     return '<div class="buy-avail low">' + esc(labels[0]) + "</div>";
   }
 
+  // ── Who is selling ─────────────────────────────────────────────────────────
+  // Most events are Hawthbush Farm's own and say nothing extra. A chef-run
+  // event is sold by the chef, and the buyer is told so plainly before paying.
+  // seller_name / seller_ready arrive with the 2026-10-22b database change;
+  // until then they are simply absent and everything behaves as before.
+  function sellerName() { return (ev && ev.seller_name) ? ev.seller_name : ""; }
+  function sellerLine() {
+    var n = sellerName();
+    if (!n) return "";
+    var shown = ev.seller_trading_name ? ev.seller_trading_name + " (" + n + ")" : n;
+    return "Tickets sold by " + shown + ". Hawthbush Farm is the venue.";
+  }
+  // A chef event can be published before the chef's payment account is ready.
+  // It shows, but can't be bought until then — the server refuses it too.
+  function onSale() { return !(ev && ev.seller_ready === false); }
+
   function renderEvent() {
     var cheapest = (ev.ticket_types || []).reduce(function (a, t) {
       return (a === null || t.price_pence < a) ? t.price_pence : a;
@@ -357,6 +374,9 @@
     } else if (ev.sold_out) {
       buyInner = '<div class="buy-price">Sold out</div>' +
         '<p class="muted">There are no tickets left for this event.</p>';
+    } else if (!onSale()) {
+      buyInner = '<div class="buy-price">On sale soon</div>' +
+        '<p class="muted">Tickets for this event aren\'t on sale just yet. Please check back soon.</p>';
     } else {
       buyInner =
         (cheapest !== null ? '<div class="buy-price">' + (cheapest === 0 ? "Free" : "From " + money(cheapest)) + "</div>" : "") +
@@ -377,6 +397,7 @@
           '<div class="event-when">' + esc(whenLine(ev)) + "</div>" +
           '<div class="event-where">' + esc(ev.venue_name || "") +
             (ev.venue_postcode ? ", " + esc(ev.venue_postcode) : "") + "</div>" +
+          (sellerLine() ? '<div class="muted" style="margin:-4px 0 14px">' + esc(sellerLine()) + "</div>" : "") +
           '<div class="panel"><div class="event-body">' + (ev.description || "<p></p>") + "</div>" + mapHtml + "</div>" +
         "</div>" +
         '<div><div class="buy-panel">' + buyInner + "</div></div>" +
@@ -444,7 +465,8 @@
 
     return '<div class="buy-panel">' +
       '<h3 style="font-family:\'Cormorant Garamond\',serif;font-size:20px;margin-bottom:4px">' + esc(ev.name) + "</h3>" +
-      '<p class="muted" style="margin-bottom:10px">' + esc(whenLine(ev)) + "<br>" + esc(ev.venue_name || "") + "</p>" +
+      '<p class="muted" style="margin-bottom:10px">' + esc(whenLine(ev)) + "<br>" + esc(ev.venue_name || "") +
+        (sellerLine() ? "<br>" + esc(sellerLine()) : "") + "</p>" +
       // With the event page living on the main website, this summary is the
       // only place the description appears during checkout.
       (ev.description ? '<div class="sum-desc">' + ev.description + "</div>" : "") +
@@ -571,10 +593,26 @@
         // Linked only once ticket terms have actually been written. Until then
         // the box still has to be ticked, but it doesn't send anyone off to
         // the cottage terms, which are not these terms.
-        (ticketTerms
-          ? "<span>I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>"
-          : "<span>I accept that tickets are non-transferable and that refunds are at Hawthbush Farm's discretion.</span>") +
+        (sellerName()
+          // A chef event: the contract is with the chef, and the box says so.
+          ? (ticketTerms
+              ? "<span>I understand these tickets are sold by " + esc(sellerName()) + ", and I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>"
+              : "<span>I understand these tickets are sold by " + esc(sellerName()) + ", that they are non-transferable, and that refunds are at the seller's discretion.</span>")
+          : (ticketTerms
+              ? "<span>I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>"
+              : "<span>I accept that tickets are non-transferable and that refunds are at Hawthbush Farm's discretion.</span>")) +
       "</label>" +
+      // Marketing consent, chef-run events only. Those buyers are the chef's
+      // customers, so Hawthbush may add them to its list only if they say yes
+      // (brevo-sync.js honours this box). Not shown on Hawthbush's own events,
+      // whose buyers are handled as before — asking there would promise
+      // something the sync doesn't do. Never ticked for them, never required.
+      (!sellerName() ? "" :
+      '<label class="terms-accept' + (optIn ? " on" : "") + '" id="optin-box">' +
+        '<input type="checkbox" id="d-optin"' + (optIn ? " checked" : "") + ">" +
+        "<span>Email me about future events at Hawthbush Farm. You can unsubscribe at any time." +
+          '<span class="muted" style="display:block;font-size:12px;margin-top:2px">Optional — leave this unticked and Hawthbush Farm won\'t add you to its mailing list.</span></span>' +
+      "</label>") +
       '<button class="btn-primary" id="to-payment">Continue to payment</button>' +
       '<div style="text-align:center;margin-top:12px"><button class="btn-link" id="back-tickets">← Back to tickets</button></div>';
   }
@@ -589,7 +627,8 @@
           "We'll email you a link nearer the time — your tickets are issued once the balance is settled.</div>"
         : "") +
       '<p class="muted" style="margin-bottom:6px">You\'ll be taken to Stripe to pay ' +
-        "<strong>" + money(payNow) + "</strong> by card. Nothing is charged until you confirm there.</p>" +
+        "<strong>" + money(payNow) + "</strong>" + (sellerName() ? " to " + esc(sellerName()) : "") +
+        " by card. Nothing is charged until you confirm there.</p>" +
       '<p class="muted">Tickets for ' + esc(details.firstName + " " + details.lastName) + " · " + esc(details.email) + "</p>" +
       '<button class="btn-primary" id="go-stripe"' + (busy ? " disabled" : "") + ">" +
         (busy ? "Opening Stripe…" : "Pay " + money(payNow)) + "</button>" +
@@ -630,6 +669,12 @@
     on("back-event", function () { step = 0; errorMsg = ""; render(); });
     on("back-tickets", function () { keepDetails(); step = 1; errorMsg = ""; render(); });
     on("back-details", function () { step = 2; errorMsg = ""; render(); });
+
+    var optBox = document.getElementById("d-optin");
+    if (optBox) optBox.addEventListener("change", function () {
+      optIn = optBox.checked;
+      document.getElementById("optin-box").className = "terms-accept" + (optIn ? " on" : "");
+    });
 
     var termsBox = document.getElementById("d-terms");
     if (termsBox) termsBox.addEventListener("change", function () {
@@ -723,7 +768,8 @@
         phone: details.phone,
         lines: lines,
         discountCode: applied ? applied.code : discountCode,
-        termsAcceptedAt: new Date().toISOString()
+        termsAcceptedAt: new Date().toISOString(),
+        marketingOptIn: optIn === true
       })
     }).then(function (r) {
       return r.json().then(function (body) { return { ok: r.ok, body: body }; });
@@ -851,7 +897,7 @@
         if (!keepStep && !params.get("ref")) {
           // A sold-out event still shows its own page, because that is where
           // the waitlist form lives.
-          step = (directBuy && !ev.gated && !ev.sold_out) ? 1 : 0;
+          step = (directBuy && !ev.gated && !ev.sold_out && onSale()) ? 1 : 0;
         }
         // Anything already in the basket that has since sold is trimmed back
         // rather than left to fail at the till.

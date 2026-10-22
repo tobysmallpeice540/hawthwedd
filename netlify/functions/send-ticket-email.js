@@ -319,9 +319,28 @@ function buildTokens(order, ev, extra) {
     balanceAmount:  money(order.balance_pence),
     balanceDueDate: fmtDateShort(order.balance_due_on),
     payLink:        "",
-    ticketsLink:    SITE_ORIGIN + "/my-ticket/" + order.qr_token
+    ticketsLink:    SITE_ORIGIN + "/my-ticket/" + order.qr_token,
+    // Who sold the tickets. "Hawthbush Farm" unless it is a chef-run event,
+    // where it is the chef's legal name (filled in by the handler below).
+    sellerName:     "Hawthbush Farm"
   };
   return Object.assign(tokens, extra || {});
+}
+
+// The seller of a chef-run order, or null for Hawthbush's own. Read from the
+// order's own snapshot only — never the event's current setting — so an email
+// always names whoever actually sold the ticket. Fails soft: before the chef
+// migration there is no payee column.
+async function chefSellerName(order, ev) {
+  var payeeId = order.payee_id;
+  if (!payeeId) return null;
+  try {
+    var rows = await sbRest("box_payees?id=eq." + payeeId + "&select=legal_name");
+    return (rows && rows[0] && rows[0].legal_name) || null;
+  } catch (e) {
+    console.error("seller lookup failed:", e.message);
+    return null;
+  }
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -396,9 +415,18 @@ exports.handler = async function(event) {
     var tmpl = getTemplate(templates, kind);
     if (!tmpl) return { statusCode: 400, body: JSON.stringify({ error: "Unknown template: " + kind }) };
 
-    var tokens = buildTokens(order, ev, { payLink: body.payLink || "" });
+    var seller  = await chefSellerName(order, ev);
+    var tokens = buildTokens(order, ev, seller
+      ? { payLink: body.payLink || "", sellerName: seller }
+      : { payLink: body.payLink || "" });
     var subject = fillTemplate(tmpl.subject, tokens);
     var text    = fillTemplate(tmpl.body, tokens);
+    // On a chef-run event every email says who the seller is, whatever the
+    // template says — the buyer's contract is with the chef, not Hawthbush, and
+    // that must not depend on someone remembering to edit a template.
+    if (seller && text.indexOf(seller) === -1) {
+      text += "\n\nThese tickets were sold by " + seller + ". Hawthbush Farm is the venue.";
+    }
 
     // The QR only ever goes out on a booking that is genuinely paid in full.
     // A deposit booking has tickets_issued_at null and gets no code at all.

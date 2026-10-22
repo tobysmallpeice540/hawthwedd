@@ -39,6 +39,16 @@ const SITE_ORIGIN  = "https://hawthbushfarm.netlify.app";
 // Ticketing's own Stripe account, never the lettings one — the same key and the
 // same pinned API version as create-ticket-checkout.js, for the same reasons
 // (see the long note there). Do not fall back to STRIPE_SECRET_KEY.
+// The chef's onboarding link. Signed with HBF_ADMIN_TOKEN so it cannot be
+// forged or pointed at a different chef, and it expires. chef-onboard.js holds
+// the matching check — keep the two in step.
+const crypto = require("crypto");
+const ONBOARD_LINK_DAYS = 14;
+function chefOnboardUrl(payeeId, expiresAt) {
+  var sig = crypto.createHmac("sha256", ADMIN_TOKEN).update("chef-onboard:" + payeeId + ":" + expiresAt).digest("hex");
+  return SITE_ORIGIN + "/.netlify/functions/chef-onboard?p=" + encodeURIComponent(payeeId) + "&x=" + expiresAt + "&s=" + sig;
+}
+
 var stripeClient = null;
 function getStripe() {
   if (!process.env.STRIPE_TICKET_SECRET_KEY) return null;
@@ -299,6 +309,12 @@ exports.handler = async function(event) {
       // without reading claude/scope-chef-ticketing.md first — losses.payments
       // = application would put the refund and dispute risk on Hawthbush.
       case "payees.invite": {
+        if (!ADMIN_TOKEN) return bad("HBF_ADMIN_TOKEN isn't set in Netlify, so a setup link can't be signed.", 500);
+        // Stripe's own onboarding links work once and expire within minutes —
+        // useless in an email the chef might open tomorrow. So what the office
+        // sends is OUR link (chef-onboard.js), signed and good for two weeks,
+        // which mints a fresh Stripe link every time it is opened. This action
+        // only makes sure the chef has a Stripe account and hands that link back.
         var stripeI = getStripe();
         if (!stripeI) return bad("Ticketing's Stripe key isn't set in Netlify yet (STRIPE_TICKET_SECRET_KEY), so no link can be made.", 500);
         var iRows = await sbRest("box_payees?id=eq." + body.id + "&select=*");
@@ -337,15 +353,9 @@ exports.handler = async function(event) {
             }
           }
 
-          var link = await stripeI.accountLinks.create({
-            account: acctId,
-            type: "account_onboarding",
-            // Single-use links expire, and this page says so plainly rather
-            // than minting a new one for whoever holds an old URL.
-            refresh_url: SITE_ORIGIN + "/chef-connected.html?expired=1",
-            return_url:  SITE_ORIGIN + "/chef-connected.html"
-          });
-          return ok({ url: link.url, expires_at: link.expires_at, account: acctId });
+          if (!acctId) return bad("The chef's Stripe account could not be recorded. Please try again.", 500);
+          var expiresAt = Math.floor(Date.now() / 1000) + ONBOARD_LINK_DAYS * 86400;
+          return ok({ url: chefOnboardUrl(iPayee.id, expiresAt), expires_at: expiresAt, account: acctId });
         } catch (se) {
           console.error("payees.invite stripe error:", se && se.type ? "[" + se.type + "] " : "", se && se.message);
           return bad("Stripe said: " + (se && se.message ? se.message : "something went wrong") +
@@ -378,18 +388,27 @@ exports.handler = async function(event) {
       // ── EVENTS ─────────────────────────────────────────────────────────────
       case "events.list": {
         var events = await sbRest("box_events?select=*&order=starts_at.desc.nullslast");
-        var orders = await sbRest("box_orders?select=event_id,total_qty,total_pence,deposit_pence,status,created_at,admitted");
+        var orders;
+        try {
+          orders = await sbRest("box_orders?select=event_id,total_qty,total_pence,deposit_pence,status,created_at,admitted,application_fee_pence");
+        } catch (colErr) {
+          // Before the chef migration there is no fee column; nothing else changes.
+          orders = await sbRest("box_orders?select=event_id,total_qty,total_pence,deposit_pence,status,created_at,admitted");
+        }
         var types  = await sbRest("box_ticket_types?select=event_id,quantity,hidden");
 
         var byEvent = {};
         (orders || []).forEach(function(o) {
-          var s = byEvent[o.event_id] || (byEvent[o.event_id] = { sold: 0, revenue: 0, orders: 0, admitted: 0 });
+          var s = byEvent[o.event_id] || (byEvent[o.event_id] = { sold: 0, revenue: 0, orders: 0, admitted: 0, commission: 0 });
           if (!countsAsSold(o)) return;
           s.sold    += o.total_qty || 0;
           s.orders  += 1;
           s.admitted += o.admitted || 0;
           // Deposit bookings have only taken the deposit so far.
           s.revenue += (o.status === "deposit_paid") ? (o.deposit_pence || 0) : (o.total_pence || 0);
+          // On a chef event the takings are the CHEF's money. Hawthbush's
+          // income is only the commission, which is what this adds up.
+          s.commission += o.application_fee_pence || 0;
         });
         var capByEvent = {};
         (types || []).forEach(function(t) {
@@ -399,12 +418,13 @@ exports.handler = async function(event) {
 
         return ok({
           events: (events || []).map(function(e) {
-            var s = byEvent[e.id] || { sold: 0, revenue: 0, orders: 0, admitted: 0 };
+            var s = byEvent[e.id] || { sold: 0, revenue: 0, orders: 0, admitted: 0, commission: 0 };
             var issued = capByEvent[e.id] || 0;
             var cap = (e.capacity != null) ? Math.min(e.capacity, issued || e.capacity) : issued;
             return Object.assign({}, e, {
               stat_sold: s.sold, stat_revenue: s.revenue, stat_orders: s.orders,
-              stat_admitted: s.admitted, stat_capacity: cap, stat_issued: issued
+              stat_admitted: s.admitted, stat_capacity: cap, stat_issued: issued,
+              stat_commission: s.commission
             });
           })
         });
@@ -485,15 +505,16 @@ exports.handler = async function(event) {
         var effPayee   = payload.payee_id !== undefined ? payload.payee_id : (current && current.payee_id) || null;
         var effMode    = payload.payment_mode !== undefined ? payload.payment_mode : (current && current.payment_mode) || "full";
         var effDeposit = payload.deposit_pence !== undefined ? Number(payload.deposit_pence) : Number(current && current.deposit_pence) || 0;
-        var effStatus  = payload.status !== undefined ? payload.status : (current && current.status) || "draft";
 
         // Once anyone has paid, who the seller is must not change under them —
         // their tickets, receipt and refund all name the original seller.
         if (current && payload.payee_id !== undefined && (payload.payee_id || null) !== (current.payee_id || null)) {
+          // Includes checkouts in progress: someone on the Stripe page right now
+          // would otherwise pay the old seller while their ticket names the new one.
           var paidRows = await sbRest("box_orders?event_id=eq." + body.event.id +
-            "&status=in.(paid,deposit_paid)&select=id&limit=1");
+            "&status=in.(paid,deposit_paid,pending)&select=id&limit=1");
           if (paidRows && paidRows.length) {
-            return bad("Tickets have already been sold for this event, so who sells them can't be changed. Cancel and refund those bookings first, or create a new event.");
+            return bad("Tickets have already been sold (or someone is part-way through buying), so who sells them can't be changed. Cancel and refund those bookings first, or create a new event.");
           }
         }
 
@@ -506,10 +527,10 @@ exports.handler = async function(event) {
           if (effMode === "deposit" || effDeposit > 0) {
             return bad("Events sold by a chef are full payment only — switch the payment option back to full, or choose Hawthbush Farm as the seller.");
           }
-          // Never put tickets on sale that cannot pay out.
-          if (effStatus === "published" && !payeeRow.charges_enabled) {
-            return bad(payeeRow.legal_name + " has not finished setting up Stripe yet, so this event can't be published. Save it as a draft until their account is ready.");
-          }
+          // A chef event MAY be published before the chef's Stripe account is
+          // ready (Toby's call: the page can go up early). Tickets simply can't
+          // be bought until then — create-ticket-checkout.js refuses the sale
+          // and the public page shows "on sale soon" in place of the button.
         }
 
         // Note: "setting an access code takes the event out of /whats-on" is
@@ -605,7 +626,7 @@ exports.handler = async function(event) {
       // reserve function as a card sale, so they count against capacity and
       // can't oversell the room — the band's guest list is real tickets.
       case "orders.manual": {
-        var mEv = await sbRest("box_events?id=eq." + body.eventId + "&select=slug,name");
+        var mEv = await sbRest("box_events?id=eq." + body.eventId + "&select=*");
         if (!mEv || !mEv[0]) return bad("Event not found", 404);
 
         var reserved = await sbRpc("box_reserve_order", {
@@ -624,9 +645,13 @@ exports.handler = async function(event) {
 
         // Issued by hand means paid by hand: real tickets, straight away.
         var nowIso = new Date().toISOString();
+        var manualPatch = { status: "paid", paid_at: nowIso, tickets_issued_at: nowIso };
+        // A hand-issued ticket on a chef event belongs to the chef's event, but
+        // no card money moved, so there is no Stripe account and no fee on it.
+        if (mEv[0].payee_id) manualPatch.payee_id = mEv[0].payee_id;
         var patched = await sbRest("box_orders?id=eq." + reserved.order_id, {
           method: "PATCH",
-          body: { status: "paid", paid_at: nowIso, tickets_issued_at: nowIso }
+          body: manualPatch
         });
 
         if (body.notify !== false && body.email) {
@@ -683,6 +708,104 @@ exports.handler = async function(event) {
           await sendEmail("booking_cancelled", { orderId: cOrd.id });
         }
         return ok({ order: cUpdated && cUpdated[0] });
+      }
+
+      // Refund a chef order and cancel it, in one step.
+      //
+      // Hawthbush's own orders are still refunded in Hawthbush's Stripe
+      // dashboard — the deliberate choice made when the box office was built.
+      // A chef order cannot be: the payment sits on the chef's account, where
+      // Hawthbush's dashboard link finds nothing. So for those the app does it,
+      // with refund_application_fee so Hawthbush's commission goes back too
+      // (Toby's rule: no commission on a refunded ticket).
+      //
+      // Order of work matters. The booking is marked refunded BEFORE Stripe is
+      // asked, so that when Stripe's charge.refunded event reaches the webhook
+      // it sees the app has already dealt with it and sends no second email. If
+      // Stripe then refuses, the booking is put back exactly as it was.
+      case "orders.refund": {
+        var stripeF = getStripe();
+        if (!stripeF) return bad("Ticketing's Stripe key isn't set in Netlify (STRIPE_TICKET_SECRET_KEY).", 500);
+        var fRows = await sbRest("box_orders?id=eq." + body.id + "&select=*");
+        var fOrd = fRows && fRows[0];
+        if (!fOrd) return bad("Order not found", 404);
+        if (!fOrd.stripe_account_id) {
+          return bad(fOrd.payee_id
+            ? "This ticket was issued by hand, so no card payment was taken through Stripe. Use Cancel instead."
+            : "This booking was paid to Hawthbush Farm, so it is refunded in Stripe as before — use the Stripe link on the row, then Cancel.", 409);
+        }
+        if (fOrd.status !== "paid") return bad("Only a paid booking can be refunded.", 409);
+
+        var prior = { status: fOrd.status, tickets_issued_at: fOrd.tickets_issued_at, notes: fOrd.notes };
+        var fToday = new Date().toISOString().slice(0, 10);
+        // Conditional on still being paid, so two presses (or two people) can't
+        // both get past this point: the second finds nothing to update.
+        var claimedRefund = await sbRest("box_orders?id=eq." + fOrd.id + "&status=eq.paid", {
+          method: "PATCH",
+          body: {
+            status: "refunded",
+            tickets_issued_at: null,
+            notes: (fOrd.notes ? fOrd.notes + "\n" : "") + "Refunded in full in the app on " + fToday +
+              " by " + caller.who + (body.reason ? ": " + body.reason : "") + " — commission returned."
+          }
+        });
+        if (!claimedRefund || !claimedRefund.length) return bad("That booking is already being refunded.", 409);
+
+        var piId = fOrd.stripe_payment_intent_id;
+        try {
+          if (!piId && fOrd.stripe_session_id) {
+            var fSess = await stripeF.checkout.sessions.retrieve(fOrd.stripe_session_id, {}, { stripeAccount: fOrd.stripe_account_id });
+            piId = typeof fSess.payment_intent === "string" ? fSess.payment_intent : (fSess.payment_intent && fSess.payment_intent.id);
+          }
+          if (piId) {
+            // A fresh key per attempt: Stripe remembers a failed request
+            // against its key for a day, and a remembered failure would block
+            // every retry. Double-refunding is prevented above instead, by the
+            // conditional update that only one request can win.
+            await stripeF.refunds.create({
+              payment_intent: piId,
+              refund_application_fee: true,
+              metadata: { orderRef: fOrd.order_ref, by: String(caller.who || "") }
+            }, { stripeAccount: fOrd.stripe_account_id, idempotencyKey: "hbf-refund-" + fOrd.id + "-" + Date.now() });
+          }
+          // No payment intent means nothing was charged (a free ticket), so
+          // cancelling is all there is to do.
+        } catch (re) {
+          // Before undoing anything, find out what is actually true in Stripe.
+          // The chef may already have refunded it from their dashboard, or the
+          // refund may have gone through and only the reply been lost. Either
+          // way the money is back with the buyer, so the booking stays refunded
+          // — and the commission is put right here rather than left to chance.
+          var alreadyBack = false;
+          try {
+            if (piId) {
+              var piNow = await stripeF.paymentIntents.retrieve(piId, { expand: ["latest_charge"] }, { stripeAccount: fOrd.stripe_account_id });
+              var ch = piNow && piNow.latest_charge;
+              alreadyBack = !!(ch && typeof ch === "object" && ch.refunded);
+              if (alreadyBack && ch.application_fee) {
+                var feeIdR = typeof ch.application_fee === "string" ? ch.application_fee : ch.application_fee.id;
+                var feeR = await stripeF.applicationFees.retrieve(feeIdR);
+                var owedR = feeR.amount - (feeR.amount_refunded || 0);
+                if (owedR > 0) {
+                  await stripeF.applicationFees.createRefund(feeIdR, { amount: owedR, metadata: { reason: "ticket refunded", charge: ch.id } },
+                    { idempotencyKey: "hbf-fee-refund-" + ch.id + "-full" });
+                }
+              }
+            }
+          } catch (checkErr) {
+            console.error("orders.refund could not confirm Stripe state:", checkErr && checkErr.message);
+          }
+          if (!alreadyBack) {
+            await sbRest("box_orders?id=eq." + fOrd.id, { method: "PATCH", prefer: "return=minimal", body: prior });
+            console.error("orders.refund stripe error:", re && re.type ? "[" + re.type + "] " : "", re && re.message);
+            return bad("Stripe didn't make the refund, so nothing has changed: " + (re && re.message ? re.message : "unknown error"), 502);
+          }
+          console.warn("orders.refund: " + fOrd.order_ref + " was already refunded in Stripe — recorded as refunded");
+        }
+
+        var emailed = false;
+        if (body.notify !== false && fOrd.email) emailed = await sendEmail("booking_cancelled", { orderId: fOrd.id });
+        return ok({ ok: true, emailed: emailed });
       }
 
       // The balance email by hand. box-billing.js still sends it automatically
@@ -863,6 +986,10 @@ exports.handler = async function(event) {
           taken_pence: live.reduce(function(a, o) { return a + (o.status === "deposit_paid" ? (o.deposit_pence || 0) : (o.total_pence || 0)); }, 0),
           due_pence:   live.reduce(function(a, o) { return a + (o.status === "deposit_paid" ? (o.balance_pence || 0) : 0); }, 0),
           discount_pence: live.reduce(function(a, o) { return a + (o.discount_pence || 0); }, 0),
+          // Chef events: what Hawthbush actually earned (VAT-inclusive), as
+          // opposed to taken_pence, which is the chef's takings.
+          commission_pence: live.reduce(function(a, o) { return a + (o.application_fee_pence || 0); }, 0),
+          chef_event:  live.some(function(o) { return !!o.payee_id; }),
           by_type:     Object.keys(byType).map(function(k) { return byType[k]; }),
           by_source:   ["stripe", "cash", "transfer", "comp"].map(function(src) {
             var rows = live.filter(function(o) { return o.source === src; });

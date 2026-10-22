@@ -109,7 +109,10 @@
       '<div class="brand-sub">' + esc(e.venue_name || "The Grain Store") + "</div>" +
       '<div class="ev-name">' + esc(e.name) + "</div>" +
       '<div class="ev-when">' + esc(fmtDate(e.starts_at)) + " · " + esc(fmtTime(e.starts_at)) + "</div>" +
-      '<div class="ev-where">' + esc([e.venue_name, e.venue_postcode].filter(Boolean).join(", ")) + "</div>";
+      '<div class="ev-where">' + esc([e.venue_name, e.venue_postcode].filter(Boolean).join(", ")) + "</div>" +
+      // Chef-run events only (seller_name is null for Hawthbush's own): the
+      // ticket names who sold it, because that is who the contract is with.
+      (t.seller_name ? '<div class="ev-where" style="margin-top:4px">Sold by ' + esc(t.seller_name) + "</div>" : "");
 
     var body;
 

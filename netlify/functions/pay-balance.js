@@ -85,6 +85,12 @@ exports.handler = async function(event) {
     if (order.status === "cancelled" || order.status === "refunded") {
       return { statusCode: 409, body: JSON.stringify({ error: "That booking has been cancelled." }) };
     }
+    // Chef events are full payment only, so a chef order never owes a
+    // balance. If one ever appeared, this function would charge it to
+    // Hawthbush's own account — so refuse outright.
+    if (order.stripe_account_id) {
+      return { statusCode: 409, body: JSON.stringify({ error: "There's nothing outstanding on that booking." }) };
+    }
     if (Number(order.balance_pence) <= 0 || order.balance_paid_at) {
       return { statusCode: 409, body: JSON.stringify({ error: "There's nothing outstanding on that booking." }) };
     }
