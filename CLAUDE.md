@@ -199,6 +199,39 @@ own header.
   templates (Lettings, Client portal, Box office, Brochure request — the same
   editors that live in each section, on the same stored keys).
 
+### Money, the day and follow-ups (23 Oct 2026, evening)
+
+- **Damage deposit** on an event (`damageDeposit`, `damageDepositState`,
+  `damageDepositKept`) is refundable: never on an invoice stage, shown on the
+  couple's statement as refundable, and only an amount KEPT reaches the VAT
+  split (outside the scope).
+- **VAT split** (`eventVatSplit`) is worked out from the venue fee, linked
+  accommodation and the portal's drinks, food and confirmed extras, plus
+  `vatAdjustments` (inc VAT, either sign — `signedAmount`, because
+  `parseMoney` drops the minus). Rates are standard-rate assumptions.
+- **Statement of account**: the staff app publishes each event's payments
+  still to come (`eventStatementRows`) to `wp_payment_schedule` through
+  `wp_admin_publish_schedule` (admin only). It never publishes from example
+  data or after a failed START-UP read (`startupReadFailedRef` in App — not the
+  shared `READ_FAILED`, which another screen's later read clears). Cancelled
+  events are sent with no rows so they clear. The portal labels every figure
+  provisional.
+- **Function sheet** (`functionSheetHtml`, Actions → Function sheet) escapes
+  every value with `fsEsc`; it is written into a new window.
+- **Follow-ups** (`netlify/functions/automations.js`, run daily by
+  `automations-cron.js`): every rule off until switched on in Settings → Email
+  templates → Follow-ups. What was sent lives in `hbf_automation_sent_v1`,
+  written ONLY by the function, marked BEFORE sending (a cut-off run can miss
+  someone, never email twice). It and `hbf_automations_v1` are deliberately
+  NOT restorable from a backup — restoring the sent record would re-send.
+  Addresses with a live event, sombre event types (wake, funeral, memorial,
+  celebration of life) and duplicate addresses are left out. The app's
+  `enquiryGoneQuiet` mirrors `goneQuiet()` there; `money-and-day-test.cjs`
+  pins them together.
+- **`sbRpcQuiet`** is `sbRpc` without the red banner, for optional reads and
+  for functions a migration may not have created yet. Portal pages use
+  `isMissingFunction(e)` the same way.
+
 ### Product
 
 - **Double bookings warn, never block.** Every override takes a second press.

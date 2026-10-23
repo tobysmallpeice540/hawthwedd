@@ -103,7 +103,10 @@ begin
   -- S1 schedule
   perform set_config('request.jwt.claims', json_build_object('sub',uC,'email','tc@test.invalid')::text, true);
   r := wp_admin_publish_schedule(jsonb_build_array(jsonb_build_object('event_id', ev, 'rows', '[]'::jsonb)));
-  if r->>'error' = 'not_staff' then passes:=passes+1; else fails:=fails||text 'S1 client published'; end if;
+  if r->>'error' = 'not_admin' then passes:=passes+1; else fails:=fails||text 'S1 client published'; end if;
+  perform set_config('request.jwt.claims', json_build_object('sub',uB,'email','tb@test.invalid')::text, true);
+  r := wp_admin_publish_schedule(jsonb_build_array(jsonb_build_object('event_id', ev, 'rows', '[]'::jsonb)));
+  if r->>'error' = 'not_admin' then passes:=passes+1; else fails:=fails||text 'S1b bar login published'; end if;
 
   perform set_config('request.jwt.claims', json_build_object('sub',uA,'email','ta@test.invalid')::text, true);
   r := wp_admin_publish_schedule(jsonb_build_array(

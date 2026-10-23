@@ -84,6 +84,23 @@ console.log("gone quiet");
   ok("never without a check-in", !A.goneQuiet(q, {}, {}, ON, TODAY));
 }
 
+console.log("who is left out");
+{
+  const q = enq("w", "2026-09-01", { contacts: [{ date: "2026-09-25" }] });
+  const sombre = Object.assign({}, q, { id: q.id + "x", email: "other@example.com", eventType: "Celebration of Life" });
+  const r = A.planAutomations({ settings: ON, today: TODAY, enquiries: [sombre] });
+  eq("no 'found your venue elsewhere?' to a celebration of life", r.due.length, 0);
+  const client = A.planAutomations({ settings: ON, today: TODAY, enquiries: [q],
+    events: [{ id: 3, status: "Confirmed", date: "2027-05-01", email: "JANEW@example.com" }] });
+  eq("an address with a live event is a client, not an enquiry", client.due.length, 0);
+  const cancelled = A.planAutomations({ settings: ON, today: TODAY, enquiries: [q],
+    events: [{ id: 3, status: "Cancelled", date: "2027-05-01", email: "janew@example.com" }] });
+  eq("a cancelled event does not count", cancelled.due.length, 1);
+  const twin = Object.assign({}, q, { id: q.id + "2" });
+  const dup = A.planAutomations({ settings: ON, today: TODAY, enquiries: [q, twin] });
+  eq("two enquiries, one address: one email", dup.due.length, 1);
+}
+
 console.log("thank-you");
 {
   const ev = { id: 7, status: "Confirmed", date: "2026-10-21", couple: "Elizabeth Bradley & Ashley Williams", email: "liz@example.com", email2: "ASH@example.com" };
@@ -91,7 +108,7 @@ console.log("thank-you");
     Object.assign({}, ev, { id: 8, status: "Holding" }),
     Object.assign({}, ev, { id: 9, date: "2026-10-22" }),                 // 1 day: too soon
     Object.assign({}, ev, { id: 10, date: "2026-08-01" }),                // history
-    Object.assign({}, ev, { id: 11, date: "2026-10-19", endDate: "2026-10-21" }),  // multi-day: counts from the end
+    Object.assign({}, ev, { id: 11, date: "2026-10-19", endDate: "2026-10-21", email: "sam@example.com", email2: "" }),  // multi-day: counts from the end
     Object.assign({}, ev, { id: 12, email: "", email2: "" })] });
   eq("confirmed, two days after it ended, with an address", kinds(r), ["thanks:7", "thanks:11"]);
   eq("both addresses, lower-cased", r.due[0].to, ["liz@example.com", "ash@example.com"]);
@@ -99,8 +116,12 @@ console.log("thank-you");
   eq("from the client names when given", A.coupleFirstNames({ client1Name: "Sam Lee", client2Name: "Jo Park", couple: "x" }), "Sam and Jo");
   const email = A.renderEmail(r.due[0], r.cfg);
   ok("review button and link", email.html.indexOf("Leave a review") !== -1 && email.text.indexOf("https://g.page/r/hawthbush/review") !== -1);
-  const once = A.planAutomations({ settings: ON, today: TODAY, events: [ev], marks: { "ev:7": { thanks: "2026-10-23T09:00:00Z" } } });
+  const once = A.planAutomations({ settings: ON, today: TODAY, events: [ev], marks: { "ev:7:2026-10-21": { thanks: "2026-10-23T09:00:00Z" } } });
   eq("never twice", once.due.length, 0);
+  const reused = A.planAutomations({ settings: ON, today: TODAY, events: [ev], marks: { "ev:7:2025-06-01": { thanks: "2025-06-03T09:00:00Z" } } });
+  eq("a reused id on a new date is still thanked", reused.due.length, 1);
+  const wake = A.planAutomations({ settings: ON, today: TODAY, events: [Object.assign({}, ev, { eventType: "Wake" })] });
+  eq("no thank-you after a wake", wake.due.length, 0);
   const off = A.planAutomations({ settings: { followup: { on: true } }, today: TODAY, events: [ev] });
   eq("off means off", off.due.length, 0);
 }

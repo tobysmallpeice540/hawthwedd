@@ -166,14 +166,17 @@ revoke all on table public.wp_payment_schedule from anon, authenticated;
 --   [{ "event_id": 123, "rows": [{ label, due_on, amount, refundable,
 --                                   lines: [{ desc, amount }] }] }]
 -- An event sent with no rows has its schedule cleared (everything invoiced).
--- An event that is not in the diary is skipped and reported.
+-- An event that is not in the diary is skipped and reported. The app sends
+-- cancelled events with no rows, so their old figures are cleared.
 create or replace function public.wp_admin_publish_schedule(p_events jsonb)
 returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
 declare
   e jsonb; r jsonb; v_event integer; v_seq integer; v_done integer := 0; v_rows integer := 0;
   v_skipped jsonb := '[]'::jsonb; v_known integer[]; v_amount numeric; v_lines jsonb;
 begin
-  if not is_staff() then return jsonb_build_object('ok', false, 'error', 'not_staff'); end if;
+  -- Admin only: these are the figures a couple is shown, and the bar and
+  -- cleaning logins are staff but have no business rewriting them.
+  if not wp_is_admin() then return jsonb_build_object('ok', false, 'error', 'not_admin'); end if;
   if jsonb_typeof(p_events) <> 'array' then return jsonb_build_object('ok', false, 'error', 'not_an_array'); end if;
   if jsonb_array_length(p_events) > 500 then return jsonb_build_object('ok', false, 'error', 'too_many_events'); end if;
 

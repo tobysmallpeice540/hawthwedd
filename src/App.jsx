@@ -2573,7 +2573,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-23c";
+const APP_BUILD = "2026-10-23d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -5496,7 +5496,9 @@ const BACKUP_DATA_KEYS = [
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
   "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
-  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_automations_v1", "hbf_automation_sent_v1"
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1"
+  // Not the follow-up keys: restoring the "already sent" record would send
+  // everybody mailed since the snapshot their email again.
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -5505,8 +5507,7 @@ const KEY_LABELS = {
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
-  "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings",
-  "hbf_automations_v1":"Follow-up settings", "hbf_automation_sent_v1":"Follow-ups sent"
+  "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -6846,9 +6847,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
       try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r || []); } catch { setEnquiries([]); }
         try { const r = await sbGet(VR_STORAGE); setViewingRequests(r || []); } catch { setViewingRequests([]); }
         try { const r = await sbGet(VB_STORAGE); setViewingBlocks(r || []); } catch { setViewingBlocks([]); }
-      try { const r = await sbGet(ACCOM_STORAGE); setAccomBookings((r||[]).map(normalizeAccom)); } catch { READ_FAILED[ACCOM_STORAGE] = true; setAccomBookings([]); }
+      try { const r = await sbGet(ACCOM_STORAGE); if (READ_FAILED[ACCOM_STORAGE]) startupReadFailedRef.current.accom = true; setAccomBookings((r||[]).map(normalizeAccom)); } catch { startupReadFailedRef.current.accom = true; setAccomBookings([]); }
       try { const r = await sbGet(PROPERTIES_STORAGE); setAccomProperties(r||INITIAL_PROPERTIES); } catch { setAccomProperties(INITIAL_PROPERTIES); }
-      try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecords(r||[]); } catch { READ_FAILED[EVENT_INVOICES_STORAGE] = true; setInvoiceRecords([]); }
+      try { const r = await sbGet(EVENT_INVOICES_STORAGE); if (READ_FAILED[EVENT_INVOICES_STORAGE]) startupReadFailedRef.current.invoices = true; setInvoiceRecords(r||[]); } catch { startupReadFailedRef.current.invoices = true; setInvoiceRecords([]); }
       setLoaded(true);
     })();
   },[]);
@@ -6862,9 +6863,13 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // a couple owes. Sent only when it has changed, a few seconds after the last
   // edit; a failure is logged and tried again on the next change.
   const publishedScheduleRef = useRef(null);
+  const startupReadFailedRef = useRef({});
   useEffect(function() {
     if (!loaded || barOnly || cleanerOnly) return;
-    if (SEED_FALLBACK[BOOKING_STORAGE] || READ_FAILED[BOOKING_STORAGE] || READ_FAILED[ACCOM_STORAGE] || READ_FAILED[EVENT_INVOICES_STORAGE]) return;
+    // The failures that matter are THIS app's start-up reads, held in a ref:
+    // READ_FAILED is shared, and another screen reading lettings successfully
+    // later would clear it without refilling the list this sum is made from.
+    if (SEED_FALLBACK[BOOKING_STORAGE] || startupReadFailedRef.current.accom || startupReadFailedRef.current.invoices) return;
     const t = setTimeout(function() {
       const today = new Date().toISOString().slice(0, 10);
       // Recently past events stay in so that a schedule left over from before
@@ -6872,10 +6877,12 @@ export default function App({ role = "admin", onSignOut } = {}) {
       const from = addDaysIso(today, -90);
       const payload = (bookings || []).filter(function(ev) {
         if (!ev || !/^\d+$/.test(String(ev.id)) || !isValidEventDate(ev.date)) return false;
-        if (String(ev.status || "").toLowerCase() === "cancelled") return false;
         return (eventEndDate(ev) || ev.date) >= from;
       }).slice(0, 500).map(function(ev) {
-        return { event_id: Number(ev.id), rows: eventStatementRows(ev, accomBookings, invoiceRecords, today) };
+        // A cancelled event is sent with nothing, so whatever it showed before
+        // is cleared rather than left on the couple's page.
+        const cancelled = String(ev.status || "").toLowerCase() === "cancelled";
+        return { event_id: Number(ev.id), rows: cancelled ? [] : eventStatementRows(ev, accomBookings, invoiceRecords, today) };
       });
       const key = JSON.stringify(payload);
       if (key === publishedScheduleRef.current) return;
@@ -15775,6 +15782,9 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso) {
   const lastM = months[months.length - 1];
   (bookings || []).forEach(function(ev) {
     if (!ev || ev.status === "Cancelled" || !isValidEventDate(ev.date)) return;
+    // Seasons invoiced by hand are not on the app's schedule, so their
+    // computed stages would be a guess at money that may already be in.
+    if (!isInvoiceableYear(ev)) return;
     const holding = ev.status === "Holding";
     computeEventInvoiceStages(ev, accomFallback || accomBookings).forEach(function(st) {
       if (!(st.total > 0)) return;
@@ -15815,7 +15825,7 @@ function CashflowReport({ bookings, accomBookings }) {
     <div>
       <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12.5, color:T.infoText, lineHeight:1.6 }}>
         What is expected in, inc VAT. Events follow the invoice schedule (deposit at booking, 1 December, final 28 days before);
-        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Lettings are the unpaid lines of each booking's payment schedule.
+        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule.
       </div>
       {f.overdue.lets > 0 && (
         <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:13, color:"#92400e" }}>
@@ -22849,7 +22859,10 @@ function AutomationsPanel() {
     let off = false;
     (async function() {
       let saved = null;
-      try { saved = await sbGet(AUTOMATIONS_STORAGE); } catch (e) { saved = null; }
+      try { saved = await sbGet(AUTOMATIONS_STORAGE); } catch (e) { READ_FAILED[AUTOMATIONS_STORAGE] = true; }
+      // A failed read must not show the defaults as if they were the saved
+      // settings: one Save would then switch everything off and lose the wording.
+      if (READ_FAILED[AUTOMATIONS_STORAGE]) { if (!off) setCfg({ __failed: true }); return; }
       const merged = {};
       Object.keys(DEFAULT_AUTOMATIONS).forEach(function(k) {
         merged[k] = Object.assign({}, DEFAULT_AUTOMATIONS[k], (saved && saved[k]) || {});
@@ -22860,6 +22873,7 @@ function AutomationsPanel() {
   }, []);
 
   if (!cfg) return <div style={quietText}>Loading…</div>;
+  if (cfg.__failed) return <ErrBanner text="The follow-up settings could not be read, so they are not shown — saving now could overwrite them. Reload the page to try again."/>;
 
   function set(id, field, value) {
     setCfg(function(c) { return Object.assign({}, c, { [id]: Object.assign({}, c[id], { [field]: value }) }); });
@@ -22867,7 +22881,14 @@ function AutomationsPanel() {
   }
   async function save() {
     setBusy(true); setFlash("");
-    try { await sbSet(AUTOMATIONS_STORAGE, cfg); setDirty(false); setFlash("Saved."); }
+    try {
+      await sbSet(AUTOMATIONS_STORAGE, cfg);
+      // sbSet reports a failure on the banner rather than throwing, so check
+      // the save actually landed before saying it did.
+      const back = await sbGet(AUTOMATIONS_STORAGE);
+      if (JSON.stringify(back) !== JSON.stringify(cfg)) throw new Error("the saved copy does not match — try again");
+      setDirty(false); setFlash("Saved.");
+    }
     catch (e) { setFlash("Not saved: " + (e.message || e)); }
     finally { setBusy(false); }
   }

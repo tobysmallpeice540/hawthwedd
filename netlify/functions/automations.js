@@ -13,8 +13,8 @@
 //   thanks    N days after a confirmed event: thank you, and a review link.
 //
 // Each goes to a person once, ever. What was sent is recorded in its own key,
-// hbf_automation_sent_v1 ({ "enq:<id>": { followup, quiet }, "ev:<id>":
-// { thanks } }), which nothing else writes — this never rewrites the shared
+// hbf_automation_sent_v1 ({ "enq:<id>": { followup, quiet },
+// "ev:<id>:<date>": { thanks } }), which nothing else writes — this never rewrites the shared
 // enquiries or events arrays. Every send is logged to hbf_email_log_v1 so it
 // shows in Recent Automated Emails.
 //
@@ -52,7 +52,7 @@ const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
 const FN_BUILD    = "2026-10-23a";
 
 // A bad day (a data import, a clock problem) must not become a mass mailing.
-const MAX_SENDS_PER_RUN = 25;
+const MAX_SENDS_PER_RUN = 15;
 
 // Mirrors DEFAULT_AUTOMATIONS in App.jsx. A field left blank in Settings falls
 // back to this wording, field by field, so an empty email is never sent.
@@ -69,7 +69,12 @@ const DEFAULTS = {
 };
 // How far past its trigger each rule still acts. Outside this, an enquiry or
 // event is history and is left alone.
-const WINDOW_DAYS = { followup: 7, quiet: 30, thanks: 14 };
+const WINDOW_DAYS = { followup: 7, quiet: 14, thanks: 14 };
+
+// Occasions where "thank you for celebrating with us" and "found your venue
+// elsewhere? congratulations" would be badly wrong. The check-in and the
+// thank-you never go to these; the neutral first follow-up still may.
+const SOMBRE = /\b(wake|funeral|memorial|celebration of life)\b/i;
 
 // ─── Pure decisions (exported for tests) ─────────────────────────────────────
 function isIso(d) { return typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d); }
@@ -149,13 +154,25 @@ function planAutomations(o) {
   const marks = o.marks || {};
   const seen = o.emailSeen || {};
   const out = [];
+  // One email per address per run, whatever the rule — two enquiries from the
+  // same couple must not mean two identical emails on the same morning.
+  const used = {};
+  // Anyone with a live event is a client, not an open enquiry, whatever the
+  // enquiry's outcome says (an event entered directly leaves the enquiry
+  // "undecided").
+  const clients = {};
+  (o.events || []).forEach(function (ev) {
+    if (!ev || String(ev.status || "") === "Cancelled") return;
+    [ev.email, ev.email2, ev.email3].forEach(function (x) { const v = validEmail(x); if (v) clients[v] = true; });
+  });
 
   (o.enquiries || []).forEach(function (e) {
     if (!e || !e.id || e.noAutoEmails) return;
     const outcome = String(e.outcome || "undecided");
     if (outcome === "booked" || outcome === "didnotbook") return;
     const to = validEmail(e.email);
-    if (!to) return;
+    if (!to || clients[to] || used[to]) return;
+    const sombre = SOMBRE.test(String(e.eventType || ""));
     const m = marks["enq:" + e.id] || {};
     const received = receivedDate(e);
     const last = lastActivity(e, seen, today);
@@ -168,16 +185,17 @@ function planAutomations(o) {
       // "No contact since it arrived": nothing later than the day it came in.
       if (age >= cfg.followup.days && age <= cfg.followup.days + WINDOW_DAYS.followup && last && last <= received) {
         out.push({ kind: "followup", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens });
-        planned = true;
+        planned = true; used[to] = true;
       }
     }
-    if (cfg.quiet.on && !m.quiet && !planned && !viewing && last) {
+    if (cfg.quiet.on && !m.quiet && !planned && !viewing && !sombre && last) {
       // Our own follow-up counts as the last touch: a check-in the day after
       // it would read as nagging.
       const touched = m.followup && String(m.followup).slice(0, 10) > last ? String(m.followup).slice(0, 10) : last;
       const idle = daysBetween(touched, today);
       if (idle >= cfg.quiet.days && idle <= cfg.quiet.days + WINDOW_DAYS.quiet) {
         out.push({ kind: "quiet", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched });
+        used[to] = true;
       }
     }
   });
@@ -185,16 +203,20 @@ function planAutomations(o) {
   if (cfg.thanks.on) {
     (o.events || []).forEach(function (ev) {
       if (!ev || ev.id == null || String(ev.status || "") !== "Confirmed") return;
-      if (!isIso(ev.date)) return;
+      if (!isIso(ev.date) || SOMBRE.test(String(ev.eventType || ""))) return;
       const end = isIso(ev.endDate) && ev.endDate > ev.date ? ev.endDate : ev.date;
       const age = daysBetween(end, today);
       if (age < cfg.thanks.days || age > cfg.thanks.days + WINDOW_DAYS.thanks) return;
-      const m = marks["ev:" + ev.id] || {};
+      // Keyed by id AND date: ids are reused after a delete, and a new event
+      // on an old id must not inherit "already thanked".
+      const mk = "ev:" + ev.id + ":" + ev.date;
+      const m = marks[mk] || {};
       if (m.thanks) return;
       const to = [validEmail(ev.email), validEmail(ev.email2)].filter(Boolean)
-        .filter(function (x, i, a) { return a.indexOf(x) === i; });
+        .filter(function (x, i, a) { return a.indexOf(x) === i && !used[x]; });
       if (!to.length) return;
-      out.push({ kind: "thanks", mark: "ev:" + ev.id, refId: ev.id, to: to, who: ev.couple || to[0],
+      to.forEach(function (x) { used[x] = true; });
+      out.push({ kind: "thanks", mark: mk, refId: ev.id, to: to, who: ev.couple || to[0],
                  tokens: { firstName: coupleFirstNames(ev), name: String(ev.couple || "").trim(), eventDate: longDate(ev.date),
                            reviewLink: cfg.thanks.reviewUrl } });
     });
@@ -304,27 +326,29 @@ async function sbSet(key, value) {
   });
   if (!res.ok) throw new Error("saving " + key + ": " + res.status + " " + (await res.text()).slice(0, 200));
 }
-// Re-read, change, write: other runs and the brochure function write the log.
-async function recordMark(markKey, kind, extra) {
+// The sent record. Re-read, change, write, every time: it is small, and only
+// this function writes it.
+async function updateMarks(change) {
   const cur = (await sbGet(MARKS_KEY)) || {};
   const marks = cur && typeof cur === "object" && !Array.isArray(cur) ? cur : {};
-  const entry = Object.assign({}, marks[markKey] || {});
-  entry[kind] = new Date().toISOString();
-  if (extra) Object.keys(extra).forEach(function (k) { entry[kind + "_" + k] = extra[k]; });
-  marks[markKey] = entry;
+  change(marks);
   await sbSet(MARKS_KEY, marks);
 }
-async function logEmail(subject, to, kind, refId, bodyText) {
+// One read and one write of the email log for the whole run — it is large,
+// and a run must finish well inside the function's time limit.
+async function logEmails(entries) {
+  if (!entries.length) return;
   try {
     const log = (await sbGet(EMAIL_LOG_KEY)) || [];
-    log.push({
-      id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
-      sentAt: new Date().toISOString(),
-      subject: subject, to: to, template: "auto_" + kind, bookingId: refId,
-      body: String(bodyText || "").slice(0, 8000)
+    entries.forEach(function (x) {
+      log.push({
+        id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
+        sentAt: x.at, subject: x.subject, to: x.to, template: "auto_" + x.kind, bookingId: x.refId,
+        body: String(x.text || "").slice(0, 8000)
+      });
     });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
-  } catch (e) { console.error("logEmail failed:", e.message); }
+  } catch (e) { console.error("email log write failed:", e.message); }
 }
 async function resolveAdmin(event) {
   const auth = event.headers["authorization"] || event.headers["Authorization"] || "";
@@ -379,8 +403,27 @@ exports.handler = async function (event) {
   if (!plan.due.length) return reply(200, { ok: true, today: today, sent: 0 });
   if (!RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length });
 
-  const sent = [], failed = [];
-  for (const d of plan.due.slice(0, MAX_SENDS_PER_RUN)) {
+  // Marked BEFORE sending, in one write. If the run is cut off part way, the
+  // worst outcome is that somebody marked is not emailed — never that
+  // somebody is emailed twice. A send that fails is unmarked at the end so it
+  // is tried again tomorrow.
+  const batch = plan.due.slice(0, MAX_SENDS_PER_RUN);
+  const startedAt = new Date().toISOString();
+  try {
+    await updateMarks(function (marks) {
+      batch.forEach(function (d) {
+        const entry = Object.assign({}, marks[d.mark] || {});
+        entry[d.kind] = startedAt;
+        if (d.basedOn) entry[d.kind + "_basedOn"] = d.basedOn;
+        marks[d.mark] = entry;
+      });
+    });
+  } catch (e) {
+    return reply(500, { error: "Could not record what is about to be sent, so nothing was sent: " + e.message });
+  }
+
+  const sent = [], failed = [], logged = [];
+  for (const d of batch) {
     const r = renderEmail(d, plan.cfg);
     try {
       const res = await fetch("https://api.resend.com/emails", {
@@ -389,17 +432,24 @@ exports.handler = async function (event) {
         body: JSON.stringify({ from: FROM_HEADER, to: d.to, reply_to: FROM_EMAIL, subject: r.subject, html: r.html, text: r.text })
       });
       if (!res.ok) throw new Error((await res.text()).slice(0, 300));
+      sent.push({ kind: d.kind, ref: d.refId });
+      logged.push({ at: new Date().toISOString(), subject: r.subject, to: d.to.join(", "), kind: d.kind, refId: d.refId, text: r.text });
     } catch (e) {
-      failed.push({ kind: d.kind, ref: d.refId, error: String(e.message || e) });
-      continue;
+      failed.push({ kind: d.kind, ref: d.refId, mark: d.mark, error: String(e.message || e) });
     }
-    // Recorded straight after the send, one at a time, so a failure part way
-    // through cannot cause tomorrow's run to email the same people again.
-    try { await recordMark(d.mark, d.kind, d.basedOn ? { basedOn: d.basedOn } : null); }
-    catch (e) { failed.push({ kind: d.kind, ref: d.refId, error: "SENT but not recorded: " + e.message }); }
-    await logEmail(r.subject, d.to.join(", "), d.kind, d.refId, r.text);
-    sent.push({ kind: d.kind, ref: d.refId });
   }
+  if (failed.length) {
+    try {
+      await updateMarks(function (marks) {
+        failed.forEach(function (f) {
+          const entry = Object.assign({}, marks[f.mark] || {});
+          delete entry[f.kind]; delete entry[f.kind + "_basedOn"];
+          if (Object.keys(entry).length) marks[f.mark] = entry; else delete marks[f.mark];
+        });
+      });
+    } catch (e) { console.error("could not unmark failed sends (they will not be retried):", e.message); }
+  }
+  await logEmails(logged);
   console.log("[automations] " + today + " sent " + sent.length + ", failed " + failed.length +
               (plan.due.length > MAX_SENDS_PER_RUN ? ", " + (plan.due.length - MAX_SENDS_PER_RUN) + " held to tomorrow" : ""));
   return reply(failed.length ? 207 : 200, { ok: !failed.length, today: today, sent: sent, failed: failed,
