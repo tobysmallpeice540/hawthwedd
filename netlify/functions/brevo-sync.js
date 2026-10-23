@@ -192,6 +192,46 @@ async function importInto(listId, contacts, label) {
   return { list: label, sent: contacts.length, processId: r.body && r.body.processId };
 }
 
+// ── Portal opt-outs ──────────────────────────────────────────────────────────
+// A client who unticks "keep in touch" in the portal (wp_access.marketing_ok)
+// is left out of every list here AND unsubscribed in Brevo, because they may
+// already be there from an enquiry or a cottage stay. Unsubscribing is
+// one-way: re-ticking in the portal does not resubscribe them, since we cannot
+// tell our unsubscribe from one made with an email's own link, and reversing
+// THAT would be the serious mistake (see importInto).
+async function portalOptOuts() {
+  try {
+    var rows = await sbRest("wp_access?marketing_ok=is.false&select=email");
+    var out = {};
+    (rows || []).forEach(function(r) { var e = cleanEmail(r.email); if (e) out[e] = true; });
+    return out;
+  } catch (e) {
+    // Only "the column is not there yet" is survivable — the portal migration
+    // not applied. Anything else must stop the sync, or an opted-out address
+    // would be imported.
+    if (/42703|PGRST204|column .* does not exist/i.test(String(e && e.message || ""))) return {};
+    throw e;
+  }
+}
+
+async function unsubscribe(emails) {
+  var done = 0, missing = 0, failed = [];
+  for (var i = 0; i < emails.length; i++) {
+    var r = await brevo("/contacts/" + encodeURIComponent(emails[i]), {
+      method: "PUT", body: { emailBlacklisted: true }
+    });
+    if (r.ok) done++;
+    else if (r.status === 404) missing++;      // never in Brevo: nothing to undo
+    else failed.push(emails[i] + " (" + r.status + ")");
+  }
+  if (failed.length) console.error("[brevo-sync] could not unsubscribe:", failed.join(", "));
+  return { unsubscribed: done, not_in_brevo: missing, failed: failed.length };
+}
+
+function without(contacts, out) {
+  return contacts.filter(function(c) { return !out[c.email]; });
+}
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 exports.handler = async function(event) {
   var token = (event && event.headers && event.headers["x-admin-token"]) || "";
@@ -278,11 +318,16 @@ exports.handler = async function(event) {
     var cottages = collect(cottageRows);
 
     // ── Push ────────────────────────────────────────────────────────────────
+    // Portal opt-outs first: they come out of every list before anything is
+    // sent, then are unsubscribed in Brevo itself.
+    var optedOut = await portalOptOuts();
     var results = [];
-    results.push(await importInto(LISTS.boxOffice, boxOffice,       "Box Office"));
-    results.push(await importInto(LISTS.weddings,  weddings,        "Wedding Couples"));
-    results.push(await importInto(LISTS.enquiries, enquiryContacts, "Event Enquiries"));
-    results.push(await importInto(LISTS.cottages,  cottages,        "Cottage Guests"));
+    results.push(await importInto(LISTS.boxOffice, without(boxOffice, optedOut),       "Box Office"));
+    results.push(await importInto(LISTS.weddings,  without(weddings, optedOut),        "Wedding Couples"));
+    results.push(await importInto(LISTS.enquiries, without(enquiryContacts, optedOut), "Event Enquiries"));
+    results.push(await importInto(LISTS.cottages,  without(cottages, optedOut),        "Cottage Guests"));
+    var outList = Object.keys(optedOut);
+    if (outList.length) results.push(Object.assign({ list: "Portal opt-outs" }, await unsubscribe(outList)));
 
     console.log("[brevo-sync] " + attrs.join(" · ") + " · " + JSON.stringify(results));
     return {

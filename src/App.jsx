@@ -7491,6 +7491,10 @@ const PORTAL_TABS = [
   { id: "suppliers",label: "Supplier directory" },
   { id: "room",     label: "The room" },
   { id: "templates",label: "Templates" },
+  { id: "sections", label: "Sections" },
+  { id: "drinks",   label: "Drinks & corkage" },
+  { id: "extras",   label: "Extras & food" },
+  { id: "venue",    label: "Cover & documents" },
 ];
 
 function PortalAdminScreen({ bookings, onBack }) {
@@ -7498,7 +7502,7 @@ function PortalAdminScreen({ bookings, onBack }) {
   return (
     <div style={{ padding: UI_CLASSIC ? "28px 4px 0" : 0 }}>
       <PageHeader title="Client portal" back="Events" onBack={onBack}
-        sub="Wedding couples' logins, access times, the supplier directory, the room and templates"/>
+        sub="Client logins, what each event shows, extras and food, the supplier directory, the room and templates"/>
       <TabStrip tabs={PORTAL_TABS.map(function(t){ return [t.id, t.label]; })} value={tab} onChange={setTab}/>
 
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
@@ -7506,6 +7510,17 @@ function PortalAdminScreen({ bookings, onBack }) {
       {tab === "suppliers" && <PortalSupplierDirectory />}
       {tab === "room"      && <><PortalRoomEditor /><PortalLayouts /></>}
       {tab === "templates" && <PortalTemplates bookings={bookings} />}
+      {tab === "sections"  && <PortalSectionDefaults />}
+      {tab === "drinks"    && <PortalDrinksSettings />}
+      {tab === "extras"    && (
+        <div style={{ display:"grid", gap:14 }}>
+          <PortalOpenRequests bookings={bookings} />
+          <PortalPricedList kind="addons" />
+          <PortalPricedList kind="food" />
+          <PortalItemTypes />
+        </div>
+      )}
+      {tab === "venue"     && <PortalVenueSettings />}
     </div>
   );
 }
@@ -8052,7 +8067,7 @@ function TemplateBlocks({ eventType, days, blocks, onSaved }) {
   }
   function add() {
     const day = offered.length ? offered[0].day_key : "event";
-    setRows(function(r){ return r.concat([{ day_key: day, start_time: "12:00", duration_min: 30, title: "", notes: "", locked: false }]); });
+    setRows(function(r){ return r.concat([{ day_key: day, start_time: "12:00", duration_min: 30, title: "", notes: "", locked: false, rel_minutes: null, prompts: "" }]); });
     setDirty(true);
   }
   function remove(i) {
@@ -8066,9 +8081,14 @@ function TemplateBlocks({ eventType, days, blocks, onSaved }) {
       await sbRpc("wp_admin_save_timeline_template", {
         p_event_type: eventType,
         p_rows: rows.map(function(r, i){
+          // rel_minutes and prompts MUST go back with every save: the save
+          // replaces the whole template, so leaving them out would wipe them.
           return { day_key: r.day_key, start_time: hhmm(r.start_time), title: r.title,
                    duration_min: Number(r.duration_min) || 0, notes: r.notes || null,
-                   locked: !!r.locked, sort: (i + 1) * 10 };
+                   locked: !!r.locked, sort: (i + 1) * 10,
+                   rel_minutes: r.day_key === "event" && r.rel_minutes !== "" && r.rel_minutes != null
+                     ? Number(r.rel_minutes) : null,
+                   prompts: r.prompts || null };
         }),
       });
       setDirty(false);
@@ -8089,6 +8109,9 @@ function TemplateBlocks({ eventType, days, blocks, onSaved }) {
         Pre-filled into each new event of this type as a starting point the couple can
         change. Tick <b>ours</b> for a line they cannot move — use it sparingly; the
         venue's own finishing times are already handled above and do not belong here.
+        <b> Mins after ceremony</b> makes a line on the day move when the couple sets
+        their ceremony time (blank = a fixed time). <b>Questions</b> appear under the
+        line for them to answer, and you see the answers below.
       </p>
       {err && <ErrBanner text={err} />}
 
@@ -8125,11 +8148,25 @@ function TemplateBlocks({ eventType, days, blocks, onSaved }) {
               <input value={r.notes || ""} onChange={function(e){ edit(i, { notes:e.target.value }); }}
                 placeholder="optional" style={inputCss} />
             </Field>
+            {r.day_key === "event" && (
+              <Field label="Mins after ceremony" width={120}>
+                <input type="number" step="5" value={r.rel_minutes == null ? "" : r.rel_minutes}
+                  onChange={function(e){ edit(i, { rel_minutes: e.target.value === "" ? null : e.target.value }); }}
+                  placeholder="fixed" title="Blank = a fixed time. 0 = the ceremony itself. -30 = half an hour before."
+                  style={inputCss} />
+              </Field>
+            )}
             <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid, paddingBottom:9 }}>
               <input type="checkbox" checked={!!r.locked}
                 onChange={function(e){ edit(i, { locked:e.target.checked }); }} />
               ours
             </label>
+            <Field label="Questions for them (one per line)" width={420}>
+              <textarea rows={Math.max(1, String(r.prompts || "").split("\n").length)} value={r.prompts || ""}
+                onChange={function(e){ edit(i, { prompts:e.target.value }); }}
+                placeholder="optional — e.g. Who is giving the speeches?"
+                style={Object.assign({}, inputCss, { resize:"vertical", fontFamily:"inherit" })} />
+            </Field>
             <button onClick={function(){ remove(i); }}
               style={Object.assign({}, btnQuiet, { color:T.red, borderColor:`${T.red}55`, padding:"8px 12px" })}>
               Remove
@@ -8663,12 +8700,19 @@ function CoupleTimelines({ bookings }) {
           They have not opened the timeline yet.
         </p>
       )}
+      {data && data.ceremony_time && (
+        <p style={{ fontSize:13, color:T.text, marginTop:14 }}>
+          Ceremony at <b>{hhmm(data.ceremony_time)}</b>, as they have set it.
+        </p>
+      )}
 
       {data && (data.days || []).map(function(d){
         const mine = (data.blocks || []).filter(function(b){ return b.day_key === d.day_key; });
         const fixed = (d.fixed || []).map(function(f){ return { at:f.time, title:f.title, venue:true }; });
         const all = mine.map(function(b){ return { at:b.start_time, title:b.title, notes:b.notes,
-                                                  supplier:b.supplier_name, locked:b.locked }; })
+                                                  supplier:b.supplier_name, locked:b.locked,
+                                                  prompts:b.prompts, answers:b.answers,
+                                                  follows: b.rel_minutes != null }; })
           .concat(fixed)
           // Midnight and half past belong at the END of the wedding day. Same
           // key as the portal uses, so the two read the same way round.
@@ -8686,7 +8730,17 @@ function CoupleTimelines({ bookings }) {
                     {r.title}
                     {r.supplier && <span style={{ color:T.textLight }}> · {r.supplier}</span>}
                     {r.notes && <div style={{ fontSize:12, color:T.textLight }}>{r.notes}</div>}
+                    {String(r.prompts || "").split("\n").filter(function(q){ return q.trim(); }).map(function(q, qi){
+                      const ans = Array.isArray(r.answers) ? r.answers[qi] : "";
+                      return (
+                        <div key={qi} style={{ fontSize:12, marginTop:3 }}>
+                          <span style={{ color:T.textLight }}>{q.trim()} </span>
+                          <b style={{ color: ans ? T.text : T.textLight, fontWeight: ans ? 600 : 400 }}>{ans || "not answered"}</b>
+                        </div>
+                      );
+                    })}
                   </span>
+                  {r.follows && <span style={{ fontSize:11, color:T.textLight }}>follows ceremony</span>}
                   {r.venue && <span style={{ fontSize:11, color:T.textLight }}>ours</span>}
                 </div>
               );
@@ -9253,12 +9307,13 @@ function PortalLogins({ bookings }) {
         })}
       </select>
 
-      {eventId && <PortalEventPanel eventId={Number(eventId)} />}
+      {eventId && <PortalEventPanel eventId={Number(eventId)}
+        booking={upcoming.find(function(b){ return String(b.id) === String(eventId); })} />}
     </div>
   );
 }
 
-function PortalEventPanel({ eventId }) {
+function PortalEventPanel({ eventId, booking }) {
   const [rows, setRows] = useState(null);
   const [numbers, setNumbers] = useState(null);
   const [checklist, setChecklist] = useState(null);
@@ -9432,10 +9487,1013 @@ function PortalEventPanel({ eventId }) {
           )}
         </div>
       </div>
+
+      <PortalEventExtras eventId={eventId} booking={booking} />
     </div>
   );
 }
 
+
+// ─── portal, 23 Oct 2026: sections, items, extras, food, music ──────────────
+//
+// Everything a client can now send us from the portal, for one event, plus the
+// lists Toby keeps for every event (add-ons, food packages, typical items,
+// cover photo, venue documents, and which sections each event type shows).
+
+const PORTAL_SECTION_LABEL = {
+  guests:"Guests", food:"Food", drinks:"Drinks", checklist:"Checklist", timeline:"Timeline", music:"Music",
+  suppliers:"Suppliers", layout:"Table plan", items:"Bringing", addons:"Extras", money:"Payments",
+  details:"Details", documents:"Documents", inspiration:"Inspiration",
+};
+
+const panelCss = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16 };
+const panelTitle = { fontSize:13, fontWeight:700, color:T.text, marginBottom:10 };
+const quietText = { fontSize:13, color:T.textLight };
+
+function portalMoney(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  return "£" + Number(v).toLocaleString("en-GB", { minimumFractionDigits:2, maximumFractionDigits:2 });
+}
+function portalWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleDateString("en-GB", { day:"numeric", month:"short" }) + " " +
+    d.toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" });
+}
+
+// One event's portal: which sections it shows, what they have sent us, and the
+// things that need a member of staff — items to tick in, extras to approve.
+function PortalEventExtras({ eventId, booking }) {
+  const [sections, setSections] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [items, setItems] = useState(null);
+  const [requests, setRequests] = useState(null);
+  const [food, setFood] = useState(null);
+  const [music, setMusic] = useState(null);
+  const [err, setErr] = useState("");
+
+  async function load() {
+    setErr("");
+    try {
+      const results = await Promise.all([
+        sbRpc("wp_admin_event_sections", { p_event_id: eventId }),
+        sbRpc("wp_admin_sections", { p_event_id: eventId }),
+        sbRpc("wp_admin_profile", { p_event_id: eventId }),
+        sbRpc("wp_admin_items", { p_event_id: eventId }),
+        sbRpc("wp_admin_addon_requests", { p_event_id: eventId }),
+        sbRpc("wp_admin_food", { p_event_id: eventId }),
+        sbRpc("wp_admin_music", { p_event_id: eventId }),
+      ]);
+      setSections({ vis: results[0], status: results[1].sections || [] });
+      setProfile(results[2]);
+      setItems(results[3].items || []);
+      setRequests(results[4].requests || []);
+      setFood(results[5].choice);
+      setMusic(results[6].items || []);
+    } catch (e) {
+      // Most likely the 23 Oct migration is not applied yet. Say so plainly
+      // rather than showing half a panel.
+      setErr("The newer portal panels could not load (" + (e.message || String(e)) +
+        "). If the 2026-10-23 portal migration has not been applied yet, that is why.");
+    }
+  }
+  useEffect(function(){ load(); }, [eventId]);
+
+  if (err) return <ErrBanner text={err} />;
+  if (!sections) return <div style={quietText}>Loading…</div>;
+
+  return (
+    <div style={{ display:"grid", gap:14 }}>
+      <PortalEventSections eventId={eventId} vis={sections.vis} status={sections.status} onChanged={load} />
+      <PortalEventDrinks eventId={eventId} booking={booking} />
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap:14 }}>
+        <PortalEventItems items={items} onChanged={load} />
+        <PortalEventRequests requests={requests} onChanged={load} />
+        <PortalEventFood food={food} />
+        <PortalEventMusic items={music} />
+        <div style={panelCss}>
+          <div style={panelTitle}>Ceremony time and emails</div>
+          <div style={{ fontSize:13, color:T.textMid, lineHeight:1.8 }}>
+            <div>Ceremony: <b style={{ color:T.text }}>{profile && profile.ceremony_time ? hhmm(profile.ceremony_time) : "not set by them"}</b></div>
+            {(profile && profile.marketing || []).map(function(m){
+              return (
+                <div key={m.email}>
+                  {m.email}: <b style={{ color: m.ok ? T.green : T.amber }}>{m.ok ? "happy to hear from us" : "opted out of marketing"}</b>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:T.textLight, marginTop:8, lineHeight:1.5 }}>
+            An opt-out is passed to Brevo by the nightly sync. Booking emails are not affected.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Which sections this event shows, against its type's standard, and whether
+// the client has told us each is finished.
+function PortalEventSections({ eventId, vis, status, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [reopening, setReopening] = useState(null);
+  const [note, setNote] = useState("");
+  const byStatus = {};
+  (status || []).forEach(function(s){ byStatus[s.section] = s; });
+
+  async function setShown(section, shown) {
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_set_event_section", { p_event_id: eventId, p_section: section, p_shown: shown }); await onChanged(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  async function reopen(section) {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_reopen_section", { p_event_id: eventId, p_section: section, p_note: note });
+      setReopening(null); setNote(""); await onChanged();
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  const custom = (vis.sections || []).some(function(s){ return s.override !== null && s.override !== undefined; });
+
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Sections in their portal <span style={{ fontWeight:400, color:T.textLight }}>· standard for a {String(vis.event_type || "").toLowerCase()}{custom ? ", changed for this event" : ""}</span></div>
+      {err && <ErrBanner text={err} />}
+      <div style={{ display:"grid", gap:6 }}>
+        {(vis.sections || []).map(function(s){
+          const st = byStatus[s.section];
+          const changed = s.override !== null && s.override !== undefined;
+          return (
+            <div key={s.section} style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", padding:"6px 0",
+              borderTop:`1px solid ${T.border}55` }}>
+              <label style={{ display:"flex", alignItems:"center", gap:7, width:150, fontSize:13, color:T.text }}>
+                <input type="checkbox" checked={!!s.shown} disabled={busy}
+                  onChange={function(e){ setShown(s.section, e.target.checked); }} />
+                {PORTAL_SECTION_LABEL[s.section] || s.section}
+              </label>
+              {changed && (
+                <button onClick={function(){ setShown(s.section, null); }} disabled={busy}
+                  style={Object.assign({}, btnQuiet, { padding:"3px 9px", fontSize:11 })}
+                  title={"Standard is " + (s.standard ? "shown" : "hidden")}>
+                  {s.shown ? "added" : "removed"} · reset
+                </button>
+              )}
+              {st && st.state === "ready" && (
+                <span style={{ fontSize:12, color: st.changed_since ? T.amber : T.green }}>
+                  Sent {portalWhen(st.ready_at)}{st.ready_by ? " by " + st.ready_by : ""}{st.changed_since ? " — changed since" : ""}
+                </span>
+              )}
+              {st && st.state === "reopened" && (
+                <span style={{ fontSize:12, color:T.amber }}>Handed back {portalWhen(st.reopened_at)}{st.reopen_note ? ": “" + st.reopen_note + "”" : ""}</span>
+              )}
+              {st && st.state === "ready" && reopening !== s.section && (
+                <button onClick={function(){ setReopening(s.section); setNote(""); }} disabled={busy}
+                  style={Object.assign({}, btnQuiet, { padding:"3px 9px", fontSize:11 })}>Hand back</button>
+              )}
+              {reopening === s.section && (
+                <span style={{ display:"flex", gap:6, flex:"1 1 260px" }}>
+                  <input value={note} onChange={function(e){ setNote(e.target.value); }} autoFocus
+                    placeholder="What needs changing (they see this)" style={inputCss} />
+                  <button onClick={function(){ reopen(s.section); }} disabled={busy}
+                    style={Object.assign({}, btnQuiet, { color:T.text })}>Send</button>
+                  <button onClick={function(){ setReopening(null); }} style={btnQuiet}>Cancel</button>
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize:11, color:T.textLight, marginTop:8, lineHeight:1.5 }}>
+        Ticks here override the standard for this event only. "Hand back" tells them something
+        needs changing — nothing is ever locked.
+      </div>
+    </div>
+  );
+}
+
+function PortalEventItems({ items, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function mark(id, what, on) {
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_mark_item", { p_id: id, p_what: what, p_on: on }); await onChanged(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Things they are bringing</div>
+      {err && <ErrBanner text={err} />}
+      {(items || []).length === 0 ? <div style={quietText}>Nothing listed.</div> : (
+        <div style={{ display:"grid", gap:8 }}>
+          {items.map(function(it){
+            return (
+              <div key={it.id} style={{ fontSize:13, borderTop:`1px solid ${T.border}55`, paddingTop:6 }}>
+                <div style={{ color:T.text, fontWeight:600 }}>{it.name}{it.qty > 1 ? " × " + it.qty : ""}</div>
+                {it.notes && <div style={{ color:T.textLight, fontSize:12 }}>{it.notes}</div>}
+                {it.take_home_by && <div style={{ color:T.textLight, fontSize:12 }}>Goes home with {it.take_home_by}</div>}
+                <div style={{ display:"flex", gap:14, marginTop:4, flexWrap:"wrap" }}>
+                  <label style={{ display:"flex", gap:5, alignItems:"center", fontSize:12, color:T.textMid }}>
+                    <input type="checkbox" checked={!!it.received_at} disabled={busy}
+                      onChange={function(e){ mark(it.id, "received", e.target.checked); }} />
+                    Received{it.received_at ? " " + portalWhen(it.received_at) + (it.received_by ? " · " + it.received_by : "") : ""}
+                  </label>
+                  <label style={{ display:"flex", gap:5, alignItems:"center", fontSize:12, color:T.textMid }}>
+                    <input type="checkbox" checked={!!it.collected_at} disabled={busy}
+                      onChange={function(e){ mark(it.id, "collected", e.target.checked); }} />
+                    Gone home{it.collected_at ? " " + portalWhen(it.collected_at) + (it.collected_by ? " · " + it.collected_by : "") : ""}
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// An add-on request, approved with a price or declined with a reason. Approval
+// does not touch Xero — it is the note that says what to put on the invoice.
+function PortalRequestRow({ r, showEvent, onChanged }) {
+  const [price, setPrice] = useState(r.unit_price == null ? "" : String(r.unit_price));
+  const [note, setNote] = useState(r.staff_note || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function decide(status) {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_decide_addon", { p_id: r.id, p_status: status,
+        p_unit_price: price === "" ? null : Number(price), p_note: note });
+      await onChanged();
+    } catch (e) {
+      setErr(e.code === "needs_price" ? "Give it a price (inc VAT) before confirming." : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+  const colour = r.status === "approved" ? T.green : r.status === "declined" ? T.red : T.amber;
+  return (
+    <div style={{ fontSize:13, borderTop:`1px solid ${T.border}55`, paddingTop:6 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", gap:8 }}>
+        <span style={{ color:T.text, fontWeight:600 }}>{r.name}{r.qty > 1 ? " × " + r.qty : ""}</span>
+        <span style={{ color:colour, fontSize:12, fontWeight:700 }}>{r.status}</span>
+      </div>
+      <div style={{ color:T.textLight, fontSize:12 }}>
+        {showEvent ? "Event " + r.event_id + " · " : ""}{portalWhen(r.requested_at)}{r.requested_by ? " · " + r.requested_by : ""}
+        {r.note ? " · “" + r.note + "”" : ""}
+      </div>
+      {err && <div style={{ color:T.red, fontSize:12 }}>{err}</div>}
+      {r.status === "requested" ? (
+        <div style={{ display:"flex", gap:6, marginTop:6, flexWrap:"wrap", alignItems:"center" }}>
+          <input value={price} onChange={function(e){ setPrice(e.target.value); }} placeholder="£ each inc VAT"
+            style={Object.assign({}, inputCss, { width:110 })} />
+          <input value={note} onChange={function(e){ setNote(e.target.value); }} placeholder="note to them (optional)"
+            style={Object.assign({}, inputCss, { flex:"1 1 140px", width:"auto" })} />
+          <button disabled={busy} onClick={function(){ decide("approved"); }} style={Object.assign({}, btnQuiet, { color:T.green })}>Confirm</button>
+          <button disabled={busy} onClick={function(){ decide("declined"); }} style={Object.assign({}, btnQuiet, { color:T.red })}>Decline</button>
+        </div>
+      ) : (
+        <div style={{ color:T.textMid, fontSize:12, marginTop:2 }}>
+          {r.unit_price != null ? portalMoney(r.unit_price) + " each inc VAT · " : ""}{r.staff_note || ""}
+          <button disabled={busy} onClick={function(){ decide("requested"); }}
+            style={{ background:"none", border:"none", color:T.textLight, textDecoration:"underline", cursor:"pointer", fontSize:11, marginLeft:6 }}>
+            undo
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PortalEventRequests({ requests, onChanged }) {
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Extras they have asked for</div>
+      {(requests || []).length === 0 ? <div style={quietText}>None.</div> : (
+        <div style={{ display:"grid", gap:8 }}>
+          {requests.map(function(r){ return <PortalRequestRow key={r.id} r={r} onChanged={onChanged} />; })}
+        </div>
+      )}
+      <div style={{ fontSize:11, color:T.textLight, marginTop:8, lineHeight:1.5 }}>
+        Confirming records the price for them to see. Add it to their next Xero invoice as usual.
+      </div>
+    </div>
+  );
+}
+
+function PortalEventFood({ food }) {
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Food</div>
+      {!food ? <div style={quietText}>Nothing chosen.</div> : (
+        <div style={{ fontSize:13, color:T.textMid, lineHeight:1.8 }}>
+          <div><b style={{ color:T.text }}>{food.package_name || "No package chosen"}</b>
+            {food.price_pp != null ? " · " + portalMoney(food.price_pp) + " a head inc VAT" : ""}</div>
+          <div>Numbers: <b style={{ color:T.text }}>{food.numbers == null ? "—" : food.numbers}</b>
+            {food.serve_time ? " · serve about " + hhmm(food.serve_time) : ""}</div>
+          {food.price_pp != null && food.numbers ? <div>Comes to {portalMoney(food.price_pp * food.numbers)} inc VAT</div> : null}
+          {food.dietary && <div style={{ color:T.text }}>Dietary: {food.dietary}</div>}
+          {food.notes && <div>{food.notes}</div>}
+          <div style={{ fontSize:11, color:T.textLight }}>Last changed {portalWhen(food.updated_at)}{food.updated_by ? " by " + food.updated_by : ""}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PortalEventMusic({ items }) {
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Music</div>
+      {(items || []).length === 0 ? <div style={quietText}>Nothing yet.</div> : (
+        <div style={{ display:"grid", gap:6 }}>
+          {items.map(function(m, i){
+            return (
+              <div key={i} style={{ fontSize:13 }}>
+                <span style={{ color:T.text }}>{m.description}</span>
+                {m.url
+                  ? <> · <a href={m.url} target="_blank" rel="noreferrer" style={{ color:T.accent }}>Spotify ↗</a></>
+                  : <span style={{ color:T.textLight }}> · no link yet</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── the standard sections for each event type ───────────────────────────────
+function PortalSectionDefaults() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    setErr("");
+    try { setData(await sbRpc("wp_admin_section_defaults")); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  async function toggle(type, section, on) {
+    const t = data.types.find(function(x){ return x.event_type === type; });
+    const shown = (t ? t.shown : []).filter(function(s){ return s !== section; }).concat(on ? [section] : []);
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_save_section_defaults", { p_event_type: type, p_shown: shown }); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  if (err) return <ErrBanner text={err} />;
+  if (!data) return <div style={quietText}>Loading…</div>;
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Standard sections for each kind of event</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 12px", maxWidth:680 }}>
+        What a new booking's portal shows. Overview is always there. Any event can add or
+        drop a section from its own panel under Logins — and an event that has not been
+        changed follows these ticks, so a change here applies to it straight away.
+      </p>
+      <div style={{ overflowX:"auto" }}>
+        <table style={{ borderCollapse:"collapse", fontSize:13 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign:"left", padding:"6px 10px", color:T.textLight, fontWeight:600 }}>Section</th>
+              {data.types.map(function(t){
+                return <th key={t.event_type} style={{ padding:"6px 14px", color:T.textMid }}>{t.event_type}</th>;
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {data.sections.map(function(s){
+              return (
+                <tr key={s} style={{ borderTop:`1px solid ${T.border}` }}>
+                  <td style={{ padding:"6px 10px", color:T.text }}>{PORTAL_SECTION_LABEL[s] || s}</td>
+                  {data.types.map(function(t){
+                    return (
+                      <td key={t.event_type} style={{ textAlign:"center", padding:"6px 14px" }}>
+                        <input type="checkbox" disabled={busy} checked={t.shown.indexOf(s) >= 0}
+                          onChange={function(e){ toggle(t.event_type, s, e.target.checked); }} />
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── open add-on requests across every event ─────────────────────────────────
+function PortalOpenRequests({ bookings }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  async function load() {
+    setErr("");
+    try { const r = await sbRpc("wp_admin_addon_requests", {}); setRows(r.requests || []); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+  const names = {};
+  (bookings || []).forEach(function(b){ if (b && b.id != null) names[b.id] = (b.date || "") + " · " + (b.couple || b.eventType || ""); });
+  if (err) return <ErrBanner text={err} />;
+  if (!rows) return null;
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Extras waiting for an answer</div>
+      {rows.length === 0 ? <div style={quietText}>None waiting.</div> : (
+        <div style={{ display:"grid", gap:8 }}>
+          {rows.map(function(r){
+            return (
+              <div key={r.id}>
+                <div style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{names[r.event_id] || ("Event " + r.event_id)}</div>
+                <PortalRequestRow r={r} onChanged={load} />
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── a priced list Toby keeps: add-ons or food packages ──────────────────────
+// Rows are upserted by id; a row removed here is switched off, never deleted,
+// because requests and choices point at it.
+function PortalPricedList({ kind }) {
+  const isFood = kind === "food";
+  const readFn = isFood ? "wp_admin_food_packages" : "wp_admin_addons";
+  const saveFn = isFood ? "wp_admin_save_food_packages" : "wp_admin_save_addons";
+  const priceKey = isFood ? "price_pp_inc_vat" : "price_inc_vat";
+  const [rows, setRows] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  async function load() {
+    setErr("");
+    try { const r = await sbRpc(readFn); setRows((isFood ? r.packages : r.addons) || []); setDirty(false); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, [kind]);
+
+  function edit(i, patch) {
+    setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
+    setDirty(true); setNote("");
+  }
+  function add() {
+    setRows(function(r){ return r.concat([{ id:null, name:"", description:"", unit_label:"each", vat_rate:20,
+      price_on_request:false, max_qty:1, active:true }]); });
+    setDirty(true);
+  }
+  async function save() {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc(saveFn, { p_rows: rows.map(function(r){
+        const o = { id: r.id || null, name: r.name, description: r.description || null,
+          vat_rate: r.vat_rate === "" || r.vat_rate == null ? 20 : Number(r.vat_rate),
+          price_on_request: !!r.price_on_request, active: r.active !== false };
+        o[priceKey] = r[priceKey] === "" || r[priceKey] == null ? null : Number(r[priceKey]);
+        if (!isFood) { o.unit_label = r.unit_label || "each"; o.max_qty = Number(r.max_qty) || 1; }
+        return o;
+      }) });
+      setNote("Saved."); await load();
+    } catch (e) {
+      setErr(e.code === "needs_price" ? "Each line needs a price, or tick “on request”."
+        : e.code === "needs_name" ? "Each line needs a name." : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  if (err && !rows) return <ErrBanner text={err} />;
+  if (!rows) return <div style={quietText}>Loading…</div>;
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>{isFood ? "Food packages (wakes and parties)" : "Extras a client can ask for"}</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 10px", maxWidth:680 }}>
+        {isFood
+          ? "Priced per head, inc VAT. Say in the description that tea and coffee are included. A client's choice keeps the price it was chosen at."
+          : "Inc VAT. Glamping is not an extra — it is accommodation and stays with the contract. A request keeps the price it was asked at; you confirm the final price."}
+        {" "}Untick <b>shown</b> to retire one without losing anybody's request.
+      </p>
+      {err && <ErrBanner text={err} />}
+      {note && <div style={{ fontSize:12, color:T.green, marginBottom:8 }}>{note}</div>}
+      {rows.map(function(r, i){
+        return (
+          <div key={r.id || ("new" + i)} style={{ borderTop:`1px solid ${T.border}`, padding:"10px 0",
+            display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
+            <Field label="Name" width={200}>
+              <input value={r.name || ""} onChange={function(e){ edit(i, { name:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="Description" width={260}>
+              <input value={r.description || ""} onChange={function(e){ edit(i, { description:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label={isFood ? "£ a head inc VAT" : "£ inc VAT"} width={100}>
+              <input type="number" step="0.01" min="0" value={r[priceKey] == null ? "" : r[priceKey]} disabled={!!r.price_on_request}
+                onChange={function(e){ const o = {}; o[priceKey] = e.target.value; edit(i, o); }} style={inputCss} />
+            </Field>
+            {!isFood && (
+              <Field label="Per" width={90}>
+                <input value={r.unit_label || ""} onChange={function(e){ edit(i, { unit_label:e.target.value }); }} placeholder="each" style={inputCss} />
+              </Field>
+            )}
+            {!isFood && (
+              <Field label="Max qty" width={70}>
+                <input type="number" min="1" value={r.max_qty || 1} onChange={function(e){ edit(i, { max_qty:e.target.value }); }} style={inputCss} />
+              </Field>
+            )}
+            <Field label="VAT %" width={64}>
+              <input type="number" min="0" max="100" value={r.vat_rate == null ? 20 : r.vat_rate}
+                onChange={function(e){ edit(i, { vat_rate:e.target.value }); }} style={inputCss} />
+            </Field>
+            <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid, paddingBottom:9 }}>
+              <input type="checkbox" checked={!!r.price_on_request} onChange={function(e){ edit(i, { price_on_request:e.target.checked }); }} />
+              on request
+            </label>
+            <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid, paddingBottom:9 }}>
+              <input type="checkbox" checked={r.active !== false} onChange={function(e){ edit(i, { active:e.target.checked }); }} />
+              shown
+            </label>
+          </div>
+        );
+      })}
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:12, flexWrap:"wrap" }}>
+        <button onClick={add} style={btnQuiet}>+ Add a line</button>
+        <button onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px",
+            borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+          {busy ? "Saving…" : dirty ? "Save" : "Saved"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── the "things people often bring" suggestions ─────────────────────────────
+function PortalItemTypes() {
+  const [text, setText] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(function(){
+    sbRpc("wp_admin_item_types")
+      .then(function(r){ setText((r.types || []).filter(function(t){ return t.active; }).map(function(t){ return t.name; }).join("\n")); })
+      .catch(function(e){ setErr(e.message || String(e)); });
+  }, []);
+  async function save() {
+    setBusy(true); setErr(""); setNote("");
+    try {
+      await sbRpc("wp_admin_save_item_types", { p_rows: text.split("\n").map(function(n){ return n.trim(); })
+        .filter(Boolean).map(function(n){ return { name:n, active:true }; }) });
+      setNote("Saved.");
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  if (err && text === null) return <ErrBanner text={err} />;
+  if (text === null) return <div style={quietText}>Loading…</div>;
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Things people often bring</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 10px" }}>
+        One per line. These are suggestions on the Bringing tab — a client taps one to add it.
+      </p>
+      {err && <ErrBanner text={err} />}
+      <textarea value={text} onChange={function(e){ setText(e.target.value); setNote(""); }} rows={10}
+        style={Object.assign({}, inputCss, { fontFamily:"inherit", resize:"vertical", maxWidth:420 })} />
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:10 }}>
+        <button onClick={save} disabled={busy} style={btnQuiet}>{busy ? "Saving…" : "Save list"}</button>
+        {note && <span style={{ fontSize:12, color:T.green }}>{note}</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── cover photo and venue documents ─────────────────────────────────────────
+function PortalVenueSettings() {
+  const [cover, setCover] = useState("");
+  const [docs, setDocs] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(function(){
+    sbRpc("wp_admin_venue_settings")
+      .then(function(r){ setCover(r.cover_url || ""); setDocs(r.docs || []); })
+      .catch(function(e){ setErr(e.message || String(e)); });
+  }, []);
+  function edit(i, patch) { setDocs(function(d){ const n = d.slice(); n[i] = Object.assign({}, n[i], patch); return n; }); setNote(""); }
+  async function save() {
+    setBusy(true); setErr(""); setNote("");
+    try {
+      await sbRpc("wp_admin_save_venue_settings", { p_cover_url: cover, p_docs: docs.filter(function(d){ return (d.title || "").trim() || (d.url || "").trim(); }) });
+      setNote("Saved.");
+    } catch (e) {
+      setErr(e.code === "cover_not_https" ? "The cover photo address must start https://"
+        : e.code === "doc_needs_title_and_https" ? "Each document needs a name and an address starting https://"
+        : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+  if (err && docs === null) return <ErrBanner text={err} />;
+  if (docs === null) return <div style={quietText}>Loading…</div>;
+  return (
+    <div style={{ display:"grid", gap:14 }}>
+      <div style={panelCss}>
+        <div style={panelTitle}>Cover photo</div>
+        <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 10px", maxWidth:680 }}>
+          The picture at the top of every portal — weddings, parties and wakes alike, so
+          choose one that suits all three. Paste the address of an image (the website's
+          own photos work: right-click → Copy image address).
+        </p>
+        {err && <ErrBanner text={err} />}
+        <input value={cover} onChange={function(e){ setCover(e.target.value); setNote(""); }} style={inputCss} placeholder="https://…" />
+        {cover && /^https:\/\//.test(cover) && (
+          <div style={{ marginTop:10, height:140, maxWidth:420, borderRadius:10, backgroundImage:"url(\"" + cover.replace(/"/g, "%22") + "\")",
+            backgroundSize:"cover", backgroundPosition:"center", border:`1px solid ${T.border}` }} />
+        )}
+      </div>
+      <div style={panelCss}>
+        <div style={panelTitle}>Documents for every client</div>
+        <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 10px", maxWidth:680 }}>
+          Shown on the Documents tab under "From us" — the venue guide, supplier rules, a map.
+          Links only: put the file on the website or in a shared folder and paste its address.
+        </p>
+        {docs.map(function(d, i){
+          return (
+            <div key={i} style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", borderTop:`1px solid ${T.border}`, padding:"8px 0" }}>
+              <Field label="Name" width={200}><input value={d.title || ""} onChange={function(e){ edit(i, { title:e.target.value }); }} style={inputCss} /></Field>
+              <Field label="Address" width={300}><input value={d.url || ""} onChange={function(e){ edit(i, { url:e.target.value }); }} placeholder="https://…" style={inputCss} /></Field>
+              <Field label="Note" width={200}><input value={d.note || ""} onChange={function(e){ edit(i, { note:e.target.value }); }} style={inputCss} /></Field>
+              <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid, paddingBottom:9 }}>
+                <input type="checkbox" checked={d.active !== false} onChange={function(e){ edit(i, { active:e.target.checked }); }} /> shown
+              </label>
+              <button onClick={function(){ setDocs(docs.filter(function(_, j){ return j !== i; })); setNote(""); }}
+                style={Object.assign({}, btnQuiet, { color:T.red, padding:"8px 12px" })}>Remove</button>
+            </div>
+          );
+        })}
+        <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:10 }}>
+          <button onClick={function(){ setDocs(docs.concat([{ title:"", url:"", note:"", active:true }])); }} style={btnQuiet}>+ Add a document</button>
+          <button onClick={save} disabled={busy}
+            style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            {busy ? "Saving…" : "Save cover and documents"}
+          </button>
+          {note && <span style={{ fontSize:12, color:T.green }}>{note}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── drinks, for one event ───────────────────────────────────────────────────
+// The order as the database works it out (wp_drinks_summary — the one place
+// the arithmetic lives), the per-wedding rates, pricing anything "on request",
+// unlocking, recording money behind the bar, and making the draft invoice.
+function PortalEventDrinks({ eventId, booking }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [rate, setRate] = useState("");
+  const [childRate, setChildRate] = useState("");
+  const [paid, setPaid] = useState("");
+  const [bespoke, setBespoke] = useState("");
+  const [again, setAgain] = useState(false);
+
+  async function load() {
+    setErr("");
+    try {
+      const r = await sbRpc("wp_admin_drinks", { p_event_id: eventId });
+      setData(r);
+      const o = r.order || {};
+      setRate(o.rate_pp == null ? "" : String(o.rate_pp));
+      setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
+      setPaid(o.bar_paid_amount == null ? "" : String(o.bar_paid_amount));
+      setBespoke(o.bespoke_note || "");
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, [eventId]);
+
+  async function setDrinks(args, msg) {
+    setBusy(true); setErr(""); setNote("");
+    try { await sbRpc("wp_admin_set_drinks", Object.assign({ p_event_id: eventId }, args)); setNote(msg || "Saved."); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  async function priceLine(id, v) {
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_price_drinks_line", { p_id: id, p_unit_price: v === "" ? null : Number(v) }); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  // Xero first, then the record here — reported separately, so "the draft was
+  // made but not recorded" never reads as a plain failure and invites a second.
+  async function invoice() {
+    if (!booking) { setErr("Choose the event from the list again — its diary record is needed for the Xero contact."); return; }
+    const sm = data.summary;
+    if (data.order && data.order.invoiced_at && !again) { setAgain(true); return; }
+    setBusy(true); setErr(""); setNote(""); setAgain(false);
+    let made = null;
+    try {
+      made = await pushInvoiceToXero(booking, {
+        invoiceDate: new Date().toISOString().slice(0, 10),
+        lines: (sm.invoice_lines || []).map(function(l){
+          return { desc: l.desc + " — " + fmtDateLong(booking.date), account: data.xero_account || XERO_ACCOUNT_EVENTS, amount: Number(l.amount) };
+        })
+      });
+    } catch (e) { setErr("Xero: " + (e.message || String(e))); setBusy(false); return; }
+    try {
+      await sbRpc("wp_admin_mark_drinks_invoiced", { p_event_id: eventId, p_xero_invoice_id: made.invoiceId, p_number: made.invoiceNumber });
+      setNote("Draft " + (made.invoiceNumber || "invoice") + " made in Xero for " + portalMoney(made.total) + ". Check it there and send it." +
+        (made.warning ? " " + made.warning : ""));
+    } catch (e) {
+      setErr("The draft " + (made.invoiceNumber || "") + " WAS made in Xero, but recording it here failed: " + (e.message || String(e)) +
+        ". Do not make another — it is already in Xero.");
+    }
+    await load();
+    setBusy(false);
+  }
+
+  if (err && !data) return <ErrBanner text={err} />;
+  if (!data) return <div style={quietText}>Loading…</div>;
+  const o = data.order || {};
+  const sm = data.summary || {};
+  const routeName = { classic:"Classic Drinks Package", corkage:"Bring your own (corkage)", bespoke:"Something different" }[o.route] || "Not chosen yet";
+  const unpricedLines = (data.lines || []).filter(function(l){ return l.unit_price == null; });
+
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Drinks <span style={{ fontWeight:400, color:T.textLight }}>· {routeName}</span></div>
+      {err && <ErrBanner text={err} />}
+      {note && <div style={{ fontSize:12, color:T.green, marginBottom:8 }}>{note}</div>}
+
+      <div style={{ fontSize:13, color:T.textMid, lineHeight:1.8 }}>
+        <div>
+          {sm.numbers_missing ? <span style={{ color:T.amber }}>No numbers from them yet.</span>
+            : <>{sm.adults} adults · {sm.children} children · {sm.infants} infants</>}
+          {sm.lock_date && <> · {sm.locked ? <b style={{ color:T.text }}>locked</b> : "locks"} {sm.lock_date}{o.unlocked ? " (unlocked by staff)" : ""}</>}
+        </div>
+        {(sm.moments || []).map(function(m){
+          return (
+            <div key={m.moment}>
+              {({ reception:"Reception", wine:"Meal", toast:"Toast" })[m.moment]}: {Number(m.used)} of {m.allowance} {m.unit}
+              {Number(m.cost) > 0 ? " · " + portalMoney(m.cost) : ""}
+            </div>
+          );
+        })}
+        {(data.lines || []).length > 0 && (
+          <div style={{ marginTop:6, borderTop:`1px solid ${T.border}55`, paddingTop:6 }}>
+            {data.lines.map(function(l){
+              return (
+                <div key={l.id} style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                  <span style={{ color:T.text }}>{l.name} × {l.qty} {l.unit}{l.qty === 1 ? "" : "s"}</span>
+                  <span style={{ color:T.textLight, fontSize:12 }}>({l.moment})</span>
+                  {l.unit_price == null
+                    ? <PriceInput onSave={function(v){ priceLine(l.id, v); }} disabled={busy} />
+                    : <span style={{ fontSize:12 }}>{portalMoney(l.unit_price)} a {l.unit}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {o.notes && <div style={{ marginTop:6 }}>Notes: <span style={{ color:T.text }}>{o.notes}</span></div>}
+        {o.soft_choice && <div>On the tables: {o.soft_choice === "squash" ? "squash" : "sparkling elderflower"}</div>}
+        <div style={{ marginTop:6 }}>
+          Total <b style={{ color:T.text }}>{portalMoney(sm.total)}</b> inc VAT (VAT {portalMoney(sm.vat)})
+          {sm.unpriced > 0 && <span style={{ color:T.amber }}> · {sm.unpriced} not priced yet</span>}
+        </div>
+      </div>
+
+      <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", marginTop:12 }}>
+        <Field label="This wedding's rate, £ a head inc VAT" width={190}>
+          <input type="number" step="0.01" value={rate} onChange={function(e){ setRate(e.target.value); }} style={inputCss} />
+        </Field>
+        <Field label="Child rate inc VAT" width={120}>
+          <input type="number" step="0.01" value={childRate} onChange={function(e){ setChildRate(e.target.value); }} style={inputCss} />
+        </Field>
+        <button disabled={busy} style={btnQuiet} onClick={function(){
+          setDrinks({ p_rate_pp: rate === "" ? null : Number(rate), p_child_rate_pp: childRate === "" ? null : Number(childRate) }, "Rates saved for this wedding.");
+        }}>Save rates</button>
+        <button disabled={busy} style={btnQuiet} onClick={function(){
+          setDrinks({ p_unlocked: !o.unlocked }, o.unlocked ? "Locked again." : "Unlocked — they can change it until you lock it again.");
+        }}>{o.unlocked ? "Lock again" : "Unlock for them"}</button>
+      </div>
+
+      {o.route === "bespoke" && (
+        <div style={{ display:"flex", gap:8, marginTop:10 }}>
+          <input value={bespoke} onChange={function(e){ setBespoke(e.target.value); }} placeholder="What was agreed (they see this)" style={inputCss} />
+          <button disabled={busy} style={btnQuiet} onClick={function(){ setDrinks({ p_bespoke_note: bespoke }, "Saved."); }}>Save</button>
+        </div>
+      )}
+
+      <div style={{ marginTop:12, borderTop:`1px solid ${T.border}55`, paddingTop:10, fontSize:13, color:T.textMid }}>
+        Money behind the bar: <b style={{ color:T.text }}>{o.bar_amount ? portalMoney(o.bar_amount) : "none"}</b>
+        {o.bar_rules ? " · “" + o.bar_rules + "”" : ""}
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6, flexWrap:"wrap" }}>
+          <span>Received £</span>
+          <input type="number" step="0.01" value={paid} onChange={function(e){ setPaid(e.target.value); }} style={Object.assign({}, inputCss, { width:110 })} />
+          <button disabled={busy} style={btnQuiet} onClick={function(){
+            setDrinks({ p_bar_paid_amount: paid === "" ? 0 : Number(paid) }, paid === "" || Number(paid) === 0 ? "Cleared." : "Recorded.");
+          }}>Record</button>
+          {o.bar_paid_at && <span style={{ fontSize:12, color:T.green }}>received {portalWhen(o.bar_paid_at)}</span>}
+        </div>
+        <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>Find it in Stripe by the reference event-{eventId}. Refund anything unused to the same card from Stripe.</div>
+      </div>
+
+      {(o.route === "classic" || o.route === "corkage") && (
+        <div style={{ marginTop:12, borderTop:`1px solid ${T.border}55`, paddingTop:10 }}>
+          {o.invoiced_at && (
+            <div style={{ fontSize:12, color:T.green, marginBottom:6 }}>
+              Invoiced {portalWhen(o.invoiced_at)}{o.xero_invoice_number ? " as " + o.xero_invoice_number : ""}
+              {o.xero_invoice_id ? <> · <a href={xeroInvoiceUrl(o.xero_invoice_id)} target="_blank" rel="noreferrer" style={{ color:T.accent }}>open in Xero</a></> : null}
+            </div>
+          )}
+          <button disabled={busy || !sm.locked || sm.unpriced > 0 || !(sm.total > 0)} onClick={invoice}
+            style={{ background: sm.locked && !sm.unpriced ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 18px",
+              borderRadius:8, cursor: sm.locked && !sm.unpriced ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            {busy ? "Working…" : again ? "Make ANOTHER draft — sure?" : "Create drinks invoice in Xero (draft)"}
+          </button>
+          <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
+            {!sm.locked ? "Available once the order locks on " + (sm.lock_date || "—") + "."
+              : sm.unpriced > 0 ? "Price " + unpricedLines.length + " line" + (unpricedLines.length === 1 ? "" : "s") + " first."
+              : "Inc-VAT lines to account " + (data.xero_account || XERO_ACCOUNT_EVENTS) + ". You check and send it from Xero."}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PriceInput({ onSave, disabled }) {
+  const [v, setV] = useState("");
+  return (
+    <span style={{ display:"inline-flex", gap:4, alignItems:"center" }}>
+      <input type="number" step="0.01" value={v} onChange={function(e){ setV(e.target.value); }} placeholder="£ inc VAT"
+        style={Object.assign({}, inputCss, { width:96, padding:"4px 6px", fontSize:12 })} />
+      <button disabled={disabled || v === ""} onClick={function(){ onSave(v); }}
+        style={Object.assign({}, btnQuiet, { padding:"4px 8px", fontSize:11 })}>Price it</button>
+    </span>
+  );
+}
+
+// ── drinks settings and the drinks list ─────────────────────────────────────
+const DRINKS_MOMENT_LABEL = { reception:"Reception", wine:"Meal (wine)", toast:"Toast", extra:"Extras", soft:"Soft drinks" };
+
+function PortalDrinksSettings() {
+  const [s, setS] = useState(null);
+  const [rows, setRows] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  async function load() {
+    setErr("");
+    try {
+      const r = await sbRpc("wp_admin_drinks_settings");
+      setS(r.settings); setRows(r.catalogue || []); setDirty(false);
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+
+  function setField(k, v) { setS(Object.assign({}, s, (function(){ const o = {}; o[k] = v; return o; })())); setNote(""); }
+  function edit(i, patch) { setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; }); setDirty(true); setNote(""); }
+
+  async function saveSettings() {
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_save_drinks_settings", { p: s }); setNote("Settings saved."); await load(); }
+    catch (e) { setErr(e.code === "link_not_https" ? "The payment link must start https://" : (e.message || String(e))); }
+    finally { setBusy(false); }
+  }
+  async function saveList() {
+    setBusy(true); setErr("");
+    try {
+      await sbRpc("wp_admin_save_drinks_catalogue", { p_rows: rows.map(function(r){
+        return { id: r.id || null, route: r.route, moment: r.moment, name: r.name, unit: r.unit,
+                 drinks_per_unit: r.drinks_per_unit === "" ? 1 : Number(r.drinks_per_unit),
+                 price_inc_vat: r.price_inc_vat === "" || r.price_inc_vat == null ? null : Number(r.price_inc_vat),
+                 price_on_request: !!r.price_on_request, allowed: r.allowed !== false,
+                 non_alcoholic: !!r.non_alcoholic, active: r.active !== false };
+      }) });
+      setNote("Drinks list saved."); await load();
+    } catch (e) { setErr(e.code === "bad_row" ? "Each line needs a name, a package, a moment and a number per unit above zero." : (e.message || String(e))); }
+    finally { setBusy(false); }
+  }
+
+  if (err && !s) return <ErrBanner text={err} />;
+  if (!s) return <div style={quietText}>Loading…</div>;
+  const num = function(k, label, w, step){
+    return (
+      <Field key={k} label={label} width={w || 130}>
+        <input type="number" step={step || "0.01"} value={s[k] == null ? "" : s[k]} onChange={function(e){ setField(k, e.target.value); }} style={inputCss} />
+      </Field>
+    );
+  };
+
+  return (
+    <div style={{ display:"grid", gap:14 }}>
+      {err && <ErrBanner text={err} />}
+      {note && <div style={{ fontSize:12, color:T.green }}>{note}</div>}
+      <div style={panelCss}>
+        <div style={panelTitle}>Drinks and corkage settings</div>
+        <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 10px", maxWidth:720 }}>
+          Every price is <b>inc VAT</b>. The package rates are copied onto a wedding when they choose,
+          so changing them here does not reprice anybody already booked — change a booked wedding's rate
+          from its own panel under Logins.
+        </p>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          {num("classic_pp", "Classic, £ a head")}
+          {num("corkage_pp", "Corkage, £ a head")}
+          {num("child_pp", "Child, £ a head")}
+          {num("vat_rate", "VAT %", 80)}
+          {num("lock_days", "Locks, days before", 130, "1")}
+          {num("reception_per_adult", "Reception drinks per adult", 170, "0.5")}
+          {num("wine_bottles_per_adult", "Bottles of wine per adult", 170, "0.25")}
+          {num("toast_per_adult", "Toast glasses per adult", 160, "1")}
+          <Field label="Xero account for drinks" width={150}>
+            <input value={s.xero_account || ""} onChange={function(e){ setField("xero_account", e.target.value); }} style={inputCss} />
+          </Field>
+        </div>
+        <div style={{ marginTop:12 }}>
+          <Field label="Stripe Payment Link for money behind the bar (customer chooses the amount)" width={560}>
+            <input value={s.bar_link_url || ""} onChange={function(e){ setField("bar_link_url", e.target.value); }} placeholder="https://buy.stripe.com/…" style={inputCss} />
+          </Field>
+          <div style={{ fontSize:11, color:T.textLight, marginTop:4, maxWidth:620, lineHeight:1.5 }}>
+            Make it in whichever Stripe account should take bar money. The portal adds the event as the reference,
+            so each payment shows which booking it is for.
+          </div>
+        </div>
+        <div style={{ marginTop:12 }}>
+          <Field label="Example bar prices (one per line: name | price inc VAT)" width={560}>
+            <textarea rows={4} style={Object.assign({}, inputCss, { fontFamily:"inherit" })}
+              value={(s.bar_prices || []).map(function(p){ return p.name + (p.price != null && p.price !== "" ? " | " + p.price : ""); }).join("\n")}
+              onChange={function(e){
+                setField("bar_prices", e.target.value.split("\n").map(function(line){
+                  const bits = line.split("|"); const name = bits[0].trim(); const price = bits[1] ? bits[1].trim().replace(/^£/, "") : "";
+                  return name ? { name: name, price: price === "" || isNaN(Number(price)) ? null : Number(price) } : null;
+                }).filter(Boolean));
+              }} />
+          </Field>
+          <Field label="Note under the prices" width={560}>
+            <input value={s.bar_note || ""} onChange={function(e){ setField("bar_note", e.target.value); }} style={inputCss} />
+          </Field>
+        </div>
+        <button onClick={saveSettings} disabled={busy} style={Object.assign({}, btnQuiet, { marginTop:12, color:T.text })}>{busy ? "Saving…" : "Save settings"}</button>
+      </div>
+
+      <div style={panelCss}>
+        <div style={panelTitle}>The drinks list</div>
+        <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 10px", maxWidth:720 }}>
+          <b>Classic</b> reception / meal / toast lines are what the allowance can be spent on — price is the
+          supplement (0 = included). <b>Extras</b> are sold by the unit. <b>Corkage</b> lines are what clients may
+          bring: "per unit" is how much of the allowance one uses (a bottle of fizz = 6 reception drinks or 8 toast
+          glasses) and price is the additional corkage beyond the allowance. Untick <b>allowed</b> to list something
+          as not permitted (spirits). Tick <b>on request</b> until it is priced.
+        </p>
+        {rows.map(function(r, i){
+          return (
+            <div key={r.id || ("n" + i)} style={{ display:"flex", gap:8, alignItems:"flex-end", flexWrap:"wrap", borderTop:`1px solid ${T.border}`, padding:"8px 0" }}>
+              <Field label="Package" width={96}>
+                <select value={r.route} onChange={function(e){ edit(i, { route:e.target.value }); }} style={inputCss}>
+                  <option value="classic">Classic</option><option value="corkage">Corkage</option>
+                </select>
+              </Field>
+              <Field label="When" width={118}>
+                <select value={r.moment} onChange={function(e){ edit(i, { moment:e.target.value }); }} style={inputCss}>
+                  {Object.keys(DRINKS_MOMENT_LABEL).map(function(k){ return <option key={k} value={k}>{DRINKS_MOMENT_LABEL[k]}</option>; })}
+                </select>
+              </Field>
+              <Field label="Name" width={220}><input value={r.name || ""} onChange={function(e){ edit(i, { name:e.target.value }); }} style={inputCss} /></Field>
+              <Field label="Unit" width={76}><input value={r.unit || ""} onChange={function(e){ edit(i, { unit:e.target.value }); }} style={inputCss} /></Field>
+              <Field label="Per unit" width={70}><input type="number" step="0.5" value={r.drinks_per_unit == null ? 1 : r.drinks_per_unit} onChange={function(e){ edit(i, { drinks_per_unit:e.target.value }); }} style={inputCss} /></Field>
+              <Field label="£ inc VAT" width={84}><input type="number" step="0.01" value={r.price_inc_vat == null ? "" : r.price_inc_vat} disabled={!!r.price_on_request} onChange={function(e){ edit(i, { price_inc_vat:e.target.value }); }} style={inputCss} /></Field>
+              {[["price_on_request","on request"],["allowed","allowed"],["non_alcoholic","non-alc"],["active","shown"]].map(function(f){
+                const on = f[0] === "allowed" || f[0] === "active" ? r[f[0]] !== false : !!r[f[0]];
+                return (
+                  <label key={f[0]} style={{ display:"flex", alignItems:"center", gap:4, fontSize:12, color:T.textMid, paddingBottom:9 }}>
+                    <input type="checkbox" checked={on} onChange={function(e){ const o = {}; o[f[0]] = e.target.checked; edit(i, o); }} /> {f[1]}
+                  </label>
+                );
+              })}
+            </div>
+          );
+        })}
+        <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:12 }}>
+          <button style={btnQuiet} onClick={function(){ setRows(rows.concat([{ id:null, route:"corkage", moment:"reception", name:"", unit:"bottle", drinks_per_unit:1, price_inc_vat:null, price_on_request:true, allowed:true, non_alcoholic:false, active:true }])); setDirty(true); }}>+ Add a line</button>
+          <button onClick={saveList} disabled={busy || !dirty}
+            style={{ background: dirty ? T.accent : T.border, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8, cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            {busy ? "Saving…" : dirty ? "Save the list" : "Saved"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── access times: the contract's words, what we read, and what you confirm ──
 

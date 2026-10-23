@@ -10,6 +10,16 @@ import { ACCOM_LABEL, accomOptions, sortGuests } from './guestSort.js'
 
 const AGE_LABEL = { adult: 'Adult', child: 'Child', baby: 'High chair' }
 
+// Whether they are coming. Blank is "not heard yet", which is most people for
+// most of the year — so it gets no chip at all rather than a nagging one.
+const RSVP_LABEL = { yes: 'Coming', no: 'Not coming', maybe: 'Maybe' }
+
+// Suggestions only. Role is free text, because "mother of the bride" does not
+// fit every wedding and a fixed list would say so to some couples.
+const ROLES = ['Best man', 'Best woman', 'Maid of honour', 'Bridesmaid', 'Groomsman', 'Usher',
+  'Flower girl', 'Page boy', 'Ring bearer', 'Mother of the bride', 'Father of the bride',
+  'Mother of the groom', 'Father of the groom', 'Witness', 'Reader', 'Officiant']
+
 
 function n(v) {
   if (v === '' || v === null || v === undefined) return null
@@ -54,7 +64,7 @@ export default function Guests({ accommodation }) {
       <NumbersPanel numbers={data.numbers} derived={data.derived} onSaved={load} />
       <GuestList
         title="Seated for the meal"
-        blurb="Everyone at a table for the wedding breakfast. This is the list the table plan will use."
+        blurb="Everyone at a table for the meal. This is the list the table plan will use."
         list="seated"
         guests={seated}
         tables={data.tables || []}
@@ -181,6 +191,8 @@ function GuestList({ title, blurb, list, guests, tables, accommodation, onChange
         <span className="count">{guests.length}</span>
       </div>
 
+      <RsvpLine guests={guests} />
+
       {guests.length > 1 && (
         <div className="sort-bar">
           <span className="muted">Sort by</span>
@@ -219,6 +231,21 @@ function GuestList({ title, blurb, list, guests, tables, accommodation, onChange
         </div>
       )}
     </section>
+  )
+}
+
+function RsvpLine({ guests }) {
+  if (!guests.length || !guests.some((g) => 'rsvp' in g)) return null
+  const c = { yes: 0, no: 0, maybe: 0, none: 0 }
+  for (const g of guests) c[g.rsvp && c[g.rsvp] !== undefined ? g.rsvp : 'none']++
+  if (c.yes + c.no + c.maybe === 0) return null
+  return (
+    <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+      <strong style={{ color: 'var(--ink)' }}>{c.yes}</strong> coming
+      <span className="dot"> · </span>{c.no} not coming
+      <span className="dot"> · </span>{c.maybe} maybe
+      <span className="dot"> · </span>{c.none} not heard yet
+    </p>
   )
 }
 
@@ -265,6 +292,8 @@ function GuestRow({ guest, tables, accommodation, onChanged }) {
     <div className="guest">
       <div className="guest-main">
         <span className="guest-name">{name}</span>
+        {guest.rsvp && <span className={'chip' + (guest.rsvp === 'yes' ? ' chip-go' : guest.rsvp === 'no' ? ' chip-warn' : '')}>{RSVP_LABEL[guest.rsvp]}</span>}
+        {guest.role && <span className="chip">{guest.role}</span>}
         {guest.age_band !== 'adult' && <span className="chip">{AGE_LABEL[guest.age_band]}</span>}
         {guest.staying && (
           <span className="chip">
@@ -332,6 +361,27 @@ function GuestFields({ v, set, accommodation }) {
           </select>
         </div>
       </div>
+      {v.extras && (
+        <div className="namegrid">
+          <div>
+            <label>Coming? </label>
+            <select value={v.rsvp} onChange={(e) => set('rsvp', e.target.value)}>
+              <option value="">Not heard yet</option>
+              <option value="yes">Yes, coming</option>
+              <option value="maybe">Maybe</option>
+              <option value="no">Not coming</option>
+            </select>
+          </div>
+          <div>
+            <label>Role on the day <span className="opt">optional</span></label>
+            <input value={v.role} onChange={(e) => set('role', e.target.value)} list="guest-roles"
+              placeholder="Best man, usher, reader…" />
+            <datalist id="guest-roles">
+              {ROLES.map((r) => <option key={r} value={r} />)}
+            </datalist>
+          </div>
+        </div>
+      )}
       <label className="check">
         <input type="checkbox" checked={v.staying}
           onChange={(e) => { set('staying', e.target.checked); if (!e.target.checked) set('staying_where', '') }} />
@@ -361,25 +411,43 @@ function GuestFields({ v, set, accommodation }) {
   )
 }
 
-const BLANK = { first_name: '', last_name: '', side: '', age_band: 'adult', staying: false, staying_where: '', access_needs: '' }
+const BLANK = { first_name: '', last_name: '', side: '', age_band: 'adult', staying: false, staying_where: '', access_needs: '',
+                rsvp: '', role: '', extras: true }
 
 function AddGuest({ list, accommodation, onDone, onCancel }) {
   const [v, setV] = useState(BLANK)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [added, setAdded] = useState(false)
   const set = (k, val) => setV((p) => ({ ...p, [k]: val }))
 
   async function submit(e) {
     e.preventDefault()
+    if (added) { onDone(); return }
     setBusy(true); setErr('')
     try {
-      await rpc('wp_add_guest', {
+      const r = await rpc('wp_add_guest', {
         p_list: list,
         p_first_name: v.first_name, p_last_name: v.last_name,
         p_side: v.side || null, p_age_band: v.age_band,
         p_staying: v.staying, p_access_needs: v.access_needs || null,
         p_staying_where: v.staying ? (v.staying_where || null) : null,
       })
+      // Reply and role are a second call: adding them to wp_add_guest would
+      // have made an overload of a live function. Only made when something
+      // was actually chosen, so a portal ahead of its database still adds guests.
+      if ((v.rsvp || v.role.trim()) && r && r.id) {
+        try {
+          await rpc('wp_set_guest_extras', { p_id: r.id, p_rsvp: v.rsvp || null, p_role: v.role.trim() || null })
+        } catch (e3) {
+          // The guest IS added. Say so, and turn the button into "Done" so a
+          // second press cannot add them twice.
+          setErr('Added — but the reply and role did not save: ' + (e3.message || String(e3)) + ' You can set them with Edit.')
+          setAdded(true)
+          setBusy(false)
+          return
+        }
+      }
       onDone()
     } catch (e2) {
       setErr(e2.code === 'no_name' ? 'Please give at least one name.' : (e2.message || String(e2)))
@@ -392,7 +460,7 @@ function AddGuest({ list, accommodation, onDone, onCancel }) {
       <GuestFields v={v} set={set} accommodation={accommodation} />
       {err && <div className="alert alert-warn">{err}</div>}
       <div className="actions">
-        <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Adding…' : 'Add'}</button>
+        <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Adding…' : added ? 'Done' : 'Add'}</button>
         <button className="btn-small ghost" type="button" onClick={onCancel}>Cancel</button>
       </div>
     </form>
@@ -405,6 +473,9 @@ function EditGuest({ guest, accommodation, onDone, onCancel }) {
     side: guest.side || '', age_band: guest.age_band || 'adult',
     staying: !!guest.staying, staying_where: guest.staying_where || '',
     access_needs: guest.access_needs || '',
+    rsvp: guest.rsvp || '', role: guest.role || '',
+    // Only offered once the database knows about them.
+    extras: 'rsvp' in guest,
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -426,6 +497,10 @@ function EditGuest({ guest, accommodation, onDone, onCancel }) {
         // going back to "not decided yet" would silently keep the old answer.
         p_staying_where: v.staying ? (v.staying_where || '') : '',
       })
+      if (v.extras && (v.rsvp !== (guest.rsvp || '') || v.role.trim() !== (guest.role || ''))) {
+        // '' clears, which is what an emptied field means here.
+        await rpc('wp_set_guest_extras', { p_id: guest.id, p_rsvp: v.rsvp, p_role: v.role.trim() })
+      }
       onDone()
     } catch (e2) {
       setErr(e2.message || String(e2)); setBusy(false)

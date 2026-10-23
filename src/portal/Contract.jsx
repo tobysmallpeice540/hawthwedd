@@ -40,7 +40,7 @@ export default function Contract() {
   return (
     <>
       <section className="card">
-        <h3>Your booking form</h3>
+        <h3>Your booking paperwork</h3>
 
         {docs.length > 0 ? (
           <div className="docs">
@@ -67,6 +67,8 @@ export default function Contract() {
           </p>
         )}
       </section>
+
+      <VenueDocs />
 
       <section className="card">
         <h3>Terms and conditions</h3>
@@ -138,5 +140,36 @@ function Doc({ doc }) {
         {busy ? 'Opening…' : 'Open'}
       </button>
     </div>
+  )
+}
+
+// Documents the venue gives everybody — the venue guide, supplier rules, the
+// map. Links Toby keeps in the admin screen; nothing to sign in for, nothing
+// private. Quietly absent if there are none, or if the database is not ready.
+function VenueDocs() {
+  const [docs, setDocs] = useState(null)
+  useEffect(() => {
+    let off = false
+    rpc('wp_get_venue_docs')
+      .then((r) => { if (!off) setDocs(r.docs || []) })
+      .catch((e) => { console.warn('wp_get_venue_docs:', e.message || e); if (!off) setDocs([]) })
+    return () => { off = true }
+  }, [])
+  if (!docs || docs.length === 0) return null
+  return (
+    <section className="card">
+      <h3>From us</h3>
+      <div className="docs">
+        {docs.map((d) => (
+          <div className="doc" key={d.id}>
+            <div className="doc-main">
+              <div className="doc-name">{d.title}</div>
+              {d.note && <div className="doc-meta">{d.note}</div>}
+            </div>
+            <a className="btn-small ghost" href={d.url} target="_blank" rel="noreferrer">Open</a>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }

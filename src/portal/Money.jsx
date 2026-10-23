@@ -106,16 +106,25 @@ export default function Money() {
   )
 }
 
+// One word for where an invoice stands. Overdue outranks part paid: a part
+// payment on a late invoice is still late.
+export function invoiceStatus(inv, paid) {
+  if (paid) return { text: 'Paid', cls: 'chip-go' }
+  if (inv.overdue) return { text: 'Overdue', cls: 'chip-bad' }
+  if (Number(inv.amount_paid || 0) > 0) return { text: 'Part paid', cls: '' }
+  return { text: 'Due', cls: '' }
+}
+
 function Invoice({ inv }) {
   const paid = inv.status === 'PAID' || Number(inv.amount_due || 0) <= 0
+  const st = invoiceStatus(inv, paid)
 
   return (
     <div className="doc">
       <div className="doc-main">
         <div className="doc-name">
           {inv.invoice_number || 'Invoice'}
-          {paid && <span className="chip" style={{ marginLeft: 8 }}>Paid</span>}
-          {inv.overdue && <span className="chip" style={{ marginLeft: 8, background: '#fef2f2', color: '#b91c1c' }}>Overdue</span>}
+          <span className={'chip ' + st.cls} style={{ marginLeft: 8 }}>{st.text}</span>
         </div>
         <div className="doc-meta">
           {money(inv.total, inv.currency)}

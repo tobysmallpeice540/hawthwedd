@@ -384,3 +384,97 @@ a.btn-small { text-decoration: none; display: inline-block; }
 }
 .pick:hover:not(:disabled) { border-color: var(--accent); }
 .pick:disabled { opacity: .5; cursor: default; }
+
+/* ── 23 Oct 2026: icons, cover photo, countdown, to-do, ready bar ───────── */
+
+.icon { flex: 0 0 auto; vertical-align: -3px; }
+.tab { display: inline-flex; align-items: center; gap: 7px; }
+.tab .icon { color: var(--muted); }
+.tab[aria-selected="true"] .icon { color: var(--accent); }
+.tab-tick { color: var(--accent) !important; margin-left: -2px; }
+.tab-mark { width: 7px; height: 7px; border-radius: 999px; background: #d97706; display: inline-block; }
+
+/* The cover photo behind the name and the countdown. A dark wash from the
+   bottom keeps white text readable whatever the picture is. */
+.hero-photo {
+  padding: 0; overflow: hidden; color: #fff;
+  background-color: var(--accent); background-size: cover; background-position: center;
+  min-height: 300px; display: flex; align-items: flex-end;
+}
+.hero-photo.no-photo { background-image: linear-gradient(135deg, #4a5d4e, #2d3a30); }
+.hero-shade {
+  width: 100%; padding: 70px 24px 24px;
+  background: linear-gradient(to top, rgba(20,18,15,.78) 0%, rgba(20,18,15,.45) 55%, rgba(20,18,15,0) 100%);
+}
+.hero-photo .couple { color: #fff; text-shadow: 0 1px 12px rgba(0,0,0,.35); }
+.hero-photo .when { color: rgba(255,255,255,.92); }
+.hero-photo .countdown { background: rgba(255,255,255,.18); color: #fff; backdrop-filter: blur(4px); }
+
+.cd { display: flex; gap: 10px; margin-top: 16px; }
+.cd-box {
+  background: rgba(255,255,255,.16); backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,.25);
+  border-radius: 12px; padding: 9px 14px; min-width: 74px; text-align: center;
+  display: flex; flex-direction: column;
+}
+.cd-n { font-family: 'Cormorant Garamond', serif; font-size: 34px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.cd-l { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; margin-top: 4px; opacity: .9; }
+@media (max-width: 420px) { .cd-box { min-width: 0; flex: 1; padding: 8px 6px; } .cd-n { font-size: 28px; } }
+
+.todo { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.todo-row {
+  appearance: none; border: none; background: var(--card); width: 100%; text-align: left; cursor: pointer;
+  display: flex; align-items: flex-start; gap: 12px; padding: 12px 15px; font-family: 'Jost', sans-serif; color: var(--ink);
+}
+.todo-row:hover { background: #fcfbf8; }
+.todo-row .icon { color: var(--accent); margin-top: 2px; }
+.todo-row.is-warn .icon, .todo-row.is-warn .todo-detail { color: var(--warn); }
+.todo-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.todo-title { font-size: 15px; }
+.todo-detail { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.todo-go { color: var(--muted); font-size: 20px; line-height: 1; }
+
+.ready-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; background: var(--sand); }
+.ready-bar.is-sent { background: #f0fdf4; border-color: #bbf7d0; }
+.ready-bar.is-back { background: var(--warnbg); border-color: #fde68a; }
+.ready-title { font-size: 15px; font-weight: 500; }
+.ready-detail { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.ready-note { font-size: 14px; color: var(--warn); margin-top: 4px; font-style: italic; }
+
+.chip-go   { background: #ecfdf5; color: #166534; }
+.chip-warn { background: var(--warnbg); color: var(--warn); }
+.chip-bad  { background: #fef2f2; color: #b91c1c; }
+a.link-chip { text-decoration: none; }
+a.link-chip:hover { text-decoration: underline; }
+
+/* Food packages: a radio list that reads as cards. */
+.choice-list { display: grid; gap: 10px; }
+.choice {
+  display: flex; gap: 12px; align-items: flex-start; margin: 0; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; background: #fff; color: var(--ink);
+}
+.choice.is-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.choice input { width: auto; margin-top: 4px; accent-color: var(--accent); }
+.choice > span { display: flex; flex-direction: column; gap: 3px; }
+.choice-name { font-size: 15px; font-weight: 500; }
+.choice-meta { font-size: 13px; color: var(--muted); }
+.choice-desc { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+/* Ceremony time on the timeline. */
+.ceremony { margin-top: 16px; padding: 14px 16px; background: var(--sand); border-radius: 11px; }
+.ceremony-row { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; }
+.ceremony-row input { max-width: 150px; }
+
+/* Questions on a timeline line, and their answers. */
+.qa { margin-top: 8px; padding: 10px 12px; background: var(--sand); border-radius: 9px; display: grid; gap: 7px; }
+.qa-row { display: flex; flex-direction: column; gap: 1px; }
+.qa-q { font-size: 12.5px; color: var(--muted); }
+.qa-a { font-size: 14px; }
+.qa-a.is-empty { color: var(--muted); font-style: italic; font-size: 13px; }
+.qa .btn-quiet { justify-self: start; font-size: 12.5px; }
+
+/* Drinks */
+.count-warn { background: var(--warnbg); color: var(--warn); }
+input.qty { width: 84px; padding: 7px 9px; font-size: 15px; }
+.add-line { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+.add-line select { flex: 1 1 220px; width: auto; }
+.add-line input { flex: 0 0 110px; width: 110px; }

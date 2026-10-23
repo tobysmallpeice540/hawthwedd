@@ -120,6 +120,30 @@ own header.
   portal magic link signs the couple in to Safari only. A typed one-time code
   on the sign-in screen would fix it; not built yet.
 
+### Client portal (23 Oct 2026)
+
+- **Money is held inc VAT everywhere** — drinks, add-ons, food, settings. Ex VAT
+  is for marketing copy only. VAT is worked out (never typed) when it is needed,
+  e.g. for Xero, which is sent `LineAmountTypes: "Inclusive"`.
+- **First-read seeding takes a per-event advisory lock**
+  (`pg_advisory_xact_lock(hashtext('wp_seed_…'), event)`). Without it two first
+  reads at once both seed — React's dev mode calls every effect twice, which is
+  how a replica wedding got 18 checklist items. Any new "seed on first read"
+  function must do the same.
+- **Which tabs an event shows** is data: a standard set per event type
+  (`wp_section_defaults`) plus per-event ticks (`wp_event_sections`). Hiding is
+  presentation, not permission.
+- **Drinks arithmetic lives in ONE place**, `wp_drinks_summary()`. The client
+  tab, the staff panel and the Xero invoice lines all read it.
+- The drinks order **locks** N days before (a setting) and staff can unlock —
+  a deliberate exception to "warn, never refuse", because the invoice is made
+  from it.
+- **No bank details are collected.** Money behind the bar is paid by card via a
+  Stripe Payment Link (with `client_reference_id=event-<id>`); unused money is
+  refunded to that card from Stripe.
+- The portal falls back to its old tab list if `wp_get_home` is missing, so the
+  front end can go out before the migration without breaking anybody.
+
 ### Product
 
 - **Double bookings warn, never block.** Every override takes a second press.

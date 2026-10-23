@@ -47,7 +47,7 @@ function lengthLabel(mins) {
   return h + (h === 1 ? ' hr' : ' hrs') + (m ? ' ' + m + ' min' : '')
 }
 
-export default function Timeline() {
+export default function Timeline({ kind }) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -102,6 +102,10 @@ export default function Timeline() {
             ))}
           </div>
         )}
+        {'ceremony_time' in data && (kind === 'Wedding' || data.blocks.some((b) => b.rel_minutes !== null && b.rel_minutes !== undefined)) && (
+          <CeremonyTime value={data.ceremony_time} blocks={data.blocks} onSaved={load} />
+        )}
+
         {data.days.length === 1 && (
           <p className="muted" style={{ fontSize: 13, marginTop: 12 }}>
             Your booking is for the one day, so everything — including setting up —
@@ -129,7 +133,7 @@ export default function Timeline() {
             {rows.map((r, i) => (
               r.kind === 'venue'
                 ? <VenueRow key={'v' + i} at={r.at} title={r.title} />
-                : <Block key={r.block.id} block={r.block} suppliers={data.suppliers} onChanged={load} />
+                : <Block key={r.block.id} block={r.block} suppliers={data.suppliers} ceremony={data.ceremony_time} onChanged={load} />
             ))}
           </div>
         )}
@@ -165,8 +169,50 @@ function VenueRow({ at, title }) {
 }
 
 
-function Block({ block, suppliers, onChanged }) {
+// The ceremony time, and what moves with it. Setting it moves every row marked
+// "moves with the ceremony"; anything moved by hand has become a fixed time and
+// stays where it was put.
+function CeremonyTime({ value, blocks, onSaved }) {
+  const [t, setT] = useState(hhmm(value))
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const [err, setErr] = useState('')
+  const following = blocks.filter((b) => b.day_key === 'event' && b.rel_minutes !== null && b.rel_minutes !== undefined && !b.locked).length
+
+  async function save(e) {
+    e.preventDefault()
+    setBusy(true); setErr(''); setNote('')
+    try {
+      const r = await rpc('wp_set_ceremony_time', { p_time: t || null })
+      setNote(t ? (r.moved ? r.moved + (r.moved === 1 ? ' thing has' : ' things have') + ' moved with it.' : 'Saved.') : 'Cleared.')
+      await onSaved()
+    } catch (e2) { setErr(e2.message || String(e2)) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <form className="ceremony" onSubmit={save}>
+      <div>
+        <label htmlFor="cer-time">Ceremony time</label>
+        <div className="ceremony-row">
+          <input id="cer-time" type="time" value={t} onChange={(e) => setT(e.target.value)} />
+          <button className="btn-small" type="submit" disabled={busy || t === hhmm(value)}>{busy ? 'Saving…' : 'Set'}</button>
+        </div>
+      </div>
+      <p className="hint" style={{ marginTop: 6 }}>
+        {following > 0
+          ? following + (following === 1 ? ' line on the day moves' : ' lines on the day move') + ' with it, so you only change the time once.'
+          : 'Lines on the day can be set to move with it.'}
+        {note && <> <strong>{note}</strong></>}
+      </p>
+      {err && <div className="alert alert-warn">{err}</div>}
+    </form>
+  )
+}
+
+function Block({ block, suppliers, ceremony, onChanged }) {
   const [editing, setEditing] = useState(false)
+  const [answering, setAnswering] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -184,12 +230,16 @@ function Block({ block, suppliers, onChanged }) {
           block={block}
           dayKey={block.day_key}
           suppliers={suppliers}
+          ceremony={ceremony}
           onDone={() => { setEditing(false); onChanged() }}
           onCancel={() => setEditing(false)}
         />
       </div>
     )
   }
+
+  const prompts = String(block.prompts || '').split('\n').map((q) => q.trim()).filter(Boolean)
+  const answers = Array.isArray(block.answers) ? block.answers : []
 
   const end = endsAt(block.start_time, block.duration_min)
 
@@ -203,12 +253,32 @@ function Block({ block, suppliers, onChanged }) {
         <div className="tl-title">
           {block.title}
           {block.locked && <span className="chip">Set by us</span>}
+          {block.rel_minutes !== null && block.rel_minutes !== undefined && !block.locked && (
+            <span className="chip" title="Moves when the ceremony time changes">Moves with ceremony</span>
+          )}
         </div>
         <div className="tl-meta">
           {lengthLabel(block.duration_min)}
           {block.supplier_name && <> · {block.supplier_name}</>}
         </div>
         {block.notes && <div className="tl-notes">{block.notes}</div>}
+        {prompts.length > 0 && !answering && (
+          <div className="qa">
+            {prompts.map((q, i) => (
+              <div key={i} className="qa-row">
+                <span className="qa-q">{q}</span>
+                <span className={'qa-a' + (answers[i] ? '' : ' is-empty')}>{answers[i] || 'Not answered yet'}</span>
+              </div>
+            ))}
+            <button className="btn-quiet" type="button" onClick={() => setAnswering(true)}>
+              {answers.some(Boolean) ? 'Change answers' : 'Answer these'}
+            </button>
+          </div>
+        )}
+        {answering && (
+          <AnswerForm block={block} prompts={prompts} answers={answers}
+            onDone={() => { setAnswering(false); onChanged() }} onCancel={() => setAnswering(false)} />
+        )}
         {err && <div className="tl-notes err">{err}</div>}
       </div>
       {!block.locked && (
@@ -230,12 +300,47 @@ function Block({ block, suppliers, onChanged }) {
   )
 }
 
-function BlockForm({ block, dayKey, suppliers, onDone, onCancel }) {
+// The questions on a line, answered in place.
+function AnswerForm({ block, prompts, answers, onDone, onCancel }) {
+  const [vals, setVals] = useState(prompts.map((_, i) => answers[i] || ''))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function submit(e) {
+    e.preventDefault()
+    setBusy(true); setErr('')
+    try { await rpc('wp_answer_block', { p_id: block.id, p_answers: vals }); onDone() }
+    catch (e2) { setErr(e2.message || String(e2)); setBusy(false) }
+  }
+
+  return (
+    <form className="editor" onSubmit={submit} style={{ marginTop: 10 }}>
+      {prompts.map((q, i) => (
+        <div key={i} style={{ marginBottom: 12 }}>
+          <label>{q}</label>
+          <input value={vals[i]} autoFocus={i === 0}
+            onChange={(e) => { const v = vals.slice(); v[i] = e.target.value; setVals(v) }} />
+        </div>
+      ))}
+      {err && <div className="alert alert-warn">{err}</div>}
+      <div className="actions">
+        <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save answers'}</button>
+        <button className="btn-small ghost" type="button" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  )
+}
+
+function BlockForm({ block, dayKey, suppliers, ceremony, onDone, onCancel }) {
   const [start, setStart] = useState(block ? hhmm(block.start_time) : '')
   const [title, setTitle] = useState(block ? block.title : '')
   const [mins, setMins] = useState(block ? block.duration_min : 30)
   const [notes, setNotes] = useState(block && block.notes ? block.notes : '')
   const [sup, setSup] = useState(block && block.supplier_id ? block.supplier_id : '')
+  const wasFollowing = !!block && block.rel_minutes !== null && block.rel_minutes !== undefined
+  const [follow, setFollow] = useState(wasFollowing)
+  // Offered on the day itself, once there is a ceremony time to follow.
+  const canFollow = dayKey === 'event' && !!ceremony
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -249,6 +354,13 @@ function BlockForm({ block, dayKey, suppliers, onDone, onCancel }) {
           p_duration_min: Number(mins) || 0, p_notes: notes,
           p_supplier_id: sup || null,
         })
+        // Moving a following line by hand fixes it at the new time (the
+        // database does that). Ticking "move with the ceremony" afterwards
+        // re-attaches it from wherever it now sits.
+        const moved = hhmm(block.start_time) !== start
+        if (canFollow && (follow !== wasFollowing || (follow && moved))) {
+          await rpc('wp_set_block_follows', { p_id: block.id, p_follow: follow })
+        }
       } else {
         await rpc('wp_add_block', {
           p_day_key: dayKey, p_start_time: start, p_title: title,
@@ -294,6 +406,12 @@ function BlockForm({ block, dayKey, suppliers, onDone, onCancel }) {
       )}
       <label style={{ marginTop: 12 }}>Notes <span className="opt">optional</span></label>
       <input value={notes} onChange={(e) => setNotes(e.target.value)} />
+      {block && canFollow && (
+        <label className="check" style={{ marginTop: 12 }}>
+          <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
+          Move this with the ceremony time
+        </label>
+      )}
       {err && <div className="alert alert-warn">{err}</div>}
       <div className="actions">
         <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Saving…' : (block ? 'Save' : 'Add')}</button>

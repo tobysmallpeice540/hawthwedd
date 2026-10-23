@@ -56,7 +56,7 @@ export default function SignIn({ notice }) {
             <img className="brand-logo" src="/email-logo.png" alt="" aria-hidden="true" />
             <div>
               <div className="brand">Hawthbush Farm</div>
-              <div className="brand-sub">Wedding planner</div>
+              <div className="brand-sub">Planning your day</div>
             </div>
           </div>
 
