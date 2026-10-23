@@ -9,6 +9,7 @@ import "@fontsource/barlow-condensed/600.css";
 import "@fontsource/barlow-condensed/700.css";
 import { dayOrder } from "./shared/dayOrder.js";
 import { snapToNeighbours, boxesOverlap, tableFootprint } from "./shared/tableSnap.js";
+import { roleFirst, fullName, downloadGuestsCsv, printGuests, ACCOM_LABEL as GUEST_ACCOM_LABEL } from "./portal/guestSort.js";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
 // Pure viewport-width detection (no device/user-agent sniffing) — recalculates
@@ -2388,7 +2389,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-23a";
+const APP_BUILD = "2026-10-23b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -10426,6 +10427,301 @@ function PortalEventDrinks({ eventId, booking }) {
   );
 }
 
+// ─── the event form's Guests and Vendors sections, from the portal ──────────
+//
+// The diary used to keep its own guest numbers and a row of supplier text
+// boxes. Both now come from the client portal, which is where the client keeps
+// them up to date. The old values are left untouched in the record and shown
+// read-only underneath, for events from before the portal.
+
+const LEGACY_GUEST_FIELDS = [
+  ["mealGuests", "Adults (meal)"], ["mealChildren", "Children (meal)"],
+  ["mealBabies", "Babies (meal)"], ["eveGuests", "Evening guests (total)"],
+];
+const LEGACY_VENDOR_FIELDS = [
+  ["ceremony", "Ceremony / clearing"], ["guestArrivalTime", "Guest arrival time"],
+  ["caterers", "Caterers"], ["foodTruck", "Food truck"], ["eveFood", "Evening food"],
+  ["florist", "Florist"], ["band", "Band / entertainment"], ["paSystem", "PA system"],
+  ["hairdresser", "Hairdresser"], ["makeup", "Makeup"], ["otherVendors", "Other vendors"],
+];
+
+function LegacyNotes({ booking, fields }) {
+  const rows = fields.filter(function(f){ return booking && String(booking[f[0]] == null ? "" : booking[f[0]]).trim() !== ""; });
+  if (!rows.length) return null;
+  return (
+    <div style={{ background:T.bgInput, border:`1px dashed ${T.border}`, borderRadius:10, padding:"12px 14px" }}>
+      <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", fontWeight:700, color:T.textLight, marginBottom:6 }}>
+        Notes from before the portal
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 170px) minmax(0, 1fr)", gap:"4px 12px", fontSize:13 }}>
+        {rows.map(function(f){
+          return [
+            <div key={f[0] + "k"} style={{ color:T.textLight }}>{f[1]}</div>,
+            <div key={f[0] + "v"} style={{ color:T.text, whiteSpace:"pre-wrap", wordBreak:"break-word" }}>{String(booking[f[0]])}</div>
+          ];
+        })}
+      </div>
+      <div style={{ fontSize:11, color:T.textLight, marginTop:8 }}>
+        Kept as they were typed into the diary. They are no longer edited here.
+      </div>
+    </div>
+  );
+}
+
+function NumberBox({ label, value, onChange, width }) {
+  return (
+    <Field label={label} width={width || 120}>
+      <input type="number" min="0" value={value} onChange={function(e){ onChange(e.target.value); }} style={inputCss} />
+    </Field>
+  );
+}
+
+const GUEST_RSVP = { yes:"Coming", no:"Not coming", maybe:"Maybe" };
+const GUEST_AGE = { child:"Child", baby:"High chair" };
+
+function EventGuestsPanel({ eventId, booking }) {
+  const [data, setData] = useState(null);
+  const [adminOnly, setAdminOnly] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [adults, setAdults] = useState("");
+  const [children, setChildren] = useState("");
+  const [babies, setBabies] = useState("");
+  const [evening, setEvening] = useState("");
+
+  function fill(n) {
+    setAdults(n && n.seated_adults != null ? String(n.seated_adults) : "");
+    setChildren(n && n.seated_children != null ? String(n.seated_children) : "");
+    setBabies(n && n.seated_babies != null ? String(n.seated_babies) : "");
+    setEvening(n && n.evening_extras != null ? String(n.evening_extras) : "");
+  }
+
+  async function load() {
+    setErr("");
+    try {
+      const r = await sbRpc("wp_admin_guests", { p_event_id: eventId });
+      setData(r); setAdminOnly(false); fill(r.numbers);
+    } catch (e) {
+      if (e.code === "not_admin") {
+        // Bar and cleaning logins: numbers, but not names and dietary notes.
+        try {
+          const n = await sbRpc("wp_admin_numbers", { p_event_id: eventId });
+          setData({ numbers: Object.assign({}, n, { told_us: !!n.told_us }), guests: [] }); setAdminOnly(true); fill(n);
+        } catch (e2) { setErr(e2.message || String(e2)); }
+      } else {
+        setErr("The guest list could not load (" + (e.message || String(e)) +
+          "). If the 23 Oct (d) migration has not been run yet, that is why.");
+      }
+    }
+  }
+  useEffect(function(){ load(); }, [eventId]);
+
+  function num(v) { if (v === "" || v == null) return null; const x = parseInt(v, 10); return Number.isFinite(x) ? x : null; }
+
+  async function saveNumbers() {
+    setBusy(true); setErr(""); setNote("");
+    try {
+      await sbRpc("wp_admin_set_numbers", { p_event_id: eventId, p_seated_adults: num(adults), p_seated_children: num(children),
+        p_seated_babies: num(babies), p_evening_extras: num(evening) });
+      setNote("Saved — the client sees these numbers on their Guests tab.");
+      await load();
+    } catch (e) {
+      setErr(e.code === "negative" ? "Numbers cannot be negative." : e.code === "implausible" ? "That looks like a typo — over 2,000." : (e.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  const n = (data && data.numbers) || {};
+  const guests = (data && data.guests) || [];
+  const seatedTotal = (num(adults) || 0) + (num(children) || 0) + (num(babies) || 0);
+  const r = roleFirst(guests);
+  const ordered = r.withRole.concat(r.rest);
+  const counts = { yes:0, no:0, maybe:0 };
+  guests.forEach(function(g){ if (counts[g.rsvp] != null) counts[g.rsvp]++; });
+  const eventName = booking && booking.couple;
+  const eventDate = booking && booking.date ? fmtDate(booking.date) : "";
+
+  return (
+    <div style={{ display:"grid", gap:14 }}>
+      {err && <ErrBanner text={err} />}
+      {note && <div style={{ fontSize:12, color:T.green }}>{note}</div>}
+
+      <div style={panelCss}>
+        <div style={panelTitle}>Numbers <span style={{ fontWeight:400, color:T.textLight }}>· from the client portal{n.updated_at ? ", last changed " + portalWhen(n.updated_at) : ""}</span></div>
+        {!data ? <div style={quietText}>Loading…</div> : (
+          <>
+            {!n.told_us && <div style={Object.assign({}, quietText, { marginBottom:10 })}>The client has not given numbers yet. You can enter them here if they tell you another way.</div>}
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end" }}>
+              <NumberBox label="Adults seated" value={adults} onChange={setAdults} />
+              <NumberBox label="Children seated" value={children} onChange={setChildren} />
+              <NumberBox label="High chairs" value={babies} onChange={setBabies} />
+              <NumberBox label="Evening only" value={evening} onChange={setEvening} />
+              <button disabled={busy} style={btnQuiet} onClick={saveNumbers}>{busy ? "Saving…" : "Save numbers"}</button>
+            </div>
+            <div style={{ fontSize:13, color:T.textMid, marginTop:10 }}>
+              <b style={{ color:T.text }}>{seatedTotal}</b> seated for the meal · <b style={{ color:T.text }}>{seatedTotal + (num(evening) || 0)}</b> on site in the evening
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={panelCss}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:10 }}>
+          <div style={Object.assign({}, panelTitle, { marginBottom:0 })}>
+            Guest list <span style={{ fontWeight:400, color:T.textLight }}>· {guests.length} named{guests.length ? " · " + counts.yes + " coming, " + counts.no + " not, " + counts.maybe + " maybe" : ""}</span>
+          </div>
+          {guests.length > 0 && (
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              <button style={btnQuiet} onClick={function(){ downloadGuestsCsv(guests, eventName); }}>Download CSV</button>
+              <button style={btnQuiet} onClick={function(){ if (!printGuests(guests, "name", eventName, eventDate)) setErr("The browser blocked the print window — allow pop-ups for this site."); }}>Print by name</button>
+              <button style={btnQuiet} onClick={function(){ if (!printGuests(guests, "table", eventName, eventDate)) setErr("The browser blocked the print window — allow pop-ups for this site."); }}>Print by table</button>
+            </div>
+          )}
+        </div>
+        {adminOnly ? <div style={quietText}>Guest names and dietary notes are shown to admin logins only.</div>
+         : !data ? <div style={quietText}>Loading…</div>
+         : guests.length === 0 ? <div style={quietText}>No names yet. The client adds them on the Guests tab of their portal.</div>
+         : (
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, minWidth:0 }}>
+              <thead>
+                <tr>{["Name", "Role", "Reply", "Table", "Notes"].map(function(h){
+                  return <th key={h} style={{ textAlign:"left", fontSize:10, letterSpacing:1, textTransform:"uppercase", color:T.textLight, padding:"4px 8px" }}>{h}</th>;
+                })}</tr>
+              </thead>
+              <tbody>
+                {ordered.map(function(g){
+                  const notes = [GUEST_AGE[g.age_band], g.staying ? "Staying" + (g.staying_where ? " · " + (GUEST_ACCOM_LABEL[g.staying_where] || g.staying_where) : "") : "", g.access_needs]
+                    .filter(Boolean).join(" · ");
+                  return (
+                    <tr key={g.id} style={{ borderTop:`1px solid ${T.border}55` }}>
+                      <td style={{ padding:"6px 8px", color:T.text, fontWeight:500 }}>{fullName(g)}</td>
+                      <td style={{ padding:"6px 8px", color:T.textMid }}>{g.role || ""}</td>
+                      <td style={{ padding:"6px 8px", color:T.textMid }}>{GUEST_RSVP[g.rsvp] || ""}</td>
+                      <td style={{ padding:"6px 8px", color:T.textMid }}>{g.list === "evening" ? "Evening" : (g.table_label || "—")}</td>
+                      <td style={{ padding:"6px 8px", color:T.textMid }}>{notes}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <LegacyNotes booking={booking} fields={LEGACY_GUEST_FIELDS} />
+    </div>
+  );
+}
+
+function EventVendorsPanel({ eventId, booking }) {
+  const [sup, setSup] = useState(null);
+  const [tl, setTl] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(function(){
+    let off = false;
+    setErr("");
+    sbRpc("wp_admin_event_suppliers", { p_event_id: eventId })
+      .then(function(r){ if (!off) setSup(r); })
+      .catch(function(e){ if (!off) setErr("Suppliers could not load (" + (e.message || String(e)) + "). If the 23 Oct (d) migration has not been run yet, that is why."); });
+    sbRpc("wp_admin_event_timeline", { p_event_id: eventId })
+      .then(function(r){ if (!off) setTl(r); })
+      .catch(function(e){ if (!off) setTl({ error: e.message || String(e) }); });
+    return function(){ off = true; };
+  }, [eventId]);
+
+  const cats = (sup && sup.categories) || {};
+  const chosen = (sup && sup.chosen) || [];
+
+  return (
+    <div style={{ display:"grid", gap:14 }}>
+      {err && <ErrBanner text={err} />}
+
+      <div style={panelCss}>
+        <div style={panelTitle}>Suppliers <span style={{ fontWeight:400, color:T.textLight }}>· chosen by the client in their portal</span></div>
+        {!sup ? <div style={quietText}>{err ? "—" : "Loading…"}</div>
+         : chosen.length === 0 ? <div style={quietText}>None yet. The client adds them on the Suppliers tab of their portal.</div>
+         : (
+          <div style={{ display:"grid", gap:8 }}>
+            {chosen.map(function(s){
+              const contact = [s.contact_name, s.phone, s.email].filter(Boolean).join(" · ");
+              return (
+                <div key={s.id} style={{ padding:"9px 12px", border:`1px solid ${T.border}`, borderRadius:8 }}>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"baseline" }}>
+                    <span style={{ fontSize:14, fontWeight:600, color:T.text }}>{s.name}</span>
+                    <span style={{ fontSize:12, color:T.textLight }}>{cats[s.category] || s.category || ""}</span>
+                    {!s.from_directory && <span style={{ fontSize:11, color:T.amber }}>their own — not in our directory</span>}
+                    {s.from_directory && s.pli_held === false && <span style={{ fontSize:11, color:T.amber }}>no liability insurance on file</span>}
+                  </div>
+                  {contact && <div style={{ fontSize:12, color:T.textMid, marginTop:3, wordBreak:"break-word" }}>{contact}</div>}
+                  {s.website && <div style={{ fontSize:12, marginTop:2 }}><a href={s.website} target="_blank" rel="noreferrer" style={{ color:T.accent }}>{s.website}</a></div>}
+                  {s.notes && <div style={{ fontSize:12, color:T.textMid, marginTop:3 }}>“{s.notes}”</div>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div style={panelCss}>
+        <div style={panelTitle}>
+          The day <span style={{ fontWeight:400, color:T.textLight }}>· their timeline{tl && tl.ceremony_time ? " · ceremony " + hhmm(tl.ceremony_time) : ""}</span>
+        </div>
+        {!tl ? <div style={quietText}>Loading…</div>
+         : tl.error ? <div style={quietText}>The timeline could not load ({tl.error}).</div>
+         : (tl.days || []).map(function(d){
+          const blocks = (tl.blocks || []).filter(function(b){ return b.day_key === d.day_key; });
+          const fixed = (d.fixed || []).filter(function(f){ return f && f.time; });
+          const rows = blocks.map(function(b){ return { at:b.start_time, title:b.title, who:b.supplier_name, notes:b.notes, venue:false, mins:b.duration_min }; })
+            .concat(fixed.map(function(f){ return { at:f.time, title:f.title, venue:true }; }))
+            .sort(function(a, b){ return dayOrder(a.at) - dayOrder(b.at); });
+          if (!rows.length) return null;
+          return (
+            <div key={d.day_key} style={{ marginBottom:10 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:T.text, margin:"6px 0 4px" }}>{d.label}</div>
+              {rows.map(function(x, i){
+                return (
+                  <div key={i} style={{ display:"flex", gap:12, fontSize:13, padding:"3px 0", color: x.venue ? T.textLight : T.textMid }}>
+                    <span style={{ width:46, flexShrink:0, fontWeight:600, color: x.venue ? T.textLight : T.text }}>{hhmm(x.at)}</span>
+                    <span style={{ minWidth:0 }}>
+                      {x.title}{x.who ? " — " + x.who : ""}{x.mins ? <span style={{ color:T.textLight }}> · {x.mins} min</span> : null}
+                      {x.notes ? <span style={{ color:T.textLight }}> · {x.notes}</span> : null}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+
+      <LegacyNotes booking={booking} fields={LEGACY_VENDOR_FIELDS} />
+    </div>
+  );
+}
+
+// Seated and evening totals for every event from the portal, for the events
+// list. One read for the whole list, cached for the session and refreshed when
+// a list mounts. Falls back to the diary's old fields for events from before.
+let portalNumbersCache = null;
+function usePortalNumbers() {
+  const [nums, setNums] = useState(portalNumbersCache);
+  useEffect(function(){
+    let off = false;
+    sbRpc("wp_admin_all_numbers", {})
+      .then(function(r){ portalNumbersCache = (r && r.numbers) || {}; if (!off) setNums(portalNumbersCache); })
+      .catch(function(){ /* old database: the diary's own numbers still show */ });
+    return function(){ off = true; };
+  }, []);
+  return nums;
+}
+function eventGuestCounts(b, nums) {
+  const p = nums && b && b.id != null ? nums[String(b.id)] : null;
+  if (p) return { day: p.seated || "—", eve: p.evening || "—", portal: true };
+  return { day: (b && b.mealGuests) || "—", eve: (b && b.eveGuests) || "—", portal: false };
+}
+
 function PriceInput({ onSave, disabled }) {
   const [v, setV] = useState("");
   return (
@@ -12581,6 +12877,8 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
   // page) so the Payment column reflects real Xero data instead of the
   // manually-typed deposit/2nd payment/final payment fields.
   const [xeroInvoicesByContact, setXeroInvoicesByContact] = useState({});
+  // Guest numbers from the client portal; the diary's old fields otherwise.
+  const portalNums = usePortalNumbers();
   const contactIds = rows.map(function(b){ return (b.xeroContactId||"").trim(); }).filter(Boolean);
   const contactIdsKey = contactIds.slice().sort().join(",");
 
@@ -12670,8 +12968,8 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                 </div>
                 <div style={{ fontSize:12, color:T.textMid, marginBottom:8 }}>{b.eventType||"—"}</div>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 16px", fontSize:12, color:T.textMid, marginBottom:8 }}>
-                  <span>Day guests: <strong style={{ color:T.text }}>{b.mealGuests||"—"}</strong></span>
-                  <span>Eve guests: <strong style={{ color:T.text }}>{b.eveGuests||"—"}</strong></span>
+                  <span>Day guests: <strong style={{ color:T.text }}>{eventGuestCounts(b, portalNums).day}</strong></span>
+                  <span>Eve guests: <strong style={{ color:T.text }}>{eventGuestCounts(b, portalNums).eve}</strong></span>
                   <span>Venue fee: <strong style={{ color:T.text }}>{total>0?`£${total.toLocaleString()}`:"—"}</strong></span>
                 </div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, paddingTop:8, borderTop:`1px solid ${T.border}` }}>
@@ -12730,8 +13028,8 @@ function BookingTable({ rows, onEdit, onDelete, label, dimmed, staff, accomBooki
                     <div style={{ fontWeight:600, color:T.text, fontSize:14 }}>{b.couple||"—"}</div>
                   </td>
                   <td style={{ padding:"10px 12px", fontSize:12, color:T.textMid }}>{b.eventType||"—"}</td>
-                  <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.mealGuests||"—"}</td>
-                  <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{b.eveGuests||"—"}</td>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{eventGuestCounts(b, portalNums).day}</td>
+                  <td style={{ padding:"10px 12px", fontSize:13, color:T.textMid }}>{eventGuestCounts(b, portalNums).eve}</td>
                   <td style={{ padding:"10px 12px", fontSize:13, color:T.text, fontWeight:500 }}>{total>0?`£${total.toLocaleString()}`:"—"}</td>
                   <td style={{ padding:"10px 12px" }} onClick={e=>e.stopPropagation()}>
                     <AccomBadgeList accomBadges={accomBadges} onOpenAccom={onOpenAccom}/>
@@ -12853,10 +13151,10 @@ const TEXT_FIELDS = [
 const FORM_SECTIONS = {
   core:       { label:"Event Details" },
   financials: { label:"Financials & Accom" },
-  guests:     { label:"Guests" },
+  guests:     { label:"Guests", note:"from the client portal" },
   contact:    { label:"Contact" },
   staffing:   { label:"Staffing" },
-  vendors:    { label:"Vendors & Logistics" },
+  vendors:    { label:"Suppliers & the day", note:"from the client portal" },
   viewings:   { label:"Viewings" },
   contract:   { label:"Contract" },
   files:      { label:"Files" },
@@ -14041,7 +14339,19 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             </div>
           )}
 
-          {activeSection!=="staffing" && activeSection!=="financials" && activeSection!=="viewings" && activeSection!=="files" && (
+          {/* Guests and the vendors list now come from the client portal; the
+              diary's own fields for them are shown read-only underneath. */}
+          {(activeSection==="guests" || activeSection==="vendors") && formData.id == null && (
+            <div style={quietText}>Save the booking first — guest numbers and suppliers come from its client portal.</div>
+          )}
+          {activeSection==="guests" && formData.id != null && (
+            <EventGuestsPanel eventId={Number(formData.id)} booking={formData} />
+          )}
+          {activeSection==="vendors" && formData.id != null && (
+            <EventVendorsPanel eventId={Number(formData.id)} booking={formData} />
+          )}
+
+          {["staffing","financials","viewings","files","guests","vendors","drinks","portal"].indexOf(activeSection) === -1 && (
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px 22px" }}>
               {TEXT_FIELDS.filter(f=>f.section===activeSection).map(field=>(
                 <div key={field.key} style={{ gridColumn:field.type==="textarea"?"1 / -1":"auto" }}>

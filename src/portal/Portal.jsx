@@ -444,7 +444,10 @@ function Overview({ event, home, words, visible, onGo, onHome }) {
         </section>
       )}
 
-      {(n.meal_guests || n.evening_total) && (
+      {/* The diary's numbers, for an event without a Guests tab. Where there
+          is one, the numbers live there and the diary's copy is no longer
+          kept up to date. */}
+      {(n.meal_guests || n.evening_total) && !visible.includes('guests') && (
         <section className="card">
           <h3>Numbers we hold</h3>
           <div className="rows">

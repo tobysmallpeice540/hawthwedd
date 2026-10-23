@@ -173,6 +173,15 @@ own header.
   what every event starts with; its "By event" tab lists coming events first
   and hides past ones.
 
+- **Guest numbers and suppliers come from the portal** (23 Oct, migration d).
+  The event form's Guests and "Suppliers & the day" sections read
+  `wp_admin_guests` (admin only — guests' dietary notes), `wp_admin_numbers`
+  (any staff), `wp_admin_event_suppliers` and `wp_admin_event_timeline`;
+  staff set numbers with `wp_admin_set_numbers`. The diary's old fields
+  (mealGuests, caterers, band…) are left in the record, never written, and
+  shown read-only as "Notes from before the portal". The events list and the
+  calendar feed use portal numbers and fall back to the old fields.
+
 ### Product
 
 - **Double bookings warn, never block.** Every override takes a second press.

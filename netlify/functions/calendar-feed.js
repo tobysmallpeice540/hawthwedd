@@ -15,6 +15,22 @@ const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 // ticketed night whether or not it's a public one.
 const SERVICE_KEY   = process.env.SUPABASE_SERVICE_KEY;
 
+// { "<event id>": { seated, evening } } from the client portal's numbers.
+async function portalNumbers() {
+  const res = await fetch(
+    SUPABASE_URL + "/rest/v1/wp_guest_numbers?select=event_id,seated_adults,seated_children,seated_babies,evening_extras",
+    { headers: { "apikey": SERVICE_KEY, "Authorization": "Bearer " + SERVICE_KEY } }
+  );
+  if (!res.ok) throw new Error("wp_guest_numbers " + res.status);
+  const rows = await res.json();
+  const out = {};
+  for (const r of rows || []) {
+    const seated = (r.seated_adults || 0) + (r.seated_children || 0) + (r.seated_babies || 0);
+    out[String(r.event_id)] = { seated: seated, evening: seated + (r.evening_extras || 0) };
+  }
+  return out;
+}
+
 const BOOKINGS_KEY  = "hawthbush_bookings_v6";
 const ENQUIRIES_KEY = "hbf_enquiries_v1";
 const ACCOM_KEY     = "hbf_accom_v1";
@@ -141,6 +157,10 @@ exports.handler = async () => {
   try { enquiries = (await sbGet(ENQUIRIES_KEY)) || []; } catch (e) { enquiries = []; }
   try { accom     = (await sbGet(ACCOM_KEY))     || []; } catch (e) { accom = []; }
   try { ticketed  = (await boxEvents())          || []; } catch (e) { ticketed = []; }
+  // Guest numbers now live in the client portal (wp_guest_numbers). Read with
+  // the service key; if that read fails the diary's own fields still show.
+  let portalNums = {};
+  try { portalNums = await portalNumbers(); } catch (e) { portalNums = {}; }
 
   const stamp = dtStamp();
   const lines = [];
@@ -154,8 +174,11 @@ exports.handler = async () => {
     const summary = (holding ? "[HOLD] " : "") + b.couple;
     const descParts = [];
     if (b.status)     descParts.push("Status: " + b.status);
-    if (b.mealGuests) descParts.push("Day guests: " + b.mealGuests);
-    if (b.eveGuests)  descParts.push("Eve guests: " + b.eveGuests);
+    const pn = b.id != null ? portalNums[String(b.id)] : null;
+    const dayG = pn ? pn.seated : b.mealGuests;
+    const eveG = pn ? pn.evening : b.eveGuests;
+    if (dayG) descParts.push("Day guests: " + dayG);
+    if (eveG) descParts.push("Eve guests: " + eveG);
     if (b.phone)      descParts.push("Phone: " + b.phone);
     if (b.email)      descParts.push("Email: " + b.email);
     // Multi-day: use endDate if present

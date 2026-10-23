@@ -117,3 +117,88 @@ export function guestsCsv(guests) {
   // Byte-order mark first, so Excel reads the accents in a name as UTF-8.
   return '﻿' + [CSV_COLUMNS].concat(rows).map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n'
 }
+
+// The printed lists, as a whole HTML page for a print window. Shared by the
+// client's Guests tab and the event form in the staff app, so both print the
+// same thing.
+function esc(v) {
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+export function guestsFileName(eventName, ext) {
+  const base = String(eventName || 'guest list').replace(/[^A-Za-z0-9 &'-]+/g, ' ').trim().replace(/\s+/g, ' ')
+  return (base || 'guest list') + ' - guests.' + ext
+}
+
+function where(g) {
+  return g.list === 'evening' ? 'Evening' : (g.table_label || '—')
+}
+
+function rowsHtml(list, cols) {
+  return list.map((g) => '<tr>' + cols.map((c) => '<td>' + esc(c(g)) + '</td>').join('') + '</tr>').join('')
+}
+
+function tableHtml(heads, list, cols) {
+  return '<table><thead><tr>' + heads.map((h) => '<th>' + esc(h) + '</th>').join('') + '</tr></thead><tbody>' +
+    rowsHtml(list, cols) + '</tbody></table>'
+}
+
+export function guestsPrintHtml(guests, how, eventName, eventDate) {
+  const r = roleFirst(guests)
+  const needs = (g) => [g.age_band === 'child' ? 'Child' : g.age_band === 'baby' ? 'High chair' : '', g.access_needs]
+    .filter(Boolean).join(' · ')
+  let body = ''
+  if (r.withRole.length) {
+    body += '<h2>With a role on the day <span>' + r.withRole.length + '</span></h2>' +
+      tableHtml(['Name', 'Role', 'Table'], r.withRole, [fullName, (g) => g.role, where])
+  }
+  if (how === 'name') {
+    body += '<h2>' + (r.withRole.length ? 'Everyone else' : 'Everyone') + ' <span>' + r.rest.length + '</span></h2>' +
+      tableHtml(['Name', 'Table', 'Notes'], r.rest, [fullName, where, needs])
+  } else {
+    for (const t of byTable(guests)) {
+      body += '<section class="tbl"><h2>' + esc(t.label) + ' <span>' + t.guests.length + '</span></h2>' +
+        tableHtml(['Name', 'Role', 'Notes'], t.guests, [fullName, (g) => g.role || '', needs]) + '</section>'
+    }
+    const ev = roleFirst(guests.filter((g) => g.list === 'evening'))
+    const evening = ev.withRole.concat(ev.rest)
+    if (evening.length) {
+      body += '<section class="tbl"><h2>Evening only <span>' + evening.length + '</span></h2>' +
+        tableHtml(['Name', 'Role', 'Notes'], evening, [fullName, (g) => g.role || '', needs]) + '</section>'
+    }
+  }
+  const title = (eventName || 'Guest list') + ' — ' + (how === 'name' ? 'guests by name' : 'guests by table')
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' +
+    'body{font-family:Georgia,serif;color:#222;margin:24px;font-size:12.5px}' +
+    'h1{font-size:20px;margin:0 0 2px}.sub{color:#666;margin:0 0 18px;font-size:12px}' +
+    'h2{font-size:14px;margin:18px 0 6px;border-bottom:1.5px solid #222;padding-bottom:3px}h2 span{color:#777;font-weight:normal;font-size:12px}' +
+    'table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#666;padding:3px 6px}' +
+    'td{padding:4px 6px;border-bottom:1px solid #ddd;vertical-align:top}td:first-child{width:38%}' +
+    '.tbl{break-inside:avoid}@media print{body{margin:0}}' +
+    '</style></head><body><h1>' + esc(eventName || 'Guest list') + '</h1><p class="sub">' +
+    esc((eventDate ? eventDate + ' · ' : '') + guests.length + ' guests · printed ' + new Date().toLocaleDateString('en-GB')) +
+    '</p>' + body + '<script>window.onload=function(){window.print()}<\/script></body></html>'
+}
+
+
+// Browser actions for the two buttons. Kept beside the builders so the client
+// tab and the staff app do exactly the same thing. Return false if the
+// browser blocked the print window, so the caller can say so.
+export function downloadGuestsCsv(guests, eventName) {
+  const blob = new Blob([guestsCsv(guests)], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = guestsFileName(eventName, 'csv')
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 2000)
+}
+
+export function printGuests(guests, how, eventName, eventDate) {
+  const w = window.open('', '_blank')
+  if (!w) return false
+  w.document.open()
+  w.document.write(guestsPrintHtml(guests, how, eventName, eventDate))
+  w.document.close()
+  return true
+}
