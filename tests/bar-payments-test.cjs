@@ -7,7 +7,8 @@
 //                          never sends anyone to a session it could not attach
 //   stripe-ticket-webhook  records a paid bar session, emails client + office
 //                          once, never twice on a retry, and tells the office
-//                          about money it could not match
+//                          about money it could not match, and records a
+//                          refund made in Stripe (charge.refunded)
 //     node tests/bar-payments-test.cjs
 
 const fs = require("fs"), path = require("path"), Module = require("module");
@@ -144,6 +145,41 @@ const hook = (type, session) => { stripeState.nextEvent = { id: "evt_1", type, d
   calls = fake({});
   r = await webhook(hook("checkout.session.completed", { id: "cs_t", metadata: { bookingType: "something_else" } }));
   check("W11 other sessions untouched", r.statusCode === 200 && !calls.some((c) => c.url.includes("wp_bar_")));
+
+  // ── refunds (charge.refunded on Hawthbush's own account) ─────────────────
+  const charge = { id: "ch_1", object: "charge", payment_intent: "pi_1", amount_refunded: 12000, refunded: false,
+                   metadata: { bookingType: "box_ticket" } };   // metadata must not route it to the ticket code
+  const refunded = (o) => () => Object.assign({ ok: true, changed: true, refund: 120, refunded_total: 120, paid: 500, total: 580,
+    event_id: 222, payer_email: "sam@x.test", couple: "Sam & Alex", event_date: "2027-06-12",
+    client_emails: ["sam@x.test", "alex@x.test"] }, o || {});
+  calls = fake({ wp_bar_payment_refunded: refunded() });
+  r = await webhook(hook("charge.refunded", charge));
+  const rcall = calls.find((c) => c.url.endsWith("wp_bar_payment_refunded"));
+  const rmail = calls.filter((c) => c.url.includes("api.resend.com")).map((c) => c.body);
+  check("F1 200", r.statusCode === 200, r.statusCode + " " + r.body);
+  check("F2 cumulative pounds and the payment intent, with the service key",
+    rcall && rcall.body.p_payment_intent === "pi_1" && rcall.body.p_refunded_total === 120 && rcall.auth === "Bearer SERVICE", JSON.stringify(rcall && rcall.body));
+  check("F3 client told the refund and what is left", rmail.length === 2 && rmail[0].to.join(",") === "sam@x.test,alex@x.test" &&
+    rmail[0].subject === "We've refunded £120.00 of your bar money" && rmail[0].html.includes("<strong>£580.00</strong>"), JSON.stringify(rmail.map((m) => m.subject)));
+  check("F4 office told", rmail[1] && rmail[1].to === "hello@hawthbushfarm.co.uk" && rmail[1].subject.startsWith("Bar money refunded: £120.00"));
+  check("F5 never touched the ticket code", !calls.some((c) => c.url.includes("box_orders") || c.url.includes("send-ticket-email")));
+
+  calls = fake({ wp_bar_payment_refunded: refunded({ changed: false, refund: 0 }) });
+  r = await webhook(hook("charge.refunded", charge));
+  check("F6 retried delivery: no email", r.statusCode === 200 && !calls.some((c) => c.url.includes("api.resend.com")));
+
+  calls = fake({ wp_bar_payment_refunded: () => ({ ok: false, error: "not_found" }) });
+  r = await webhook(hook("charge.refunded", Object.assign({}, charge, { payment_intent: "pi_ticket" })));
+  check("F7 a ticket refund: ignored quietly", r.statusCode === 200 && !calls.some((c) => c.url.includes("api.resend.com")));
+
+  calls = fake({ wp_bar_payment_refunded: () => { throw new Error("db down"); } });
+  r = await webhook(hook("charge.refunded", charge));
+  check("F8 database down: 500 so Stripe retries", r.statusCode === 500, String(r.statusCode));
+
+  calls = fake({ wp_bar_payment_refunded: refunded() }, [{ id: "bar_refund", subject: "Back to you: {refund}", body: "Sent {refund} back on {date}.\n\nLeft: {total}" }]);
+  r = await webhook(hook("charge.refunded", charge));
+  const rc = calls.filter((c) => c.url.includes("api.resend.com")).map((c) => c.body)[0];
+  check("F9 custom refund wording", rc && rc.subject === "Back to you: £120.00" && rc.html.includes("Left: <strong>£580.00</strong>"), rc && rc.subject);
 
   if (fails.length) { console.log(passes + " passed, FAILED:\n  " + fails.join("\n  ")); process.exit(1); }
   console.log("ALL " + passes + " ASSERTIONS PASSED");

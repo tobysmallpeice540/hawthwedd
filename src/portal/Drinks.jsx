@@ -635,11 +635,16 @@ function BarPayments({ payments, total, returned }) {
         <div className="rows">
           {paid.map((p) => (
             <div className="row" key={p.id}>
-              <span className="k">{fmtDate(p.paid_at)}{p.source === 'staff' ? ' · recorded by us' : ''}</span>
-              <span className="v">{money(p.amount)}</span>
+              <span className="k">
+                {fmtDate(p.paid_at)}{p.source === 'staff' ? ' · recorded by us' : ''}
+                {Number(p.refunded_amount) > 0 && (
+                  <span className="muted"> · {money(p.refunded_amount)} refunded{p.refunded_at ? ' on ' + fmtDate(p.refunded_at) : ''}</span>
+                )}
+              </span>
+              <span className="v">{Number(p.refunded_amount) > 0 ? money(Number(p.amount) - Number(p.refunded_amount)) : money(p.amount)}</span>
             </div>
           ))}
-          {paid.length > 1 && (
+          {(paid.length > 1 || paid.some((p) => Number(p.refunded_amount) > 0)) && (
             <div className="row"><span className="k"><strong>Behind the bar</strong></span><span className="v"><strong>{money(total)}</strong></span></div>
           )}
         </div>
@@ -647,7 +652,7 @@ function BarPayments({ payments, total, returned }) {
       {pending.length > 0 && returned !== 'thanks' && (
         <p className="hint">{pending.map((p) => money(p.amount)).join(', ')} started on the card page and not finished — it will disappear if it isn't completed.</p>
       )}
-      {paid.length > 0 && <p className="hint" style={{ marginTop: 8 }}>We email you a receipt each time.</p>}
+      {paid.length > 0 && <p className="hint" style={{ marginTop: 8 }}>We email you a receipt each time, and again if we refund any of it.</p>}
     </>
   )
 }

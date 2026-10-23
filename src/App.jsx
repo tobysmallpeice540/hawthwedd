@@ -11312,6 +11312,9 @@ function BarPaymentsAdmin({ eventId, payments, onChanged }) {
                   {p.status === "paid" ? (p.source === "staff" ? "recorded by staff" : "paid by card") : "started, not paid yet"}
                 </span>
                 {p.note && <span style={{ color:T.textLight }}>· {p.note}</span>}
+                {Number(p.refunded_amount) > 0 && (
+                  <span style={{ color:T.red }}>· {portalMoney(p.refunded_amount)} refunded{p.refunded_at ? " " + portalWhen(p.refunded_at) : ""}</span>
+                )}
                 {p.payer_email && p.source !== "staff" && <span style={{ color:T.textLight }}>· {p.payer_email}</span>}
                 {p.source === "staff" && p.status === "paid" && (
                   <button disabled={busy} onClick={function(){ remove(p.id); }} style={Object.assign({}, btnQuiet, { padding:"2px 8px", fontSize:11 })}>Remove</button>
@@ -11329,7 +11332,7 @@ function BarPaymentsAdmin({ eventId, payments, onChanged }) {
       </div>
       {err && <div style={{ fontSize:12, color:T.red, marginTop:4 }}>{err}</div>}
       <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
-        Card payments are confirmed by Stripe (ticketing account) and emailed to the client and the office. Refund anything unused from Stripe.
+        Card payments are confirmed by Stripe (ticketing account) and emailed to the client and the office. Refund anything unused from the payment in Stripe — the refund is recorded here and emailed by itself.
       </div>
     </div>
   );
@@ -12063,8 +12066,9 @@ const BAR_TABS = [
 // from the lettings calendar and the home page, so it is still a known type.
 const REPORT_TYPES = [
   {id:"summary",label:"Annual Summary"},{id:"accommodation",label:"Accommodation"},
-  {id:"staffing",label:"Rota Overview"},{id:"timeline",label:"Event Rota"},{id:"hours",label:"Hours Worked"},
+  {id:"staffing",label:"Rota Overview"},{id:"timeline",label:"Event Rota"},
   {id:"funnel",label:"Sales Funnel"},{id:"cashflow",label:"Cashflow Forecast"},
+  {id:"hours",label:"Hours Worked"},   // Toby: always at the bottom
 ];
 const HIDDEN_REPORT_TYPES = ["calendar"];
 // The pages under Settings in the sidebar.
@@ -23069,6 +23073,10 @@ const DEFAULT_PORTAL_EMAILS = [
     subject:"We've received {amount} behind your bar", button:"",
     body:"Thank you — we received {amount} to go behind the bar on {date}.\n\nThat makes {total} behind the bar for {event} ({eventDate}).\n\nWhen the tab runs out the bar goes back to pay as you go, and anything left over is refunded to the card it came from after the event.\n\nYou can see this on the Evening bar page of your planner at any time.",
     fields:["{amount}","{total}","{date}","{event}","{eventDate}"] },
+  { id:"bar_refund", name:"Money behind the bar — refund", when:"When a bar payment is refunded in Stripe",
+    subject:"We've refunded {refund} of your bar money", button:"",
+    body:"We have refunded {refund} of the money behind the bar to the card it came from, on {date}. Refunds usually reach the card within 5 to 10 working days.\n\nThat leaves {total} behind the bar for {event} ({eventDate}).\n\nYou can see this on the Evening bar page of your planner at any time.",
+    fields:["{refund}","{total}","{date}","{event}","{eventDate}"] },
 ];
 
 function PortalEmailTemplatesPanel() {
@@ -23121,7 +23129,7 @@ function PortalEmailTemplatesPanel() {
         <Field label="Message" width="100%">
           <textarea value={t.body} rows={11} onChange={function(e){ upd("body", e.target.value); }} style={Object.assign({}, inputCss, { fontFamily:"inherit", lineHeight:1.5 })}/>
         </Field>
-        {t.id !== "bar_receipt" && (
+        {!/^bar_/.test(t.id) && (
           <>
             <div style={{ height:10 }}/>
             <Field label="Button" width={260}>
@@ -23131,7 +23139,7 @@ function PortalEmailTemplatesPanel() {
         )}
         <div style={{ fontSize:11.5, color:T.textLight, marginTop:10, lineHeight:1.6 }}>
           Filled in when it is sent: {t.fields.join(" · ")}.
-          {t.id !== "bar_receipt" ? " The sign-in link itself is always added as the button — it is never written into the text." : " The office gets its own short note with each payment."}
+          {!/^bar_/.test(t.id) ? " The sign-in link itself is always added as the button — it is never written into the text." : " The office gets its own short note each time."}
           {" "}Left empty, a field falls back to the standard wording.
         </div>
         <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14 }}>

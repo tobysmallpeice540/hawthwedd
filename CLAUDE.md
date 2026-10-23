@@ -188,7 +188,13 @@ own header.
   webhook's `handleBarTab` calls `wp_bar_payment_paid`, which checks session
   AND amount and reports `first_time`, so a retried delivery never emails twice;
   then it emails the client (wording from the portal email templates) and the
-  office. Unmatched money emails the office. `wp_drinks.bar_paid_amount` is the
+  office. Unmatched money emails the office. **Refunds record themselves too**
+  (migration h): staff refund in the Stripe dashboard, `charge.refunded` on the
+  ticketing account calls `wp_bar_payment_refunded(payment_intent, cumulative
+  refunded)`, which stores the cumulative figure (so retries change nothing)
+  and the client and office are emailed (template `bar_refund`). Every
+  `charge.refunded` on the platform account stops at that handler — a charge
+  is not a checkout session and must never reach the ticket code below it. `wp_drinks.bar_paid_amount` is the
   recomputed total of paid rows. The old Payment Link setting is unused once
   migration f is in; staff can add a payment "taken another way".
 - **Portal emails are editable** under Settings → Email templates → Client

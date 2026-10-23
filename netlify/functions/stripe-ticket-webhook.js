@@ -6,7 +6,8 @@
 // mistaken for a ticket order or the other way round. Add it in Stripe as a
 // SECOND webhook endpoint:
 //   https://hawthbushfarm.netlify.app/.netlify/functions/stripe-ticket-webhook
-// listening for: checkout.session.completed, checkout.session.expired
+// listening for: checkout.session.completed, checkout.session.expired and
+// charge.refunded (a refund of money behind the bar records itself),
 // signing secret in STRIPE_TICKET_WEBHOOK_SECRET.
 //
 // Chef-run events need a THIRD endpoint at the SAME URL, created as a Connect
@@ -380,6 +381,80 @@ async function handleBarTab(stripeEvent) {
   ], r.event_id);
 }
 
+// ── A refund of money behind the bar ────────────────────────────────────────
+// Staff refund in the Stripe dashboard; nothing is typed into the app. Stripe
+// sends charge.refunded with the charge's CUMULATIVE amount refunded, and the
+// database records that figure against the bar payment with the same payment
+// intent — so a retried delivery, or a second partial refund, is worked out
+// rather than added twice. A charge that is not a bar payment (a ticket
+// refund on Hawthbush's own account) is not_found and left alone here.
+const BAR_REFUND_STD = {
+  subject: "We've refunded {refund} of your bar money",
+  body: "We have refunded {refund} of the money behind the bar to the card it came from, on {date}. " +
+        "Refunds usually reach the card within 5 to 10 working days.\n\n" +
+        "That leaves {total} behind the bar for {event} ({eventDate}).\n\n" +
+        "You can see this on the Evening bar page of your planner at any time."
+};
+async function barRefundTemplate() {
+  try {
+    var rows = await sbRest("app_data?key=eq.hbf_portal_email_templates_v1&select=value");
+    var list = (rows && rows[0] && rows[0].value) || [];
+    var t = list.find(function (x) { return x && x.id === "bar_refund"; }) || {};
+    return { subject: String(t.subject || "").trim() || BAR_REFUND_STD.subject,
+             body: String(t.body || "").trim() || BAR_REFUND_STD.body };
+  } catch (e) { console.warn("bar refund template unreadable, using the standard wording: " + e.message); return BAR_REFUND_STD; }
+}
+
+async function handleBarRefund(charge) {
+  var pi = typeof charge.payment_intent === "string" ? charge.payment_intent : (charge.payment_intent && charge.payment_intent.id) || null;
+  if (!pi) return;
+  var r = await sbRpcService("wp_bar_payment_refunded", {
+    p_payment_intent: pi, p_refunded_total: Number(charge.amount_refunded || 0) / 100
+  });
+  if (!r || r.ok === false) {
+    if (r && r.error === "not_found") return;   // not money behind the bar
+    throw new Error("wp_bar_payment_refunded: " + JSON.stringify(r));
+  }
+  if (!r.changed) return;   // already recorded and emailed
+
+  var when = barDate();
+  var name = r.couple || "your event";
+  var eventDate = r.event_date ? barDate(r.event_date + "T12:00:00Z") : "the day";
+  var to = [];
+  (r.client_emails || []).concat(r.payer_email ? [r.payer_email] : []).forEach(function (e) {
+    e = String(e || "").trim().toLowerCase();
+    if (e && to.indexOf(e) < 0) to.push(e);
+  });
+
+  // A correction that lowers the refund (rare: Stripe reports a smaller
+  // cumulative figure) is the office's business, not the client's.
+  if (to.length && Number(r.refund) > 0) {
+    var tpl = await barRefundTemplate();
+    var vals = { "{refund}": barMoney(r.refund), "{amount}": barMoney(r.refund), "{total}": barMoney(r.total),
+                 "{date}": when, "{event}": name, "{eventDate}": eventDate };
+    var fill = function (text, html) {
+      var out = html ? barEsc(text) : String(text);
+      Object.keys(vals).forEach(function (k) {
+        var v = html ? barEsc(vals[k]) : vals[k];
+        if (html && (k === "{refund}" || k === "{amount}" || k === "{total}")) v = "<strong>" + v + "</strong>";
+        out = out.split(k).join(v);
+      });
+      return out;
+    };
+    var paras = tpl.body.split(/\n\s*\n/).map(function (p) { return fill(p.trim(), true).replace(/\n/g, "<br>"); }).filter(Boolean);
+    await barSend(to, fill(tpl.subject, false), paras, r.event_id);
+  }
+  await barSend(OFFICE_EMAIL, "Bar money refunded: " + barMoney(Math.abs(r.refund)) + " — " + name, [
+    (Number(r.refund) > 0
+      ? "<strong>" + barMoney(r.refund) + "</strong> of the money behind the bar was refunded"
+      : "The refund recorded against the money behind the bar was corrected by " + barMoney(Math.abs(r.refund))) +
+    " for <strong>" + barEsc(name) + "</strong> (" + barEsc(eventDate) + ") on " + when + ".",
+    "That payment: " + barMoney(r.paid) + " paid, " + barMoney(r.refunded_total) + " refunded in all. " +
+    "Total behind the bar now: <strong>" + barMoney(r.total) + "</strong>.",
+    "Already recorded on the event — nothing to do. Stripe reference " + barEsc(charge.id) + "."
+  ], r.event_id);
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method not allowed" };
@@ -440,6 +515,14 @@ exports.handler = async function(event) {
     // ── A refund on a chef's account ────────────────────────────────────────
     if (stripeEvent.type === "charge.refunded" && connectedAccount) {
       await handleChefRefund(stripeEvent.data.object, connectedAccount);
+      return { statusCode: 200, body: JSON.stringify({ received: true }) };
+    }
+
+    // ── A refund on Hawthbush's own ticketing account ───────────────────────
+    // Only money behind the bar is acted on. Whatever it was, it stops here:
+    // a charge is not a checkout session and must never reach the code below.
+    if (stripeEvent.type === "charge.refunded") {
+      await handleBarRefund(stripeEvent.data.object);
       return { statusCode: 200, body: JSON.stringify({ received: true }) };
     }
   } catch (err) {
