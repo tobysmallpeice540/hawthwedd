@@ -6,6 +6,16 @@
     <title>Hawthbush Farm</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%232e3837'/%3E%3Crect x='13' y='12' width='4' height='40' fill='%23fff'/%3E%3Crect x='47' y='12' width='4' height='40' fill='%23fff'/%3E%3Cpath d='M24 18v28M40 18v28M24 32h16' stroke='%23fff' stroke-width='5' fill='none'/%3E%3C/svg%3E" />
     <meta name="theme-color" content="#2e3837" />
+    <!-- Installable on phones: Add to Home Screen on iPhone, Install app on Android.
+         There is deliberately no service worker, so nothing is cached for
+         offline use: an installed copy always loads the live build, and the
+         stale-build guard in App.jsx keeps working exactly as in a browser tab. -->
+    <link rel="manifest" href="/app.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Hawthbush" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <style>html, body { margin: 0; }</style>
   </head>
   <body>

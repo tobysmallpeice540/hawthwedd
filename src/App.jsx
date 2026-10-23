@@ -9734,6 +9734,92 @@ function PortalSupplierForm({ onDone }) {
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
+// ─── INSTALLING ON A PHONE ───────────────────────────────────────────────────
+// The app is installable (public/app.webmanifest). Android and desktop Chrome
+// announce that with a beforeinstallprompt event, early and once, so it is
+// caught here at module scope and kept until somebody presses Install. iPhone
+// has no such event — installing there is Share → Add to Home Screen, which the
+// Settings card explains.
+let installPromptEvent = null;
+const installSubs = new Set();
+function isStandaloneApp() {
+  try {
+    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+  } catch (e) { return false; }
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", function(e) {
+    e.preventDefault();
+    installPromptEvent = e;
+    installSubs.forEach(function(f) { f(); });
+  });
+  window.addEventListener("appinstalled", function() {
+    installPromptEvent = null;
+    installSubs.forEach(function(f) { f(); });
+  });
+}
+function useInstallPrompt() {
+  const [, force] = useState(0);
+  useEffect(function() {
+    function f() { force(function(n) { return n + 1; }); }
+    installSubs.add(f);
+    return function() { installSubs.delete(f); };
+  }, []);
+  async function install() {
+    const ev = installPromptEvent;
+    if (!ev) return false;
+    installPromptEvent = null;          // a prompt can only be shown once
+    installSubs.forEach(function(f) { f(); });
+    try { ev.prompt(); const r = await ev.userChoice; return r && r.outcome === "accepted"; }
+    catch (e) { return false; }
+  }
+  return { canInstall: !!installPromptEvent && !isStandaloneApp(), install: install, standalone: isStandaloneApp() };
+}
+
+// The Settings card: how to put the app on a phone.
+function PhoneAppPanel() {
+  const ip = useInstallPrompt();
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const li = { margin:"0 0 6px", lineHeight:1.55 };
+  return (
+    <div>
+      {ip.standalone
+        ? <p style={{ fontSize:13, color:T.green, fontWeight:600, margin:"0 0 12px" }}>You're using the installed app on this device.</p>
+        : ip.canInstall && (
+          <div style={{ marginBottom:14 }}>
+            <button onClick={ip.install}
+              style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 18px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+              Install on this device
+            </button>
+          </div>
+        )}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px, 1fr))", gap:18, fontSize:13, color:T.textMid }}>
+        <div>
+          <div style={{ fontWeight:700, color:T.text, marginBottom:6 }}>iPhone or iPad</div>
+          <ol style={{ margin:0, paddingLeft:18 }}>
+            <li style={li}>Open {origin.replace(/^https?:\/\//, "")} in <strong>Safari</strong>.</li>
+            <li style={li}>Tap the Share button, then <strong>Add to Home Screen</strong>.</li>
+            <li style={li}>Open it from the home screen and sign in once.</li>
+          </ol>
+        </div>
+        <div>
+          <div style={{ fontWeight:700, color:T.text, marginBottom:6 }}>Android</div>
+          <ol style={{ margin:0, paddingLeft:18 }}>
+            <li style={li}>Open {origin.replace(/^https?:\/\//, "")} in <strong>Chrome</strong>.</li>
+            <li style={li}>Tap <strong>Install app</strong> in the ⋮ menu (or "Install" when Chrome offers it).</li>
+            <li style={li}>Open it from the app drawer and sign in once.</li>
+          </ol>
+        </div>
+      </div>
+      <p style={{ fontSize:12, color:T.textLight, margin:"14px 0 0", lineHeight:1.55 }}>
+        The app is this website, so every update reaches it automatically — there is nothing to update on the phone.
+        Couples can install their portal the same way from {origin.replace(/^https?:\/\//, "")}/portal; it appears as "Our wedding".
+        Connect Xero and Gmail from a computer's browser rather than the installed iPhone app.
+      </p>
+    </div>
+  );
+}
+
 // ─── SIDEBAR LAYOUT ──────────────────────────────────────────────────────────
 // Sub-page lists, shared by the sidebar and by the sections themselves (which
 // still draw them as a tab strip for the restricted logins and the classic
@@ -9814,6 +9900,7 @@ function sidebarCrumbs(nav, view) {
 }
 
 function AppSidebar({ nav, onNew, onSignOut, onClose }) {
+  const ip = useInstallPrompt();
   return (
     <aside className="hb-side" aria-label="Main menu">
       <div className="hb-side-brand">
@@ -9848,6 +9935,7 @@ function AppSidebar({ nav, onNew, onSignOut, onClose }) {
         })}
       </nav>
       <div className="hb-side-foot">
+        {ip.canInstall && <button type="button" onClick={ip.install}>Install app on this device</button>}
         {onSignOut && <button type="button" onClick={onSignOut}>Sign out</button>}
         <button type="button" onClick={function() { setClassicUi(true); }} title="Go back to the old top-menu layout in this browser. You can switch back from there.">
           Switch to classic layout
@@ -19819,6 +19907,12 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Backup &amp; restore</div>
         <BackupPanel/>
+      </div>
+
+      {/* Phone app — the site installs as an app on iPhone and Android */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Phone app</div>
+        <PhoneAppPanel/>
       </div>
 
       {/* Brochure request — the website form's wording, link and rules */}

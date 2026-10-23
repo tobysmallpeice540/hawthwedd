@@ -104,6 +104,20 @@ own header.
 - Sticky panels inside a page use `top: var(--hb-sticky-top, 0px)` so they sit
   under the sidebar layout's top bar and at 0 everywhere else.
 
+### Phone app (23 Oct 2026)
+
+- The staff app and the client portal are installable web apps (Add to Home
+  Screen on iPhone, Install on Android): `public/app.webmanifest` (scope `/`)
+  and `public/portal.webmanifest` (scope `/portal`, shown as "Our wedding"),
+  icons in `public/icons/`. Both pass Chrome's installability check.
+- **There is deliberately no service worker.** An offline cache would let an
+  installed phone keep running an old build, which is exactly what the
+  stale-build guard exists to stop. If push notifications are ever wanted, add
+  a worker with no fetch handler — never one that caches the app shell.
+- On iPhone, links in emails open in Safari, not in the installed app, so a
+  portal magic link signs the couple in to Safari only. A typed one-time code
+  on the sign-in screen would fix it; not built yet.
+
 ### Product
 
 - **Double bookings warn, never block.** Every override takes a second press.
