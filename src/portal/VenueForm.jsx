@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
+import KeyContacts from './KeyContacts.jsx'
 
 // Components that render inputs live at module scope — see Guests.jsx.
 //
@@ -67,6 +68,7 @@ export default function VenueForm() {
   const { answered, total } = data.progress
 
   return (
+    <>
     <form onSubmit={save}>
       <section className="card">
         <h3>Things we need to know</h3>
@@ -98,6 +100,10 @@ export default function VenueForm() {
         </button>
       </section>
     </form>
+    {/* Outside the form: it saves each contact on its own, and a form may not
+        hold another form. */}
+    <KeyContacts />
+    </>
   )
 }
 

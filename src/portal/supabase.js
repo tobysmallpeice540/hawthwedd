@@ -39,3 +39,10 @@ export async function rpc(fn, args) {
   }
   return data
 }
+
+// True when the database does not have this function yet — a page shipped
+// ahead of its migration. The caller hides that part quietly instead of
+// showing an error the couple can do nothing about.
+export function isMissingFunction(e) {
+  return /could not find the function|schema cache|PGRST202/i.test(String((e && e.message) || e || ''))
+}

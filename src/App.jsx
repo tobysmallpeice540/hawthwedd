@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { Fragment, useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
 import "@fontsource/barlow/400.css";
 import "@fontsource/barlow/500.css";
 import "@fontsource/barlow/600.css";
@@ -133,11 +133,18 @@ function noteDataFailure(what, status, detail) {
   } catch (e) { /* never let reporting a fault cause one */ }
 }
 
+// Keys whose last read failed. sbGet answers null both for "not there" and
+// for "could not read", so anything that publishes a figure worked out from a
+// key (the client statement, say) checks here first rather than publishing
+// sums made from an empty list.
+const READ_FAILED = {};
+
 const sbGet = async (key) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}&select=value`, {
     headers: sbAuthHeaders()
   });
-  if (!res.ok) { noteDataFailure(`reading ${key}`, res.status, await res.text()); return null; }
+  if (!res.ok) { READ_FAILED[key] = true; noteDataFailure(`reading ${key}`, res.status, await res.text()); return null; }
+  delete READ_FAILED[key];
   const rows = await res.json();
   return rows?.[0]?.value ?? null;
 };
@@ -177,6 +184,33 @@ const sbRpc = async (fn, args) => {
   if (!res.ok) {
     noteDataFailure(`calling ${fn}`, res.status, text);
     throw new Error(`${fn} failed (${res.status})`);
+  }
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+  if (data && data.ok === false) {
+    const err = new Error(data.error || "refused");
+    err.code = data.error;
+    throw err;
+  }
+  return data;
+};
+
+// The same call for a read that is optional, or for a function a migration
+// may not have created yet: it still throws on any failure — the caller must
+// handle it — but does not raise the red data-failure banner across the whole
+// app. Logged to the console either way.
+const sbRpcQuiet = async (fn, args) => {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
+    body: JSON.stringify(args || {})
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    console.warn(fn + " failed (" + res.status + "): " + text.slice(0, 200));
+    const err = new Error(res.status === 404 ? fn + " is not in the database yet" : fn + " failed (" + res.status + ")");
+    err.status = res.status;
+    throw err;
   }
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
@@ -1193,6 +1227,156 @@ function computeEventInvoiceStages(ev, accomBookings) {
     };
   }
   return [stage(1, stage1Lines), stage(2, stage2Lines), stage(3, stage3Lines)];
+}
+
+// ─── Damage deposit on an event ──────────────────────────────────────────────
+// Refundable, so it is not income: it is kept out of the invoice stages and
+// out of the price. Most events have none (blank or 0). What is KEPT at the
+// end, if anything, is compensation for damage and is shown in the VAT split
+// as outside the scope of VAT.
+const DAMAGE_DEPOSIT_STATES = [
+  { id: "",         label: "Not received yet" },
+  { id: "received", label: "Received — holding it" },
+  { id: "refunded", label: "Refunded in full" },
+  { id: "part",     label: "Part kept, the rest refunded" },
+  { id: "kept",     label: "Kept in full" },
+];
+function damageDepositInfo(ev) {
+  const amount = round2(parseMoney(ev && ev.damageDeposit));
+  const state = (ev && ev.damageDepositState) || "";
+  const kept = state === "kept" ? amount
+    : state === "part" ? Math.min(amount, round2(parseMoney(ev.damageDepositKept)))
+    : 0;
+  return {
+    amount: amount, state: state, kept: kept,
+    outstanding: amount > 0 && state === "",          // still to come in
+    held: amount > 0 && state === "received",         // in hand, owed back
+    refund: state === "part" ? round2(amount - kept) : state === "refunded" ? amount : 0
+  };
+}
+
+// ─── Statement of account (client portal) ───────────────────────────────────
+// The payments still to come on one event, as the couple's portal shows them
+// under their invoices. Only what is NOT already an invoice: stage 1 is raised
+// at booking; a stage linked to a Xero invoice is in their invoice list; a
+// stage whose date has passed should have been raised, so it is not promised
+// here either. The portal labels every figure provisional — final invoices
+// move with numbers and additions.
+const STATEMENT_STAGE_LABELS = { 2: "Second payment", 3: "Final balance" };
+function eventStatementRows(ev, accomBookings, invoiceRecords, todayIso) {
+  const rows = [];
+  if (!ev || !isValidEventDate(ev.date)) return rows;
+  const stages = computeEventInvoiceStages(ev, accomBookings || []);
+  if (isInvoiceableYear(ev)) {
+    stages.forEach(function(st) {
+      if (st.stage === 1) return;
+      if (!(st.total > 0)) return;
+      if (findPushedInvoice(invoiceRecords, ev.id, st.stage)) return;
+      if (!st.invoiceDate || st.invoiceDate < todayIso) return;
+      rows.push({
+        label: STATEMENT_STAGE_LABELS[st.stage], due_on: st.invoiceDate, amount: st.total, refundable: false,
+        lines: st.lines.map(function(l) { return { desc: l.desc, amount: l.amount }; })
+      });
+    });
+  }
+  const dd = damageDepositInfo(ev);
+  if (dd.outstanding) {
+    rows.push({ label: "Damage deposit (refundable)", due_on: (stages[2] && stages[2].invoiceDate) || ev.date,
+                amount: dd.amount, refundable: true, lines: [] });
+  }
+  return rows;
+}
+
+// ─── Price by VAT category ───────────────────────────────────────────────────
+// Money is held inc VAT everywhere; VAT is worked out here, never typed. The
+// split is automatic from what the event already holds — venue fee, linked
+// accommodation, the portal's drinks, food and confirmed extras — plus any
+// adjustment lines staff add to move money between categories. Rates are the
+// standard UK ones and are an assumption to check with the accountant, not a
+// ruling; an adjustment is the way to correct a line.
+const VAT_CATEGORIES = [
+  { id: "venue",         label: "Venue hire",               rate: 20 },
+  { id: "accommodation", label: "Accommodation",            rate: 20 },
+  { id: "drinks",        label: "Drinks",                   rate: 20 },
+  { id: "food",          label: "Food",                     rate: 20 },
+  { id: "extras",        label: "Extras",                   rate: 20 },
+  { id: "exempt",        label: "Exempt / outside the scope", rate: 0 },
+];
+function vatOfInclusive(inc, rate) {
+  const r = Number(rate) || 0;
+  return r > 0 ? round2(inc * r / (100 + r)) : 0;
+}
+// A typed number from a number input, sign kept. parseMoney drops the minus,
+// which is right for a fee and wrong for an adjustment.
+function signedAmount(v) {
+  if (v === null || v === undefined || v === "") return 0;
+  const n = Number(String(v).trim());
+  return isFinite(n) ? round2(n) : 0;
+}
+// portal: { drinks, food, addons } as the admin functions return them, or null
+// for any not loaded (the result says so rather than reading as zero).
+function eventVatSplit(ev, accomBookings, portal) {
+  const p = portal || {};
+  const items = [];
+  const missing = [];
+  function catRate(id) { const c = VAT_CATEGORIES.find(function(x) { return x.id === id; }); return c ? c.rate : 20; }
+  function add(cat, desc, inc, rate, how, vatOverride) {
+    inc = round2(inc);
+    if (!inc) return;
+    const r = rate == null ? catRate(cat) : Number(rate);
+    items.push({ cat: cat, desc: desc, inc: inc, rate: r,
+                 vat: vatOverride != null ? round2(vatOverride) : vatOfInclusive(inc, r), how: how });
+  }
+  add("venue", "Venue fee", parseMoney(ev.venueFee), null, "auto");
+  eventAccomStays(ev, accomBookings || []).forEach(function(s) {
+    add("accommodation", s.propertyName + (s.nights ? " — " + s.nights + " night" + (s.nights === 1 ? "" : "s") : ""), s.value, null, "auto");
+  });
+  eventAccomExtras(ev, accomBookings || []).forEach(function(x) { add("accommodation", x.desc, x.amount, null, "auto"); });
+
+  if (p.drinks === null || p.drinks === undefined) missing.push("drinks");
+  const dsum = p.drinks && p.drinks.summary;
+  if (dsum && Number(dsum.total) > 0) {
+    const total = Number(dsum.total), vat = Number(dsum.vat) || 0;
+    const rate = total - vat > 0 ? Math.round(vat / (total - vat) * 1000) / 10 : 20;
+    add("drinks", "Drinks order (client portal)", total, rate, "auto", vat);
+  } else if (parseMoney(ev.corkageTotal) > 0) {
+    add("drinks", "Corkage (from the diary)", parseMoney(ev.corkageTotal), null, "auto");
+  }
+
+  if (p.food === null || p.food === undefined) missing.push("food");
+  const food = p.food && p.food.choice;
+  if (food && food.price_pp != null && Number(food.numbers) > 0) {
+    add("food", (food.package_name || "Food") + " — " + food.numbers + " at " + fmtMoney(Number(food.price_pp)),
+        Number(food.price_pp) * Number(food.numbers), food.vat_rate == null ? null : Number(food.vat_rate), "auto");
+  }
+
+  if (p.addons === null || p.addons === undefined) missing.push("extras");
+  ((p.addons && p.addons.requests) || []).forEach(function(r) {
+    if (r.status !== "approved" || r.unit_price == null) return;
+    const qty = Number(r.qty) || 1;
+    add("extras", r.name + (qty > 1 ? " × " + qty : ""), Number(r.unit_price) * qty,
+        r.vat_rate == null ? null : Number(r.vat_rate), "auto");
+  });
+
+  const dd = damageDepositInfo(ev);
+  if (dd.kept > 0) add("exempt", "Damage deposit kept", dd.kept, 0, "auto");
+
+  (Array.isArray(ev.vatAdjustments) ? ev.vatAdjustments : []).forEach(function(a) {
+    const amt = signedAmount(a && a.amount);
+    if (!amt) return;
+    add(VAT_CATEGORIES.some(function(c) { return c.id === a.category; }) ? a.category : "exempt",
+        (a.note || "").trim() || "Adjustment", amt, null, "adjust");
+  });
+
+  const cats = VAT_CATEGORIES.map(function(c) {
+    const mine = items.filter(function(i) { return i.cat === c.id; });
+    const inc = round2(mine.reduce(function(s, i) { return s + i.inc; }, 0));
+    const vat = round2(mine.reduce(function(s, i) { return s + i.vat; }, 0));
+    return { id: c.id, label: c.label, rate: c.rate, items: mine, inc: inc, vat: vat, ex: round2(inc - vat) };
+  });
+  const inc = round2(cats.reduce(function(s, c) { return s + c.inc; }, 0));
+  const vat = round2(cats.reduce(function(s, c) { return s + c.vat; }, 0));
+  return { cats: cats, inc: inc, vat: vat, ex: round2(inc - vat), missing: missing };
 }
 
 // Stable fingerprint of a stage's lines, stored when the invoice is pushed so
@@ -6651,17 +6835,55 @@ export default function App({ role = "admin", onSignOut } = {}) {
           xeroContactId: b.xeroContactId || "",
         }));
         setBookings(migrated);
-      } catch { setBookings(INITIAL_BOOKINGS); }
-      try { const r = await sbGet(STAFF_STORAGE); if (!r) noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
+      } catch {
+        // A network failure lands here, not in the null check above. It is the
+        // same situation — example data on screen — so it gets the same guard.
+        noteSeedFallback(BOOKING_STORAGE, "The wedding diary");
+        setBookings(INITIAL_BOOKINGS);
+      }
+      try { const r = await sbGet(STAFF_STORAGE); if (!r) noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(r || INITIAL_STAFF); } catch { noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(INITIAL_STAFF); }
       try { const r = await sbGet(ENQUIRIES_STORAGE); setEnquiries(r || []); } catch { setEnquiries([]); }
         try { const r = await sbGet(VR_STORAGE); setViewingRequests(r || []); } catch { setViewingRequests([]); }
         try { const r = await sbGet(VB_STORAGE); setViewingBlocks(r || []); } catch { setViewingBlocks([]); }
-      try { const r = await sbGet(ACCOM_STORAGE); setAccomBookings((r||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
+      try { const r = await sbGet(ACCOM_STORAGE); setAccomBookings((r||[]).map(normalizeAccom)); } catch { READ_FAILED[ACCOM_STORAGE] = true; setAccomBookings([]); }
       try { const r = await sbGet(PROPERTIES_STORAGE); setAccomProperties(r||INITIAL_PROPERTIES); } catch { setAccomProperties(INITIAL_PROPERTIES); }
-      try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecords(r||[]); } catch { setInvoiceRecords([]); }
+      try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecords(r||[]); } catch { READ_FAILED[EVENT_INVOICES_STORAGE] = true; setInvoiceRecords([]); }
       setLoaded(true);
     })();
   },[]);
+
+  // ── Statement of account, mirrored to the client portal ─────────────────
+  // The payments still to come on each event (stages not yet raised, and any
+  // damage deposit) are worked out here — where the invoice arithmetic lives —
+  // and copied to the database for the couple's portal to read, in the same
+  // spirit as the invoice mirror. Never from example data or a failed read:
+  // a statement built from an empty accommodation list would under-state what
+  // a couple owes. Sent only when it has changed, a few seconds after the last
+  // edit; a failure is logged and tried again on the next change.
+  const publishedScheduleRef = useRef(null);
+  useEffect(function() {
+    if (!loaded || barOnly || cleanerOnly) return;
+    if (SEED_FALLBACK[BOOKING_STORAGE] || READ_FAILED[BOOKING_STORAGE] || READ_FAILED[ACCOM_STORAGE] || READ_FAILED[EVENT_INVOICES_STORAGE]) return;
+    const t = setTimeout(function() {
+      const today = new Date().toISOString().slice(0, 10);
+      // Recently past events stay in so that a schedule left over from before
+      // the event is cleared; anything older is left alone.
+      const from = addDaysIso(today, -90);
+      const payload = (bookings || []).filter(function(ev) {
+        if (!ev || !/^\d+$/.test(String(ev.id)) || !isValidEventDate(ev.date)) return false;
+        if (String(ev.status || "").toLowerCase() === "cancelled") return false;
+        return (eventEndDate(ev) || ev.date) >= from;
+      }).slice(0, 500).map(function(ev) {
+        return { event_id: Number(ev.id), rows: eventStatementRows(ev, accomBookings, invoiceRecords, today) };
+      });
+      const key = JSON.stringify(payload);
+      if (key === publishedScheduleRef.current) return;
+      sbRpcQuiet("wp_admin_publish_schedule", { p_events: payload })
+        .then(function() { publishedScheduleRef.current = key; })
+        .catch(function(e) { console.warn("Client statement not published: " + (e.message || e)); });
+    }, 4000);
+    return function() { clearTimeout(t); };
+  }, [loaded, bookings, accomBookings, invoiceRecords]);
 
   // NOTE: there is deliberately no whole-array "saveBookings" at this level.
   // Writing the entire events array from a component's snapshot is what
@@ -7387,7 +7609,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
+        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -10615,6 +10837,92 @@ function EventGuestsPanel({ eventId, booking }) {
   );
 }
 
+// What the couple has told us about the day outside the timeline: their venue
+// form answers (ceremony, drop-off and collection, and the rest) and the key
+// contacts to phone. Read-only here — it is theirs to keep up to date.
+function venueAnswerText(q, v) {
+  if (v === null || v === undefined || String(v).trim() === "") return "";
+  if (q.kind === "yesno") return v === "yes" || v === true || v === "true" ? "Yes" : v === "no" || v === false || v === "false" ? "No" : String(v);
+  if (q.kind === "time") return hhmm(v);
+  if (q.kind === "date") return fmtWeekdayLong(v);
+  return String(v);
+}
+// Sections of the venue form, each with only the questions answered.
+function venueFormAnswered(day) {
+  const out = [];
+  ((day && day.questions) || []).forEach(function(q) {
+    const text = venueAnswerText(q, ((day && day.answers) || {})[q.qkey]);
+    if (!text) return;
+    let s = out.find(function(x) { return x.name === q.section; });
+    if (!s) { s = { name: q.section, rows: [] }; out.push(s); }
+    s.rows.push({ label: q.label, text: text, qkey: q.qkey });
+  });
+  return out;
+}
+
+function EventDayDetailsPanel({ eventId }) {
+  const [day, setDay] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(function() {
+    let off = false;
+    setErr(""); setDay(null);
+    sbRpcQuiet("wp_admin_day_details", { p_event_id: eventId })
+      .then(function(r){ if (!off) setDay(r); })
+      .catch(function(e){ if (!off) setErr(e.message || String(e)); });
+    return function(){ off = true; };
+  }, [eventId]);
+
+  if (err) {
+    return (
+      <div style={panelCss}>
+        <div style={panelTitle}>Ceremony, contacts and drop-off</div>
+        <div style={quietText}>Could not load ({err}). If the 23 Oct (g) migration has not been run yet, that is why.</div>
+      </div>
+    );
+  }
+  if (!day) return <div style={panelCss}><div style={quietText}>Loading the day's details…</div></div>;
+  const sections = venueFormAnswered(day);
+  const contacts = day.contacts || [];
+  return (
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap:14 }}>
+      <div style={panelCss}>
+        <div style={panelTitle}>Key contacts on the day <span style={{ fontWeight:400, color:T.textLight }}>· from their portal</span></div>
+        {contacts.length === 0 ? <div style={quietText}>None given yet.</div> : (
+          <div style={{ display:"grid", gap:8 }}>
+            {contacts.map(function(c){
+              return (
+                <div key={c.id} style={{ fontSize:13, borderTop:`1px solid ${T.border}55`, paddingTop:6 }}>
+                  <div style={{ color:T.text, fontWeight:600 }}>{c.name}{c.role ? <span style={{ fontWeight:400, color:T.textLight }}> · {c.role}</span> : null}</div>
+                  {c.phone && <div><a href={"tel:" + String(c.phone).replace(/[^0-9+]/g, "")} style={{ color:T.accent }}>{c.phone}</a></div>}
+                  {c.note && <div style={{ color:T.textLight, fontSize:12 }}>{c.note}</div>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div style={panelCss}>
+        <div style={panelTitle}>Their answers <span style={{ fontWeight:400, color:T.textLight }}>· venue form{day.ceremony_time ? " · ceremony " + hhmm(day.ceremony_time) : ""}</span></div>
+        {sections.length === 0 ? <div style={quietText}>Nothing answered yet.</div> : sections.map(function(s){
+          return (
+            <div key={s.name} style={{ marginBottom:8 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:T.text, margin:"4px 0" }}>{s.name}</div>
+              {s.rows.map(function(r){
+                return (
+                  <div key={r.qkey} style={{ fontSize:13, color:T.textMid, padding:"2px 0", display:"flex", gap:8 }}>
+                    <span style={{ color:T.textLight, flex:"0 0 45%" }}>{r.label}</span>
+                    <span style={{ minWidth:0, wordBreak:"break-word", color:T.text }}>{r.text}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function EventVendorsPanel({ eventId, booking }) {
   const [sup, setSup] = useState(null);
   const [tl, setTl] = useState(null);
@@ -10638,6 +10946,8 @@ function EventVendorsPanel({ eventId, booking }) {
   return (
     <div style={{ display:"grid", gap:14 }}>
       {err && <ErrBanner text={err} />}
+
+      <EventDayDetailsPanel eventId={eventId} />
 
       <div style={panelCss}>
         <div style={panelTitle}>Suppliers <span style={{ fontWeight:400, color:T.textLight }}>· chosen by the client in their portal</span></div>
@@ -10700,6 +11010,232 @@ function EventVendorsPanel({ eventId, booking }) {
       <LegacyNotes booking={booking} fields={LEGACY_VENDOR_FIELDS} />
     </div>
   );
+}
+
+// ─── FUNCTION SHEET ──────────────────────────────────────────────────────────
+// One printable page per event for whoever runs the day: numbers, ceremony,
+// key contacts, the timeline, drinks, food and dietary needs, suppliers, the
+// rota, what is being dropped off (with a clear-up checklist) and the notes.
+//
+// Everything is read fresh when the sheet is opened. Any part that will not
+// load says so on the sheet rather than leaving a blank that reads as "none".
+// Guests' dietary notes are admin-only in the database, so a bar or cleaning
+// login gets the sheet without them, and the sheet says why.
+function fsEsc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, function(c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function functionSheetHtml(ev, d, staff, printedAt) {
+  const e = fsEsc;
+  const part = function(k) { return d && d[k] && !d[k].__error ? d[k] : null; };
+  const failed = function(k) { return d && d[k] && d[k].__error ? d[k].__error : null; };
+  const unavailable = function(k, what) {
+    const f = failed(k);
+    return f ? '<p class="warn">' + e(what) + " could not be loaded (" + e(f) + ").</p>" : "";
+  };
+  const day = part("day");
+  const answers = (day && day.answers) || {};
+  const qByKey = {};
+  ((day && day.questions) || []).forEach(function(q) { qByKey[q.qkey] = q; });
+  const ans = function(k) { const q = qByKey[k]; return q ? venueAnswerText(q, answers[k]) : ""; };
+  const row = function(label, value) {
+    return value ? "<tr><th>" + e(label) + "</th><td>" + e(value) + "</td></tr>" : "";
+  };
+  const staffName = function(id) { const p = (staff || []).find(function(s) { return s.id === id; }); return p ? p.name : id; };
+
+  // Numbers: the portal's when the couple has given them, the diary's otherwise.
+  const n = part("numbers");
+  let numbers;
+  if (n && n.told_us) {
+    numbers = row("Seated adults", String(n.seated_adults || 0)) + row("Seated children", String(n.seated_children || 0)) +
+      row("Babies", String(n.seated_babies || 0)) + row("Seated in all", String(n.seated_total || 0)) +
+      row("Evening in all", String(n.evening_total || 0));
+  } else {
+    numbers = row("Adults (meal)", ev.mealGuests) + row("Children (meal)", ev.mealChildren) +
+      row("Babies (meal)", ev.mealBabies) + row("Evening guests", ev.eveGuests);
+    numbers = numbers ? numbers + '<tr><td colspan="2" class="muted">From the diary — the couple has not given numbers in their portal.</td></tr>'
+                      : '<tr><td colspan="2" class="muted">No numbers yet.</td></tr>';
+  }
+
+  const ceremonyTime = (day && day.ceremony_time) || (part("timeline") && part("timeline").ceremony_time) || "";
+  const ceremony = row("Kind", ans("ceremony_type")) + row("Time", ceremonyTime ? hhmm(ceremonyTime) : ans("ceremony_time")) +
+    row("Conducted by", ans("officiant_name")) + row("Their contact", ans("officiant_contact")) +
+    row("Registrars arrive", ans("registrar_arrival")) + row("Where", ans("ceremony_location")) +
+    row("If it rains", ans("wet_weather_location")) + row("Guests arrive", ev.guestArrivalTime) +
+    row("Diary note", ev.ceremony);
+
+  const contacts = ((day && day.contacts) || []).map(function(c) {
+    return "<tr><th>" + e(c.name) + (c.role ? ' <span class="muted">' + e(c.role) + "</span>" : "") + "</th><td>" +
+      e(c.phone || "") + (c.note ? ' <span class="muted">' + e(c.note) + "</span>" : "") + "</td></tr>";
+  }).join("");
+
+  // Timeline: the couple's blocks with the venue's fixed points, by day.
+  const tl = part("timeline");
+  let timeline = "";
+  if (tl) {
+    (tl.days || []).forEach(function(dd) {
+      const blocks = (tl.blocks || []).filter(function(b) { return b.day_key === dd.day_key; });
+      const fixed = (dd.fixed || []).filter(function(f) { return f && f.time; });
+      const rows = blocks.map(function(b) {
+        const prompts = String(b.prompts || "").split("\n").map(function(q) { return q.trim(); }).filter(Boolean);
+        const said = Array.isArray(b.answers) ? b.answers : [];
+        const qa = prompts.map(function(q, i) { return said[i] ? e(q) + " " + e(said[i]) : ""; }).filter(Boolean).join("<br>");
+        return { at: b.start_time, html: e(b.title) + (b.supplier_name ? " — " + e(b.supplier_name) : "") +
+          (b.duration_min ? ' <span class="muted">' + e(b.duration_min) + " min</span>" : "") +
+          (b.notes ? '<div class="muted">' + e(b.notes) + "</div>" : "") + (qa ? '<div class="qa">' + qa + "</div>" : "") };
+      }).concat(fixed.map(function(f) { return { at: f.time, html: '<span class="muted">' + e(f.title) + "</span>" }; }))
+        .sort(function(a, b) { return dayOrder(a.at) - dayOrder(b.at); });
+      if (!rows.length) return;
+      timeline += "<h3>" + e(dd.label) + "</h3><table class=\"tl\">" + rows.map(function(r) {
+        return '<tr><th class="t">' + e(hhmm(r.at)) + "</th><td>" + r.html + "</td></tr>";
+      }).join("") + "</table>";
+    });
+    if (!timeline) timeline = '<p class="muted">No timeline yet.</p>';
+  }
+
+  // Drinks: what was ordered, from the one place the arithmetic lives.
+  const dr = part("drinks");
+  let drinks = "";
+  if (dr) {
+    const o = dr.order || {};
+    const sm = dr.summary || {};
+    const ROUTE = { classic: "Classic drinks package", corkage: "Bring your own (corkage)", bespoke: "Bespoke" };
+    drinks += row("Route", o.route ? (ROUTE[o.route] || o.route) : "Not chosen yet");
+    drinks += (sm.invoice_lines || []).map(function(l) { return "<tr><th></th><td>" + e(l.desc) + "</td></tr>"; }).join("");
+    drinks += row("Soft drinks", o.soft_choice) + row("Their notes", o.notes) + row("Bespoke", o.bespoke_note);
+    if (o.pay_bar) drinks += row("Pay bar", "Yes" + (o.bar_usage ? " — expect " + (BAR_USAGE_LABEL[o.bar_usage] || o.bar_usage) + " use" : ""));
+    if (Number(o.bar_paid_amount) > 0) drinks += row("Money behind the bar", fmtMoney(Number(o.bar_paid_amount)) + " paid");
+    if (o.bar_rules) drinks += row("Bar rules", o.bar_rules);
+  }
+
+  const fd = part("food");
+  const food = fd && fd.choice ? row("Package", fd.choice.package_name) + row("Numbers", fd.choice.numbers ? String(fd.choice.numbers) : "") +
+    row("Served at", fd.choice.serve_time ? hhmm(fd.choice.serve_time) : "") + row("Dietary (their note)", fd.choice.dietary) +
+    row("Notes", fd.choice.notes) : (fd ? '<tr><td colspan="2" class="muted">No food chosen in the portal.</td></tr>' : "");
+
+  const g = part("guests");
+  let dietary = "";
+  if (g) {
+    const needs = (g.guests || []).filter(function(x) { return x.access_needs && String(x.access_needs).trim(); });
+    dietary = needs.length ? needs.map(function(x) {
+      return "<tr><th>" + e([x.first_name, x.last_name].filter(Boolean).join(" ")) + (x.table_label ? ' <span class="muted">' + e(x.table_label) + "</span>" : "") +
+        "</th><td>" + e(x.access_needs) + "</td></tr>";
+    }).join("") : '<tr><td colspan="2" class="muted">No guest has a dietary or access note.</td></tr>';
+    const roles = (g.guests || []).filter(function(x) { return x.role; });
+    if (roles.length) {
+      dietary += '<tr><td colspan="2"><b>Wedding party:</b> ' + roles.map(function(x) {
+        return e([x.first_name, x.last_name].filter(Boolean).join(" ")) + " (" + e(x.role) + ")";
+      }).join(", ") + "</td></tr>";
+    }
+  } else if (failed("guests") === "not_admin") {
+    dietary = '<tr><td colspan="2" class="muted">Guest dietary notes are only shown to an admin login.</td></tr>';
+  }
+
+  const sp = part("suppliers");
+  const suppliers = sp ? ((sp.chosen || []).length ? (sp.chosen || []).map(function(s) {
+    return "<tr><th>" + e((sp.categories || {})[s.category] || s.category || "") + "</th><td><b>" + e(s.name) + "</b> " +
+      e([s.contact_name, s.phone].filter(Boolean).join(" · ")) + (s.notes ? ' <span class="muted">' + e(s.notes) + "</span>" : "") + "</td></tr>";
+  }).join("") : '<tr><td colspan="2" class="muted">None chosen in the portal.</td></tr>') : "";
+
+  // Rota from the event record.
+  const shifts = ev.staffShifts || {};
+  const rotaRows = [["Friday set-up", ev.setup || []]].concat(STAFFING_FIELDS.map(function(k) { return [STAFFING_LABELS[k], ev[k] || []]; }))
+    .filter(function(r) { return r[1].length; })
+    .map(function(r) {
+      return "<tr><th>" + e(r[0]) + "</th><td>" + r[1].map(function(id) {
+        const sh = shifts[id] || {};
+        return e(staffName(id)) + (sh.start || sh.end ? ' <span class="muted">' + e((sh.start || "?") + "–" + (sh.end || "?")) + "</span>" : "");
+      }).join(", ") + "</td></tr>";
+    }).join("");
+
+  // What they are bringing, as a checklist to tick on the way in and out.
+  const it = part("items");
+  const slot = [ans("dropoff_date"), ans("dropoff_time")].filter(Boolean).join(", ");
+  const coll = [ans("collect_date"), ans("collect_time")].filter(Boolean).join(", ");
+  let items = "";
+  if (it) {
+    items = (slot || coll ? '<p>' + (slot ? "<b>Dropping off:</b> " + e(slot) + "&nbsp;&nbsp; " : "") + (coll ? "<b>Collecting:</b> " + e(coll) : "") + "</p>" : "") +
+      ((it.items || []).length ? '<table class="check"><tr><th>Item</th><th>Goes home with</th><th class="box">In</th><th class="box">Out</th></tr>' +
+        (it.items || []).map(function(x) {
+          return "<tr><td>" + e(x.name) + (x.qty > 1 ? " × " + e(x.qty) : "") + (x.notes ? ' <span class="muted">' + e(x.notes) + "</span>" : "") +
+            "</td><td>" + e(x.take_home_by || "") + '</td><td class="box">' + (x.received_at ? "✓" : "☐") + '</td><td class="box">' + (x.collected_at ? "✓" : "☐") + "</td></tr>";
+        }).join("") + "</table>"
+      : '<p class="muted">Nothing listed.</p>');
+  }
+
+  // Anything else they told us on the venue form, not already shown above.
+  const SHOWN = { ceremony_type:1, ceremony_time:1, officiant_name:1, officiant_contact:1, registrar_arrival:1, ceremony_location:1,
+                  wet_weather_location:1, dropoff_date:1, dropoff_time:1, collect_date:1, collect_time:1 };
+  const otherAnswers = venueFormAnswered(day).map(function(s) {
+    return s.rows.filter(function(r) { return !SHOWN[r.qkey]; }).map(function(r) { return row(r.label, r.text); }).join("");
+  }).join("");
+  const notes = row("Internal notes", ev.notes) + row("Non-standard / extras", ev.nonStandard) + row("Pets", ev.pets) + otherAnswers;
+
+  const dateLine = fmtWeekdayLong(ev.date) + (ev.endDate && ev.endDate > ev.date ? " to " + fmtWeekdayLong(ev.endDate) : "");
+  const section = function(title, body, k, what) {
+    const warn = k ? unavailable(k, what) : "";
+    if (!body && !warn) return "";
+    return '<section><h2>' + e(title) + "</h2>" + warn + (body ? (body.indexOf("<tr") === 0 ? "<table>" + body + "</table>" : body) : "") + "</section>";
+  };
+
+  return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Function sheet — " + e(ev.couple || "") + "</title><style>" +
+    "body{font:12px/1.45 -apple-system,'Segoe UI',Arial,sans-serif;color:#1f2937;margin:18px 24px}" +
+    "h1{font-size:20px;margin:0}h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#334155;border-bottom:1.5px solid #cbd5e1;padding-bottom:3px;margin:14px 0 6px}" +
+    "h3{font-size:12px;margin:8px 0 3px}.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;border-bottom:2px solid #334155;padding-bottom:8px}" +
+    ".muted{color:#6b7280}.warn{color:#b45309;margin:2px 0}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:2px 6px 2px 0}" +
+    "th{width:30%;font-weight:600}.tl th.t{width:46px}.qa{color:#374151;font-size:11px;margin-top:1px}" +
+    ".check th,.check td{border-bottom:1px solid #e5e7eb;padding:3px 6px}.check th{width:auto}.box{width:34px;text-align:center}" +
+    ".cols{display:grid;grid-template-columns:1fr 1fr;gap:0 24px}section{break-inside:avoid}" +
+    ".bar{margin:10px 0}.bar button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid #94a3b8;background:#f8fafc;cursor:pointer}" +
+    "@media print{.bar{display:none}body{margin:0}}" +
+    "</style></head><body>" +
+    '<div class="bar"><button onclick="window.print()">Print</button></div>' +
+    '<div class="top"><div><h1>' + e(ev.couple || "Event") + "</h1><div>" + e(eventTypeLabel(ev)) + " · " + e(dateLine) + "</div></div>" +
+    '<div class="muted" style="text-align:right">Ref ' + e(ev.id) + " · " + e(ev.status || "") + "<br>Printed " + e(printedAt || "") + "</div></div>" +
+    '<div class="cols"><div>' +
+      section("Numbers", numbers, "numbers", "Portal numbers") +
+      section("Ceremony", ceremony, "day", "The venue form") +
+      section("Key contacts on the day", contacts || '<tr><td colspan="2" class="muted">None given.</td></tr>') +
+      section("Rota", rotaRows || '<tr><td colspan="2" class="muted">Nobody on the rota yet.</td></tr>') +
+      section("Suppliers", suppliers, "suppliers", "Suppliers") +
+    "</div><div>" +
+      section("Drinks", drinks, "drinks", "Drinks") +
+      section("Food", food, "food", "Food") +
+      section("Dietary and access needs", dietary, failed("guests") === "not_admin" ? null : "guests", "The guest list") +
+      section("Notes", notes) +
+    "</div></div>" +
+    section("Timeline", timeline, "timeline", "The timeline") +
+    section("Dropped off — clear-up checklist", items, "items", "Their list of things to bring") +
+    "</body></html>";
+}
+
+const FUNCTION_SHEET_CALLS = {
+  numbers: "wp_admin_numbers", timeline: "wp_admin_event_timeline", drinks: "wp_admin_drinks", food: "wp_admin_food",
+  suppliers: "wp_admin_event_suppliers", day: "wp_admin_day_details", items: "wp_admin_items", guests: "wp_admin_guests"
+};
+// Opens the window inside the click (a window opened after an await is
+// blocked as a pop-up), then fills it once everything has loaded.
+async function openFunctionSheet(ev, staff) {
+  const w = window.open("", "_blank");
+  if (!w) { alert("The browser blocked the function sheet. Allow pop-ups for this site and try again."); return; }
+  w.document.write("<p style=\"font-family:sans-serif;padding:20px\">Putting the function sheet together…</p>");
+  const data = {};
+  if (ev && ev.id != null) {
+    const keys = Object.keys(FUNCTION_SHEET_CALLS);
+    const res = await Promise.allSettled(keys.map(function(k) { return sbRpcQuiet(FUNCTION_SHEET_CALLS[k], { p_event_id: Number(ev.id) }); }));
+    keys.forEach(function(k, i) {
+      data[k] = res[i].status === "fulfilled" ? (res[i].value || {}) : { __error: (res[i].reason && (res[i].reason.code || res[i].reason.message)) || "failed" };
+    });
+  }
+  const printed = new Date().toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  try {
+    w.document.open();
+    w.document.write(functionSheetHtml(ev, data, staff, printed));
+    w.document.close();
+  } catch (e) {
+    // The window was closed while it loaded. Nothing to do.
+  }
 }
 
 // Seated and evening totals for every event from the portal, for the events
@@ -13870,6 +14406,174 @@ function BarTakeSuggestion({ eventDate, value, onApply }) {
   );
 }
 
+// The event's refundable damage deposit. Blank or 0 means none, which is the
+// usual case. Kept out of the invoices: it is collected and returned on its
+// own, and it appears on the couple's statement as "refundable".
+function DamageDepositSection({ formData, update }) {
+  const dd = damageDepositInfo(formData);
+  const dueHint = (function() {
+    if (!isValidEventDate(formData.date)) return "";
+    const d = addDaysIso(formData.date, -28);
+    return d ? "Due with the final balance, " + fmtDateLong(d) + "." : "";
+  })();
+  const sel = { width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" };
+  return (
+    <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
+      <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:4 }}>Damage deposit</div>
+      <div style={{ fontSize:12, color:T.textLight, marginBottom:12, lineHeight:1.5 }}>
+        Refundable, so not part of the price or the invoices. Leave blank for none. {dd.amount > 0 ? dueHint : ""}
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 200px), 1fr))", gap:"14px 22px" }}>
+        <div>
+          <FLabel>Amount (£)</FLabel>
+          <FInput type="number" value={formData.damageDeposit||""} onChange={v=>update("damageDeposit",v)} placeholder="0"/>
+        </div>
+        {dd.amount > 0 && (
+          <div>
+            <FLabel>Where it stands</FLabel>
+            <select value={formData.damageDepositState||""} onChange={e=>update("damageDepositState", e.target.value)} style={sel}>
+              {DAMAGE_DEPOSIT_STATES.map(function(s){ return <option key={s.id} value={s.id}>{s.label}</option>; })}
+            </select>
+          </div>
+        )}
+        {dd.amount > 0 && dd.state === "part" && (
+          <div>
+            <FLabel>Amount kept (£)</FLabel>
+            <FInput type="number" value={formData.damageDepositKept||""} onChange={v=>update("damageDepositKept",v)}/>
+          </div>
+        )}
+        {dd.amount > 0 && (dd.state === "part" || dd.state === "kept") && (
+          <div style={{ gridColumn:"1 / -1" }}>
+            <FLabel>Why it was kept</FLabel>
+            <FInput type="text" value={formData.damageDepositNote||""} onChange={v=>update("damageDepositNote",v)} placeholder="What was damaged, and the cost"/>
+          </div>
+        )}
+      </div>
+      {dd.amount > 0 && dd.state !== "" && (
+        <div style={{ fontSize:12, color:T.textMid, marginTop:8 }}>
+          {dd.held ? "Holding " + fmtMoney(dd.amount) + " — to go back after the event."
+           : dd.state === "refunded" ? fmtMoney(dd.amount) + " refunded."
+           : dd.state === "part" ? fmtMoney(dd.kept) + " kept, " + fmtMoney(dd.refund) + " refunded."
+           : fmtMoney(dd.kept) + " kept."}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The event's price split by VAT category. Automatic from the diary and the
+// portal, with adjustment lines (inc VAT, either sign) to move money between
+// categories. Adjustments save with the event like any other field.
+function EventVatSplitPanel({ formData, update, accomBookings }) {
+  const [portal, setPortal] = useState({ drinks: null, food: null, addons: null });
+  const [open, setOpen] = useState(false);
+  const eventId = formData.id != null ? Number(formData.id) : null;
+
+  useEffect(function() {
+    if (eventId == null) return;
+    let off = false;
+    const calls = [["drinks", "wp_admin_drinks"], ["food", "wp_admin_food"], ["addons", "wp_admin_addon_requests"]];
+    Promise.allSettled(calls.map(function(c){ return sbRpcQuiet(c[1], { p_event_id: eventId }); })).then(function(res) {
+      if (off) return;
+      const next = {};
+      calls.forEach(function(c, i){ next[c[0]] = res[i].status === "fulfilled" ? (res[i].value || {}) : null; });
+      setPortal(next);
+    });
+    return function(){ off = true; };
+  }, [eventId]);
+
+  const split = eventVatSplit(formData, accomBookings || [], portal);
+  const adj = Array.isArray(formData.vatAdjustments) ? formData.vatAdjustments : [];
+  function setAdj(list) { update("vatAdjustments", list); }
+  function changeAdj(id, field, value) {
+    setAdj(adj.map(function(a){ return a.id === id ? Object.assign({}, a, { [field]: value }) : a; }));
+  }
+  const cell = { padding:"5px 8px", fontSize:13, textAlign:"right", whiteSpace:"nowrap" };
+  const head = Object.assign({}, cell, { fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase" });
+  const small = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 8px", outline:"none", minWidth:0 };
+
+  return (
+    <div style={{ borderTop:`2px solid ${T.border}`, paddingTop:16 }}>
+      <div style={{ display:"flex", alignItems:"baseline", gap:10, flexWrap:"wrap", marginBottom:4 }}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Price by VAT category</div>
+        <button type="button" onClick={function(){ setOpen(!open); }} style={{ background:"none", border:"none", color:T.accent, cursor:"pointer", fontSize:12, fontFamily:"inherit", padding:0 }}>
+          {open ? "Hide the lines" : "Show the lines"}
+        </button>
+      </div>
+      <div style={{ fontSize:12, color:T.textLight, marginBottom:10, lineHeight:1.5 }}>
+        Worked out from the venue fee, linked accommodation and the client portal (drinks, food, confirmed extras). VAT is calculated from inc-VAT figures at standard rates — add an adjustment to move a line.
+        {split.missing.length > 0 && <span style={{ color:T.amber }}> Could not load the portal's {split.missing.join(", ")}, so {split.missing.length === 1 ? "it is" : "they are"} not included.</span>}
+      </div>
+      <div style={{ overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:440 }}>
+          <thead>
+            <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+              <th style={Object.assign({}, head, { textAlign:"left" })}>Category</th>
+              <th style={head}>Inc VAT</th><th style={head}>VAT</th><th style={head}>Ex VAT</th>
+            </tr>
+          </thead>
+          <tbody>
+            {split.cats.map(function(c) {
+              if (!c.inc && !c.items.length) return null;
+              return (
+                <Fragment key={c.id}>
+                  <tr style={{ borderBottom:`1px solid ${T.border}55` }}>
+                    <td style={Object.assign({}, cell, { textAlign:"left", fontWeight:600, color:T.text })}>
+                      {c.label} <span style={{ fontWeight:400, color:T.textLight, fontSize:11 }}>{c.rate ? c.rate + "%" : "no VAT"}</span>
+                    </td>
+                    <td style={cell}>{fmtMoney(c.inc)}</td><td style={cell}>{fmtMoney(c.vat)}</td><td style={cell}>{fmtMoney(c.ex)}</td>
+                  </tr>
+                  {open && c.items.map(function(i, k) {
+                    return (
+                      <tr key={k} style={{ color:T.textMid }}>
+                        <td style={Object.assign({}, cell, { textAlign:"left", paddingLeft:22, fontSize:12, whiteSpace:"normal" })}>
+                          {i.desc}{i.how === "adjust" ? <span style={{ color:T.amber }}> · adjustment</span> : null}{i.rate !== c.rate ? <span style={{ color:T.textLight }}> · {i.rate}%</span> : null}
+                        </td>
+                        <td style={Object.assign({}, cell, { fontSize:12 })}>{fmtMoney(i.inc)}</td>
+                        <td style={Object.assign({}, cell, { fontSize:12 })}>{fmtMoney(i.vat)}</td>
+                        <td style={Object.assign({}, cell, { fontSize:12 })}>{fmtMoney(round2(i.inc - i.vat))}</td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
+            <tr style={{ borderTop:`2px solid ${T.border}` }}>
+              <td style={Object.assign({}, cell, { textAlign:"left", fontWeight:700 })}>Total</td>
+              <td style={Object.assign({}, cell, { fontWeight:700 })}>{fmtMoney(split.inc)}</td>
+              <td style={Object.assign({}, cell, { fontWeight:700 })}>{fmtMoney(split.vat)}</td>
+              <td style={Object.assign({}, cell, { fontWeight:700 })}>{fmtMoney(split.ex)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop:12 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:T.textMid, marginBottom:6 }}>Adjustments <span style={{ fontWeight:400, color:T.textLight }}>· inc VAT; use a minus to take money out of a category</span></div>
+        {adj.map(function(a) {
+          return (
+            <div key={a.id} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:6, flexWrap:"wrap" }}>
+              <select value={a.category || "venue"} onChange={function(e){ changeAdj(a.id, "category", e.target.value); }} style={Object.assign({}, small, { flex:"0 0 170px" })}>
+                {VAT_CATEGORIES.map(function(c){ return <option key={c.id} value={c.id}>{c.label}</option>; })}
+              </select>
+              <input type="number" step="0.01" value={a.amount == null ? "" : a.amount} placeholder="£"
+                onChange={function(e){ changeAdj(a.id, "amount", e.target.value); }} style={Object.assign({}, small, { flex:"0 0 100px", width:100 })}/>
+              <input type="text" value={a.note || ""} placeholder="What it is"
+                onChange={function(e){ changeAdj(a.id, "note", e.target.value); }} style={Object.assign({}, small, { flex:"1 1 160px" })}/>
+              <button type="button" onClick={function(){ setAdj(adj.filter(function(x){ return x.id !== a.id; })); }}
+                style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Remove</button>
+            </div>
+          );
+        })}
+        <button type="button" onClick={function(){ setAdj(adj.concat([{ id: "adj_" + Date.now(), category: "venue", amount: "", note: "" }])); }}
+          style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.textMid, cursor:"pointer", fontSize:12, fontFamily:"inherit", padding:"5px 12px" }}>
+          + Add adjustment
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Read-only preview of the three computed invoice stages, shown on the
 // Financials tab in place of the old manual 2nd/Final payment inputs.
 function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveInvoiceRecords }) {
@@ -14638,6 +15342,9 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                 <LinkedAccomPanel eventDate={formData.date} eventEndDate={formData.endDate} eventId={formData.id} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onSaveAccomBooking={onSaveAccomBooking} onOpenAccomBooking={onOpenAccomBooking}
                   onAddAccom={onAddAccom ? function(){ onAddAccom(formData); } : null}/>
               </div>
+
+              <DamageDepositSection formData={formData} update={update}/>
+              <EventVatSplitPanel formData={formData} update={update} accomBookings={accomBookings}/>
 
               {/* Payment notes */}
               <div>

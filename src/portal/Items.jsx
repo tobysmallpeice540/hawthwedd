@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { rpc } from './supabase.js'
+import { rpc, isMissingFunction } from './supabase.js'
 
 // The things a client is bringing to the venue — signs, favours, the cake
 // knife. Staff tick each one off as it arrives and again as it goes home, so
@@ -35,6 +35,7 @@ export default function Items() {
 
   return (
     <>
+      <DropOffSlot />
       <section className="card">
         <div className="list-head">
           <div>
@@ -172,6 +173,80 @@ function ItemForm({ item, startName, onDone, onCancel }) {
       <div className="actions">
         <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Saving…' : (item ? 'Save' : 'Add')}</button>
         <button className="btn-small ghost" type="button" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  )
+}
+
+// When it all arrives and when it goes home. Stored as venue-form answers
+// (dropoff_date, dropoff_time, collect_date, collect_time) so they sit with
+// everything else the couple tells us and reach the function sheet; saving
+// here sends only these four, and the form merges them in.
+const SLOT_KEYS = ['dropoff_date', 'dropoff_time', 'collect_date', 'collect_time']
+
+function DropOffSlot() {
+  const [vals, setVals] = useState(null)
+  const [state, setState] = useState('loading')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+
+  async function load() {
+    try {
+      const d = await rpc('wp_get_venue_form')
+      const keys = new Set((d.questions || []).map((q) => q.qkey))
+      // The questions arrive with a migration; until then there is nowhere to
+      // keep the answers, so say nothing rather than offer a box that drops them.
+      if (!SLOT_KEYS.every((k) => keys.has(k))) { setState('absent'); return }
+      const a = d.answers || {}
+      setVals(Object.fromEntries(SLOT_KEYS.map((k) => [k, a[k] || ''])))
+      setState('ready')
+    } catch (e) {
+      setState(isMissingFunction(e) ? 'absent' : 'quiet')
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  if (state !== 'ready') return null
+
+  function set(k, v) { setVals((p) => ({ ...p, [k]: v })); setMsg('') }
+  async function save(e) {
+    e.preventDefault()
+    setBusy(true); setErr(''); setMsg('')
+    try { await rpc('wp_save_venue_form', { p_answers: vals }); setMsg('Saved. Thank you.') }
+    catch (e2) { setErr(e2.message || String(e2)) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <form className="card" onSubmit={save}>
+      <h3 style={{ marginBottom: 4 }}>Dropping off and collecting</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Tell us roughly when you will bring everything in, and when it will be collected,
+        so somebody is here to meet you.
+      </p>
+      <div className="namegrid" style={{ marginTop: 12 }}>
+        <div>
+          <label htmlFor="drop-d">Dropping off</label>
+          <input id="drop-d" type="date" value={vals.dropoff_date} onChange={(e) => set('dropoff_date', e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="drop-t">Roughly what time</label>
+          <input id="drop-t" type="time" value={vals.dropoff_time} onChange={(e) => set('dropoff_time', e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="coll-d">Collecting</label>
+          <input id="coll-d" type="date" value={vals.collect_date} onChange={(e) => set('collect_date', e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="coll-t">Roughly what time</label>
+          <input id="coll-t" type="time" value={vals.collect_time} onChange={(e) => set('collect_time', e.target.value)} />
+        </div>
+      </div>
+      {err && <div className="alert alert-warn">{err}</div>}
+      {msg && <div className="alert alert-ok">{msg}</div>}
+      <div className="actions">
+        <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
       </div>
     </form>
   )

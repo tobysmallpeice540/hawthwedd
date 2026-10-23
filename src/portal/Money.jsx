@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { rpc } from './supabase.js'
+import { rpc, isMissingFunction } from './supabase.js'
 
 // The figures here are a copy of what Xero held when we last looked, so they can
 // be a little behind. Two things follow from that, and both are deliberate:
@@ -27,9 +27,15 @@ export default function Money() {
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
 
+  const [plan, setPlan] = useState(null)
+
   async function load() {
     try { setData(await rpc('wp_my_invoices')); setState('ready') }
     catch (e) { setError(e.message || String(e)); setState('error') }
+    // The payments still to come. Optional: if it will not load, the invoices
+    // above still stand on their own, so it is simply left out.
+    try { setPlan(await rpc('wp_my_statement')) }
+    catch (e) { if (!isMissingFunction(e)) console.warn('statement: ' + (e.message || e)); setPlan(null) }
   }
   useEffect(() => { load() }, [])
 
@@ -61,7 +67,9 @@ export default function Money() {
             <div className="hero" style={{ marginTop: 6 }}>
               <div className="couple" style={{ fontSize: 32 }}>{money(outstanding)}</div>
               <div className="when" style={{ color: outstanding > 0 ? undefined : 'var(--go)' }}>
-                {outstanding > 0 ? 'still to pay' : 'nothing outstanding — thank you'}
+                {outstanding > 0 ? 'still to pay'
+                  : plan && (plan.schedule || []).length ? 'nothing due right now — thank you'
+                  : 'nothing outstanding — thank you'}
               </div>
             </div>
             {overdue.length > 0 && (
@@ -84,6 +92,8 @@ export default function Money() {
           </div>
         </section>
       )}
+
+      {plan && (plan.schedule || []).length > 0 && <ToCome plan={plan} />}
 
       <section className="card">
         <h3>A note on timing</h3>
@@ -140,6 +150,64 @@ function Invoice({ inv }) {
         </a>
       ) : (
         <span className="doc-meta">Link coming</span>
+      )}
+    </div>
+  )
+}
+
+// What is still to come, as the venue's diary has it today. Everything here is
+// provisional: the second and final invoices move with your numbers and with
+// anything added along the way, so the invoice itself is the figure to pay.
+function ToCome({ plan }) {
+  const rows = plan.schedule || []
+  const total = rows.filter((r) => !r.refundable).reduce((a, r) => a + Number(r.amount || 0), 0)
+  return (
+    <section className="card">
+      <h3>Payments to come</h3>
+      <p className="muted" style={{ fontSize: 14 }}>
+        A guide to what is still to be invoiced, as things stand today. These figures
+        are <strong>provisional</strong> — they are subject to your final numbers and
+        to any additions, and will change if those do. Please pay from the invoice
+        when it arrives rather than from this list.
+      </p>
+      <div className="docs" style={{ marginTop: 10 }}>
+        {rows.map((r, i) => <PlanRow key={i} r={r} />)}
+      </div>
+      {rows.filter((r) => !r.refundable).length > 1 && (
+        <p className="muted" style={{ fontSize: 13, marginTop: 10 }}>
+          Still to be invoiced, provisionally: <strong>{money(total)}</strong>
+        </p>
+      )}
+    </section>
+  )
+}
+
+function PlanRow({ r }) {
+  const [open, setOpen] = useState(false)
+  const lines = r.lines || []
+  return (
+    <div className="doc" style={{ flexWrap: 'wrap' }}>
+      <div className="doc-main">
+        <div className="doc-name">
+          {r.label}
+          <span className="chip" style={{ marginLeft: 8 }}>{r.refundable ? 'Refundable' : 'Provisional'}</span>
+        </div>
+        <div className="doc-meta">
+          {money(r.amount)}
+          {r.due_on && <> · {r.refundable ? 'due by around ' : 'invoiced around '}{fmtDate(r.due_on)}</>}
+        </div>
+      </div>
+      {lines.length > 0 && (
+        <button type="button" className="btn-small ghost" onClick={() => setOpen(!open)}>{open ? 'Hide' : 'What it is'}</button>
+      )}
+      {open && (
+        <div style={{ flexBasis: '100%', fontSize: 13, marginTop: 6 }}>
+          {lines.map((l, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '2px 0' }}>
+              <span className="muted">{l.desc}</span><span>{money(l.amount)}</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )
