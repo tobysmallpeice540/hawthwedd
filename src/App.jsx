@@ -10709,9 +10709,17 @@ function usePortalNumbers() {
   const [nums, setNums] = useState(portalNumbersCache);
   useEffect(function(){
     let off = false;
-    sbRpc("wp_admin_all_numbers", {})
-      .then(function(r){ portalNumbersCache = (r && r.numbers) || {}; if (!off) setNums(portalNumbersCache); })
-      .catch(function(){ /* old database: the diary's own numbers still show */ });
+    // Called directly rather than through sbRpc: this read is optional (the
+    // diary's own numbers show without it), so a failure must not raise the
+    // red data-failure banner across the whole app. It is still logged.
+    fetch(`${SUPABASE_URL}/rest/v1/rpc/wp_admin_all_numbers`, {
+      method: "POST", headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }), body: "{}"
+    }).then(function(res){
+      return res.ok ? res.json() : res.text().then(function(t){ throw new Error(res.status + " " + t.slice(0, 120)); });
+    }).then(function(r){
+      if (!r || r.ok === false) throw new Error((r && r.error) || "refused");
+      portalNumbersCache = r.numbers || {}; if (!off) setNums(portalNumbersCache);
+    }).catch(function(e){ console.warn("Portal guest numbers unavailable; showing the diary's own:", e.message || e); });
     return function(){ off = true; };
   }, []);
   return nums;
