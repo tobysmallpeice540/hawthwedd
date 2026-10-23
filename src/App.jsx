@@ -11520,6 +11520,7 @@ const BAR_TABS = [
 const REPORT_TYPES = [
   {id:"summary",label:"Annual Summary"},{id:"accommodation",label:"Accommodation"},
   {id:"staffing",label:"Rota Overview"},{id:"timeline",label:"Event Rota"},{id:"hours",label:"Hours Worked"},
+  {id:"funnel",label:"Sales Funnel"},{id:"cashflow",label:"Cashflow Forecast"},
 ];
 const HIDDEN_REPORT_TYPES = ["calendar"];
 // The pages under Settings in the sidebar.
@@ -11543,7 +11544,7 @@ function buildSidebarNav(o) {
   // pressed (o.origin, kept by SidebarLayout), so the highlight does not jump
   // to another part of the menu after a click.
   const onLetCal = view === "lettings" && o.tabs.lettings === "calendar";
-  const onEvCal  = view === "reports" && reportOn === "calendar";
+  const onEvCal  = view === "reports" && o.reportType === "calendar";
   const calOn    = o.origin === "calendar" && (onLetCal || onEvCal);
   const evCalOn  = o.origin === "events" && onEvCal;
   function openEventsCalendar() { o.setReportType("calendar"); setView("reports"); }
@@ -13202,6 +13203,23 @@ function countByEventType(list) {
 
 // What an enquiry is about. Deliberately plainer than EVENT_TYPES above, which
 // carries the peak/off-peak split that only matters once something is booked.
+// Enquiry reporting fields. "Heard about us" is where they first came across
+// us; "Source" is the channel the enquiry itself arrived through (the website
+// forms write "Website brochure request" / "Website viewing request" there),
+// so the two are kept apart rather than one field trying to answer both.
+const HEARD_ABOUT_OPTIONS = [
+  "Bridebook", "Hitched", "Google / web search", "Instagram", "Facebook", "TikTok", "Pinterest",
+  "Word of mouth", "Been a guest here", "Wedding fair / open day", "Local / passing by",
+  "Supplier recommendation", "Returning client", "Other",
+];
+const REASON_NOT_BOOKED_OPTIONS = [
+  "Chose another venue", "Price / budget", "Date not available", "Capacity — too big or too small",
+  "Location / too far", "Plans postponed or cancelled", "Stopped replying", "Other",
+];
+const ENQUIRY_SOURCE_SUGGESTIONS = [
+  "Website brochure request", "Website viewing request", "Email", "Phone", "Bridebook", "Hitched", "Instagram", "Walk-in",
+];
+
 const ENQUIRY_EVENT_TYPES = ["Wedding", "Party", "Celebration of Life", "Other"];
 
 const TEXT_FIELDS = [
@@ -14906,6 +14924,246 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
+// ─── SALES FUNNEL ────────────────────────────────────────────────────────────
+// Enquiries → viewings → bookings, by the month each enquiry arrived and by
+// where it came from. An enquiry's arrival date is the timestamp in its id
+// (enq_<ms>, every enquiry made since June 2026), else its first contact-log
+// date, else it is counted as undated rather than guessed.
+function enquiryReceivedDate(e) {
+  const m = /^enq_(\d{12,})$/.exec(String((e && e.id) || ""));
+  if (m) { const d = new Date(Number(m[1])); if (!isNaN(d)) return d.toISOString().slice(0, 10); }
+  const dates = ((e && e.contacts) || []).map(function(c) { return c && c.date; }).filter(isValidEventDate).sort();
+  return dates[0] || null;
+}
+function enquiryHadViewing(e) {
+  return ((e && e.viewings) || []).length > 0 || !!String((e && e.firstViewing) || "").trim();
+}
+function funnelBucketsKey(label) { return String(label || "").trim().toLowerCase(); }
+function funnelRows(list, keyFn, bookedIds) {
+  const groups = {}, order = [];
+  list.forEach(function(e) {
+    const raw = keyFn(e);
+    const k = funnelBucketsKey(raw) || "~";
+    if (!groups[k]) { groups[k] = { label: String(raw || "").trim() || "Not recorded", n:0, viewed:0, booked:0 }; order.push(k); }
+    const g = groups[k];
+    g.n++;
+    if (enquiryHadViewing(e)) g.viewed++;
+    if (bookedIds[e.id]) g.booked++;
+  });
+  return order.map(function(k) { return groups[k]; });
+}
+function pct(a, b) { return b ? Math.round((a / b) * 100) + "%" : "—"; }
+function FunnelTable({ title, rows, firstCol, note }) {
+  const max = Math.max.apply(null, [1].concat(rows.map(function(r) { return r.n; })));
+  const th = { textAlign:"right", padding:"9px 12px", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, whiteSpace:"nowrap" };
+  const td = { textAlign:"right", padding:"8px 12px", fontSize:13, color:T.text, borderTop:`1px solid ${T.border}`, fontVariantNumeric:"tabular-nums", whiteSpace:"nowrap" };
+  const tot = rows.reduce(function(a, r) { return { n:a.n + r.n, viewed:a.viewed + r.viewed, booked:a.booked + r.booked }; }, { n:0, viewed:0, booked:0 });
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", marginBottom:20, boxShadow:T.shadowCard }}>
+      <div style={{ padding:"14px 16px 6px", fontWeight:700, color:T.text, fontSize:14 }}>{title}</div>
+      {note && <div style={{ padding:"0 16px 8px", fontSize:12, color:T.textLight }}>{note}</div>}
+      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <thead><tr style={{ background:T.tint }}>
+          <th style={Object.assign({}, th, { textAlign:"left" })}>{firstCol}</th>
+          <th style={th}>Enquiries</th><th style={th}>Viewed</th><th style={th}>% viewed</th><th style={th}>Booked</th><th style={th}>% booked</th>
+          <th style={Object.assign({}, th, { width:"30%" })}></th>
+        </tr></thead>
+        <tbody>
+          {rows.map(function(r, i) {
+            return (
+              <tr key={i}>
+                <td style={Object.assign({}, td, { textAlign:"left", fontWeight:600 })}>{r.label}</td>
+                <td style={td}>{r.n}</td><td style={td}>{r.viewed}</td><td style={td}>{pct(r.viewed, r.n)}</td>
+                <td style={td}>{r.booked}</td><td style={td}>{pct(r.booked, r.n)}</td>
+                <td style={Object.assign({}, td, { textAlign:"left" })}>
+                  <div style={{ position:"relative", height:10, borderRadius:5, background:T.tint, width:(Math.max(4, (r.n / max) * 100)) + "%" }}>
+                    <div style={{ position:"absolute", left:0, top:0, bottom:0, borderRadius:5, background:T.accentMid, opacity:.55, width:pct(r.viewed, r.n) === "—" ? 0 : (r.viewed / r.n * 100) + "%" }}/>
+                    <div style={{ position:"absolute", left:0, top:0, bottom:0, borderRadius:5, background:T.accent, width:r.n ? (r.booked / r.n * 100) + "%" : 0 }}/>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+          <tr style={{ background:T.tintSoft }}>
+            <td style={Object.assign({}, td, { textAlign:"left", fontWeight:700 })}>Total</td>
+            <td style={Object.assign({}, td, { fontWeight:700 })}>{tot.n}</td><td style={Object.assign({}, td, { fontWeight:700 })}>{tot.viewed}</td>
+            <td style={Object.assign({}, td, { fontWeight:700 })}>{pct(tot.viewed, tot.n)}</td><td style={Object.assign({}, td, { fontWeight:700 })}>{tot.booked}</td>
+            <td style={Object.assign({}, td, { fontWeight:700 })}>{pct(tot.booked, tot.n)}</td><td style={td}></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function SalesFunnelReport({ enquiries, bookings }) {
+  const [period, setPeriod] = useState("12m");
+  const today = new Date().toISOString().slice(0, 10);
+  // Booked = marked Booked, or an event converted from it that is not cancelled.
+  const bookedIds = {};
+  (enquiries || []).forEach(function(e) { if (e && e.outcome === "booked") bookedIds[e.id] = true; });
+  (bookings || []).forEach(function(b) { if (b && b.fromEnquiryId && b.status !== "Cancelled") bookedIds[b.fromEnquiryId] = true; });
+  const dated = (enquiries || []).map(function(e) { return { e:e, d:enquiryReceivedDate(e) }; });
+  const years = Array.from(new Set(dated.filter(function(x) { return x.d; }).map(function(x) { return x.d.slice(0, 4); }))).sort().reverse();
+  const from12 = (function() { const d = new Date(); d.setMonth(d.getMonth() - 11, 1); return d.toISOString().slice(0, 7); })();
+  const inPeriod = dated.filter(function(x) {
+    if (period === "all") return true;
+    if (!x.d) return false;
+    if (period === "12m") return x.d.slice(0, 7) >= from12 && x.d <= today;
+    return x.d.slice(0, 4) === period;
+  });
+  const list = inPeriod.map(function(x) { return x.e; });
+  const byMonth = funnelRows(inPeriod.slice().sort(function(a, b) { return (a.d || "~") < (b.d || "~") ? -1 : 1; }).map(function(x) { return x.e; }),
+    function(e) { const d = enquiryReceivedDate(e); return d ? new Date(d + "T12:00:00").toLocaleDateString("en-GB", { month:"short", year:"numeric" }) : "Undated"; }, bookedIds);
+  const bySource = funnelRows(list, function(e) { return e.source; }, bookedIds).sort(function(a, b) { return b.n - a.n; });
+  const byHeard  = funnelRows(list, function(e) { return e.heardAbout; }, bookedIds).sort(function(a, b) { return b.n - a.n; });
+  const reasons = {};
+  list.forEach(function(e) { if (e.outcome === "didnotbook") { const r = e.reasonNotBooked || "No reason chosen"; reasons[r] = (reasons[r] || 0) + 1; } });
+  const undated = dated.filter(function(x) { return !x.d; }).length;
+  const pill = function(on) { return { background:on ? T.midBlue : "#fff", color:on ? "#fff" : T.textMid, border:`1.5px solid ${on ? T.midBlue : T.border}`, padding:"6px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:on ? 700 : 500 }; };
+  return (
+    <div>
+      <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:16 }}>
+        <button style={pill(period === "12m")} onClick={function(){ setPeriod("12m"); }}>Last 12 months</button>
+        {years.map(function(y) { return <button key={y} style={pill(period === y)} onClick={function(){ setPeriod(y); }}>{y}</button>; })}
+        <button style={pill(period === "all")} onClick={function(){ setPeriod("all"); }}>All time</button>
+      </div>
+      <FunnelTable title="By month the enquiry arrived" firstCol="Month" rows={byMonth}
+        note={"Viewed = a viewing is recorded on the enquiry. Booked = marked Booked, or converted to an event that is not cancelled." + (undated ? " " + undated + " older enquiries have no arrival date and only appear under All time." : "")}/>
+      <FunnelTable title="By source — how the enquiry reached us" firstCol="Source" rows={bySource}/>
+      <FunnelTable title="By where they heard about us" firstCol="Heard about us" rows={byHeard}
+        note="Filled in on each enquiry from now on; older enquiries show as Not recorded."/>
+      {Object.keys(reasons).length > 0 && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px", boxShadow:T.shadowCard }}>
+          <div style={{ fontWeight:700, color:T.text, fontSize:14, marginBottom:8 }}>Why they didn't book</div>
+          {Object.keys(reasons).sort(function(a, b) { return reasons[b] - reasons[a]; }).map(function(r) {
+            return <div key={r} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"5px 0", borderTop:`1px solid ${T.border}` }}><span>{r}</span><strong>{reasons[r]}</strong></div>;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CASHFLOW FORECAST ───────────────────────────────────────────────────────
+// Money expected in, by month, for the next twelve months.
+//   · Events: the invoice schedule the Xero push uses — deposit at booking,
+//     the 1 December invoice, the final invoice 28 days before — so the
+//     amounts here are the ones that will be invoiced. Confirmed and Holding
+//     are kept apart. A deposit is counted only for Holding events (a
+//     confirmed one has paid it), and a stage dated before this month is left
+//     out: it has been invoiced, and whether it is paid is in Xero, not here.
+//   · Lettings: each unpaid line of a booking's payment schedule, by its due
+//     date. Bookings billed through a linked event are skipped — they are on
+//     the event's invoices already — and unpaid lines already past due are
+//     shown as overdue rather than dropped.
+function cashflowForecast(bookings, accomBookings, accomFallback, todayIso) {
+  const today = todayIso || new Date().toISOString().slice(0, 10);
+  const startM = today.slice(0, 7);
+  const months = [];
+  const d0 = new Date(startM + "-01T12:00:00");
+  for (let i = 0; i < 12; i++) { const d = new Date(d0); d.setMonth(d0.getMonth() + i); months.push(d.toISOString().slice(0, 7)); }
+  const rows = {}; months.forEach(function(m) { rows[m] = { month:m, conf:0, hold:0, lets:0, items:[] }; });
+  const overdue = { lets:0, items:[] };
+  const lastM = months[months.length - 1];
+  (bookings || []).forEach(function(ev) {
+    if (!ev || ev.status === "Cancelled" || !isValidEventDate(ev.date)) return;
+    const holding = ev.status === "Holding";
+    computeEventInvoiceStages(ev, accomFallback || accomBookings).forEach(function(st) {
+      if (!(st.total > 0)) return;
+      let when = st.invoiceDate;
+      if (st.stage === 1) { if (!holding) return; when = today; }
+      if (!when) return;
+      const m = when.slice(0, 7);
+      if (m < startM || m > lastM) return;
+      const r = rows[m];
+      if (holding) r.hold += st.total; else r.conf += st.total;
+      r.items.push({ kind: holding ? "Holding event" : "Event", who: ev.couple || "(no name)", what: st.label, when: when, amount: st.total });
+    });
+  });
+  (accomBookings || []).forEach(function(b) {
+    if (!b || b.status === "cancelled" || b.linkedEventId) return;
+    (b.schedule || []).forEach(function(line) {
+      if (!line || line.paid) return;
+      const owed = round2((Number(line.amount) || 0) - (Number(line.paidAmount) || 0));
+      if (!(owed > 0) || !isValidEventDate(line.dueDate)) return;
+      const item = { kind:"Lettings", who: b.guestName || "(no name)", what: line.label || "Payment", when: line.dueDate, amount: owed };
+      if (line.dueDate < today) { overdue.lets += owed; overdue.items.push(item); return; }
+      const m = line.dueDate.slice(0, 7);
+      if (!rows[m]) return;
+      rows[m].lets += owed; rows[m].items.push(item);
+    });
+  });
+  return { months: months.map(function(m) { return rows[m]; }), overdue: overdue };
+}
+function CashflowReport({ bookings, accomBookings }) {
+  const [open, setOpen] = useState(null);
+  const f = cashflowForecast(bookings, accomBookings);
+  const totals = f.months.reduce(function(a, r) { return { conf:a.conf + r.conf, hold:a.hold + r.hold, lets:a.lets + r.lets }; }, { conf:0, hold:0, lets:0 });
+  const max = Math.max.apply(null, [1].concat(f.months.map(function(r) { return r.conf + r.hold + r.lets; })));
+  const th = { textAlign:"right", padding:"9px 12px", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, whiteSpace:"nowrap" };
+  const td = { textAlign:"right", padding:"8px 12px", fontSize:13, color:T.text, borderTop:`1px solid ${T.border}`, fontVariantNumeric:"tabular-nums", whiteSpace:"nowrap" };
+  const money = function(n) { return n ? fmtMoney(n) : "—"; };
+  return (
+    <div>
+      <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12.5, color:T.infoText, lineHeight:1.6 }}>
+        What is expected in, inc VAT. Events follow the invoice schedule (deposit at booking, 1 December, final 28 days before);
+        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Lettings are the unpaid lines of each booking's payment schedule.
+      </div>
+      {f.overdue.lets > 0 && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:13, color:"#92400e" }}>
+          <strong>{fmtMoney(f.overdue.lets)}</strong> of lettings payments are past their due date and not marked paid ({f.overdue.items.length} line{f.overdue.items.length !== 1 ? "s" : ""}).
+        </div>
+      )}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr style={{ background:T.tint }}>
+            <th style={Object.assign({}, th, { textAlign:"left" })}>Month</th>
+            <th style={th}>Events</th><th style={th}>Holding</th><th style={th}>Lettings</th><th style={th}>Total</th>
+            <th style={Object.assign({}, th, { width:"28%" })}></th>
+          </tr></thead>
+          <tbody>
+            {f.months.map(function(r) {
+              const tot = r.conf + r.hold + r.lets;
+              const isOpen = open === r.month;
+              return [
+                <tr key={r.month} onClick={function(){ setOpen(isOpen ? null : r.month); }} style={{ cursor: r.items.length ? "pointer" : "default" }} title={r.items.length ? "Show what makes this up" : ""}>
+                  <td style={Object.assign({}, td, { textAlign:"left", fontWeight:600 })}>{new Date(r.month + "-01T12:00:00").toLocaleDateString("en-GB", { month:"long", year:"numeric" })}{r.items.length ? <span style={{ color:T.textLight, fontWeight:400 }}> {isOpen ? "▾" : "▸"}</span> : null}</td>
+                  <td style={td}>{money(r.conf)}</td><td style={Object.assign({}, td, { color:T.textMid })}>{money(r.hold)}</td><td style={td}>{money(r.lets)}</td>
+                  <td style={Object.assign({}, td, { fontWeight:700 })}>{money(tot)}</td>
+                  <td style={Object.assign({}, td, { textAlign:"left" })}>
+                    <div style={{ display:"flex", height:10, borderRadius:5, overflow:"hidden", background:T.tint, width:(tot / max * 100) + "%", minWidth: tot ? 4 : 0 }}>
+                      <div style={{ background:T.accent, width:(tot ? r.conf / tot * 100 : 0) + "%" }}/>
+                      <div style={{ background:T.brass || T.amber, width:(tot ? r.hold / tot * 100 : 0) + "%" }}/>
+                      <div style={{ background:T.accentMid, opacity:.6, width:(tot ? r.lets / tot * 100 : 0) + "%" }}/>
+                    </div>
+                  </td>
+                </tr>,
+                isOpen && (
+                  <tr key={r.month + "-x"}><td colSpan={6} style={{ padding:"4px 12px 12px", background:T.tintSoft }}>
+                    {r.items.slice().sort(function(a, b) { return a.when < b.when ? -1 : 1; }).map(function(it, i) {
+                      return <div key={i} style={{ display:"flex", gap:12, fontSize:12.5, padding:"4px 0", borderTop: i ? `1px solid ${T.border}` : "none" }}>
+                        <span style={{ width:80, color:T.textLight }}>{fmtDate(it.when)}</span>
+                        <span style={{ width:110, color:T.textMid }}>{it.kind}</span>
+                        <span style={{ flex:1 }}>{it.who} — {it.what}</span>
+                        <strong style={{ fontVariantNumeric:"tabular-nums" }}>{fmtMoney(it.amount)}</strong>
+                      </div>;
+                    })}
+                  </td></tr>
+                ),
+              ];
+            })}
+            <tr style={{ background:T.tintSoft }}>
+              <td style={Object.assign({}, td, { textAlign:"left", fontWeight:700 })}>Next 12 months</td>
+              <td style={Object.assign({}, td, { fontWeight:700 })}>{money(totals.conf)}</td><td style={Object.assign({}, td, { fontWeight:700, color:T.textMid })}>{money(totals.hold)}</td>
+              <td style={Object.assign({}, td, { fontWeight:700 })}>{money(totals.lets)}</td><td style={Object.assign({}, td, { fontWeight:800 })}>{money(totals.conf + totals.hold + totals.lets)}</td><td style={td}></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry, accomBookings, accomProperties }) {
   const types = REPORT_TYPES;
   const inSidebar = useContext(SidebarNavContext);
@@ -14924,6 +15182,8 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
       {activeType==="staffing"  && <StaffingRota bookings={bookings} staff={staff}/>}
       {activeType==="hours"     && <HoursReport bookings={bookings} staff={staff}/>}
       {activeType==="timeline"  && <StaffTimelineReport bookings={bookings} staff={staff}/>}
+      {activeType==="funnel"    && <SalesFunnelReport enquiries={enquiries||[]} bookings={bookings}/>}
+      {activeType==="cashflow"  && <CashflowReport bookings={bookings} accomBookings={accomBookings||[]}/>}
     </div>
   );
 }
@@ -22650,7 +22910,18 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
                 </FRow>
                 <FRow label="Numbers"><input type="text" value={form.numbers||""} onChange={e=>update("numbers",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
                 <FRow label="Date Preference"><input type="text" value={form.datePreference||""} onChange={e=>update("datePreference",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
-                <FRow label="Source"><input type="text" value={form.source||""} onChange={e=>update("source",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
+                <FRow label="Heard about us">
+                  <select value={form.heardAbout||""} onChange={e=>update("heardAbout",e.target.value)}
+                    style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}>
+                    <option value="">Not known</option>
+                    {HEARD_ABOUT_OPTIONS.map(function(t){ return <option key={t} value={t}>{t}</option>; })}
+                    {form.heardAbout && HEARD_ABOUT_OPTIONS.indexOf(form.heardAbout) === -1 && <option value={form.heardAbout}>{form.heardAbout}</option>}
+                  </select>
+                </FRow>
+                <FRow label="Other venues considered"><input type="text" value={form.otherVenues||""} onChange={e=>update("otherVenues",e.target.value)} placeholder="e.g. Pangdean, Rushlake Green"
+                  style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
+                <FRow label="Source (how it reached us)"><input type="text" list="hbf-enquiry-sources" value={form.source||""} onChange={e=>update("source",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
+                <datalist id="hbf-enquiry-sources">{ENQUIRY_SOURCE_SUGGESTIONS.map(function(t){ return <option key={t} value={t}/>; })}</datalist>
                 <FRow label="Email">
                   <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                     <input type="email" value={form.email||""} onChange={e=>update("email",e.target.value)} style={{ flex:1, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/>
@@ -22692,7 +22963,14 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
             {/* Did not book reason */}
             {form.outcome==="didnotbook" && (
               <div style={{ marginTop:12 }}>
-                <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>Reason Did Not Book</label>
+                <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>Reason not booked</label>
+                <select value={form.reasonNotBooked||""} onChange={e=>update("reasonNotBooked",e.target.value)}
+                  style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box", marginBottom:10 }}>
+                  <option value="">Choose a reason…</option>
+                  {REASON_NOT_BOOKED_OPTIONS.map(function(t){ return <option key={t} value={t}>{t}</option>; })}
+                  {form.reasonNotBooked && REASON_NOT_BOOKED_OPTIONS.indexOf(form.reasonNotBooked) === -1 && <option value={form.reasonNotBooked}>{form.reasonNotBooked}</option>}
+                </select>
+                <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>Details</label>
                 <textarea value={form.didNotBookReason||""} onChange={e=>update("didNotBookReason",e.target.value)} rows={3}
                   style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", resize:"vertical", boxSizing:"border-box" }}/>
               </div>
