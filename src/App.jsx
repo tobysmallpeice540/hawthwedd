@@ -53,8 +53,13 @@ function MobileGlobalStyles() {
         /* Long emails, URLs and guest names have no break opportunity, so they
            would otherwise set the minimum width of whatever holds them. */
         input, select, textarea { max-width: 100%; }
-        [style*="display:flex"]:not([style*="flex-wrap"]),
-        [style*="display: flex"]:not([style*="flex-wrap"]) {
+        /* Rows only. A column wrapping does not reflow anything — inside a
+           height-limited box (every modal: header, scrolling body, footer)
+           it moves the overflowing children into a second column off the
+           right edge, which is how a long logged email opened as a blank box
+           with no Close button on a phone. */
+        [style*="display:flex"]:not([style*="flex-wrap"]):not([style*="flex-direction: column"]):not([style*="flex-direction:column"]),
+        [style*="display: flex"]:not([style*="flex-wrap"]):not([style*="flex-direction: column"]):not([style*="flex-direction:column"]) {
           flex-wrap: wrap !important;
         }
         div:has(> table) { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }

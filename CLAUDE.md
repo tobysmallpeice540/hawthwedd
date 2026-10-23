@@ -82,6 +82,8 @@ own header.
   inline-styled, so attribute selectors are the only practical lever. Collapsed
   grid tracks must be `minmax(0, 1fr)`. Any flex row that must not wrap has to
   say `nowrap`, because the stylesheet forces wrap onto every row that does not.
+  Column flex containers are exempt from that rule (a wrapped column inside a
+  height-limited modal sends its body off-screen); keep it that way.
 
 ### Layout (sidebar redesign, 22 Oct 2026)
 
