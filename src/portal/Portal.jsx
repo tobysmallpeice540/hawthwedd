@@ -137,7 +137,9 @@ function accomLabel(v) {
 }
 
 export default function Portal({ session }) {
-  const [tab, setTab] = useState('overview')
+  // Back from the bar's card payment page (?bar=thanks|cancelled): open the
+  // bar tab, which reads and clears the flag itself.
+  const [tab, setTab] = useState(() => (/[?&]bar=/.test(window.location.search) ? 'bar' : 'overview'))
   const [event, setEvent] = useState(null)
   const [home, setHome] = useState(null)        // null = the newer functions are not there
   const [state, setState] = useState('loading') // loading | ready | no_access | error

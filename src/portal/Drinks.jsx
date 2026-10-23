@@ -437,9 +437,10 @@ function TotalCard({ sm, route }) {
 // is what the staffing is planned from; and money behind it.
 //
 // Nothing here has a Save button. The tick and the choice save as they are
-// made, the rules when the box is left. Money behind the bar is added on
-// Stripe's page, and this page only ever shows what has actually arrived —
-// which staff record, so it is never a figure somebody merely typed in.
+// made, the rules when the box is left. Money behind the bar: they choose an
+// amount, pay on a Stripe page made for exactly that amount, and Stripe tells
+// us — so what shows here is only ever money that has actually arrived, with
+// the date, and nobody records it by hand.
 const USAGE = [
   { k: 'less',    label: 'Less than average' },
   { k: 'average', label: 'Average' },
@@ -480,6 +481,19 @@ function Bar({ data, onChanged }) {
     : null
   const prices = (s.bar_prices || []).filter((p) => p && p.name)
   const added = Number(o.bar_paid_amount) > 0
+  // Newer database: payments are recorded by Stripe itself (bar-checkout.js
+  // and the ticket webhook), and listed here. Older: the payment link above.
+  const hasPayments = Array.isArray(o.bar_payments)
+  const [returned] = useState(() => readReturn())
+
+  // Back from Stripe: the webhook usually lands within seconds, so look again
+  // a few times rather than asking them to refresh.
+  useEffect(() => {
+    if (returned !== 'thanks') return
+    let n = 0
+    const t = setInterval(() => { n += 1; onChanged(); if (n >= 8) clearInterval(t) }, 4000)
+    return () => clearInterval(t)
+  }, [returned])
 
   if (!hasPrefs) return <OldBarCard data={data} onChanged={onChanged} />
 
@@ -541,7 +555,9 @@ function Bar({ data, onChanged }) {
       {payBar && (
         <section className="card">
           <h3>Money behind the bar</h3>
-          {added ? (
+          {hasPayments ? (
+            <BarPayments payments={o.bar_payments} total={o.bar_paid_amount} returned={returned} />
+          ) : added ? (
             <div className="alert alert-ok" style={{ marginTop: 0 }}>
               <strong>{money(o.bar_paid_amount)}</strong> added behind the bar
               {o.bar_paid_at ? ' — received ' + fmtDate(o.bar_paid_at) : ''}. Thank you.
@@ -556,7 +572,9 @@ function Bar({ data, onChanged }) {
             placeholder="e.g. beer and wine only, no spirits" />
           {savedWhat === 'rules' && <p className="hint" style={{ color: 'var(--accent)' }}>Saved.</p>}
 
-          {payUrl ? (
+          {hasPayments ? (
+            <AddMoney added={added} />
+          ) : payUrl ? (
             <>
               <div className="actions">
                 <a className="btn-small" href={payUrl} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
@@ -580,6 +598,106 @@ function Bar({ data, onChanged }) {
         </section>
       )}
     </>
+  )
+}
+
+// ?bar=thanks / ?bar=cancelled on the way back from Stripe. Read once, then
+// taken out of the address bar so a reload does not say it again.
+function readReturn() {
+  try {
+    const q = new URLSearchParams(window.location.search)
+    const v = q.get('bar')
+    if (v) {
+      q.delete('bar')
+      const rest = q.toString()
+      window.history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : '') + window.location.hash)
+    }
+    return v === 'thanks' || v === 'cancelled' ? v : null
+  } catch (e) { return null }
+}
+
+function BarPayments({ payments, total, returned }) {
+  const paid = (payments || []).filter((p) => p.status === 'paid')
+  const pending = (payments || []).filter((p) => p.status === 'pending')
+  return (
+    <>
+      {returned === 'thanks' && pending.length > 0 && (
+        <div className="alert alert-ok" style={{ marginTop: 0 }}>
+          Thank you — we're just waiting for the card payment to confirm. It will show below in a moment.
+        </div>
+      )}
+      {returned === 'cancelled' && (
+        <div className="alert alert-warn" style={{ marginTop: 0 }}>The payment was cancelled — nothing was taken.</div>
+      )}
+      {paid.length === 0 ? (
+        <p className="muted" style={{ fontSize: 14 }}>Nothing added yet.</p>
+      ) : (
+        <div className="rows">
+          {paid.map((p) => (
+            <div className="row" key={p.id}>
+              <span className="k">{fmtDate(p.paid_at)}{p.source === 'staff' ? ' · recorded by us' : ''}</span>
+              <span className="v">{money(p.amount)}</span>
+            </div>
+          ))}
+          {paid.length > 1 && (
+            <div className="row"><span className="k"><strong>Behind the bar</strong></span><span className="v"><strong>{money(total)}</strong></span></div>
+          )}
+        </div>
+      )}
+      {pending.length > 0 && returned !== 'thanks' && (
+        <p className="hint">{pending.map((p) => money(p.amount)).join(', ')} started on the card page and not finished — it will disappear if it isn't completed.</p>
+      )}
+      {paid.length > 0 && <p className="hint" style={{ marginTop: 8 }}>We email you a receipt each time.</p>}
+    </>
+  )
+}
+
+const PRESETS = [100, 250, 500, 1000]
+
+function AddMoney({ added }) {
+  const [amount, setAmount] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function go(e) {
+    e.preventDefault()
+    const n = Math.round(Number(amount) * 100) / 100
+    if (!Number.isFinite(n) || n < 10 || n > 5000) { setErr('Choose an amount between £10 and £5,000.'); return }
+    setBusy(true); setErr('')
+    try {
+      const { data: d } = await supabase.auth.getSession()
+      const token = d.session && d.session.access_token
+      const res = await fetch('/.netlify/functions/bar-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (token || '') },
+        body: JSON.stringify({ amount: n }),
+      })
+      const text = await res.text()
+      let body = null; try { body = text ? JSON.parse(text) : null } catch (x) { body = null }
+      if (!res.ok || !body || !body.url) throw new Error((body && body.error) || 'The payment page could not be opened (' + res.status + ').')
+      window.location.assign(body.url)
+    } catch (e2) { setErr(e2.message || String(e2)); setBusy(false) }
+  }
+
+  return (
+    <form onSubmit={go} style={{ marginTop: 16 }}>
+      <label>{added ? 'Add more' : 'How much would you like to put behind the bar?'} <span className="opt">£</span></label>
+      <div className="add-line">
+        <input type="number" min="10" max="5000" step="1" inputMode="decimal" value={amount}
+          onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 500" aria-label="Amount in pounds" />
+        <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Opening…' : 'Add now'}</button>
+      </div>
+      <div className="actions" style={{ marginTop: 8 }}>
+        {PRESETS.map((v) => (
+          <button key={v} type="button" className="btn-small ghost" onClick={() => setAmount(String(v))}>£{v}</button>
+        ))}
+      </div>
+      {err && <div className="alert alert-warn">{err}</div>}
+      <p className="hint" style={{ marginTop: 8 }}>
+        Takes you to our secure card payment page for that amount, then straight back here.
+        It shows above as soon as it is paid, and we email you a receipt.
+      </p>
+    </form>
   )
 }
 

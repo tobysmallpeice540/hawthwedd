@@ -181,6 +181,23 @@ own header.
   (mealGuests, caterers, band…) are left in the record, never written, and
   shown read-only as "Notes from before the portal". The events list and the
   calendar feed use portal numbers and fall back to the old fields.
+- **Money behind the bar records itself** (23 Oct, migration f). The client
+  types an amount; `bar-checkout.js` asks `wp_bar_payment_start` AS THE USER,
+  makes a Checkout session for exactly that amount on the TICKETING Stripe
+  account (`metadata.bookingType = "bar_tab"`), and attaches it. The ticket
+  webhook's `handleBarTab` calls `wp_bar_payment_paid`, which checks session
+  AND amount and reports `first_time`, so a retried delivery never emails twice;
+  then it emails the client (wording from the portal email templates) and the
+  office. Unmatched money emails the office. `wp_drinks.bar_paid_amount` is the
+  recomputed total of paid rows. The old Payment Link setting is unused once
+  migration f is in; staff can add a payment "taken another way".
+- **Portal emails are editable** under Settings → Email templates → Client
+  portal (`app_data` `hbf_portal_email_templates_v1`). `portal-auth.js` and the
+  webhook read it with the service key and fall back, field by field, to the
+  standard wording. The sign-in link is only ever the button, never the text.
+- Settings has its own pages: General, Staff, Activity (with More), Email
+  templates (Lettings, Client portal, Box office, Brochure request — the same
+  editors that live in each section, on the same stored keys).
 
 ### Product
 

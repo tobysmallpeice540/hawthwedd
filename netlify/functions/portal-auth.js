@@ -231,6 +231,27 @@ async function logEmail(subject, to, type, bookingId, bodyText) {
   } catch (e) { console.error("logEmail failed:", e.message); }
 }
 
+// The wording Toby can change under Settings → Email templates → Client
+// portal (app_data hbf_portal_email_templates_v1). Any field left empty, or a
+// failed read, falls back to the standard wording below — an email always
+// goes, and always says something sensible.
+async function portalTemplate(id, fallback) {
+  try {
+    var rows = await sbRest("app_data?key=eq.hbf_portal_email_templates_v1&select=value");
+    var list = (rows && rows[0] && rows[0].value) || [];
+    var t = list.find(function (x) { return x && x.id === id; }) || {};
+    return {
+      subject: String(t.subject || "").trim() || fallback.subject,
+      body: String(t.body || "").trim() || fallback.body,
+      button: String(t.button || "").trim() || fallback.button
+    };
+  } catch (e) {
+    console.warn("portal email template " + id + " unreadable, using the standard wording: " + e.message);
+    return fallback;
+  }
+}
+function fillPortal(text) { return String(text).split("{portalUrl}").join(PORTAL_URL); }
+
 // ── Handler ─────────────────────────────────────────────────────────────────
 
 exports.handler = async function (event) {
@@ -260,7 +281,7 @@ exports.handler = async function (event) {
     try {
       await ensureUser(email);
       var inviteLink = await mintLink(email);
-      var inviteBody =
+      var inviteStd =
         "We have opened your wedding planner at Hawthbush Farm.\n\n" +
         "It is where you can tell us your numbers, work up your timings, choose " +
         "your suppliers and lay out the tables — all in one place, and all at your " +
@@ -269,13 +290,14 @@ exports.handler = async function (event) {
         "remember: whenever you come back, go to " + PORTAL_URL + " and we will email " +
         "you a fresh link.\n\n" +
         "If anything looks wrong, just reply to this email.";
+      var invT = await portalTemplate("invite", { subject: "Your wedding planner at Hawthbush Farm",
+                                                  body: inviteStd.split(PORTAL_URL).join("{portalUrl}"), button: "Open your planner" });
+      var inviteBody = fillPortal(invT.body);
 
-      var sent = await sendEmail(email, "Your wedding planner at Hawthbush Farm",
-                                 inviteBody, inviteLink, "Open your planner");
+      var sent = await sendEmail(email, fillPortal(invT.subject), inviteBody, inviteLink, invT.button);
       if (!sent.ok) return bad(sent.error, 502);
 
-      await logEmail("Your wedding planner at Hawthbush Farm", email,
-                     "portal-invite", allowed.event_id, inviteBody);
+      await logEmail(fillPortal(invT.subject), email, "portal-invite", allowed.event_id, inviteBody);
       return ok({ sent: true });
     } catch (e) {
       return bad(e.message || "Could not send the invite.", 502);
@@ -296,16 +318,19 @@ exports.handler = async function (event) {
     try {
       await ensureUser(email);
       var link = await mintLink(email);
-      var signinBody =
+      var signinStd =
         "Here is your link into the Hawthbush Farm wedding planner.\n\n" +
         "It signs you in on whatever device you open it on, and it is good for one " +
         "use. If it has expired by the time you get to it, go to " + PORTAL_URL +
         " and ask for another — we will send one straight away.\n\n" +
         "If you did not ask for this, you can ignore it and nothing will happen.";
+      var sinT = await portalTemplate("signin", { subject: "Your sign-in link",
+                                                  body: signinStd.split(PORTAL_URL).join("{portalUrl}"), button: "Sign in" });
+      var signinBody = fillPortal(sinT.body);
 
-      var r2 = await sendEmail(email, "Your sign-in link", signinBody, link, "Sign in");
+      var r2 = await sendEmail(email, fillPortal(sinT.subject), signinBody, link, sinT.button);
       if (!r2.ok) console.warn("sign-in email failed: " + r2.error);
-      else await logEmail("Your sign-in link", email, "portal-signin", may.event_id, signinBody);
+      else await logEmail(fillPortal(sinT.subject), email, "portal-signin", may.event_id, signinBody);
     } catch (e) {
       console.warn("sign-in link failed for " + email + ": " + e.message);
     }

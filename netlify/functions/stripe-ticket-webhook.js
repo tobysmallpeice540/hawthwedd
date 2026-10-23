@@ -19,7 +19,9 @@
 // charge.refunded means a refund made in the chef's own dashboard never
 // returns Hawthbush's commission and never voids the tickets.
 //
-// Two payment flows land here, told apart by session.metadata.bookingType:
+// Three payment flows land here, told apart by session.metadata.bookingType
+// ("bar_tab", money behind the bar from bar-checkout.js, is handled near the
+// bottom of this file):
 //   "box_ticket"  — a new order from create-ticket-checkout.js. Either paid in
 //                   full (tickets issued, QR sent) or a deposit (table
 //                   reserved, deliberately no QR).
@@ -220,6 +222,164 @@ async function handleChefRefund(charge, account) {
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
+// ── Money behind the bar (bookingType "bar_tab", from bar-checkout.js) ───────
+//
+// Always on Hawthbush's own ticketing account, never a chef's. The database
+// checks the session and the amount against the pending row before anything
+// is marked paid, and says whether this is the first delivery, so a retried
+// webhook never emails anyone twice.
+const RESEND_KEY    = process.env.RESEND_API_KEY;
+const FROM_EMAIL    = "hello@hawthbushfarm.co.uk";
+const FROM_HEADER   = "Hawthbush Farm <" + FROM_EMAIL + ">";
+const OFFICE_EMAIL  = "hello@hawthbushfarm.co.uk";
+const EMAIL_LOG_KEY = "hbf_email_log_v1";
+
+async function sbRpcService(fn, args) {
+  var res = await fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+    method: "POST",
+    headers: { "apikey": SERVICE_KEY, "Authorization": "Bearer " + SERVICE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(args || {})
+  });
+  var text = await res.text();
+  if (!res.ok) throw new Error(fn + " " + res.status + ": " + text.slice(0, 300));
+  return text ? JSON.parse(text) : null;
+}
+
+function barMoney(v) {
+  return "£" + Number(v).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function barDate(iso) {
+  var d = iso ? new Date(iso) : new Date();
+  return d.toLocaleDateString("en-GB", { timeZone: "Europe/London", day: "numeric", month: "long", year: "numeric" });
+}
+function barEsc(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function barEmailHtml(paragraphs) {
+  return '<!doctype html><html><body style="margin:0;padding:24px 12px;background:#f9f6f1;font-family:Helvetica,Arial,sans-serif;color:#2d2a25">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">' +
+    '<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%">' +
+    '<tr><td align="center" style="padding:0 0 18px"><img src="' + SITE_ORIGIN + '/email-logo.png" alt="Hawthbush Farm" width="100" style="display:block;width:100px;height:auto"></td></tr>' +
+    '<tr><td style="background:#fff;border:1px solid #e8e2d9;border-radius:14px;padding:28px 30px;font-size:15px;line-height:1.6">' +
+    paragraphs.map(function (p) { return '<p style="margin:0 0 14px">' + p + "</p>"; }).join("") +
+    "</td></tr>" +
+    '<tr><td align="center" style="padding:16px;font-size:12px;color:#7a7060">Hawthbush Farm &middot; <a href="mailto:' + FROM_EMAIL + '" style="color:#7a7060">' + FROM_EMAIL + "</a></td></tr>" +
+    "</table></td></tr></table></body></html>";
+}
+
+async function barSend(to, subject, paragraphs, eventId) {
+  if (!RESEND_KEY) { console.error("bar email not sent — RESEND_API_KEY missing:", subject); return false; }
+  try {
+    var res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: FROM_HEADER, to: to, subject: subject, html: barEmailHtml(paragraphs) })
+    });
+    if (!res.ok) { console.error("bar email failed:", subject, (await res.text()).slice(0, 300)); return false; }
+  } catch (e) { console.error("bar email threw:", subject, e.message); return false; }
+  // Into Recent Automated Emails with everything else. Re-reads first: a
+  // shared array written back from a stale copy is how records get lost.
+  try {
+    var rows = await sbRest("app_data?key=eq." + EMAIL_LOG_KEY + "&select=value");
+    var log = (rows && rows[0] && rows[0].value) || [];
+    log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(),
+               subject: subject, to: Array.isArray(to) ? to.join(", ") : to, template: "bar_payment",
+               bookingId: String(eventId || ""), body: paragraphs.join("\n").replace(/<[^>]+>/g, "").slice(0, 4000) });
+    await sbRest("app_data", { method: "POST", prefer: "resolution=merge-duplicates",
+      body: { key: EMAIL_LOG_KEY, value: log.slice(-500), updated_at: new Date().toISOString() } });
+  } catch (e) { console.error("bar email log failed:", e.message); }
+  return true;
+}
+
+const BAR_RECEIPT_STD = {
+  subject: "We've received {amount} behind your bar",
+  body: "Thank you — we received {amount} to go behind the bar on {date}.\n\n" +
+        "That makes {total} behind the bar for {event} ({eventDate}).\n\n" +
+        "When the tab runs out the bar goes back to pay as you go, and anything left over is refunded to the card it came from after the event.\n\n" +
+        "You can see this on the Evening bar page of your planner at any time."
+};
+async function barReceiptTemplate() {
+  try {
+    var rows = await sbRest("app_data?key=eq.hbf_portal_email_templates_v1&select=value");
+    var list = (rows && rows[0] && rows[0].value) || [];
+    var t = list.find(function (x) { return x && x.id === "bar_receipt"; }) || {};
+    return { subject: String(t.subject || "").trim() || BAR_RECEIPT_STD.subject,
+             body: String(t.body || "").trim() || BAR_RECEIPT_STD.body };
+  } catch (e) { console.warn("bar receipt template unreadable, using the standard wording: " + e.message); return BAR_RECEIPT_STD; }
+}
+
+async function handleBarTab(stripeEvent) {
+  var session = stripeEvent.data.object;
+
+  if (stripeEvent.type === "checkout.session.expired") {
+    await sbRpcService("wp_bar_payment_expired", { p_session: session.id });
+    return;
+  }
+  if (stripeEvent.type !== "checkout.session.completed") return;
+  if (session.payment_status !== "paid") {
+    // Cards settle at once. Anything slower would need the async-payment
+    // events, which this endpoint does not listen for — so say so.
+    console.error("bar session " + session.id + " completed but not paid (" + session.payment_status + ") — not recorded");
+    return;
+  }
+
+  var amount = Number(session.amount_total) / 100;
+  var payer = (session.customer_details && session.customer_details.email) || session.customer_email || "";
+  var r = await sbRpcService("wp_bar_payment_paid", {
+    p_session: session.id, p_amount_total: amount,
+    p_payment_intent: typeof session.payment_intent === "string" ? session.payment_intent : (session.payment_intent && session.payment_intent.id) || null,
+    p_email: payer
+  });
+
+  if (!r || r.ok === false) {
+    // Money has arrived that we could not match. Tell the office rather than
+    // let it sit unnoticed in Stripe.
+    var why = (r && r.error) || "no reply";
+    console.error("bar payment for session " + session.id + " not recorded: " + why, JSON.stringify(r));
+    await barSend(OFFICE_EMAIL, "Bar payment received but not matched — please check Stripe", [
+      "A payment of <strong>" + barMoney(amount) + "</strong> behind the bar arrived in Stripe (ticketing account) " +
+      "but could not be matched to a booking (" + barEsc(why) + ").",
+      "Stripe reference: " + barEsc(session.id) + (session.client_reference_id ? " · " + barEsc(session.client_reference_id) : "") +
+      (payer ? " · paid by " + barEsc(payer) : ""),
+      "Nothing has been recorded against an event. Check it in Stripe and record it on the event by hand if it belongs to one."
+    ], null);
+    return;
+  }
+  if (!r.first_time) return;   // a retried delivery: already recorded and emailed
+
+  var when = barDate(r.paid_at);
+  var name = r.couple || "your event";
+  var to = [];
+  (r.client_emails || []).concat(r.payer_email ? [r.payer_email] : []).forEach(function (e) {
+    e = String(e || "").trim().toLowerCase();
+    if (e && to.indexOf(e) < 0) to.push(e);
+  });
+
+  if (to.length) {
+    // Wording from Settings → Email templates → Client portal, if changed there.
+    var tpl = await barReceiptTemplate();
+    var fill = function (text, html) {
+      var vals = { "{amount}": barMoney(r.amount), "{total}": barMoney(r.total), "{date}": when,
+                   "{event}": name, "{eventDate}": r.event_date ? barDate(r.event_date + "T12:00:00Z") : "the day" };
+      var out = html ? barEsc(text) : String(text);
+      Object.keys(vals).forEach(function (k) {
+        var v = html ? barEsc(vals[k]) : vals[k];
+        if (html && (k === "{amount}" || k === "{total}")) v = "<strong>" + v + "</strong>";
+        out = out.split(k).join(v);
+      });
+      return out;
+    };
+    var paras = tpl.body.split(/\n\s*\n/).map(function (p) { return fill(p.trim(), true).replace(/\n/g, "<br>"); }).filter(Boolean);
+    await barSend(to, fill(tpl.subject, false), paras, r.event_id);
+  }
+  await barSend(OFFICE_EMAIL, "Bar money received: " + barMoney(r.amount) + " — " + name, [
+    "<strong>" + barMoney(r.amount) + "</strong> was paid behind the bar for <strong>" + barEsc(name) + "</strong>" +
+    (r.event_date ? " (" + barEsc(barDate(r.event_date + "T12:00:00Z")) + ")" : "") + " on " + when + ".",
+    "Total behind the bar now: <strong>" + barMoney(r.total) + "</strong>." + (r.payer_email ? " Paid by " + barEsc(r.payer_email) + "." : ""),
+    "Already recorded on the event — nothing to do. Stripe reference " + barEsc(session.id) + "."
+  ], r.event_id);
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method not allowed" };
@@ -289,6 +449,17 @@ exports.handler = async function(event) {
 
   const session  = stripeEvent.data.object;
   const metaType = (session.metadata && session.metadata.bookingType) || "";
+
+  if (metaType === "bar_tab") {
+    if (connectedAccount) return { statusCode: 200, body: JSON.stringify({ received: true, note: "bar money is never on a chef account" }) };
+    try {
+      await handleBarTab(stripeEvent);
+      return { statusCode: 200, body: JSON.stringify({ received: true }) };
+    } catch (err) {
+      console.error("bar_tab webhook error:", stripeEvent.type, err);
+      return { statusCode: 500, body: "Internal error — Stripe will retry" };
+    }
+  }
 
   if (metaType !== "box_ticket" && metaType !== "box_balance") {
     return { statusCode: 200, body: JSON.stringify({ received: true }) };

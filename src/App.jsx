@@ -2389,7 +2389,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-23b";
+const APP_BUILD = "2026-10-23c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7436,6 +7436,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="boxoffice"  && <BoxOfficeView bookings={bookings}/>}
         {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties}/>}
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
+        {view==="activity"   && <ActivityView/>}
+        {view==="emails"     && <EmailsView/>}
       </div>
   );
 
@@ -10237,7 +10239,6 @@ function PortalEventDrinks({ eventId, booking }) {
   const [busy, setBusy] = useState(false);
   const [rate, setRate] = useState("");
   const [childRate, setChildRate] = useState("");
-  const [paid, setPaid] = useState("");
   const [bespoke, setBespoke] = useState("");
   const [again, setAgain] = useState(false);
 
@@ -10253,7 +10254,6 @@ function PortalEventDrinks({ eventId, booking }) {
       const o = r.order || {};
       setRate(o.rate_pp == null ? "" : String(o.rate_pp));
       setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
-      setPaid(o.bar_paid_amount == null ? "" : String(o.bar_paid_amount));
       setBespoke(o.bespoke_note || "");
     } catch (e) { setErr(e.message || String(e)); }
   }
@@ -10388,19 +10388,16 @@ function PortalEventDrinks({ eventId, booking }) {
           <div style={{ color:T.amber }}>The 23 Oct (c) bar migration is not applied yet — pay bar and expected use will show here once it is.</div>
         )}
         <div>
-          Money behind the bar: <b style={{ color:T.text }}>{o.bar_paid_amount ? portalMoney(o.bar_paid_amount) + " received" : "none received"}</b>
+          Money behind the bar: <b style={{ color:T.text }}>{o.bar_paid_amount ? portalMoney(o.bar_paid_amount) + " paid" : "none yet"}</b>
           {o.bar_rules ? " · rules: “" + o.bar_rules + "”" : ""}
-          {o.bar_amount && !o.bar_paid_amount ? <span style={{ color:T.textLight }}> · they said {portalMoney(o.bar_amount)} (old form)</span> : null}
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6, flexWrap:"wrap" }}>
-          <span>Received in total £</span>
-          <input type="number" step="0.01" value={paid} onChange={function(e){ setPaid(e.target.value); }} style={Object.assign({}, inputCss, { width:110 })} />
-          <button disabled={busy} style={btnQuiet} onClick={function(){
-            setDrinks({ p_bar_paid_amount: paid === "" ? 0 : Number(paid) }, paid === "" || Number(paid) === 0 ? "Cleared." : "Recorded — they now see it as added.");
-          }}>Record</button>
-          {o.bar_paid_at && <span style={{ fontSize:12, color:T.green }}>updated {portalWhen(o.bar_paid_at)}</span>}
-        </div>
-        <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>Find payments in Stripe by the reference event-{eventId}. If they top up, enter the running total. Refund anything unused to the same card from Stripe.</div>
+        {Array.isArray(data.bar_payments) ? (
+          <BarPaymentsAdmin eventId={eventId} payments={data.bar_payments} onChanged={load} />
+        ) : (
+          <div style={{ fontSize:12, color:T.amber, marginTop:4 }}>
+            The 23 Oct (f) migration is not run yet — card payments cannot be taken or recorded automatically until it is.
+          </div>
+        )}
       </div>
 
       {(o.route === "classic" || o.route === "corkage") && (
@@ -10730,6 +10727,66 @@ function eventGuestCounts(b, nums) {
   return { day: (b && b.mealGuests) || "—", eve: (b && b.eveGuests) || "—", portal: false };
 }
 
+// Money behind the bar for one event: what Stripe has recorded, newest last,
+// and a way to add money taken another way (cash, a transfer). Card payments
+// arrive by themselves — the client and the office are emailed when they do.
+function BarPaymentsAdmin({ eventId, payments, onChanged }) {
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function add() {
+    const n = Number(amount);
+    if (!(n > 0)) { setErr("Enter the amount received."); return; }
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_add_bar_payment", { p_event_id: eventId, p_amount: n, p_note: note || null }); setAmount(""); setNote(""); await onChanged(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  async function remove(id) {
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_remove_bar_payment", { p_id: id }); await onChanged(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ marginTop:6 }}>
+      {payments.length === 0 ? <div style={{ fontSize:12, color:T.textLight }}>No payments yet. Card payments made from their portal appear here by themselves.</div> : (
+        <div style={{ display:"grid", gap:4, marginBottom:6 }}>
+          {payments.map(function(p){
+            return (
+              <div key={p.id} style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", fontSize:12 }}>
+                <span style={{ width:92, color:T.textMid }}>{portalWhen(p.paid_at || p.created_at)}</span>
+                <b style={{ color: p.status === "paid" ? T.text : T.textLight, minWidth:70 }}>{portalMoney(p.amount)}</b>
+                <span style={{ color: p.status === "paid" ? T.green : T.amber }}>
+                  {p.status === "paid" ? (p.source === "staff" ? "recorded by staff" : "paid by card") : "started, not paid yet"}
+                </span>
+                {p.note && <span style={{ color:T.textLight }}>· {p.note}</span>}
+                {p.payer_email && p.source !== "staff" && <span style={{ color:T.textLight }}>· {p.payer_email}</span>}
+                {p.source === "staff" && p.status === "paid" && (
+                  <button disabled={busy} onClick={function(){ remove(p.id); }} style={Object.assign({}, btnQuiet, { padding:"2px 8px", fontSize:11 })}>Remove</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+        <span style={{ fontSize:12 }}>Taken another way £</span>
+        <input type="number" step="0.01" value={amount} onChange={function(e){ setAmount(e.target.value); }} style={Object.assign({}, inputCss, { width:100 })} />
+        <input value={note} onChange={function(e){ setNote(e.target.value); }} placeholder="cash, transfer…" style={Object.assign({}, inputCss, { width:150 })} />
+        <button disabled={busy} style={btnQuiet} onClick={add}>Add</button>
+      </div>
+      {err && <div style={{ fontSize:12, color:T.red, marginTop:4 }}>{err}</div>}
+      <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
+        Card payments are confirmed by Stripe (ticketing account) and emailed to the client and the office. Refund anything unused from Stripe.
+      </div>
+    </div>
+  );
+}
+
 function PriceInput({ onSave, disabled }) {
   const [v, setV] = useState("");
   return (
@@ -10821,7 +10878,7 @@ function PortalDrinksSettings() {
           </Field>
         </div>
         <div style={{ marginTop:12 }}>
-          <Field label="Stripe Payment Link for money behind the bar (customer chooses the amount)" width={560}>
+          <Field label="Stripe Payment Link — no longer used once the 23 Oct (f) migration is run (card payments then go through our own checkout and record themselves)" width={560}>
             <input value={s.bar_link_url || ""} onChange={function(e){ setField("bar_link_url", e.target.value); }} placeholder="https://buy.stripe.com/…" style={inputCss} />
           </Field>
           <div style={{ fontSize:11, color:T.textLight, marginTop:4, maxWidth:620, lineHeight:1.5 }}>
@@ -11453,11 +11510,17 @@ const BAR_TABS = [
   ["report","Usage Report"], ["reconcile","Till Reconciliation"], ["products","Products"],
   ["rota","Rota Overview"], ["eventrota","Event Rota"],
 ];
-// "accommodation" is not a report of its own — it opens Lettings, as it always has.
+// "accommodation" is not a report of its own — it opens the Lettings report.
+// The Year Calendar is no longer listed under Reports, but stays reachable
+// from the lettings calendar and the home page, so it is still a known type.
 const REPORT_TYPES = [
-  {id:"summary",label:"Annual Summary"},{id:"calendar",label:"Year Calendar"},{id:"accommodation",label:"Accommodation"},
-  {id:"staffing",label:"Rota Overview"},{id:"hours",label:"Hours Worked"},{id:"timeline",label:"Event Rota"},
+  {id:"summary",label:"Annual Summary"},{id:"accommodation",label:"Accommodation"},
+  {id:"staffing",label:"Rota Overview"},{id:"timeline",label:"Event Rota"},{id:"hours",label:"Hours Worked"},
 ];
+const HIDDEN_REPORT_TYPES = ["calendar"];
+// The pages under Settings in the sidebar.
+const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails"];
+function openAccomReport(setView) { navClick("lettings", "report"); setView("lettings"); }
 
 // The sidebar's contents, worked out from where the app is. Each entry's `go`
 // does exactly what the old top-menu tab or section tab did.
@@ -11498,13 +11561,15 @@ function buildSidebarNav(o) {
       go: function() { setView("reports"); },
       children: REPORT_TYPES.map(function(r) {
         return { label: r.label, on: view === "reports" && reportOn === r.id,
-          go: function() { if (r.id === "accommodation") { setView("lettings"); } else { o.setReportType(r.id); setView("reports"); } } };
+          go: function() { if (r.id === "accommodation") { openAccomReport(setView); } else { o.setReportType(r.id); setView("reports"); } } };
       }) },
-    { id:"settings", icon:"settings", label:"Settings", on: view === "settings" || view === "staff",
+    { id:"settings", icon:"settings", label:"Settings", on: SETTINGS_VIEWS.indexOf(view) !== -1,
       go: function() { setView("settings"); },
       children: [
         { label:"General", on: view === "settings", go: function() { setView("settings"); } },
         { label:"Staff", on: view === "staff", go: function() { setView("staff"); } },
+        { label:"Activity", on: view === "activity", go: function() { setView("activity"); } },
+        { label:"Email templates", on: view === "emails", go: function() { setView("emails"); } },
       ] },
   ];
 }
@@ -13156,21 +13221,23 @@ const TEXT_FIELDS = [
   { key:"circaCommission",  label:"Circa Commission (£, inc VAT)", type:"number",   section:"financials" },
 ];
 
+// Order: who and when, who to contact, how many, money, the contract, then
+// what the client sends through the portal, then the venue's own planning,
+// and files last. The drinks and portal sections are the client portal's,
+// kept in its own tables — nothing there is saved with the booking, so they
+// show what they are rather than a "filled" count.
 const FORM_SECTIONS = {
   core:       { label:"Event Details" },
-  financials: { label:"Financials & Accom" },
-  guests:     { label:"Guests", note:"from the client portal" },
   contact:    { label:"Contact" },
-  staffing:   { label:"Staffing" },
-  vendors:    { label:"Suppliers & the day", note:"from the client portal" },
-  viewings:   { label:"Viewings" },
+  guests:     { label:"Guests", note:"from the client portal" },
+  financials: { label:"Financials & Accom" },
   contract:   { label:"Contract" },
-  files:      { label:"Files" },
-  // These two are the client portal's, kept in its own tables — nothing here
-  // is saved with the booking, so they show what they are rather than a
-  // "filled" count.
-  drinks:     { label:"Drinks & bar", note:"from the client portal" },
   portal:     { label:"Client portal", note:"logins and what they see" },
+  drinks:     { label:"Drinks & bar", note:"from the client portal" },
+  vendors:    { label:"Suppliers & the day", note:"from the client portal" },
+  staffing:   { label:"Staffing" },
+  viewings:   { label:"Viewings" },
+  files:      { label:"Files" },
 };
 
 // ─── GMAIL THREAD PANEL ──────────────────────────────────────────────────────
@@ -14642,14 +14709,14 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
   const types = REPORT_TYPES;
   const inSidebar = useContext(SidebarNavContext);
   // If an old/removed report type is still selected, fall back to summary
-  const activeType = types.some(t=>t.id===reportType) ? reportType : "summary";
-  const activeLabel = (types.filter(function(t){ return t.id === activeType; })[0] || {}).label;
+  const activeType = types.some(t=>t.id===reportType) || HIDDEN_REPORT_TYPES.indexOf(reportType) !== -1 ? reportType : "summary";
+  const activeLabel = activeType === "calendar" ? "Year Calendar" : (types.filter(function(t){ return t.id === activeType; })[0] || {}).label;
   return (
     <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}>
       <PageHeader title="Reports" sub={inSidebar ? activeLabel : null}/>
       {!inSidebar && (
         <TabStrip tabs={types.map(function(t){ return [t.id, t.label]; })} value={activeType}
-          onChange={function(id){ if(id==="accommodation"){ setView("lettings"); } else { setReportType(id); } }}/>
+          onChange={function(id){ if(id==="accommodation"){ openAccomReport(setView); } else { setReportType(id); } }}/>
       )}
       {activeType==="summary"   && <SummaryReport bookings={bookings}/>}
       {activeType==="calendar"  && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
@@ -21544,13 +21611,175 @@ function BrochureSettingsPanel() {
   );
 }
 
+// ─── Settings → Email templates ──────────────────────────────────────────────
+//
+// Every automated email's wording in one place. Each tab is the same editor
+// that lives beside its own section (Lettings → Settings, Box Office →
+// Settings), reading and saving the same stored copy, so a change made in
+// either place is the change. Each loads fresh when it opens.
+
+const EMAIL_PAGES = [["lettings","Lettings"],["portal","Client portal"],["boxoffice","Box office"],["brochure","Brochure request"]];
+
+function EmailsView() {
+  const [tab, setTab] = useState("lettings");
+  return (
+    <div style={{ paddingTop: UI_CLASSIC ? 28 : 0, maxWidth:960 }}>
+      <PageHeader title="Email templates" sub="The wording of every email the app sends on its own"/>
+      <TabStrip tabs={EMAIL_PAGES} value={tab} onChange={setTab}/>
+      {tab === "lettings"  && <LettingsEmailTemplatesPanel/>}
+      {tab === "portal"    && <PortalEmailTemplatesPanel/>}
+      {tab === "boxoffice" && <div style={{ maxWidth:880 }}><BoxEmailTemplatesCard/></div>}
+      {tab === "brochure"  && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard }}>
+          <BrochureSettingsPanel/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LettingsEmailTemplatesPanel() {
+  const [templates, setTemplates] = useState(DEFAULT_EMAIL_TEMPLATES);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(function() {
+    let off = false;
+    (async function() {
+      try { const et = await sbGet(EMAIL_TEMPLATES_STORAGE); if (!off && et && et.length) setTemplates(et); } catch (e) {}
+      if (!off) setLoaded(true);
+    })();
+    return function() { off = true; };
+  }, []);
+  if (!loaded) return <div style={quietText}>Loading…</div>;
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard }}>
+      <EmailTemplatesEditor templates={templates} setTemplates={setTemplates}
+        onSave={function(){ return sbSet(EMAIL_TEMPLATES_STORAGE, templates); }}/>
+    </div>
+  );
+}
+
+// The client portal's own emails. Netlify functions read this same key and
+// fall back to these defaults, so an empty field is never sent: the default
+// wording is used instead. Placeholders are filled in when the email is sent.
+const PORTAL_EMAILS_STORAGE = "hbf_portal_email_templates_v1";
+const DEFAULT_PORTAL_EMAILS = [
+  { id:"invite", name:"Invitation to the planner", when:"When staff give an address access",
+    subject:"Your wedding planner at Hawthbush Farm", button:"Open your planner",
+    body:"We have opened your wedding planner at Hawthbush Farm.\n\nIt is where you can tell us your numbers, work up your timings, choose your suppliers and lay out the tables — all in one place, and all at your own pace. Nothing needs doing today.\n\nThe button below takes you straight in. There is no password to set up or remember: whenever you come back, go to {portalUrl} and we will email you a fresh link.\n\nIf anything looks wrong, just reply to this email.",
+    fields:["{portalUrl}"] },
+  { id:"signin", name:"Sign-in link", when:"When someone asks for a link on the sign-in page",
+    subject:"Your sign-in link", button:"Sign in",
+    body:"Here is your link into the Hawthbush Farm wedding planner.\n\nIt signs you in on whatever device you open it on, and it is good for one use. If it has expired by the time you get to it, go to {portalUrl} and ask for another — we will send one straight away.\n\nIf you did not ask for this, you can ignore it and nothing will happen.",
+    fields:["{portalUrl}"] },
+  { id:"bar_receipt", name:"Money behind the bar — receipt", when:"When a card payment behind the bar is confirmed by Stripe",
+    subject:"We've received {amount} behind your bar", button:"",
+    body:"Thank you — we received {amount} to go behind the bar on {date}.\n\nThat makes {total} behind the bar for {event} ({eventDate}).\n\nWhen the tab runs out the bar goes back to pay as you go, and anything left over is refunded to the card it came from after the event.\n\nYou can see this on the Evening bar page of your planner at any time.",
+    fields:["{amount}","{total}","{date}","{event}","{eventDate}"] },
+];
+
+function PortalEmailTemplatesPanel() {
+  const [list, setList] = useState(null);
+  const [sel, setSel] = useState(0);
+  const [flash, setFlash] = useState("");
+  useEffect(function() {
+    let off = false;
+    (async function() {
+      let saved = null;
+      try { saved = await sbGet(PORTAL_EMAILS_STORAGE); } catch (e) { saved = null; }
+      // Merge onto the defaults so a template added in a later build appears.
+      const merged = DEFAULT_PORTAL_EMAILS.map(function(d) {
+        const s0 = (saved || []).find(function(x) { return x && x.id === d.id; });
+        return s0 ? Object.assign({}, d, { subject: s0.subject, body: s0.body, button: s0.button }) : d;
+      });
+      if (!off) setList(merged);
+    })();
+    return function() { off = true; };
+  }, []);
+  if (!list) return <div style={quietText}>Loading…</div>;
+  const t = list[sel];
+  function upd(k, v) { setList(list.map(function(x, i) { return i === sel ? Object.assign({}, x, { [k]: v }) : x; })); }
+  function reset() { const d = DEFAULT_PORTAL_EMAILS.find(function(x){ return x.id === t.id; }); setList(list.map(function(x, i) { return i === sel ? Object.assign({}, d) : x; })); }
+  async function save() {
+    try {
+      await sbSet(PORTAL_EMAILS_STORAGE, list.map(function(x) { return { id:x.id, subject:x.subject, body:x.body, button:x.button }; }));
+      setFlash("Saved"); setTimeout(function(){ setFlash(""); }, 1800);
+    } catch (e) { setFlash("Save failed — " + (e.message || e)); }
+  }
+  return (
+    <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 220px) minmax(0, 1fr)", gap:16 }}>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", alignSelf:"start" }}>
+        {list.map(function(x, i) {
+          return (
+            <button key={x.id} onClick={function(){ setSel(i); }}
+              style={{ display:"block", width:"100%", textAlign:"left", padding:"11px 14px", background: i === sel ? T.tint : "none", border:"none",
+                borderLeft: i === sel ? `3px solid ${T.accent}` : "3px solid transparent", borderBottom:`1px solid ${T.border}`,
+                color: i === sel ? T.accent : T.textMid, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight: i === sel ? 700 : 400 }}>
+              {x.name}<div style={{ fontSize:10.5, opacity:.7, marginTop:2 }}>{x.when}</div>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", boxShadow:T.shadowCard }}>
+        <Field label="Subject" width="100%">
+          <input value={t.subject} onChange={function(e){ upd("subject", e.target.value); }} style={inputCss}/>
+        </Field>
+        <div style={{ height:10 }}/>
+        <Field label="Message" width="100%">
+          <textarea value={t.body} rows={11} onChange={function(e){ upd("body", e.target.value); }} style={Object.assign({}, inputCss, { fontFamily:"inherit", lineHeight:1.5 })}/>
+        </Field>
+        {t.id !== "bar_receipt" && (
+          <>
+            <div style={{ height:10 }}/>
+            <Field label="Button" width={260}>
+              <input value={t.button} onChange={function(e){ upd("button", e.target.value); }} style={inputCss}/>
+            </Field>
+          </>
+        )}
+        <div style={{ fontSize:11.5, color:T.textLight, marginTop:10, lineHeight:1.6 }}>
+          Filled in when it is sent: {t.fields.join(" · ")}.
+          {t.id !== "bar_receipt" ? " The sign-in link itself is always added as the button — it is never written into the text." : " The office gets its own short note with each payment."}
+          {" "}Left empty, a field falls back to the standard wording.
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14 }}>
+          <button onClick={save} style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Save</button>
+          <button onClick={reset} style={btnQuiet}>Back to the standard wording</button>
+          {flash && <span style={{ fontSize:12, color: flash === "Saved" ? T.green : T.red, fontWeight:700 }}>{flash}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Settings → Activity: who changed what, and when.
+function ActivityView() {
+  return (
+    <div style={{ paddingTop: UI_CLASSIC ? 28 : 0, maxWidth:900 }}>
+      <PageHeader title="Activity" sub="Every change to the data, with who made it"/>
+      <ActivityLogPanel/>
+    </div>
+  );
+}
+
 function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, setView }) {
+  const inSidebar = useContext(SidebarNavContext);
   const [feedCopied, setFeedCopied] = useState(false);
   const feedUrl = (typeof window !== "undefined" ? window.location.origin : "") + "/calendar.ics";
   const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard, marginBottom:20 };
   return (
     <div style={{ paddingTop:28, maxWidth:820 }}>
       <PageHeader title="Settings"/>
+
+      {/* Staff, Activity and Brochure are their own pages under Settings in the
+          sidebar. The classic layout and phones have no sidebar children, so
+          they get the same pages as a row here. */}
+      {!inSidebar && setView && (
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:18 }}>
+          {[["staff","Staff"],["activity","Activity"],["emails","Email templates"]].map(function(x){
+            return <button key={x[0]} onClick={function(){ setView(x[0]); }}
+              style={{ background:"#fff", border:`1.5px solid ${T.border}`, color:T.midBlue, padding:"8px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>{x[1]} →</button>;
+          })}
+        </div>
+      )}
 
       {/* Backup & restore — belongs on the main Settings page, not buried in
           the Lettings sub-settings where it was easy to miss. */}
@@ -21565,11 +21794,6 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
         <PhoneAppPanel/>
       </div>
 
-      {/* Brochure request — the website form's wording, link and rules */}
-      <div style={card}>
-        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Brochure request</div>
-        <BrochureSettingsPanel/>
-      </div>
 
       {/* Weekly cleaning summary */}
       <div style={card}>
@@ -21586,14 +21810,6 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       {/* Logins are managed under Staff now that each person has their own.
           The card here explained a shared password that no longer exists. */}
 
-      {/* Staff */}
-      {setView && (
-        <div style={card}>
-          <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Staff</div>
-          <p style={{ fontSize:13, color:T.textMid, margin:"0 0 14px", lineHeight:1.5 }}>Manage staff members used for rota assignments.</p>
-          <button onClick={()=>setView("staff")} style={{ background:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Manage Staff</button>
-        </div>
-      )}
 
       {/* Calendar feed */}
       <div style={card}>
@@ -21617,8 +21833,6 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       {/* Contracts */}
       <SignWellPanel/>
 
-      {/* Who changed what, and when */}
-      <ActivityLogPanel/>
 
       {/* Mailing lists. Not under Box Office: it syncs weddings, enquiries and
           cottage guests as well as ticket buyers. */}
@@ -24873,11 +25087,12 @@ function printDoorList(door, typeNames, doorNotes) {
 }
 
 // ── Box office settings ──────────────────────────────────────────────────────
-function BoxSettingsScreen() {
+// The box office's email templates, on their own so they can sit both here
+// and on Settings → Email templates. Each copy loads fresh when it opens.
+function BoxEmailTemplatesCard() {
   const [templates, setTemplates] = useState(DEFAULT_BOX_TEMPLATES);
   const [loaded, setLoaded] = useState(false);
   const [flash, setFlash] = useState("");
-  const [copied, setCopied] = useState(false);
 
   useEffect(function() {
     (async function() {
@@ -24903,6 +25118,20 @@ function BoxSettingsScreen() {
     } catch (e) { setFlash("Save failed"); }
   }
 
+  return (
+    <BoxCard title="Emails" right={<div style={{ display:"flex", gap:10, alignItems:"center" }}>
+      {flash && <span style={{ fontSize:12, color: flash === "Saved" ? T.green : T.red, fontWeight:700 }}>{flash}</span>}
+      <BoxBtn onClick={saveTemplates} disabled={!loaded}>Save templates</BoxBtn>
+    </div>}>
+      {!loaded
+        ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>
+        : <BoxTemplatesEditor templates={templates} setTemplates={setTemplates}/>}
+    </BoxCard>
+  );
+}
+
+function BoxSettingsScreen() {
+  const [copied, setCopied] = useState(false);
   const whatsOn = (typeof window !== "undefined" ? window.location.origin : "") + "/whats-on";
 
   return (
@@ -24925,14 +25154,7 @@ function BoxSettingsScreen() {
         </div>
       </BoxCard>
 
-      <BoxCard title="Emails" right={<div style={{ display:"flex", gap:10, alignItems:"center" }}>
-        {flash && <span style={{ fontSize:12, color:T.green, fontWeight:700 }}>{flash}</span>}
-        <BoxBtn onClick={saveTemplates}>Save templates</BoxBtn>
-      </div>}>
-        {!loaded
-          ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div>
-          : <BoxTemplatesEditor templates={templates} setTemplates={setTemplates}/>}
-      </BoxCard>
+      <BoxEmailTemplatesCard/>
 
 
       <BoxCard title="What runs on its own">
@@ -25596,12 +25818,17 @@ function ActivityLogPanel() {
   const [rows, setRows]   = useState(null);
   const [err, setErr]     = useState("");
   const [onlyPeople, setOnlyPeople] = useState(true);
+  // How many rows to fetch and how many to show. "More" shows another page,
+  // and fetches further back once what has been fetched runs out.
+  const [fetchN, setFetchN] = useState(200);
+  const [showN, setShowN] = useState(50);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  async function load() {
+  async function load(n) {
     setErr("");
     try {
       const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/audit_log?select=*&order=at.desc&limit=200`,
+        `${SUPABASE_URL}/rest/v1/audit_log?select=*&order=at.desc&limit=${n || fetchN}`,
         { headers: sbAuthHeaders() });
       if (!res.ok) throw new Error(await res.text());
       setRows(await res.json());
@@ -25612,15 +25839,30 @@ function ActivityLogPanel() {
   }
   useEffect(function() { load(); }, []);
 
+  async function more() {
+    const next = showN + 50;
+    setShowN(next);
+    // Filtering (People only, the deploy marker) leaves fewer rows than were
+    // fetched, so fetch further back whenever the filtered list runs short.
+    if (rows && filtered.length < next && rows.length >= fetchN) {
+      setLoadingMore(true);
+      const n = fetchN + 400;
+      setFetchN(n);
+      await load(n);
+      setLoadingMore(false);
+    }
+  }
+
   const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard, marginBottom:20 };
 
   // hbf_app_build_v1 is the deploy marker, written once by whichever browser
   // loads a new build first. It is a fact about the app, not a change to the
   // data, so it doesn't belong in a log about who edited what.
-  const shown = (rows || [])
+  const filtered = (rows || [])
     .filter(function(r) { return r.key !== "hbf_app_build_v1"; })
-    .filter(function(r) { return !onlyPeople || r.actor_id; })
-    .slice(0, 60);
+    .filter(function(r) { return !onlyPeople || r.actor_id; });
+  const shown = filtered.slice(0, showN);
+  const canMore = rows && (filtered.length > showN || rows.length >= fetchN);
 
   return (
     <div style={card}>
@@ -25632,7 +25874,7 @@ function ActivityLogPanel() {
               style={{ accentColor:T.accent, cursor:"pointer" }}/>
             People only
           </label>
-          <BoxBtn tone="ghost" onClick={load}>Refresh</BoxBtn>
+          <BoxBtn tone="ghost" onClick={function(){ load(); }}>Refresh</BoxBtn>
         </div>
       </div>
 
@@ -25667,6 +25909,12 @@ function ActivityLogPanel() {
           </div>
         );
       })}
+
+      {canMore && (
+        <div style={{ textAlign:"center", marginTop:14 }}>
+          <BoxBtn tone="ghost" onClick={more}>{loadingMore ? "Loading…" : "More"}</BoxBtn>
+        </div>
+      )}
     </div>
   );
 }
