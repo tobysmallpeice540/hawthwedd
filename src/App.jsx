@@ -2613,7 +2613,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           <div style={{ fontSize:20, fontWeight:800, color:T.text, minWidth:70, textAlign:"center" }}>{year}</div>
           <button onClick={()=>setCursor(new Date(year+1,0,1))} style={navBtn}>&#8250;</button>
           <button onClick={()=>{ setCursor(new Date()); setMode("month"); }} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600 }}>This month</button>
-          {onViewEventsCalendar && (
+          {UI_CLASSIC && onViewEventsCalendar && (
             <button onClick={onViewEventsCalendar} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600, marginLeft:"auto", background:T.accentLight, color:T.accent, border:`1.5px solid ${T.accent}` }}>Events calendar</button>
           )}
         </div>
@@ -6442,6 +6442,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [view, setViewRaw]      = useState("home");
   const [viewHistory, setViewHistory] = useState([]);
   const goingBackRef = useRef(false);
+  // A fresh event form per event opened. Stepping to the next event from inside
+  // the form must not reuse the same form: its autosave timer would be cleared
+  // by the change of event and an edit made in the last second and a half lost.
+  const [formKey, setFormKey] = useState(0);
   // A section reached any way other than its own sidebar entry opens on its
   // first sub-page, as it did when each section kept its own tab state.
   useEffect(function() { navResetExcept(view); }, [view]);
@@ -7008,8 +7012,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // racing each other can't each mint a record. Cleared whenever we move to a
   // different event, or the next new event would be glued to the last one's id.
   const newEventRef = useRef(null);
-  const handleNew    = ()=>{ newEventRef.current = null; setFormData(emptyBooking()); setEditId(null); setView("form"); };
-  const handleEdit   = id=>{ newEventRef.current = null; const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
+  const handleNew    = ()=>{ newEventRef.current = null; setFormKey(function(k){ return k+1; }); setFormData(emptyBooking()); setEditId(null); setView("form"); };
+  const handleEdit   = id=>{ newEventRef.current = null; setFormKey(function(k){ return k+1; }); const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
   const handleDelete = id => {
     const b = bookings.find(x=>x.id===id);
     askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
@@ -7383,7 +7387,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
+        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -11533,14 +11537,29 @@ function buildSidebarNav(o) {
     });
   }
   const reportOn = REPORT_TYPES.some(function(r) { return r.id === o.reportType; }) ? o.reportType : "summary";
+  // The two calendars each have two homes in the menu: the lettings calendar
+  // under Calendar and under Lettings, the events calendar under Calendar,
+  // Events and Reports. Which entry lights up follows the entry that was
+  // pressed (o.origin, kept by SidebarLayout), so the highlight does not jump
+  // to another part of the menu after a click.
+  const onLetCal = view === "lettings" && o.tabs.lettings === "calendar";
+  const onEvCal  = view === "reports" && reportOn === "calendar";
+  const calOn    = o.origin === "calendar" && (onLetCal || onEvCal);
+  const evCalOn  = o.origin === "events" && onEvCal;
+  function openEventsCalendar() { o.setReportType("calendar"); setView("reports"); }
   return [
     { id:"home", icon:"home", label:"Home", on: view === "home", go: function() { setView("home"); } },
-    { id:"calendar", icon:"calendar", label:"Calendar", on: false, go: o.onCalendarTab },
+    { id:"calendar", icon:"calendar", label:"Calendar", origin:"calendar", on: calOn, go: o.onCalendarTab,
+      children: [
+        { label:"Lettings", on: calOn && onLetCal, go: o.onCalendarTab },
+        { label:"Events",   on: calOn && onEvCal,  go: openEventsCalendar },
+      ] },
     { group:"Venue" },
-    { id:"events", icon:"events", label:"Events", on: ["list","form","invoices","portal"].indexOf(view) !== -1,
+    { id:"events", icon:"events", label:"Events", origin:"events", on: ["list","form","invoices","portal"].indexOf(view) !== -1 || evCalOn,
       go: function() { setView("list"); },
       children: [
         { label:"All events", on: view === "list" || view === "form", go: function() { setView("list"); } },
+        { label:"Events calendar", on: evCalOn, go: openEventsCalendar },
         { label:"Invoices", badge: o.invoiceDueCount, on: view === "invoices", go: function() { setView("invoices"); } },
         { label:"Portal settings", on: view === "portal", go: function() { setView("portal"); } },
       ] },
@@ -11549,7 +11568,7 @@ function buildSidebarNav(o) {
       go: function() { setView("viewings"); },
       children: sectionKids("viewings", [["viewings","Viewings",o.pendingViewings],["blocks","Blocks"]], o.tabs.viewings) },
     { group:"Stays" },
-    { id:"lettings", icon:"lettings", label:"Lettings", on: view === "lettings",
+    { id:"lettings", icon:"lettings", label:"Lettings", on: view === "lettings" && !calOn,
       go: function() { setView("lettings"); }, children: sectionKids("lettings", LETTINGS_TABS, o.tabs.lettings) },
     { group:"Grain Store" },
     { id:"boxoffice", icon:"boxoffice", label:"Box Office", on: view === "boxoffice",
@@ -11557,10 +11576,10 @@ function buildSidebarNav(o) {
     { id:"bar", icon:"bar", label:"Bar", on: view === "bar",
       go: function() { setView("bar"); }, children: sectionKids("bar", BAR_TABS.map(function(t) { return [t[0], t[1].replace(/^\+ /, "")]; }), o.tabs.bar) },
     { group:"Admin" },
-    { id:"reports", icon:"reports", label:"Reports", on: view === "reports",
+    { id:"reports", icon:"reports", label:"Reports", on: view === "reports" && !calOn && !evCalOn,
       go: function() { setView("reports"); },
       children: REPORT_TYPES.map(function(r) {
-        return { label: r.label, on: view === "reports" && reportOn === r.id,
+        return { label: r.label, on: view === "reports" && reportOn === r.id && !calOn && !evCalOn,
           go: function() { if (r.id === "accommodation") { openAccomReport(setView); } else { o.setReportType(r.id); setView("reports"); } } };
       }) },
     { id:"settings", icon:"settings", label:"Settings", on: SETTINGS_VIEWS.indexOf(view) !== -1,
@@ -11677,6 +11696,9 @@ function SidebarLayout(props) {
   const [boxTab]      = useNavTab("boxoffice");
   const [barTab]      = useNavTab("bar");
   const [viewingsTab] = useNavTab("viewings");
+  // Which part of the menu was last pressed ("calendar", "events" or null).
+  // Only used to decide which of two entries for the same calendar lights up.
+  const [origin, setOrigin] = useState(null);
 
   // Close the drawer on Escape, and whenever the page changes underneath it.
   useEffect(function() { setNavOpen(false); }, [props.view]);
@@ -11692,15 +11714,18 @@ function SidebarLayout(props) {
     reportType: props.reportType, setReportType: props.setReportType,
     invoiceDueCount: props.invoiceDueCount, pendingViewings: props.pendingViewings,
     tabs: { lettings: lettingsTab, boxoffice: boxTab, bar: barTab, viewings: viewingsTab },
+    origin: origin,
   });
   // A tap in the drawer always closes it, including a sub-page of the page
-  // already showing (which does not change the view).
+  // already showing (which does not change the view). Every tap also records
+  // which part of the menu it came from.
   const closing = nav.map(function(n) {
     if (!n.go) return n;
+    const from = n.origin || null;
     return Object.assign({}, n, {
-      go: function() { setNavOpen(false); n.go(); },
+      go: function() { setNavOpen(false); setOrigin(from); n.go(); },
       children: n.children && n.children.map(function(c) {
-        return Object.assign({}, c, { go: function() { setNavOpen(false); c.go(); } });
+        return Object.assign({}, c, { go: function() { setNavOpen(false); setOrigin(from); c.go(); } });
       }),
     });
   });
@@ -12607,13 +12632,14 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
       <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}>
         <PageHeader title="Events" sub={bookings.length + " event" + (bookings.length!==1?"s":"")}
           actions={<>
-          {onOpenPortal && (
+          {/* In the sidebar layout these are Events → Invoices / Portal settings. */}
+          {UI_CLASSIC && onOpenPortal && (
             <button onClick={onOpenPortal}
               style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.border}`, padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
               Client portal settings
             </button>
           )}
-          {onOpenInvoices && (
+          {UI_CLASSIC && onOpenInvoices && (
             <button onClick={onOpenInvoices}
               style={{ background:T.midBlue, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, display:"flex", alignItems:"center", gap:8, whiteSpace:"nowrap" }}>
               Invoices
@@ -14090,7 +14116,158 @@ function EventClashWarning({ bookings, formData }) {
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onUpdateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom, enquiries, onOpenEnquiry }) {
+// Previous / next event arrows for the event header.
+function EventStepper({ prev, next, onStep }) {
+  const btn = function(on) {
+    return { width:34, height:34, borderRadius:8, border:`1px solid ${T.border}`, background:"#fff",
+      color: on ? T.text : T.border, cursor: on ? "pointer" : "default", fontFamily:"inherit", fontSize:18, lineHeight:1,
+      display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 };
+  };
+  const name = function(b) { return b ? ((b.couple || "Untitled") + (b.date ? " · " + fmtDate(b.date) : "")) : ""; };
+  return (
+    <div style={{ display:"flex", gap:6, flexWrap:"nowrap", flexShrink:0 }}>
+      <button type="button" disabled={!prev} onClick={function(){ onStep(prev); }} title={prev ? "Previous: " + name(prev) : "No earlier event"} aria-label="Previous event" style={btn(!!prev)}>&#8249;</button>
+      <button type="button" disabled={!next} onClick={function(){ onStep(next); }} title={next ? "Next: " + name(next) : "No later event"} aria-label="Next event" style={btn(!!next)}>&#8250;</button>
+    </div>
+  );
+}
+
+// One menu for a record's actions. items: [{ label, onClick, danger }] — nulls skipped.
+function ActionsMenu({ items, label }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(function() {
+    if (!open) return;
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onKey(e) { if (e.key === "Escape") setOpen(false); }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return function() { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const list = (items || []).filter(Boolean);
+  return (
+    <div ref={ref} style={{ position:"relative", flexShrink:0 }}>
+      <button type="button" onClick={function(){ setOpen(function(v){ return !v; }); }} aria-haspopup="menu" aria-expanded={open ? "true" : "false"}
+        style={{ height:34, padding:"0 12px", borderRadius:8, border:`1px solid ${T.border}`, background: open ? T.tint : "#fff", color:T.text,
+          cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, whiteSpace:"nowrap" }}>
+        {label || "Actions"} &#9662;
+      </button>
+      {open && (
+        <div role="menu" style={{ position:"absolute", right:0, top:"calc(100% + 6px)", zIndex:60, minWidth:210, background:"#fff",
+          border:`1px solid ${T.border}`, borderRadius:10, boxShadow:"0 12px 32px rgba(0,0,0,.14)", padding:6, display:"flex", flexDirection:"column" }}>
+          {list.map(function(it, i) {
+            return (
+              <button key={i} type="button" role="menuitem" onClick={function(){ setOpen(false); it.onClick(); }}
+                style={{ textAlign:"left", background:"none", border:"none", borderRadius:6, padding:"9px 12px", cursor:"pointer",
+                  fontFamily:"inherit", fontSize:13.5, color: it.danger ? T.red : T.text, whiteSpace:"nowrap",
+                  borderTop: it.danger && i > 0 ? `1px solid ${T.border}` : "none", marginTop: it.danger && i > 0 ? 4 : 0 }}>
+                {it.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── AVAILABILITY DATE PICKER ────────────────────────────────────────────────
+// A date box with a month calendar beside it, each day coloured by what is
+// already on it: booked (red), holding (amber), pencilled (grey), free (green
+// tint). Used wherever a date is being chosen for an event or a pencil, so the
+// choice is made looking at the diary rather than checked against it after.
+// Advisory, like the clash warnings under it: any day can still be picked.
+function dayAvailability(day, bookings, enquiries, ignoreEventId, ignoreEnquiryId, today) {
+  const evs = overlappingEvents(bookings, day, null, ignoreEventId).filter(function(b) { return b.status !== "Cancelled"; });
+  if (evs.some(function(b) { return b.status !== "Holding"; })) return { kind:"booked", evs:evs };
+  if (evs.length) return { kind:"holding", evs:evs };
+  const pens = overlappingPencils(enquiries, day, null, ignoreEnquiryId, today);
+  if (pens.length) return { kind:"pencil", pens:pens };
+  return { kind:"free" };
+}
+const AVAIL_TONE = {
+  booked:  { bg:"#fee2e2", fg:"#991b1b", label:"Booked" },
+  holding: { bg:"#fef3c7", fg:"#92400e", label:"Holding" },
+  pencil:  { bg:"#e5e7eb", fg:"#374151", label:"Pencilled" },
+  free:    { bg:"#ecfdf3", fg:"#166534", label:"Free" },
+};
+function AvailabilityDateInput({ value, onChange, bookings, enquiries, ignoreEventId, ignoreEnquiryId, inputStyle, min }) {
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(function() {
+    const d = isValidEventDate(value) ? new Date(value + "T12:00:00") : new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const ref = useRef(null);
+  useEffect(function() {
+    if (!open) return;
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onKey(e) { if (e.key === "Escape") setOpen(false); }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return function() { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  function toggle() {
+    if (!open && isValidEventDate(value)) { const d = new Date(value + "T12:00:00"); setCursor(new Date(d.getFullYear(), d.getMonth(), 1)); }
+    setOpen(function(v) { return !v; });
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const y = cursor.getFullYear(), m = cursor.getMonth();
+  const lead = (new Date(y, m, 1).getDay() + 6) % 7;           // Monday first
+  const daysIn = new Date(y, m + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(null);
+  for (let d = 1; d <= daysIn; d++) cells.push(y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0"));
+  const monthName = cursor.toLocaleDateString("en-GB", { month:"long", year:"numeric" });
+  const navBtn = { width:28, height:28, border:`1px solid ${T.border}`, borderRadius:6, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:16, lineHeight:1, color:T.text };
+  return (
+    <div ref={ref} style={{ position:"relative", display:"flex", alignItems:"center", gap:6, flexWrap:"nowrap", minWidth:0 }}>
+      <input type="date" value={value || ""} min={min} onChange={function(e){ onChange(e.target.value); }}
+        style={Object.assign({ flex:1, minWidth:0 }, inputStyle || IS(false))}/>
+      <button type="button" onClick={toggle} title="Show availability" aria-label="Show availability" aria-expanded={open ? "true" : "false"}
+        style={{ flexShrink:0, width:36, height:36, border:`1.5px solid ${open ? T.accent : T.border}`, borderRadius:6, background: open ? T.accentLight : "#fff",
+          color: open ? T.accent : T.textMid, cursor:"pointer", display:"inline-flex", alignItems:"center", justifyContent:"center" }}>
+        <NavIcon name="calendar" size={17}/>
+      </button>
+      {open && (
+        <div style={{ position:"absolute", top:"calc(100% + 6px)", left:0, zIndex:70, width:292, maxWidth:"calc(100vw - 32px)", background:"#fff",
+          border:`1px solid ${T.border}`, borderRadius:10, boxShadow:"0 12px 32px rgba(0,0,0,.16)", padding:12 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"nowrap", marginBottom:8 }}>
+            <button type="button" style={navBtn} onClick={function(){ setCursor(new Date(y, m - 1, 1)); }} aria-label="Previous month">&#8249;</button>
+            <div style={{ fontWeight:700, fontSize:14, color:T.text }}>{monthName}</div>
+            <button type="button" style={navBtn} onClick={function(){ setCursor(new Date(y, m + 1, 1)); }} aria-label="Next month">&#8250;</button>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:3 }}>
+            {["M","T","W","T","F","S","S"].map(function(d, i) { return <div key={"h" + i} style={{ textAlign:"center", fontSize:10.5, fontWeight:700, color:T.textLight, padding:"2px 0" }}>{d}</div>; })}
+            {cells.map(function(day, i) {
+              if (!day) return <div key={"x" + i}/>;
+              const a = dayAvailability(day, bookings, enquiries, ignoreEventId, ignoreEnquiryId, today);
+              const tone = AVAIL_TONE[a.kind];
+              const sel = day === value;
+              const past = day < today;
+              const who = (a.evs || []).map(function(b) { return (b.couple || "(no name)") + (b.status ? " (" + b.status + ")" : ""); })
+                .concat((a.pens || []).map(function(r) { return "Pencil: " + (r.enq.name || "(no name)"); })).join("\n");
+              return (
+                <button key={day} type="button" onClick={function(){ onChange(day); setOpen(false); }}
+                  title={(tone.label + (who ? "\n" + who : ""))}
+                  style={{ height:32, border: sel ? `2px solid ${T.text}` : "1px solid transparent", borderRadius:6, background:tone.bg, color:tone.fg,
+                    fontFamily:"inherit", fontSize:12.5, fontWeight: sel ? 800 : 600, cursor:"pointer", opacity: past ? .45 : 1, padding:0 }}>
+                  {Number(day.slice(8))}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:10, fontSize:11, color:T.textMid }}>
+            {["booked","holding","pencil","free"].map(function(k) {
+              return <span key={k} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:AVAIL_TONE[k].bg, border:`1px solid ${AVAIL_TONE[k].fg}33` }}/>{AVAIL_TONE[k].label}</span>;
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onUpdateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom, enquiries, onOpenEnquiry , onOpenEvent, onOpenFunctionSheet}) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -14156,6 +14333,29 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
     return function() { window.removeEventListener("beforeunload", onBeforeUnload); };
   }, []);
 
+  // Previous / next event, in diary order. Anything still waiting in the
+  // autosave window is saved to THIS event first; if that save fails the move
+  // asks before going, rather than carrying on and losing the edit.
+  const diary = (allBookings || []).filter(function(b){ return b && b.id != null; }).slice().sort(function(a, b) {
+    const da = a.date || "9999", db = b.date || "9999";
+    return da < db ? -1 : da > db ? 1 : (Number(a.id) || 0) - (Number(b.id) || 0);
+  });
+  const here = isEdit ? diary.findIndex(function(b){ return String(b.id) === String(formData.id); }) : -1;
+  const stepPrev = here > 0 ? diary[here - 1] : null;
+  const stepNext = here >= 0 && here < diary.length - 1 ? diary[here + 1] : null;
+  async function stepTo(target) {
+    if (!target || !onOpenEvent) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    if (pendingRef.current && latestSaveRef.current) {
+      try { await latestSaveRef.current(latestFormRef.current); pendingRef.current = false; }
+      catch (e) {
+        if (!window.confirm("Your last change to this event could not be saved. Move to the other event anyway and lose it?")) return;
+        pendingRef.current = false;
+      }
+    }
+    onOpenEvent(target.id);
+  }
+
   const countFilled = s => {
     if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
     if(s==="viewings") return (formData.viewings||[]).length;
@@ -14175,20 +14375,35 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
   return (
     <div style={{ paddingTop:28 }}>
-      <div style={{ position:"sticky", top:"var(--hb-sticky-top, 0px)", zIndex:30, background:UI_CLASSIC ? T.bg : "#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 18px", marginBottom:18, boxShadow:`0 2px 8px rgba(${T.shadowRgb},.10)`, display:"flex", alignItems:"center", gap:14 }}>
+      <div style={{ position:"sticky", top:"var(--hb-sticky-top, 0px)", zIndex:30, background:UI_CLASSIC ? T.bg : "#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 18px", marginBottom:18, flexWrap:"nowrap", boxShadow:`0 2px 8px rgba(${T.shadowRgb},.10)`, display:"flex", alignItems:"center", gap:14 }}>
         <button onClick={onCancel} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, cursor:"pointer", fontSize:13, fontFamily:"inherit", padding:"6px 14px", borderRadius:6, flexShrink:0 }}>← Back</button>
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ fontWeight:UI_CLASSIC ? 700 : 600, fontSize:UI_CLASSIC ? 18 : 25, lineHeight:1.15, fontFamily:T.fontDisplay, color:T.midBlue, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {formData.couple || (isEdit ? "Edit Booking" : "New Booking")}
           </div>
-          {(formData.date || formData.eventType) && (
-            <div style={{ fontSize:12, color:T.textMid, marginTop:2, display:"flex", alignItems:"center", gap:8 }}>
+          {(formData.date || formData.eventType || isEdit) && (
+            <div style={{ fontSize:12, color:T.textMid, marginTop:3, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+              {isEdit && <BookingStatusBadge b={formData}/>}
+              {isEdit && formData.id != null && <span title="This event's reference — Stripe payments for it carry event-{id}" style={{ background:T.tint, color:T.textMid, border:`1px solid ${T.border}`, borderRadius:4, padding:"0 7px", fontSize:11, fontWeight:600, fontVariantNumeric:"tabular-nums" }}>Ref {formData.id}</span>}
               {formData.date && <span>{fmtDate(formData.date)}{formData.endDate && formData.endDate > formData.date ? " – " + fmtDate(formData.endDate) : ""}</span>}
               {formData.eventType && <span style={{ background:T.midBlueBg, color:T.midBlue, borderRadius:4, padding:"1px 7px", fontSize:11, fontWeight:600 }}>{formData.eventType}</span>}
             </div>
           )}
         </div>
+        <EventStepper prev={stepPrev} next={stepNext} onStep={stepTo}/>
+        <ActionsMenu items={[
+          { label: isEdit ? "Save" : "Create booking", onClick: function(){ onSubmit(true); } },
+          { label: "Save & exit", onClick: function(){ onSubmit(false); } },
+          { label: "Exit", onClick: onCancel },
+          isEdit && onOpenFunctionSheet ? { label: "Function sheet (print)", onClick: function(){ onOpenFunctionSheet(formData); } } : null,
+          isEdit && onDelete ? { label: "Delete event…", danger: true, onClick: function(){ setConfirmDelete(true); } } : null,
+        ]}/>
       </div>
+      {confirmDelete && (
+        <ConfirmDialog message="Delete this event?"
+          subMessage={(formData.couple || "This event") + " will be permanently removed. This cannot be undone."}
+          confirmLabel="Yes, delete" onConfirm={onDelete} onCancel={function(){ setConfirmDelete(false); }}/>
+      )}
       <div style={{ display:"grid", gridTemplateColumns:"200px 1fr", gap:20 }}>
         <div>
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
@@ -14434,12 +14649,12 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   {field.key==="date" ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                        <FInput type="date" value={formData.date} onChange={v=>update("date",v)}/>
+                        <AvailabilityDateInput value={formData.date} onChange={v=>update("date",v)} bookings={allBookings} enquiries={enquiries} ignoreEventId={formData.id}/>
                         <DayBadge dateStr={formData.date} style={{ fontSize:13, padding:"6px 12px" }}/>
                       </div>
                       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                         <div style={{ fontSize:12, fontWeight:600, color:T.textMid, width:80, flexShrink:0 }}>End date</div>
-                        <FInput type="date" value={formData.endDate||""} onChange={v=>update("endDate",v)}/>
+                        <AvailabilityDateInput value={formData.endDate||""} onChange={v=>update("endDate",v)} bookings={allBookings} enquiries={enquiries} ignoreEventId={formData.id}/>
                         {formData.endDate && formData.endDate > formData.date && (
                           <span style={{ fontSize:12, color:T.textMid }}>
                             {Math.round((new Date(formData.endDate+"T00:00:00") - new Date(formData.date+"T00:00:00")) / 86400000)} day(s)
@@ -14490,21 +14705,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             </>
           )}
 
-          {activeSection==="core" && isEdit && onDelete && (
-            <div style={{ marginTop:40, paddingTop:20, borderTop:`1px solid ${T.border}` }}>
-              {!confirmDelete ? (
-                <button onClick={()=>setConfirmDelete(true)} style={{ background:"none", color:T.red, border:`1.5px solid ${T.red}`, padding:"9px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-                  Delete Booking
-                </button>
-              ) : (
-                <div style={{ background:"#fff5f5", border:`1.5px solid ${T.red}`, borderRadius:8, padding:"16px 20px", display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
-                  <span style={{ color:T.red, fontWeight:600, fontSize:14, flex:1 }}>Are you sure? This cannot be undone.</span>
-                  <button onClick={onDelete} style={{ background:T.red, color:"#fff", border:"none", padding:"9px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Yes, Delete</button>
-                  <button onClick={()=>setConfirmDelete(false)} style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"9px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>Cancel</button>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Deleting the event is under Actions in the header. */}
         </div>
       </div>
     </div>
@@ -14713,7 +14914,7 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
   const activeLabel = activeType === "calendar" ? "Year Calendar" : (types.filter(function(t){ return t.id === activeType; })[0] || {}).label;
   return (
     <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}>
-      <PageHeader title="Reports" sub={inSidebar ? activeLabel : null}/>
+      <PageHeader title={activeType === "calendar" ? "Events calendar" : "Reports"} sub={inSidebar && activeType !== "calendar" ? activeLabel : null}/>
       {!inSidebar && (
         <TabStrip tabs={types.map(function(t){ return [t.id, t.label]; })} value={activeType}
           onChange={function(id){ if(id==="accommodation"){ openAccomReport(setView); } else { setReportType(id); } }}/>
@@ -20177,13 +20378,15 @@ function EnquiryPencilsSection({ form, setForm, onSave, onSavePencils, bookings,
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>Date</label>
-              <input type="date" value={newP.date} onChange={function(e){ const v=e.target.value; setNewP(function(n){ return Object.assign({}, n, { date:v }); }); }}
-                style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
+              <AvailabilityDateInput value={newP.date} onChange={function(v){ setNewP(function(n){ return Object.assign({}, n, { date:v }); }); }}
+                bookings={bookings} enquiries={enquiries} ignoreEnquiryId={form.id}
+                inputStyle={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
             </div>
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:4, fontWeight:600 }}>End date (optional)</label>
-              <input type="date" value={newP.endDate} onChange={function(e){ const v=e.target.value; setNewP(function(n){ return Object.assign({}, n, { endDate:v }); }); }}
-                style={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
+              <AvailabilityDateInput value={newP.endDate} onChange={function(v){ setNewP(function(n){ return Object.assign({}, n, { endDate:v }); }); }}
+                bookings={bookings} enquiries={enquiries} ignoreEnquiryId={form.id}
+                inputStyle={{ width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", outline:"none", boxSizing:"border-box" }}/>
             </div>
           </div>
           <input type="text" value={newP.note} onChange={function(e){ const v=e.target.value; setNewP(function(n){ return Object.assign({}, n, { note:v }); }); }}
