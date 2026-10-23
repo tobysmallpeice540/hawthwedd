@@ -22833,15 +22833,27 @@ function enquiryGoneQuiet(e, marks, emailSeen, settings, todayIso) {
   if (last && last.date > sent) return false;
   const q = (settings && settings.quiet) || {};
   const flagDays = automationDays(q.flagDays, DEFAULT_AUTOMATIONS.quiet.flagDays);
-  return Math.round((Date.parse(todayIso + "T00:00:00Z") - Date.parse(sent + "T00:00:00Z")) / 86400000) >= flagDays;
+  // Silence counts only as far as Gmail has looked at this address — to the
+  // day of its last check, not to today.
+  const checked = gmailCheckedOnDay(e, emailSeen);
+  if (!checked || checked < sent) return false;
+  return Math.round((Date.parse(checked + "T00:00:00Z") - Date.parse(sent + "T00:00:00Z")) / 86400000) >= flagDays;
+}
+// The day (London) Gmail was last asked about an enquiry's address.
+function gmailCheckedOnDay(e, emailSeen) {
+  const em = String((e && e.email) || "").trim().toLowerCase();
+  const c = em && emailSeen && emailSeen[em];
+  const t = c && Date.parse(c.at || "");
+  if (!t || !isFinite(t)) return null;
+  return new Date(t).toLocaleDateString("en-CA", { timeZone: "Europe/London" });
 }
 
 const AUTOMATION_CARDS = [
   { id: "followup", title: "Enquiry follow-up",
-    when: function(a) { return "Sent " + a.days + " day" + (a.days === 1 ? "" : "s") + " after an enquiry or brochure request arrives, if there has been no contact since and no viewing is booked."; },
+    when: function(a) { return "Sent once Gmail has confirmed " + a.days + " day" + (a.days === 1 ? "" : "s") + " with no contact since an enquiry or brochure request arrived, and no viewing is booked."; },
     fields: ["{firstName}", "{name}"] },
   { id: "quiet", title: "Gone quiet: check-in, then a flag",
-    when: function(a) { return "Sent once to an open enquiry with no activity for " + a.days + " days. If nothing happens for " + a.flagDays + " more days, the enquiry is flagged “gone quiet” in the list. Nothing else is sent."; },
+    when: function(a) { return "Sent once to an open enquiry when Gmail has confirmed " + a.days + " days with no activity. If Gmail then confirms " + a.flagDays + " more quiet days, the enquiry is flagged “gone quiet” in the list. Nothing else is sent."; },
     fields: ["{firstName}", "{name}"] },
   { id: "thanks", title: "Thank you and a review request",
     when: function(a) { return "Sent " + a.days + " day" + (a.days === 1 ? "" : "s") + " after a confirmed event ends, to its email and 2nd email."; },
@@ -22901,7 +22913,7 @@ function AutomationsPanel() {
       });
       const data = await res.json().catch(function() { return {}; });
       if (!res.ok) throw new Error(data.error || ("status " + res.status));
-      setPreview({ due: data.due || [], today: data.today });
+      setPreview({ due: data.due || [], waiting: data.waiting || [], today: data.today });
     } catch (e) { setPreview({ error: e.message || String(e) }); }
   }
 
@@ -22914,8 +22926,10 @@ function AutomationsPanel() {
         <div style={{ fontSize:13, color:T.textMid, lineHeight:1.6 }}>
           Each of these goes to a person once, ever, at about 9am, and shows in Recent Automated Emails.
           They all start <b>off</b>. “Activity” means anything in the contact log, a viewing that has happened, and
-          email exchanged with the address <b>as last seen by this app</b> — which is only kept up to date while Gmail is
-          connected and the Enquiries list is opened now and then. A reply nobody has logged is invisible to it.
+          email exchanged with the address. Quiet days only count <b>up to the last time Gmail was checked</b> for
+          that address, never up to today: three days after an enquiry, with Gmail last checked yesterday, is two
+          verified days, so nothing goes yet. Gmail is checked when the Enquiries list is opened with Gmail connected
+          (at most every six hours). An address Gmail has never been checked for is never followed up.
           Tick “No automatic follow-ups” on an enquiry to leave it out.
         </div>
         <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:10, flexWrap:"wrap" }}>
@@ -22926,6 +22940,14 @@ function AutomationsPanel() {
           {preview && preview.error && <span style={{ fontSize:12, color:T.red }}>Could not check: {preview.error}. {dirty ? "Save first — it reads the saved settings." : ""}</span>}
           {preview && preview.due && <span style={{ fontSize:12, color:T.textMid }}>{preview.due.length === 0 ? "Nothing would be sent today." : preview.due.length + " would be sent today" + (dirty ? " (as saved — save to include your changes)" : "") + ":"}</span>}
         </div>
+        {preview && preview.waiting && preview.waiting.length > 0 && (
+          <div style={{ marginTop:8, display:"grid", gap:3 }}>
+            <div style={{ fontSize:12, color:T.textMid }}>Waiting for Gmail to confirm the gap:</div>
+            {preview.waiting.map(function(w, i) {
+              return <div key={i} style={{ fontSize:12, color:T.textLight }}>· <b>{w.who}</b> — {w.verified} of {w.needed} days confirmed{w.checked ? " (Gmail last checked " + fmtDate(w.checked) + ")" : " (Gmail has not checked this address)"}</div>;
+            })}
+          </div>
+        )}
         {preview && preview.due && preview.due.length > 0 && (
           <div style={{ marginTop:8, display:"grid", gap:3 }}>
             {preview.due.map(function(d, i) {

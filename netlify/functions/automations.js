@@ -22,8 +22,10 @@
 // a viewing that has happened, email exchanged with the address AS LAST SEEN
 // BY THE APP (the Gmail cache, hbf_enquiry_email_seen_v1, refreshed when the
 // enquiries list is opened with Gmail connected), and the enquiry arriving.
-// A reply nobody has logged and Gmail has not been asked about is invisible
-// here — the reason these start switched off.
+// Silence is only counted as far as Gmail has confirmed it: every gap runs
+// from the last activity to the day Gmail last looked at that address
+// (hbf_enquiry_email_seen_v1 records when), never to today. An address Gmail
+// has never been asked about is never emailed by the follow-up or check-in.
 //
 // Never acts on anything old when first switched on: each rule has a window
 // (a few days to a few weeks past its trigger) and ignores what is outside it.
@@ -123,6 +125,22 @@ function lastActivity(e, emailSeen, today) {
   if (r) dates.push(r);
   return dates.sort().pop() || null;
 }
+// The day Gmail was last asked about this address (the app's cache records
+// when it looked, whether or not it found anything). Silence is only known up
+// to that day: after it, a reply could have arrived that nobody has seen.
+function gmailCheckedOn(e, emailSeen) {
+  const em = validEmail(e && e.email);
+  const c = em && emailSeen && emailSeen[em];
+  const t = c && Date.parse(c.at || "");
+  if (!t || !isFinite(t)) return null;
+  return new Date(t).toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+}
+// Days of silence since `from` that Gmail has actually confirmed: from the
+// last activity to the last check, never to today. 0 if never checked.
+function verifiedQuietDays(from, checked) {
+  if (!from || !checked || checked < from) return 0;
+  return daysBetween(from, checked);
+}
 function hasViewingToCome(e, today) {
   return (e.viewings || []).some(function (v) { return v && isIso(v.date) && v.date > today; });
 }
@@ -154,6 +172,9 @@ function planAutomations(o) {
   const marks = o.marks || {};
   const seen = o.emailSeen || {};
   const out = [];
+  // Due by the calendar but not yet confirmed by Gmail — shown in the preview
+  // so "why has nothing gone?" has an answer.
+  const waiting = [];
   // One email per address per run, whatever the rule — two enquiries from the
   // same couple must not mean two identical emails on the same morning.
   const used = {};
@@ -177,15 +198,26 @@ function planAutomations(o) {
     const received = receivedDate(e);
     const last = lastActivity(e, seen, today);
     const viewing = hasViewingToCome(e, today);
+    const checked = gmailCheckedOn(e, seen);
     const tokens = { firstName: firstName(e.name, e.email), name: String(e.name || "").trim() };
     let planned = false;
 
+    // Every gap is counted to the day Gmail last looked, not to today: three
+    // days since the enquiry with Gmail last checked yesterday is two verified
+    // days. The contact log counts as activity, so a logged call restarts the
+    // count. The window past the trigger is still measured to today, so a
+    // check that comes very late does not wake up history.
     if (cfg.followup.on && !m.followup && received && !viewing) {
       const age = daysBetween(received, today);
+      const verified = verifiedQuietDays(received, checked);
       // "No contact since it arrived": nothing later than the day it came in.
       if (age >= cfg.followup.days && age <= cfg.followup.days + WINDOW_DAYS.followup && last && last <= received) {
-        out.push({ kind: "followup", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens });
-        planned = true; used[to] = true;
+        if (verified >= cfg.followup.days) {
+          out.push({ kind: "followup", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens });
+          planned = true; used[to] = true;
+        } else {
+          waiting.push({ kind: "followup", who: e.name || to, verified: verified, needed: cfg.followup.days, checked: checked });
+        }
       }
     }
     if (cfg.quiet.on && !m.quiet && !planned && !viewing && !sombre && last) {
@@ -193,9 +225,14 @@ function planAutomations(o) {
       // it would read as nagging.
       const touched = m.followup && String(m.followup).slice(0, 10) > last ? String(m.followup).slice(0, 10) : last;
       const idle = daysBetween(touched, today);
+      const verified = verifiedQuietDays(touched, checked);
       if (idle >= cfg.quiet.days && idle <= cfg.quiet.days + WINDOW_DAYS.quiet) {
-        out.push({ kind: "quiet", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched });
-        used[to] = true;
+        if (verified >= cfg.quiet.days) {
+          out.push({ kind: "quiet", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched });
+          used[to] = true;
+        } else {
+          waiting.push({ kind: "quiet", who: e.name || to, verified: verified, needed: cfg.quiet.days, checked: checked });
+        }
       }
     }
   });
@@ -221,7 +258,7 @@ function planAutomations(o) {
                            reviewLink: cfg.thanks.reviewUrl } });
     });
   }
-  return { cfg: cfg, due: out };
+  return { cfg: cfg, due: out, waiting: waiting };
 }
 
 // The quiet-enquiry flag the app shows: a check-in went, and nothing has
@@ -235,7 +272,8 @@ function goneQuiet(e, marks, emailSeen, settings, today) {
   const sent = String(m.quiet).slice(0, 10);
   const last = lastActivity(e, emailSeen || {}, today);
   if (last && last > sent) return false;
-  return daysBetween(sent, today) >= cfg.quiet.flagDays;
+  // As with the emails: silence counts only as far as Gmail has looked.
+  return verifiedQuietDays(sent, gmailCheckedOn(e, emailSeen || {})) >= cfg.quiet.flagDays;
 }
 
 function renderEmail(item, cfg) {
@@ -398,7 +436,8 @@ exports.handler = async function (event) {
 
   if (body.dryRun) {
     return reply(200, { ok: true, today: today, dryRun: true,
-      due: plan.due.map(function (d) { const r = renderEmail(d, plan.cfg); return { kind: d.kind, to: d.to, who: d.who, subject: r.subject }; }) });
+      due: plan.due.map(function (d) { const r = renderEmail(d, plan.cfg); return { kind: d.kind, to: d.to, who: d.who, subject: r.subject }; }),
+      waiting: plan.waiting });
   }
   if (!plan.due.length) return reply(200, { ok: true, today: today, sent: 0 });
   if (!RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length });
@@ -456,4 +495,4 @@ exports.handler = async function (event) {
     held: Math.max(0, plan.due.length - MAX_SENDS_PER_RUN) });
 };
 
-exports._test = { planAutomations, goneQuiet, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, coupleFirstNames, DEFAULTS };
+exports._test = { planAutomations, goneQuiet, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, coupleFirstNames, DEFAULTS };

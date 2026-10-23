@@ -225,7 +225,12 @@ own header.
   someone, never email twice). It and `hbf_automations_v1` are deliberately
   NOT restorable from a backup — restoring the sent record would re-send.
   Addresses with a live event, sombre event types (wake, funeral, memorial,
-  celebration of life) and duplicate addresses are left out. The app's
+  celebration of life) and duplicate addresses are left out.
+  **Quiet days count only up to the last Gmail check** of that address
+  (`at` in `hbf_enquiry_email_seen_v1`), never up to today — Toby's rule: 3
+  days since an enquiry with Gmail last checked yesterday is 2 verified days,
+  so nothing goes. Never checked = never followed up. The contact log is
+  activity and restarts the count. The preview lists what is waiting. The app's
   `enquiryGoneQuiet` mirrors `goneQuiet()` there; `money-and-day-test.cjs`
   pins them together.
 - **`sbRpcQuiet`** is `sbRpc` without the red banner, for optional reads and
