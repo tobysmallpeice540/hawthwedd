@@ -49,15 +49,16 @@ function liftConst(name) {
 
 const CONSTS = ["XERO_ACCOUNT_EVENTS", "XERO_ACCOUNT_ACCOM", "INVOICE_STAGE_LABELS", "INVOICE_FIRST_EVENT_YEAR",
                 "DAMAGE_DEPOSIT_STATES", "STATEMENT_STAGE_LABELS", "VAT_CATEGORIES", "STAFFING_FIELDS",
-                "STAFFING_LABELS", "BAR_USAGE_LABEL"];
+                "STAFFING_LABELS", "BAR_USAGE_LABEL", "DEFAULT_AUTOMATIONS"];
 const NAMES = ["round2", "parseMoney", "isValidEventDate", "addDaysIso", "fmtDateLong", "fmtWeekdayLong", "eventTypeLabel",
                "eventAccomStays", "eventAccomExtras", "accomLineDescription", "invoiceStageDates",
                "computeEventInvoiceStages", "findPushedInvoice", "isInvoiceableYear", "fmtMoney", "hhmm",
                "damageDepositInfo", "eventStatementRows", "vatOfInclusive", "signedAmount", "eventVatSplit",
-               "venueAnswerText", "venueFormAnswered", "fsEsc", "functionSheetHtml"];
+               "venueAnswerText", "venueFormAnswered", "fsEsc", "functionSheetHtml",
+               "lastContactFrom", "automationDays", "enquiryGoneQuiet"];
 const ctx = {};
 eval(DAY + "\n" + CONSTS.map(liftConst).join("\n") + "\n" + NAMES.map(lift).join("\n\n") + "\n" +
-     NAMES.map(n => "ctx." + n + " = " + n + ";").join("\n"));
+     NAMES.concat(CONSTS).map(n => "ctx." + n + " = " + n + ";").join("\n"));
 
 let pass = 0, fail = 0;
 function ok(label, cond) {
@@ -172,6 +173,22 @@ console.log("function sheet");
   ok("other venue-form answers in notes", html.indexOf("Confetti?") !== -1 && html.indexOf(">Yes<") !== -1);
   ok("a part that failed says so", html.indexOf("Drinks could not be loaded") !== -1);
   ok("non-admin is told why dietary notes are missing", html.indexOf("only shown to an admin login") !== -1);
+}
+
+console.log("gone-quiet flag (app side, mirrors automations.js)");
+{
+  const A = require("../netlify/functions/automations.js")._test;
+  const e = { id: "enq_1756720800000", email: "jo@example.com", outcome: "undecided", contacts: [{ date: "2026-09-25" }], viewings: [] };
+  const marks = { "enq:enq_1756720800000": { quiet: "2026-10-10T09:00:00Z" } };
+  const cases = [
+    [marks, {}, null, "2026-10-23"], [marks, {}, null, "2026-10-15"], [marks, {}, { quiet: { flagDays: 20 } }, "2026-10-23"],
+    [marks, { "jo@example.com": { date: "2026-10-20" } }, null, "2026-10-23"], [{}, {}, null, "2026-10-23"]
+  ];
+  const app = cases.map(c => ctx.enquiryGoneQuiet(e, c[0], c[1], c[2], c[3]));
+  const fn  = cases.map(c => A.goneQuiet(e, c[0], c[1], c[2], c[3]));
+  eq("app and function agree", app, fn);
+  eq("flag only in the first case", app, [true, false, false, false, false]);
+  eq("same standard wording in both", Object.keys(ctx.DEFAULT_AUTOMATIONS).map(k => ctx.DEFAULT_AUTOMATIONS[k].body), Object.keys(A.DEFAULTS).map(k => A.DEFAULTS[k].body));
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

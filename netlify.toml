@@ -63,6 +63,14 @@
 [functions."check-contracts"]
   schedule = "0 4 * * *"
 
+# Enquiry follow-ups, gone-quiet check-ins and after-event thank-yous. Every
+# rule is OFF until switched on in Settings → Email templates → Follow-ups, so
+# this does nothing until then. 09:00 UTC is 9am in winter and 10am in summer:
+# a sensible hour to land in somebody's inbox either way. The schedule is on
+# the shim (see brevo-sync-cron for why).
+[functions."automations-cron"]
+  schedule = "0 9 * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"

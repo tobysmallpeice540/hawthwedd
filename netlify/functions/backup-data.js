@@ -41,7 +41,13 @@ const DATA_KEYS = [
   "hbf_email_log_v1",
   "hbf_event_invoices_v1",
   "hbf_terms_v1",
-  "hbf_starred_emails_v1"
+  "hbf_starred_emails_v1",
+  // Added 23 Oct 2026 — the brochure keys had been missed from the nightly
+  // snapshot (the app's own list had them), and the follow-up keys are new.
+  "hbf_brochure_requests_v1",
+  "hbf_brochure_settings_v1",
+  "hbf_automations_v1",
+  "hbf_automation_sent_v1"
 ];
 
 function jsonResponse(statusCode, body) {

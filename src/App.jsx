@@ -5496,7 +5496,7 @@ const BACKUP_DATA_KEYS = [
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
   "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
-  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1"
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_automations_v1", "hbf_automation_sent_v1"
 ];
 const KEY_LABELS = {
   "hawthbush_bookings_v6":"Events", "hawthbush_staff_v5":"Staff", "hbf_accom_v1":"Lettings bookings",
@@ -5505,7 +5505,8 @@ const KEY_LABELS = {
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
-  "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings"
+  "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings",
+  "hbf_automations_v1":"Follow-up settings", "hbf_automation_sent_v1":"Follow-ups sent"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -22788,7 +22789,186 @@ function BrochureSettingsPanel() {
 // Settings), reading and saving the same stored copy, so a change made in
 // either place is the change. Each loads fresh when it opens.
 
-const EMAIL_PAGES = [["lettings","Lettings"],["portal","Client portal"],["boxoffice","Box office"],["brochure","Brochure request"]];
+// ─── Follow-ups (automatic emails) ───────────────────────────────────────────
+// Sent by netlify/functions/automations.js once a day, each rule OFF until it
+// is switched on here. The wording below mirrors DEFAULTS there; a blank field
+// falls back to it, field by field. What has been sent is recorded by the
+// function in AUTOMATION_SENT_KEY, which only the function writes.
+const AUTOMATIONS_STORAGE = "hbf_automations_v1";
+const AUTOMATION_SENT_KEY = "hbf_automation_sent_v1";
+const DEFAULT_AUTOMATIONS = {
+  followup: { on: false, days: 3,
+    subject: "Following up on your enquiry — Hawthbush Farm",
+    body: "Hello {firstName},\n\nThank you again for getting in touch about Hawthbush Farm. I wanted to check that everything reached you, and to see whether you have any questions at all.\n\nIf you would like to come and see the farm, just reply with a few dates that suit you and we will arrange a viewing.\n\nAnd if you would rather we did not follow up, just say so — we will not mind in the least.\n\nWarm regards,\nHawthbush Farm" },
+  quiet: { on: false, days: 21, flagDays: 7,
+    subject: "Still thinking about Hawthbush Farm?",
+    body: "Hello {firstName},\n\nWe have not heard from you for a little while, so I wanted to check in. Dates do go, so if you are still thinking about Hawthbush Farm it is worth letting us know which ones you have in mind.\n\nAnd if you have found your venue elsewhere, congratulations — a one-line reply saying so would help us a great deal, and we will not email again.\n\nWarm regards,\nHawthbush Farm" },
+  thanks: { on: false, days: 2, reviewUrl: "", button: "Leave a review",
+    subject: "Thank you from Hawthbush Farm",
+    body: "Dear {firstName},\n\nThank you for celebrating with us. It was a real pleasure to be part of your day, and we hope you and your guests enjoyed every moment.\n\nIf you have a minute, a review would mean a great deal to a small venue like ours.\n\nWith warmest wishes,\nHawthbush Farm" }
+};
+function automationDays(v, d) { const n = Number(v); return isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : d; }
+
+// The flag on an enquiry that was sent a check-in and has had no activity in
+// the days since. Mirrors goneQuiet() in automations.js; activity is whatever
+// lastContactFrom counts.
+function enquiryGoneQuiet(e, marks, emailSeen, settings, todayIso) {
+  if (!e) return false;
+  const m = (marks || {})["enq:" + e.id] || {};
+  if (!m.quiet) return false;
+  const outcome = String(e.outcome || "undecided");
+  if (outcome === "booked" || outcome === "didnotbook") return false;
+  const sent = String(m.quiet).slice(0, 10);
+  const last = lastContactFrom(e, emailSeen || {}, todayIso);
+  if (last && last.date > sent) return false;
+  const q = (settings && settings.quiet) || {};
+  const flagDays = automationDays(q.flagDays, DEFAULT_AUTOMATIONS.quiet.flagDays);
+  return Math.round((Date.parse(todayIso + "T00:00:00Z") - Date.parse(sent + "T00:00:00Z")) / 86400000) >= flagDays;
+}
+
+const AUTOMATION_CARDS = [
+  { id: "followup", title: "Enquiry follow-up",
+    when: function(a) { return "Sent " + a.days + " day" + (a.days === 1 ? "" : "s") + " after an enquiry or brochure request arrives, if there has been no contact since and no viewing is booked."; },
+    fields: ["{firstName}", "{name}"] },
+  { id: "quiet", title: "Gone quiet: check-in, then a flag",
+    when: function(a) { return "Sent once to an open enquiry with no activity for " + a.days + " days. If nothing happens for " + a.flagDays + " more days, the enquiry is flagged “gone quiet” in the list. Nothing else is sent."; },
+    fields: ["{firstName}", "{name}"] },
+  { id: "thanks", title: "Thank you and a review request",
+    when: function(a) { return "Sent " + a.days + " day" + (a.days === 1 ? "" : "s") + " after a confirmed event ends, to its email and 2nd email."; },
+    fields: ["{firstName}", "{name}", "{eventDate}"] },
+];
+
+function AutomationsPanel() {
+  const [cfg, setCfg] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState("");
+  const [preview, setPreview] = useState(null);
+
+  useEffect(function() {
+    let off = false;
+    (async function() {
+      let saved = null;
+      try { saved = await sbGet(AUTOMATIONS_STORAGE); } catch (e) { saved = null; }
+      const merged = {};
+      Object.keys(DEFAULT_AUTOMATIONS).forEach(function(k) {
+        merged[k] = Object.assign({}, DEFAULT_AUTOMATIONS[k], (saved && saved[k]) || {});
+      });
+      if (!off) setCfg(merged);
+    })();
+    return function() { off = true; };
+  }, []);
+
+  if (!cfg) return <div style={quietText}>Loading…</div>;
+
+  function set(id, field, value) {
+    setCfg(function(c) { return Object.assign({}, c, { [id]: Object.assign({}, c[id], { [field]: value }) }); });
+    setDirty(true); setFlash("");
+  }
+  async function save() {
+    setBusy(true); setFlash("");
+    try { await sbSet(AUTOMATIONS_STORAGE, cfg); setDirty(false); setFlash("Saved."); }
+    catch (e) { setFlash("Not saved: " + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+  async function look() {
+    setPreview({ busy: true });
+    try {
+      const res = await fetch("/.netlify/functions/automations", {
+        method: "POST", headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
+        body: JSON.stringify({ dryRun: true })
+      });
+      const data = await res.json().catch(function() { return {}; });
+      if (!res.ok) throw new Error(data.error || ("status " + res.status));
+      setPreview({ due: data.due || [], today: data.today });
+    } catch (e) { setPreview({ error: e.message || String(e) }); }
+  }
+
+  const inp = { width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" };
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", boxShadow:T.shadowCard, marginBottom:14 };
+
+  return (
+    <div>
+      <div style={Object.assign({}, card, { background:T.tint })}>
+        <div style={{ fontSize:13, color:T.textMid, lineHeight:1.6 }}>
+          Each of these goes to a person once, ever, at about 9am, and shows in Recent Automated Emails.
+          They all start <b>off</b>. “Activity” means anything in the contact log, a viewing that has happened, and
+          email exchanged with the address <b>as last seen by this app</b> — which is only kept up to date while Gmail is
+          connected and the Enquiries list is opened now and then. A reply nobody has logged is invisible to it.
+          Tick “No automatic follow-ups” on an enquiry to leave it out.
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:10, flexWrap:"wrap" }}>
+          <button type="button" onClick={look} disabled={preview && preview.busy}
+            style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.textMid, cursor:"pointer", fontSize:12, fontFamily:"inherit", padding:"6px 12px" }}>
+            {preview && preview.busy ? "Looking…" : "What would go today?"}
+          </button>
+          {preview && preview.error && <span style={{ fontSize:12, color:T.red }}>Could not check: {preview.error}. {dirty ? "Save first — it reads the saved settings." : ""}</span>}
+          {preview && preview.due && <span style={{ fontSize:12, color:T.textMid }}>{preview.due.length === 0 ? "Nothing would be sent today." : preview.due.length + " would be sent today" + (dirty ? " (as saved — save to include your changes)" : "") + ":"}</span>}
+        </div>
+        {preview && preview.due && preview.due.length > 0 && (
+          <div style={{ marginTop:8, display:"grid", gap:3 }}>
+            {preview.due.map(function(d, i) {
+              return <div key={i} style={{ fontSize:12, color:T.textMid }}>· <b>{d.who}</b> — {(AUTOMATION_CARDS.find(function(c){ return c.id === d.kind; }) || {}).title} — “{d.subject}”</div>;
+            })}
+          </div>
+        )}
+      </div>
+
+      {AUTOMATION_CARDS.map(function(c) {
+        const a = cfg[c.id];
+        const days = automationDays(a.days, DEFAULT_AUTOMATIONS[c.id].days);
+        const flagDays = automationDays(a.flagDays, DEFAULT_AUTOMATIONS.quiet.flagDays);
+        return (
+          <div key={c.id} style={card}>
+            <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:6 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:T.text, flex:1 }}>{c.title}</div>
+              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, color: a.on ? T.green : T.textLight, cursor:"pointer" }}>
+                <input type="checkbox" checked={!!a.on} onChange={function(e){ set(c.id, "on", e.target.checked); }} style={{ width:16, height:16, accentColor:T.green }}/>
+                {a.on ? "On" : "Off"}
+              </label>
+            </div>
+            <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>{c.when({ days: days, flagDays: flagDays })}</div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(min(100%, 170px), 1fr))", gap:12, marginBottom:12 }}>
+              <div>
+                <FLabel>{c.id === "thanks" ? "Days after the event" : c.id === "quiet" ? "Days with no activity" : "Days after it arrives"}</FLabel>
+                <input type="number" min="1" max="365" value={a.days} onChange={function(e){ set(c.id, "days", e.target.value); }} style={inp}/>
+              </div>
+              {c.id === "quiet" && (
+                <div>
+                  <FLabel>Then flag after (days)</FLabel>
+                  <input type="number" min="1" max="365" value={a.flagDays} onChange={function(e){ set(c.id, "flagDays", e.target.value); }} style={inp}/>
+                </div>
+              )}
+              {c.id === "thanks" && (
+                <div style={{ gridColumn:"span 2" }}>
+                  <FLabel>Review link (https://…)</FLabel>
+                  <input type="url" value={a.reviewUrl || ""} placeholder="Your Google review link" onChange={function(e){ set(c.id, "reviewUrl", e.target.value); }} style={inp}/>
+                </div>
+              )}
+            </div>
+            <FLabel>Subject</FLabel>
+            <input value={a.subject || ""} onChange={function(e){ set(c.id, "subject", e.target.value); }} style={Object.assign({}, inp, { marginBottom:10 })}/>
+            <FLabel>Wording</FLabel>
+            <textarea rows={8} value={a.body || ""} onChange={function(e){ set(c.id, "body", e.target.value); }} style={Object.assign({}, inp, { resize:"vertical", lineHeight:1.5 })}/>
+            <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
+              Fills in: {c.fields.join(" ")}{c.id === "thanks" ? " · the review link is added as a button, and as a link if the wording does not already include it" : ""}. Leave a box empty to use the standard wording.
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+        <button type="button" onClick={save} disabled={busy || !dirty}
+          style={{ background: dirty ? T.accent : "#c7c2b8", color:"#fff", border:"none", borderRadius:7, padding:"9px 20px", cursor: dirty ? "pointer" : "default", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>
+          {busy ? "Saving…" : "Save follow-ups"}
+        </button>
+        {flash && <span style={{ fontSize:13, color: /^Not/.test(flash) ? T.red : T.green }}>{flash}</span>}
+      </div>
+    </div>
+  );
+}
+
+const EMAIL_PAGES = [["lettings","Lettings"],["portal","Client portal"],["boxoffice","Box office"],["brochure","Brochure request"],["automations","Follow-ups"]];
 
 function EmailsView() {
   const [tab, setTab] = useState("lettings");
@@ -22799,6 +22979,7 @@ function EmailsView() {
       {tab === "lettings"  && <LettingsEmailTemplatesPanel/>}
       {tab === "portal"    && <PortalEmailTemplatesPanel/>}
       {tab === "boxoffice" && <div style={{ maxWidth:880 }}><BoxEmailTemplatesCard/></div>}
+      {tab === "automations" && <AutomationsPanel/>}
       {tab === "brochure"  && (
         <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard }}>
           <BrochureSettingsPanel/>
@@ -23160,6 +23341,16 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   const [seenLoaded, setSeenLoaded] = useState(false);
   const scannedRef = useRef("");
   const [sortDir, setSortDir] = useState("desc");   // for contact: desc = longest ago first
+  // What the daily follow-ups have sent, and their settings, for the "gone
+  // quiet" flag. Read only: the function is the one writer of the markers.
+  const [autoMarks, setAutoMarks] = useState({});
+  const [autoCfg, setAutoCfg] = useState(null);
+  useEffect(() => {
+    let off = false;
+    sbGet(AUTOMATION_SENT_KEY).then(m => { if (!off && m && typeof m === "object") setAutoMarks(m); }).catch(() => {});
+    sbGet(AUTOMATIONS_STORAGE).then(c => { if (!off) setAutoCfg(c || null); }).catch(() => {});
+    return () => { off = true; };
+  }, []);
   const [search, setSearch]       = useState("");
   const [confirmDlg, setConfirmDlg] = useState(null);
 
@@ -23334,6 +23525,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         bookings={bookings || []}
         enquiries={enquiries}
         onSavePencils={savePencils}
+        autoMarks={autoMarks["enq:" + enq.id] || null}
       />
     );
   }
@@ -23487,6 +23679,12 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
                             : lastContact.method}
                           {" · "}{(e.contacts||[]).length} logged
                         </div>
+                        {enquiryGoneQuiet(e, autoMarks, emailSeen, autoCfg, new Date().toISOString().slice(0,10)) && (
+                          <div title="We sent a check-in and nothing has happened since"
+                            style={{ display:"inline-block", marginTop:3, fontSize:10, fontWeight:700, color:"#92400e", background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"1px 7px" }}>
+                            Gone quiet
+                          </div>
+                        )}
                       </>
                     ) : (
                       <span style={{ color:T.textLight }}>Never</span>
@@ -23517,7 +23715,7 @@ function FRow({ label, children }) {
   );
 }
 
-function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking, bookings, enquiries, onSavePencils }) {
+function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking, bookings, enquiries, onSavePencils, autoMarks }) {
   const [form, setForm]         = useState({...enq});
   const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"phone", note:"" });
   const [addingContact, setAddingContact] = useState(false);
@@ -23636,6 +23834,14 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
                   </div>
                 </FRow>
                 <FRow label="Phone"><input type="tel" value={form.phone||""} onChange={e=>update("phone",e.target.value)} style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none", boxSizing:"border-box" }}/></FRow>
+              </div>
+              <div style={{ display:"flex", gap:14, alignItems:"center", flexWrap:"wrap", marginTop:10, fontSize:12, color:T.textMid }}>
+                <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer" }}>
+                  <input type="checkbox" checked={!!form.noAutoEmails} onChange={e=>update("noAutoEmails", e.target.checked)} style={{ width:15, height:15 }}/>
+                  No automatic follow-ups
+                </label>
+                {autoMarks && autoMarks.followup && <span style={{ color:T.textLight }}>Follow-up sent {fmtDate(String(autoMarks.followup).slice(0,10))}</span>}
+                {autoMarks && autoMarks.quiet && <span style={{ color:T.textLight }}>Check-in sent {fmtDate(String(autoMarks.quiet).slice(0,10))}</span>}
               </div>
             </div>
           </div>
