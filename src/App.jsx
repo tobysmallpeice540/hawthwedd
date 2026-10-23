@@ -9797,8 +9797,8 @@ function PhoneAppPanel() {
         <div>
           <div style={{ fontWeight:700, color:T.text, marginBottom:6 }}>iPhone or iPad</div>
           <ol style={{ margin:0, paddingLeft:18 }}>
-            <li style={li}>Open {origin.replace(/^https?:\/\//, "")} in <strong>Safari</strong>.</li>
-            <li style={li}>Tap the Share button, then <strong>Add to Home Screen</strong>.</li>
+            <li style={li}>Open {origin.replace(/^https?:\/\//, "")} in <strong>Safari</strong> or <strong>Chrome</strong>.</li>
+            <li style={li}>Tap the Share button (in Chrome it's in the address bar), then <strong>Add to Home Screen</strong>.</li>
             <li style={li}>Open it from the home screen and sign in once.</li>
           </ol>
         </div>
