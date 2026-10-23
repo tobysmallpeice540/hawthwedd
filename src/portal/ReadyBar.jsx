@@ -8,6 +8,7 @@ export const READY_LABEL = {
   drinks:    'your drinks order',
   timeline:  'your timeline',
   music:     'your music',
+  uploads:   'the photos and films',
   suppliers: 'your suppliers',
   layout:    'your table plan',
   items:     'the list of things you are bringing',

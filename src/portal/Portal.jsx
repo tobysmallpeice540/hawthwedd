@@ -14,6 +14,8 @@ import Addons from './Addons.jsx'
 import Food from './Food.jsx'
 import Music from './Music.jsx'
 import Drinks from './Drinks.jsx'
+import Uploads from './Uploads.jsx'
+import Webcast from './Webcast.jsx'
 import ReadyBar, { READY_LABEL } from './ReadyBar.jsx'
 import Icon from './Icon.jsx'
 
@@ -28,6 +30,8 @@ const TABS = {
   checklist:   { label: 'Checklist' },
   timeline:    { label: 'Timeline' },
   music:       { label: 'Music' },
+  uploads:     { label: 'Photos & films' },
+  webcast:     { label: 'Webcast' },
   suppliers:   { label: 'Suppliers' },
   layout:      { label: 'Table plan' },
   items:       { label: 'Bringing' },
@@ -283,6 +287,8 @@ export default function Portal({ session }) {
         {current === 'checklist'   && <Checklist />}
         {current === 'timeline'    && <Timeline kind={kind} />}
         {current === 'music'       && <Music />}
+        {current === 'uploads'     && <Uploads />}
+        {current === 'webcast'     && <Webcast />}
         {current === 'suppliers'   && <Suppliers />}
         {current === 'layout'      && <Layout />}
         {current === 'items'       && <Items />}

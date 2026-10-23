@@ -7977,6 +7977,8 @@ function PortalTemplates({ bookings }) {
         </>
       )}
 
+      <PortalMusicDefaults />
+
       <ChecklistTemplate rows={data.checklist || []} onSaved={function(m){ setNote(m); load(); }} />
       <PortalFormBuilder />
       <PortalAccommodation onSaved={function(m){ setNote(m); }} />
@@ -9502,6 +9504,7 @@ function PortalEventPanel({ eventId, booking }) {
 
 const PORTAL_SECTION_LABEL = {
   guests:"Guests", food:"Food", drinks:"Drinks", checklist:"Checklist", timeline:"Timeline", music:"Music",
+  uploads:"Photos & films", webcast:"Webcast",
   suppliers:"Suppliers", layout:"Table plan", items:"Bringing", addons:"Extras", money:"Payments",
   details:"Details", documents:"Documents", inspiration:"Inspiration",
 };
@@ -9571,6 +9574,8 @@ function PortalEventExtras({ eventId, booking }) {
         <PortalEventRequests requests={requests} onChanged={load} />
         <PortalEventFood food={food} />
         <PortalEventMusic items={music} />
+        <PortalEventUploads eventId={eventId} />
+        <PortalEventWebcast eventId={eventId} />
         <div style={panelCss}>
           <div style={panelTitle}>Ceremony time and emails</div>
           <div style={{ fontSize:13, color:T.textMid, lineHeight:1.8 }}>
@@ -9961,7 +9966,7 @@ function PortalPricedList({ kind }) {
           vat_rate: r.vat_rate === "" || r.vat_rate == null ? 20 : Number(r.vat_rate),
           price_on_request: !!r.price_on_request, active: r.active !== false };
         o[priceKey] = r[priceKey] === "" || r[priceKey] == null ? null : Number(r[priceKey]);
-        if (!isFood) { o.unit_label = r.unit_label || "each"; o.max_qty = Number(r.max_qty) || 1; }
+        if (!isFood) { o.unit_label = r.unit_label || "each"; o.max_qty = Number(r.max_qty) || 1; o.unlocks = r.unlocks || null; }
         return o;
       }) });
       setNote("Saved."); await load();
@@ -10006,6 +10011,14 @@ function PortalPricedList({ kind }) {
             {!isFood && (
               <Field label="Max qty" width={70}>
                 <input type="number" min="1" value={r.max_qty || 1} onChange={function(e){ edit(i, { max_qty:e.target.value }); }} style={inputCss} />
+              </Field>
+            )}
+            {!isFood && (
+              <Field label="When confirmed, show" width={130}>
+                <select value={r.unlocks || ""} onChange={function(e){ edit(i, { unlocks: e.target.value || null }); }} style={inputCss}>
+                  <option value="">nothing extra</option>
+                  <option value="webcast">Webcast page</option>
+                </select>
               </Field>
             )}
             <Field label="VAT %" width={64}>
@@ -10490,6 +10503,163 @@ function PortalDrinksSettings() {
             {busy ? "Saving…" : dirty ? "Save the list" : "Saved"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── webcast details, for one event ──────────────────────────────────────────
+function PortalEventWebcast({ eventId }) {
+  const [d, setD] = useState(null);
+  const [url, setUrl] = useState("");
+  const [pw, setPw] = useState("");
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  async function load() {
+    try {
+      const r = await sbRpc("wp_admin_webcast", { p_event_id: eventId });
+      setD(r); setUrl(r.stream_url || ""); setPw(r.password || ""); setNotes(r.notes || "");
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, [eventId]);
+  async function save() {
+    setBusy(true); setErr(""); setNote("");
+    try { await sbRpc("wp_admin_save_webcast", { p_event_id: eventId, p_stream_url: url, p_password: pw, p_notes: notes }); setNote("Saved."); await load(); }
+    catch (e) { setErr(e.code === "url_not_https" ? "The stream address must start https://" : (e.message || String(e))); }
+    finally { setBusy(false); }
+  }
+  if (!d) return err ? <ErrBanner text={err} /> : null;
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Webcast <span style={{ fontWeight:400, color:T.textLight }}>
+        · {d.shown ? "showing in their portal" : "not showing — confirm the webcast extra, or tick Webcast under Sections"}</span></div>
+      {err && <ErrBanner text={err} />}
+      <div style={{ display:"grid", gap:8 }}>
+        <Field label="Stream address" width="100%"><input value={url} onChange={function(e){ setUrl(e.target.value); setNote(""); }} placeholder="https://…" style={inputCss} /></Field>
+        <Field label="Password" width="100%"><input value={pw} onChange={function(e){ setPw(e.target.value); setNote(""); }} style={inputCss} /></Field>
+        <Field label="Note for them (optional)" width="100%"><input value={notes} onChange={function(e){ setNotes(e.target.value); setNote(""); }} placeholder="e.g. goes live at 11:45" style={inputCss} /></Field>
+      </div>
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:10 }}>
+        <button onClick={save} disabled={busy} style={btnQuiet}>{busy ? "Saving…" : "Save"}</button>
+        {note && <span style={{ fontSize:12, color:T.green }}>{note}</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── photos and films they have sent ─────────────────────────────────────────
+// Opened and removed through netlify/functions/portal-upload.js with the
+// staff member's own session, which the database recognises as staff.
+async function portalUploadCall(action, id) {
+  const res = await fetch("/.netlify/functions/portal-upload", {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, SESSION_TOKEN ? { Authorization: "Bearer " + SESSION_TOKEN } : {}),
+    body: JSON.stringify({ action: action, id: id })
+  });
+  const text = await res.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch (e) {}
+  if (!res.ok) throw new Error((data && data.error) || ("refused (" + res.status + ")"));
+  return data;
+}
+
+function PortalEventUploads({ eventId }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  async function load() {
+    try { const r = await sbRpc("wp_admin_uploads", { p_event_id: eventId }); setRows(r.uploads || []); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, [eventId]);
+  async function open(id) {
+    setBusy(id); setErr("");
+    const w = window.open("", "_blank");
+    try { const r = await portalUploadCall("view", id); if (w) w.location = r.url; else window.location.href = r.url; }
+    catch (e) { if (w) w.close(); setErr(e.message || String(e)); }
+    finally { setBusy(""); }
+  }
+  async function remove(u) {
+    if (!window.confirm("Remove " + u.name + "? It is deleted for them too.")) return;
+    setBusy(u.id); setErr("");
+    try { await portalUploadCall("delete", u.id); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(""); }
+  }
+  if (rows === null) return err ? <ErrBanner text={err} /> : null;
+  const ready = rows.filter(function(u){ return u.status === "ready"; });
+  const pending = rows.length - ready.length;
+  const total = ready.reduce(function(a, u){ return a + Number(u.size_bytes || 0); }, 0);
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Photos and films <span style={{ fontWeight:400, color:T.textLight }}>
+        · {ready.length} sent{total ? ", " + (total / 1048576).toFixed(0) + " MB" : ""}{pending ? " · " + pending + " not finished" : ""}</span></div>
+      {err && <ErrBanner text={err} />}
+      {ready.length === 0 ? <div style={quietText}>Nothing sent.</div> : (
+        <div style={{ display:"grid", gap:6 }}>
+          {ready.map(function(u){
+            return (
+              <div key={u.id} style={{ display:"flex", gap:8, alignItems:"center", fontSize:13, borderTop:`1px solid ${T.border}55`, paddingTop:6, flexWrap:"wrap" }}>
+                <span style={{ fontSize:11, color:T.textLight, width:38 }}>{u.kind === "video" ? "Film" : "Photo"}</span>
+                <span style={{ flex:"1 1 160px", color:T.text, minWidth:0, wordBreak:"break-word" }}>
+                  {u.name}{u.caption ? <span style={{ color:T.textLight }}> — {u.caption}</span> : null}
+                </span>
+                <button disabled={busy === u.id} onClick={function(){ open(u.id); }} style={Object.assign({}, btnQuiet, { padding:"4px 10px", fontSize:12 })}>View</button>
+                <button disabled={busy === u.id} onClick={function(){ remove(u); }} style={Object.assign({}, btnQuiet, { padding:"4px 10px", fontSize:12, color:T.red })}>Remove</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── music suggestions per kind of event ─────────────────────────────────────
+function PortalMusicDefaults() {
+  const [types, setTypes] = useState(null);
+  const [texts, setTexts] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  async function load() {
+    try {
+      const r = await sbRpc("wp_admin_music_defaults");
+      setTypes(r.types || []);
+      const t = {}; (r.types || []).forEach(function(x){ t[x.event_type] = (x.lines || []).join("\n"); }); setTexts(t);
+    } catch (e) { setErr(e.message || String(e)); }
+  }
+  useEffect(function(){ load(); }, []);
+  async function save(type) {
+    setBusy(true); setErr(""); setNote("");
+    try {
+      await sbRpc("wp_admin_save_music_defaults", { p_event_type: type, p_lines: String(texts[type] || "").split("\n") });
+      setNote("Saved the " + type.toLowerCase() + " suggestions."); await load();
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  if (!types) return err ? <ErrBanner text={err} /> : null;
+  return (
+    <div style={Object.assign({}, panelCss, { marginBottom:16 })}>
+      <div style={panelTitle}>Music — the lines each kind of event starts with</div>
+      <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 10px", maxWidth:680 }}>
+        One per line. A client sees these with an empty Spotify link to fill in, and can add their
+        own. A change here applies to events that open their Music tab from now on.
+      </p>
+      {err && <ErrBanner text={err} />}
+      {note && <div style={{ fontSize:12, color:T.green, marginBottom:8 }}>{note}</div>}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap:12 }}>
+        {types.map(function(t){
+          return (
+            <div key={t.event_type}>
+              <div style={{ fontSize:12, fontWeight:700, color:T.textMid, marginBottom:4 }}>{t.event_type}</div>
+              <textarea rows={6} value={texts[t.event_type] || ""} onChange={function(e){ const n = Object.assign({}, texts); n[t.event_type] = e.target.value; setTexts(n); setNote(""); }}
+                style={Object.assign({}, inputCss, { fontFamily:"inherit", resize:"vertical" })} />
+              <button onClick={function(){ save(t.event_type); }} disabled={busy} style={Object.assign({}, btnQuiet, { marginTop:6, padding:"5px 12px", fontSize:12 })}>Save</button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

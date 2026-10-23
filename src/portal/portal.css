@@ -478,3 +478,7 @@ input.qty { width: 84px; padding: 7px 9px; font-size: 15px; }
 .add-line { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
 .add-line select { flex: 1 1 220px; width: auto; }
 .add-line input { flex: 0 0 110px; width: 110px; }
+
+/* Photos & films */
+input.caption { flex-basis: 100%; margin-top: 6px; padding: 7px 10px; font-size: 14px; }
+.filebtn.is-busy { opacity: .6; cursor: default; }

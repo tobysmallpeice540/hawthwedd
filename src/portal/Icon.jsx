@@ -10,6 +10,8 @@ const PATHS = {
   checklist:   'M4 5h3v3H4zM4 11h3v3H4zM4 17h3v3H4zM10 6.5h10M10 12.5h10M10 18.5h10',
   timeline:    'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7v5l3.5 2',
   drinks:      'M6 3h12l-1.5 8.5a4.5 4.5 0 0 1-9 0zM6.6 7h10.8M12 15.5V21M8.5 21h7',
+  uploads:     'M4 5h16v14H4zM4 15l4.5-4.5 4 4 2.5-2.5L20 17M15 9.5h.01M12 3v4M10 5l2-2 2 2',
+  webcast:     'M3 6h13v10H3zM16 10l5-3v8l-5-3M7 20h5M9.5 16v4',
   music:       'M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
   suppliers:   'M4 8h16v12H4zM9 8V5h6v3M4 13h16',
   layout:      'M3 4h18v16H3zM7 8h4v3H7zM13 13h4v3h-4zM7 15h2M15 8h2',

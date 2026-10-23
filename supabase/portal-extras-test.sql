@@ -76,13 +76,17 @@ begin
      'wp_admin_save_section_defaults','wp_admin_event_sections','wp_admin_set_event_section',
      'wp_get_food','wp_save_food','wp_admin_food_packages','wp_admin_save_food_packages','wp_admin_food',
      'wp_music_url_ok','wp_get_music','wp_save_music_item','wp_delete_music_item','wp_admin_music',
+     'wp_admin_music_defaults','wp_admin_save_music_defaults','wp_get_webcast','wp_admin_webcast',
+     'wp_admin_save_webcast','wp_upload_slot','wp_upload_confirm','wp_upload_path','wp_upload_forget',
+     'wp_get_uploads','wp_set_upload_caption','wp_admin_uploads',
      'wp_set_marketing')
      and has_function_privilege('anon', p.oid, 'execute');
   if n = 0 then passes:=passes+1; else fails:=fails||('G1 anon can execute '||n||' new functions'); end if;
 
   select count(*) into n from pg_proc p join pg_namespace s on s.oid = p.pronamespace
    where s.nspname='public' and p.proname in ('wp_section_area','wp_section_rows','wp_minutes_after',
-         'wp_section_keys','wp_event_type_of','wp_visible_sections','wp_music_url_ok')
+         'wp_section_keys','wp_event_type_of','wp_visible_sections','wp_music_url_ok',
+         'wp_upload_confirm','wp_upload_forget')
      and has_function_privilege('authenticated', p.oid, 'execute');
   if n = 0 then passes:=passes+1; else fails:=fails||('G2 helpers callable by clients: '||n); end if;
 

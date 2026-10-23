@@ -118,7 +118,7 @@ select pg_temp.patch_fn('wp_get_guests',
 
 create table if not exists public.wp_section_status (
   event_id     integer not null,
-  section      text    not null check (section in ('guests','timeline','suppliers','layout','details','items','food','music','drinks')),
+  section      text    not null check (section in ('guests','timeline','suppliers','layout','details','items','food','music','drinks','uploads')),
   state        text    not null check (state in ('ready','reopened')),
   ready_at     timestamptz,
   ready_by     text,
@@ -143,6 +143,7 @@ returns text language sql immutable set search_path to 'public' as $function$
     when 'food'      then 'food'
     when 'music'     then 'music'
     when 'drinks'    then 'drinks'
+    when 'uploads'   then 'uploads'
   end;
 $function$;
 
@@ -642,6 +643,8 @@ create table if not exists public.wp_addons (
   vat_rate         numeric(5,2) not null default 20 check (vat_rate between 0 and 100),
   price_on_request boolean not null default false,
   max_qty          integer not null default 1 check (max_qty between 1 and 999),
+  -- A portal section this add-on switches on once confirmed (the webcast).
+  unlocks          text check (unlocks is null or unlocks in ('webcast')),
   active           boolean not null default true,
   sort             integer not null default 0,
   created_at       timestamptz not null default now()
@@ -680,6 +683,13 @@ select v.* from (values
   ('Lawn games', 'Giant Jenga, quoits and the like, set out on the lawn.', 'set', true, false, 30)
 ) as v(name, description, unit_label, price_on_request, active, sort)
 where not exists (select 1 from public.wp_addons);
+
+-- The webcast: once confirmed, the client's portal gains a Webcast page with
+-- the stream address and password staff set for that event. Off until priced.
+insert into public.wp_addons (name, description, unit_label, price_on_request, active, sort, unlocks)
+select 'Webcast of the service', 'A live stream for people who cannot be there. We send you the link and password to share.',
+       'each', true, false, 40, 'webcast'
+where not exists (select 1 from public.wp_addons where unlocks = 'webcast');
 
 create or replace function public.wp_get_addons()
 returns jsonb language plpgsql stable security definer set search_path to 'public', 'extensions' as $function$
@@ -762,7 +772,7 @@ begin
     select jsonb_agg(jsonb_build_object(
              'id', a.id, 'name', a.name, 'description', a.description, 'unit_label', a.unit_label,
              'price_inc_vat', a.price_inc_vat, 'vat_rate', a.vat_rate, 'price_on_request', a.price_on_request,
-             'max_qty', a.max_qty, 'active', a.active, 'sort', a.sort,
+             'max_qty', a.max_qty, 'active', a.active, 'sort', a.sort, 'unlocks', a.unlocks,
              'requests', (select count(*) from wp_addon_requests r where r.addon_id = a.id))
            order by a.sort, a.name) from wp_addons a), '[]'::jsonb));
 end $function$;
@@ -797,11 +807,12 @@ begin
         vat_rate = coalesce(nullif(e ->> 'vat_rate', '')::numeric, 20),
         price_on_request = coalesce((e ->> 'price_on_request')::boolean, false),
         max_qty = greatest(1, least(999, coalesce(nullif(e ->> 'max_qty', '')::int, 1))),
+        unlocks = case when e ->> 'unlocks' = 'webcast' then 'webcast' end,
         active = coalesce((e ->> 'active')::boolean, true),
         sort = ord * 10
       where id = v_id;
     else
-      insert into wp_addons (name, description, unit_label, price_inc_vat, vat_rate, price_on_request, max_qty, active, sort)
+      insert into wp_addons (name, description, unit_label, price_inc_vat, vat_rate, price_on_request, max_qty, active, sort, unlocks)
       values (left(trim(e ->> 'name'), 120),
               left(nullif(trim(coalesce(e ->> 'description', '')), ''), 500),
               coalesce(left(nullif(trim(coalesce(e ->> 'unit_label', '')), ''), 30), 'each'),
@@ -809,7 +820,8 @@ begin
               coalesce(nullif(e ->> 'vat_rate', '')::numeric, 20),
               coalesce((e ->> 'price_on_request')::boolean, false),
               greatest(1, least(999, coalesce(nullif(e ->> 'max_qty', '')::int, 1))),
-              coalesce((e ->> 'active')::boolean, true), ord * 10)
+              coalesce((e ->> 'active')::boolean, true), ord * 10,
+              case when e ->> 'unlocks' = 'webcast' then 'webcast' end)
       returning id into v_id;
     end if;
     v_ids := v_ids || v_id;
@@ -895,8 +907,8 @@ revoke all on table public.wp_event_sections from anon, authenticated;
 -- The tabs, in the order the portal draws them.
 create or replace function public.wp_section_keys()
 returns text[] language sql immutable set search_path to 'public' as $function$
-  select array['guests','food','drinks','checklist','timeline','music','suppliers','layout','items',
-               'addons','money','details','documents','inspiration'];
+  select array['guests','food','drinks','checklist','timeline','music','uploads','webcast','suppliers',
+               'layout','items','addons','money','details','documents','inspiration'];
 $function$;
 
 insert into public.wp_section_defaults (event_type, section, shown)
@@ -906,7 +918,7 @@ select t.event_type, k.section, k.section = any (t.shown)
                       'addons','money','details','documents','inspiration']),
     ('Party',   array['guests','food','drinks','checklist','timeline','music','suppliers','layout','items',
                       'addons','money','details','documents']),
-    ('Wake',    array['guests','food','drinks','timeline','music','money','details','documents']),
+    ('Wake',    array['guests','food','drinks','timeline','music','uploads','money','details','documents']),
     ('Other',   array['guests','timeline','money','details','documents'])
   ) as t(event_type, shown)
   cross join unnest(wp_section_keys()) as k(section)
@@ -927,6 +939,11 @@ returns jsonb language sql stable security definer set search_path to 'public', 
     from unnest(wp_section_keys()) with ordinality as k(section, ord)
    where coalesce(
            (select es.shown from wp_event_sections es where es.event_id = p_event and es.section = k.section),
+           -- A section an add-on unlocks (the webcast) appears once that add-on
+           -- is CONFIRMED for this event. A per-event tick still overrides.
+           (select true where exists (
+              select 1 from wp_addon_requests r join wp_addons a on a.id = r.addon_id
+               where r.event_id = p_event and r.status = 'approved' and a.unlocks = k.section)),
            (select sd.shown from wp_section_defaults sd
              where sd.event_type = wp_event_type_of(p_event) and sd.section = k.section),
            false);
@@ -999,7 +1016,7 @@ end $function$;
 
 -- Small settings Toby can change without a deploy. Allowlisted keys only.
 create table if not exists public.wp_settings (
-  key        text primary key check (key in ('cover_url')),
+  key        text primary key check (key in ('cover_url', 'upload_max_mb')),
   value      text,
   updated_at timestamptz not null default now()
 );
@@ -1336,8 +1353,62 @@ returns boolean language sql immutable set search_path to 'public' as $function$
   select p_url ~ '^https://(open\.spotify\.com|spotify\.link)/[A-Za-z0-9/_?=&%.-]+$' and length(p_url) <= 500;
 $function$;
 
--- Suggested lines go in on the first visit, by event type, with empty links.
--- They go in once: a client who deletes them all does not get them back.
+-- The suggested lines for each kind of event, which staff edit. Wake:
+-- arrival, procession, song 1, song 2 … Wedding: arrival, first dance …
+create table if not exists public.wp_music_defaults (
+  event_type  text not null,
+  description text not null,
+  sort        integer not null default 0,
+  primary key (event_type, description)
+);
+alter table public.wp_music_defaults enable row level security;
+revoke all on table public.wp_music_defaults from anon, authenticated;
+
+insert into public.wp_music_defaults (event_type, description, sort)
+select v.t, v.d, v.o from (values
+  ('Wedding', 'Arrival — background music', 10), ('Wedding', 'First dance', 20), ('Wedding', 'Dancefloor', 30),
+  ('Party',   'Arrival — background music', 10), ('Party',   'Dancefloor', 20),
+  ('Wake',    'Arrival — background music', 10), ('Wake',    'Procession', 20),
+  ('Wake',    'Song 1', 30), ('Wake', 'Song 2', 40),
+  ('Other',   'Background music', 10)
+) as v(t, d, o)
+where not exists (select 1 from public.wp_music_defaults);
+
+create or replace function public.wp_admin_music_defaults()
+returns jsonb language plpgsql stable security definer set search_path to 'public', 'extensions' as $function$
+begin
+  if not is_staff() then return jsonb_build_object('ok', false, 'error', 'not_staff'); end if;
+  return jsonb_build_object('ok', true, 'types', (
+    select jsonb_agg(jsonb_build_object('event_type', t,
+             'lines', coalesce((select jsonb_agg(m.description order by m.sort, m.description)
+                                  from wp_music_defaults m where m.event_type = t), '[]'::jsonb))
+           order by o)
+      from unnest(array['Wedding', 'Party', 'Wake', 'Other']) with ordinality as x(t, o)));
+end $function$;
+
+-- Changes the suggestions for events that open their Music tab from now on.
+-- An event already seeded keeps its own list.
+create or replace function public.wp_admin_save_music_defaults(p_event_type text, p_lines text[])
+returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
+begin
+  if not is_staff() then return jsonb_build_object('ok', false, 'error', 'not_staff'); end if;
+  if p_event_type not in ('Wedding', 'Party', 'Wake', 'Other') then
+    return jsonb_build_object('ok', false, 'error', 'bad_event_type');
+  end if;
+  if coalesce(array_length(p_lines, 1), 0) > 30 then return jsonb_build_object('ok', false, 'error', 'too_many'); end if;
+  delete from wp_music_defaults where event_type = p_event_type;
+  insert into wp_music_defaults (event_type, description, sort)
+  select p_event_type, left(trim(l), 200), o * 10
+    from unnest(coalesce(p_lines, '{}')) with ordinality as x(l, o)
+   where length(trim(l)) > 0
+  on conflict (event_type, description) do nothing;   -- a line typed twice counts once
+  perform wp_log('admin', 'changed the music suggestions for ' || p_event_type);
+  return jsonb_build_object('ok', true);
+end $function$;
+
+-- Suggested lines go in on the first visit, from the event type's list above,
+-- with empty links. They go in once: a client who deletes them all does not
+-- get them back.
 create or replace function public.wp_get_music()
 returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
 declare
@@ -1350,12 +1421,10 @@ begin
   if not exists (select 1 from wp_event_profile where event_id = v_event and music_seeded_at is not null) then
     v_type := wp_event_type_of(v_event);
     insert into wp_playlist (event_id, description, sort)
-    select v_event, s.d, s.o * 10
-      from unnest(case v_type
-             when 'Wedding' then array['Arrival — background music', 'First dance', 'Dancefloor']
-             when 'Party'   then array['Arrival — background music', 'Dancefloor']
-             else                array['Background music'] end) with ordinality as s(d, o)
-     where not exists (select 1 from wp_playlist where event_id = v_event);
+    select v_event, m.description, m.sort
+      from wp_music_defaults m
+     where m.event_type = v_type
+       and not exists (select 1 from wp_playlist where event_id = v_event);
     insert into wp_event_profile (event_id, music_seeded_at) values (v_event, now())
     on conflict (event_id) do update set music_seeded_at = now();
   end if;
@@ -1453,6 +1522,219 @@ begin
 end $function$;
 
 
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 11. WEBCAST, and PHOTOS & FILMS
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- The webcast page: the stream address and password staff set for the event.
+-- Shown only while the Webcast section is visible to that event (normally
+-- because the webcast add-on has been confirmed).
+create table if not exists public.wp_webcast (
+  event_id    integer primary key,
+  stream_url  text check (stream_url is null or stream_url ~ '^https://'),
+  password    text,
+  notes       text,
+  updated_at  timestamptz not null default now()
+);
+alter table public.wp_webcast enable row level security;
+revoke all on table public.wp_webcast from anon, authenticated;
+
+create or replace function public.wp_get_webcast()
+returns jsonb language plpgsql stable security definer set search_path to 'public', 'extensions' as $function$
+declare v_event integer := wp_my_event_id(); w wp_webcast%rowtype;
+begin
+  if v_event is null then return jsonb_build_object('ok', false, 'error', 'no_access'); end if;
+  if not (wp_visible_sections(v_event) ? 'webcast') then
+    return jsonb_build_object('ok', false, 'error', 'not_available');
+  end if;
+  select * into w from wp_webcast where event_id = v_event;
+  return jsonb_build_object('ok', true, 'stream_url', w.stream_url, 'password', w.password, 'notes', w.notes);
+end $function$;
+
+create or replace function public.wp_admin_webcast(p_event_id integer)
+returns jsonb language plpgsql stable security definer set search_path to 'public', 'extensions' as $function$
+declare w wp_webcast%rowtype;
+begin
+  if not is_staff() then return jsonb_build_object('ok', false, 'error', 'not_staff'); end if;
+  select * into w from wp_webcast where event_id = p_event_id;
+  return jsonb_build_object('ok', true, 'shown', wp_visible_sections(p_event_id) ? 'webcast',
+    'stream_url', w.stream_url, 'password', w.password, 'notes', w.notes);
+end $function$;
+
+create or replace function public.wp_admin_save_webcast(p_event_id integer, p_stream_url text, p_password text, p_notes text)
+returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
+declare v_url text := nullif(trim(coalesce(p_stream_url, '')), '');
+begin
+  if not is_staff() then return jsonb_build_object('ok', false, 'error', 'not_staff'); end if;
+  if v_url is not null and v_url !~ '^https://' then return jsonb_build_object('ok', false, 'error', 'url_not_https'); end if;
+  insert into wp_webcast (event_id, stream_url, password, notes, updated_at)
+  values (p_event_id, left(v_url, 1000), left(nullif(trim(coalesce(p_password, '')), ''), 200),
+          left(nullif(trim(coalesce(p_notes, '')), ''), 1000), now())
+  on conflict (event_id) do update set stream_url = excluded.stream_url, password = excluded.password,
+    notes = excluded.notes, updated_at = now();
+  return jsonb_build_object('ok', true);
+end $function$;
+
+
+-- Photos and films a client sends us — for a wake, the pictures for the
+-- slideshow and the films for the screen.
+--
+-- THE SHAPE. Files go straight from the browser to a PRIVATE storage bucket
+-- with a one-use signed upload URL, so a 400MB film never passes through a
+-- Netlify function (they take 6MB). netlify/functions/portal-upload.js:
+--   1. asks wp_upload_slot() AS THE USER — which checks the event, the
+--      section, the type and the size, and decides the path itself
+--      (<event_id>/<uuid>.<ext>); the client never names a path;
+--   2. signs an upload URL for exactly that path with the service key;
+--   3. after the upload, checks the object is really there and calls
+--      wp_upload_confirm() with the service key, so a row only becomes
+--      "ready" when a file exists.
+-- Viewing and deleting go through the same function the same way. Clients see
+-- only their own event's files; staff see any.
+create table if not exists public.wp_uploads (
+  id          uuid primary key default gen_random_uuid(),
+  event_id    integer not null,
+  path        text not null unique,
+  name        text not null,
+  kind        text not null check (kind in ('image', 'video')),
+  mime        text not null,
+  size_bytes  bigint not null check (size_bytes > 0),
+  caption     text,
+  status      text not null default 'pending' check (status in ('pending', 'ready')),
+  uploaded_by text,
+  created_at  timestamptz not null default now(),
+  ready_at    timestamptz
+);
+create index if not exists wp_uploads_event on public.wp_uploads (event_id, created_at);
+alter table public.wp_uploads enable row level security;
+revoke all on table public.wp_uploads from anon, authenticated;
+
+insert into public.wp_settings (key, value) values ('upload_max_mb', '500') on conflict (key) do nothing;
+
+-- The private bucket, where Supabase storage exists (not on a bare replica).
+-- Its own limit backs up the function's; the project-wide upload limit in the
+-- Supabase dashboard must be at least as large for films to get through.
+do $bucket$
+begin
+  if exists (select 1 from pg_namespace where nspname = 'storage') then
+    execute $q$insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+      values ('portal-uploads', 'portal-uploads', false, 524288000,
+              array['image/jpeg','image/png','image/webp','image/heic','image/heif',
+                    'video/mp4','video/quicktime','video/x-m4v','video/webm'])
+      on conflict (id) do nothing$q$;
+  end if;
+end $bucket$;
+
+create or replace function public.wp_upload_slot(p_name text, p_size bigint, p_mime text)
+returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
+declare
+  v_event integer := wp_my_event_id();
+  v_kind text;
+  v_ext  text;
+  v_max  bigint := coalesce((select value::bigint from wp_settings where key = 'upload_max_mb'), 500) * 1048576;
+  v_id   uuid := gen_random_uuid();
+  v_path text;
+begin
+  if v_event is null then return jsonb_build_object('ok', false, 'error', 'no_access'); end if;
+  if not (wp_visible_sections(v_event) ? 'uploads') then
+    return jsonb_build_object('ok', false, 'error', 'not_available');
+  end if;
+  v_kind := case when p_mime in ('image/jpeg','image/png','image/webp','image/heic','image/heif') then 'image'
+                 when p_mime in ('video/mp4','video/quicktime','video/x-m4v','video/webm') then 'video' end;
+  if v_kind is null then return jsonb_build_object('ok', false, 'error', 'bad_type'); end if;
+  if p_size is null or p_size <= 0 or p_size > v_max then
+    return jsonb_build_object('ok', false, 'error', 'too_big', 'max_mb', v_max / 1048576);
+  end if;
+  if (select count(*) from wp_uploads where event_id = v_event) >= 300 then
+    return jsonb_build_object('ok', false, 'error', 'too_many');
+  end if;
+  v_ext := case p_mime when 'image/jpeg' then 'jpg' when 'image/png' then 'png' when 'image/webp' then 'webp'
+                       when 'image/heic' then 'heic' when 'image/heif' then 'heif' when 'video/mp4' then 'mp4'
+                       when 'video/quicktime' then 'mov' when 'video/x-m4v' then 'm4v' else 'webm' end;
+  v_path := v_event || '/' || v_id || '.' || v_ext;
+  insert into wp_uploads (id, event_id, path, name, kind, mime, size_bytes, uploaded_by)
+  values (v_id, v_event, v_path, left(coalesce(nullif(trim(p_name), ''), 'file'), 200), v_kind, p_mime, p_size,
+          lower(coalesce(auth.jwt() ->> 'email', '')));
+  return jsonb_build_object('ok', true, 'id', v_id, 'path', v_path);
+end $function$;
+
+-- Service key only: the file is there, so the row is real.
+create or replace function public.wp_upload_confirm(p_id uuid, p_size bigint)
+returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
+begin
+  update wp_uploads set status = 'ready', ready_at = now(), size_bytes = coalesce(p_size, size_bytes)
+   where id = p_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  -- Logged directly, not through wp_log(): this runs with the service key, so
+  -- there is no signed-in person for wp_log to find an event from.
+  insert into wp_change_log (event_id, actor_email, area, summary)
+  select event_id, uploaded_by, 'uploads', 'sent ' || name from wp_uploads where id = p_id;
+  return jsonb_build_object('ok', true);
+end $function$;
+
+-- Whether the CALLER may see / remove this upload, and where it is. Asked as
+-- the user by the function: a client gets their own event's files only; staff
+-- any. p_for 'view' needs the file ready; 'delete' does not (an abandoned
+-- upload can be cleared).
+create or replace function public.wp_upload_path(p_id uuid, p_for text)
+returns jsonb language plpgsql stable security definer set search_path to 'public', 'extensions' as $function$
+declare u wp_uploads%rowtype; v_event integer;
+begin
+  select * into u from wp_uploads where id = p_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if not is_staff() then
+    v_event := wp_my_event_id();
+    if v_event is null or u.event_id <> v_event then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  end if;
+  if p_for = 'view' and u.status <> 'ready' then return jsonb_build_object('ok', false, 'error', 'not_ready'); end if;
+  return jsonb_build_object('ok', true, 'path', u.path, 'event_id', u.event_id, 'status', u.status,
+                            'size_bytes', u.size_bytes, 'mime', u.mime, 'name', u.name);
+end $function$;
+
+-- Service key only, after the stored file is gone.
+create or replace function public.wp_upload_forget(p_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
+begin
+  delete from wp_uploads where id = p_id;
+  return jsonb_build_object('ok', true);
+end $function$;
+
+create or replace function public.wp_get_uploads()
+returns jsonb language plpgsql stable security definer set search_path to 'public', 'extensions' as $function$
+declare v_event integer := wp_my_event_id();
+begin
+  if v_event is null then return jsonb_build_object('ok', false, 'error', 'no_access'); end if;
+  return jsonb_build_object('ok', true,
+    'max_mb', coalesce((select value::int from wp_settings where key = 'upload_max_mb'), 500),
+    'uploads', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', u.id, 'name', u.name, 'kind', u.kind, 'size_bytes', u.size_bytes, 'caption', u.caption,
+        'uploaded_by', u.uploaded_by, 'created_at', u.created_at) order by u.created_at)
+      from wp_uploads u where u.event_id = v_event and u.status = 'ready'), '[]'::jsonb));
+end $function$;
+
+create or replace function public.wp_set_upload_caption(p_id uuid, p_caption text)
+returns jsonb language plpgsql security definer set search_path to 'public', 'extensions' as $function$
+declare v_event integer := wp_my_event_id();
+begin
+  if v_event is null then return jsonb_build_object('ok', false, 'error', 'no_access'); end if;
+  update wp_uploads set caption = left(nullif(trim(coalesce(p_caption, '')), ''), 300)
+   where id = p_id and event_id = v_event;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  perform wp_log('uploads', 'captioned a photo or film');
+  return jsonb_build_object('ok', true);
+end $function$;
+
+create or replace function public.wp_admin_uploads(p_event_id integer)
+returns jsonb language plpgsql stable security definer set search_path to 'public', 'extensions' as $function$
+begin
+  if not is_staff() then return jsonb_build_object('ok', false, 'error', 'not_staff'); end if;
+  return jsonb_build_object('ok', true, 'uploads', coalesce((select jsonb_agg(jsonb_build_object(
+      'id', u.id, 'name', u.name, 'kind', u.kind, 'size_bytes', u.size_bytes, 'caption', u.caption,
+      'status', u.status, 'uploaded_by', u.uploaded_by, 'created_at', u.created_at) order by u.created_at)
+    from wp_uploads u where u.event_id = p_event_id), '[]'::jsonb));
+end $function$;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- GRANTS
 -- ════════════════════════════════════════════════════════════════════════════
@@ -1480,13 +1762,19 @@ begin
        'wp_get_venue_docs', 'wp_admin_venue_settings', 'wp_admin_save_venue_settings',
        'wp_get_food', 'wp_save_food', 'wp_admin_food_packages', 'wp_admin_save_food_packages', 'wp_admin_food',
        'wp_music_url_ok', 'wp_get_music', 'wp_save_music_item', 'wp_delete_music_item', 'wp_admin_music',
+       'wp_admin_music_defaults', 'wp_admin_save_music_defaults',
+       'wp_get_webcast', 'wp_admin_webcast', 'wp_admin_save_webcast',
+       'wp_upload_slot', 'wp_upload_confirm', 'wp_upload_path', 'wp_upload_forget', 'wp_get_uploads',
+       'wp_set_upload_caption', 'wp_admin_uploads',
        'wp_set_marketing')
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
     -- Internal helpers stay with service_role only. They are only ever called
     -- from inside SECURITY DEFINER functions, which run as the owner.
     if f.proname in ('wp_section_area', 'wp_section_rows', 'wp_minutes_after', 'wp_section_keys',
-                     'wp_event_type_of', 'wp_visible_sections', 'wp_music_url_ok') then
+                     'wp_event_type_of', 'wp_visible_sections', 'wp_music_url_ok',
+                     -- called only by netlify/functions/portal-upload.js with the service key
+                     'wp_upload_confirm', 'wp_upload_forget') then
       execute format('grant execute on function %s to service_role', f.sig);
     else
       execute format('grant execute on function %s to authenticated, service_role', f.sig);

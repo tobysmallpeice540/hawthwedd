@@ -143,6 +143,17 @@ own header.
   refunded to that card from Stripe.
 - The portal falls back to its old tab list if `wp_get_home` is missing, so the
   front end can go out before the migration without breaking anybody.
+- **Client uploads never pass through a function.** `portal-upload.js` asks the
+  database AS THE USER (`wp_upload_slot`), which picks the path
+  (`<event_id>/<uuid>.<ext>`); then signs a one-use upload token for that path
+  only. The browser sends the file straight to the private `portal-uploads`
+  bucket, and a row only becomes `ready` after the function has checked the
+  object exists. Netlify functions take 6MB; films are hundreds.
+- A function run with the service key has no signed-in person, so
+  `wp_log()` (which finds the event from the caller) logs nothing there. Write
+  the change-log row directly, as `wp_upload_confirm` does.
+- A portal section can be switched on by a confirmed add-on (`wp_addons.unlocks`,
+  e.g. the webcast). A per-event tick still overrides it.
 
 ### Product
 
