@@ -154,6 +154,24 @@ own header.
   the change-log row directly, as `wp_upload_confirm` does.
 - A portal section can be switched on by a confirmed add-on (`wp_addons.unlocks`,
   e.g. the webcast). A per-event tick still overrides it.
+- **The evening bar is its own section, `bar`** (23 Oct, migration c), separate
+  from Drinks (packages and corkage, weddings only). Drinks is off as standard
+  for every type but Wedding. The client ticks "we would like a pay bar" and
+  says how busy they expect it (`wp_drinks.pay_bar`, `bar_usage`); there is no
+  Save button — each control saves itself through `wp_save_bar_prefs`, where
+  NULL leaves a field alone. Money behind the bar is "Add now" to the Stripe
+  Payment Link; the page shows only what staff have recorded as received.
+- **A new section key needs the front end first.** The portal draws a menu
+  entry for every visible section by name; an older bundle with no name for a
+  new key throws. Push, let Netlify deploy, then apply the migration. (From
+  this build on, the portal skips keys it does not know, so the next one is safe
+  either way round.)
+- The portal menu is a left-hand column (`.side`) that folds into one button
+  under 820px. The old single row of tabs ran off its box with no scrollbar.
+- Each event's portal logins and drinks are on the event form itself (the
+  "Drinks & bar" and "Client portal" sections). Events → Portal settings holds
+  what every event starts with; its "By event" tab lists coming events first
+  and hides past ones.
 
 ### Product
 

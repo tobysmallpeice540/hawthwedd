@@ -43,6 +43,10 @@ export default function Music() {
         Add a Spotify link for each moment — a playlist or a single song. Add anything
         else you would like us to know, with or without a link.
       </p>
+      <p className="muted" style={{ fontSize: 14, marginTop: 8 }}>
+        You don't need to give us playlists for anything your DJ or band will be
+        playing — just the music you will need when they are not here.
+      </p>
       <div className="alert alert-warn" style={{ fontSize: 13 }}>
         Links must be <strong>Spotify</strong>. We can't play Apple Music, Amazon Music,
         YouTube or other links. In Spotify, use <em>Share → Copy link</em> and paste it here.

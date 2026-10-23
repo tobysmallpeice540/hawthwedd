@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
 import { parseGuests } from './parseGuests.js'
-import { ACCOM_LABEL, accomOptions, sortGuests } from './guestSort.js'
+import { ACCOM_LABEL, accomOptions, sortGuests, roleFirst, byTable, guestsCsv, fullName } from './guestSort.js'
 
 // EVERY component that renders an input lives at module scope. A component
 // defined inside another is a new type on every render, so React rebuilds its
@@ -27,7 +27,7 @@ function n(v) {
   return Number.isFinite(x) ? x : null
 }
 
-export default function Guests({ accommodation }) {
+export default function Guests({ accommodation, eventName, eventDate }) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -62,6 +62,7 @@ export default function Guests({ accommodation }) {
   return (
     <>
       <NumbersPanel numbers={data.numbers} derived={data.derived} onSaved={load} />
+      {data.guests.length > 0 && <ExportCard guests={data.guests} eventName={eventName} eventDate={eventDate} />}
       <GuestList
         title="Seated for the meal"
         blurb="Everyone at a table for the meal. This is the list the table plan will use."
@@ -79,6 +80,111 @@ export default function Guests({ accommodation }) {
         onChanged={load}
       />
     </>
+  )
+}
+
+// ── export and print ───────────────────────────────────────────────────────
+//
+// A CSV for a spreadsheet, and two printable lists: by name and by table.
+// Both printed lists open with everyone who has a role on the day, by name —
+// they are the people looked for first — and then the rest, by name.
+// The order rules live in guestSort.js, where they are tested.
+
+function esc(v) {
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function fileName(eventName, ext) {
+  const base = String(eventName || 'guest list').replace(/[^A-Za-z0-9 &'-]+/g, ' ').trim().replace(/\s+/g, ' ')
+  return (base || 'guest list') + ' - guests.' + ext
+}
+
+function where(g) {
+  return g.list === 'evening' ? 'Evening' : (g.table_label || '—')
+}
+
+function rowsHtml(list, cols) {
+  return list.map((g) => '<tr>' + cols.map((c) => '<td>' + esc(c(g)) + '</td>').join('') + '</tr>').join('')
+}
+
+function tableHtml(heads, list, cols) {
+  return '<table><thead><tr>' + heads.map((h) => '<th>' + esc(h) + '</th>').join('') + '</tr></thead><tbody>' +
+    rowsHtml(list, cols) + '</tbody></table>'
+}
+
+function printHtml(guests, how, eventName, eventDate) {
+  const r = roleFirst(guests)
+  const needs = (g) => [g.age_band === 'child' ? 'Child' : g.age_band === 'baby' ? 'High chair' : '', g.access_needs]
+    .filter(Boolean).join(' · ')
+  let body = ''
+  if (r.withRole.length) {
+    body += '<h2>With a role on the day <span>' + r.withRole.length + '</span></h2>' +
+      tableHtml(['Name', 'Role', 'Table'], r.withRole, [fullName, (g) => g.role, where])
+  }
+  if (how === 'name') {
+    body += '<h2>' + (r.withRole.length ? 'Everyone else' : 'Everyone') + ' <span>' + r.rest.length + '</span></h2>' +
+      tableHtml(['Name', 'Table', 'Notes'], r.rest, [fullName, where, needs])
+  } else {
+    for (const t of byTable(guests)) {
+      body += '<section class="tbl"><h2>' + esc(t.label) + ' <span>' + t.guests.length + '</span></h2>' +
+        tableHtml(['Name', 'Role', 'Notes'], t.guests, [fullName, (g) => g.role || '', needs]) + '</section>'
+    }
+    const ev = roleFirst(guests.filter((g) => g.list === 'evening'))
+    const evening = ev.withRole.concat(ev.rest)
+    if (evening.length) {
+      body += '<section class="tbl"><h2>Evening only <span>' + evening.length + '</span></h2>' +
+        tableHtml(['Name', 'Role', 'Notes'], evening, [fullName, (g) => g.role || '', needs]) + '</section>'
+    }
+  }
+  const title = (eventName || 'Guest list') + ' — ' + (how === 'name' ? 'guests by name' : 'guests by table')
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' +
+    'body{font-family:Georgia,serif;color:#222;margin:24px;font-size:12.5px}' +
+    'h1{font-size:20px;margin:0 0 2px}.sub{color:#666;margin:0 0 18px;font-size:12px}' +
+    'h2{font-size:14px;margin:18px 0 6px;border-bottom:1.5px solid #222;padding-bottom:3px}h2 span{color:#777;font-weight:normal;font-size:12px}' +
+    'table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#666;padding:3px 6px}' +
+    'td{padding:4px 6px;border-bottom:1px solid #ddd;vertical-align:top}td:first-child{width:38%}' +
+    '.tbl{break-inside:avoid}@media print{body{margin:0}}' +
+    '</style></head><body><h1>' + esc(eventName || 'Guest list') + '</h1><p class="sub">' +
+    esc((eventDate ? eventDate + ' · ' : '') + guests.length + ' guests · printed ' + new Date().toLocaleDateString('en-GB')) +
+    '</p>' + body + '<script>window.onload=function(){window.print()}<\/script></body></html>'
+}
+
+function ExportCard({ guests, eventName, eventDate }) {
+  const [err, setErr] = useState('')
+
+  function download() {
+    setErr('')
+    const blob = new Blob([guestsCsv(guests)], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = fileName(eventName, 'csv')
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+  }
+
+  function print(how) {
+    setErr('')
+    const w = window.open('', '_blank')
+    if (!w) { setErr('Your browser blocked the print window. Allow pop-ups for this site and try again.'); return }
+    w.document.open()
+    w.document.write(printHtml(guests, how, eventName, eventDate))
+    w.document.close()
+  }
+
+  return (
+    <section className="card">
+      <h3>Download or print</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Both printed lists start with everyone who has a role on the day, by name, then everyone else.
+      </p>
+      <div className="actions">
+        <button type="button" className="btn-small" onClick={download}>Download CSV</button>
+        <button type="button" className="btn-small ghost" onClick={() => print('name')}>Print by name</button>
+        <button type="button" className="btn-small ghost" onClick={() => print('table')}>Print by table</button>
+      </div>
+      {err && <div className="alert alert-warn">{err}</div>}
+    </section>
   )
 }
 

@@ -4,8 +4,9 @@
 -- arrives as an exception:  ERROR: ALL n ASSERTIONS PASSED (rolled back)
 --
 -- The ones to care about:
---   C3   corkage: the allowance absorbs the DEAREST drinks first, part bottles
---        round up, and moments do not pool
+--   C3   corkage: the allowance absorbs the DEAREST drinks first, the bottle
+--        that runs past the allowance is free, and moments do not pool
+--        (needs 2026-10-23c applied)
 --   P2   a price change after a line is added does not move the line
 --   L1–L3  once locked, the client cannot change the order; staff can unlock
 --   X1   no invoice is recorded from an unlocked or half-priced order
@@ -78,21 +79,23 @@ begin
 
   -- C3  reception allowance 200 drinks. 30 bottles fizz (180 drinks, £2/drink)
   --     + 48 beers (£2.40/drink). Beers absorbed first (dearer per drink):
-  --     48 used, 152 left for fizz → 28 drinks over = 5 bottles (rounded up) × £12.
-  --     Toast: 100 glasses allowance; 15 bottles × 8 = 120 → 20 over = 3 bottles.
+  --     48 used, 152 left for fizz → 28 drinks over = 4.67 bottles. The bottle
+  --     that runs past the allowance is free (23 Oct c: rounded up to a full
+  --     bottle without charge), so 4 bottles × £12.
+  --     Toast: 100 glasses allowance; 15 bottles × 8 = 120 → 20 over = 2.5 → 2 bottles.
   --     Meal: 50 bottles allowance; 50 brought → nothing over (no pooling with toast).
   perform wp_save_drinks_line(null, c_fizz, 30);
   perform wp_save_drinks_line(null, c_beer, 48);
   perform wp_save_drinks_line(null, c_toast, 15);
   r := wp_save_drinks_line(null, c_wine, 50);
   sm := wp_drinks_summary(evA);
-  if (sm->'moments'->0->>'allowance')::numeric = 200 and (sm->'moments'->0->>'cost')::numeric = 60
-     and (sm->'moments'->1->>'cost')::numeric = 0 and (sm->'moments'->2->>'cost')::numeric = 36
-     and (sm->>'total')::numeric = 1428 + 60 + 36
+  if (sm->'moments'->0->>'allowance')::numeric = 200 and (sm->'moments'->0->>'cost')::numeric = 48
+     and (sm->'moments'->1->>'cost')::numeric = 0 and (sm->'moments'->2->>'cost')::numeric = 24
+     and (sm->>'total')::numeric = 1428 + 48 + 24
   then passes:=passes+1; else fails:=fails||('C3 corkage maths: '||sm::text); end if;
 
   -- C4  VAT is the inc-VAT share, not added on
-  if (sm->>'vat')::numeric = round(1524 * 20.0 / 120, 2) then passes:=passes+1;
+  if (sm->>'vat')::numeric = round(1500 * 20.0 / 120, 2) then passes:=passes+1;
   else fails:=fails||('C4 vat: '||(sm->>'vat')); end if;
 
   -- C5  invoice lines add up to the total, and children at £0 add no line

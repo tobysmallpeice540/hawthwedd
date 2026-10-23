@@ -6,6 +6,7 @@ export const READY_LABEL = {
   guests:    'your guest list',
   food:      'your food choices',
   drinks:    'your drinks order',
+  bar:       'your bar choices',
   timeline:  'your timeline',
   music:     'your music',
   uploads:   'the photos and films',

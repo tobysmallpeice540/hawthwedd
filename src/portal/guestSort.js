@@ -58,3 +58,62 @@ export function sortGuests(guests, how) {
   }
   return out
 }
+
+// ── export and print ───────────────────────────────────────────────────────
+//
+// Anyone with a role on the day (best man, ushers, readers…) at the top,
+// alphabetical; then everyone else, alphabetical. Toby's rule for every
+// printed list: the people who have a job are the ones looked for first.
+export function hasRole(g) { return !!(g && String(g.role || '').trim()) }
+
+export function roleFirst(guests) {
+  const all = (guests || []).slice().sort(byName)
+  return { withRole: all.filter(hasRole), rest: all.filter((g) => !hasRole(g)) }
+}
+
+// Seated guests by table, in table order (Table 2 before Table 12), unseated
+// last; names alphabetical within each table, people with a role first.
+export function byTable(guests) {
+  const groups = new Map()
+  const seated = (guests || []).filter((g) => g.list !== 'evening')
+    .slice().sort((a, b) => tableRank(a) - tableRank(b))
+  for (const g of seated) {
+    const k = g.table_label || ''
+    if (!groups.has(k)) groups.set(k, [])
+    groups.get(k).push(g)
+  }
+  return Array.from(groups, ([label, list]) => {
+    const r = roleFirst(list)
+    return { label: label || 'Not seated yet', seated: !!label, guests: r.withRole.concat(r.rest) }
+  })
+}
+
+export function fullName(g) { return [g.first_name, g.last_name].filter(Boolean).join(' ') }
+
+const RSVP_WORD = { yes: 'Coming', no: 'Not coming', maybe: 'Maybe' }
+const AGE_WORD = { adult: 'Adult', child: 'Child', baby: 'High chair' }
+
+// One cell of a CSV. Quoted when it must be, and a cell that a spreadsheet
+// would run as a formula (=, +, -, @ at the start) is defused with a leading
+// apostrophe: a guest typed as "=HYPERLINK(…)" must stay a name.
+function cell(v) {
+  let s = v === null || v === undefined ? '' : String(v)
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+}
+
+export const CSV_COLUMNS = ['List', 'First name', 'Last name', 'Role', 'Reply', 'Age', 'Table',
+  'Side', 'Staying', 'Where', 'Access or dietary needs']
+
+export function guestsCsv(guests) {
+  const r = roleFirst(guests)
+  const rows = r.withRole.concat(r.rest).map((g) => [
+    g.list === 'evening' ? 'Evening only' : 'Seated',
+    g.first_name, g.last_name, g.role, RSVP_WORD[g.rsvp] || '', AGE_WORD[g.age_band] || '',
+    g.list === 'evening' ? '' : (g.table_label || ''),
+    g.side, g.staying ? 'Yes' : 'No', g.staying ? (ACCOM_LABEL[g.staying_where] || 'Not decided') : '',
+    g.access_needs,
+  ])
+  // Byte-order mark first, so Excel reads the accents in a name as UTF-8.
+  return '﻿' + [CSV_COLUMNS].concat(rows).map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n'
+}

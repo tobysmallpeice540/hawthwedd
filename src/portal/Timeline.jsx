@@ -102,7 +102,9 @@ export default function Timeline({ kind }) {
             ))}
           </div>
         )}
-        {'ceremony_time' in data && (kind === 'Wedding' || data.blocks.some((b) => b.rel_minutes !== null && b.rel_minutes !== undefined)) && (
+        {/* The ceremony belongs to the day itself — not the set-up day before
+            or the clear-up day after. */}
+        {'ceremony_time' in data && current && current.day_key === 'event' && (kind === 'Wedding' || data.blocks.some((b) => b.rel_minutes !== null && b.rel_minutes !== undefined)) && (
           <CeremonyTime value={data.ceremony_time} blocks={data.blocks} onSaved={load} />
         )}
 
@@ -124,6 +126,17 @@ export default function Timeline({ kind }) {
           <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
             Access {current.access_text}.
           </p>
+        )}
+
+        {/* At the top as well as the bottom: on a long day the bottom button
+            is a long scroll away. The new line drops into its place by time
+            either way. */}
+        {rows.length > 0 && (
+          <AddBlock
+            dayKey={current ? current.day_key : 'event'}
+            suppliers={data.suppliers}
+            onChanged={load}
+          />
         )}
 
         {rows.length === 0 ? (

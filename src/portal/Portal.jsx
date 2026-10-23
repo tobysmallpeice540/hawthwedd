@@ -27,6 +27,7 @@ const TABS = {
   guests:      { label: 'Guests' },
   food:        { label: 'Food' },
   drinks:      { label: 'Drinks' },
+  bar:         { label: 'Evening bar' },
   checklist:   { label: 'Checklist' },
   timeline:    { label: 'Timeline' },
   music:       { label: 'Music' },
@@ -228,7 +229,9 @@ export default function Portal({ session }) {
 
   const kind = home ? kindOf(home.event_type) : kindOf(event.event_type)
   const words = WORDS[kind]
-  const visible = ['overview'].concat(home ? (home.visible || []) : LEGACY_TABS)
+  // Unknown keys are dropped rather than drawn: a section added in the database
+  // before this bundle knows its name must not take the whole page down.
+  const visible = ['overview'].concat((home ? (home.visible || []) : LEGACY_TABS).filter((k) => TABS[k]))
   const current = visible.includes(tab) ? tab : 'overview'
   const sections = home ? (home.sections || []) : null
 
@@ -260,46 +263,66 @@ export default function Portal({ session }) {
         </div>
       </header>
 
-      <div className="tabs-bar">
-        <nav className="tabs" role="tablist" aria-label={words.yours}>
-          {visible.map((k) => (
-            <button
-              key={k}
-              role="tab"
-              aria-selected={current === k}
-              className="tab"
-              onClick={() => setTab(k)}
-            >
-              <Icon name={k} size={16} />
-              {TABS[k].label}
-              {sections && READY_LABEL[k] && <TabMark section={k} sections={sections} />}
-            </button>
-          ))}
-        </nav>
-      </div>
+      <div className="shell">
+        <SideMenu label={words.yours} visible={visible} current={current} sections={sections}
+          onGo={(k) => { setTab(k); window.scrollTo(0, 0) }} />
 
-      <main className="wrap">
-        {current === 'overview'    && <Overview event={event} home={home} words={words} visible={visible}
-                                                onGo={setTab} onHome={loadHome} />}
-        {current === 'guests'      && <Guests accommodation={event.accommodation} />}
-        {current === 'food'        && <Food />}
-        {current === 'drinks'      && <Drinks />}
-        {current === 'checklist'   && <Checklist />}
-        {current === 'timeline'    && <Timeline kind={kind} />}
-        {current === 'music'       && <Music />}
-        {current === 'uploads'     && <Uploads />}
-        {current === 'webcast'     && <Webcast />}
-        {current === 'suppliers'   && <Suppliers />}
-        {current === 'layout'      && <Layout />}
-        {current === 'items'       && <Items />}
-        {current === 'addons'      && <Addons />}
-        {current === 'money'       && <Money />}
-        {current === 'details'     && <VenueForm />}
-        {current === 'documents'   && <Contract />}
-        {current === 'inspiration' && <Pinterest />}
-        {ready}
-      </main>
+        <main className="wrap">
+          {current === 'overview'    && <Overview event={event} home={home} words={words} visible={visible}
+                                                  onGo={setTab} onHome={loadHome} />}
+          {current === 'guests'      && <Guests accommodation={event.accommodation} eventName={event.couple} eventDate={fmtDate(event.date)} />}
+          {current === 'food'        && <Food />}
+          {current === 'drinks'      && <Drinks part="package" barTab={visible.includes('bar')} onGo={setTab} />}
+          {current === 'bar'         && <Drinks part="bar" />}
+          {current === 'checklist'   && <Checklist />}
+          {current === 'timeline'    && <Timeline kind={kind} />}
+          {current === 'music'       && <Music />}
+          {current === 'uploads'     && <Uploads />}
+          {current === 'webcast'     && <Webcast />}
+          {current === 'suppliers'   && <Suppliers />}
+          {current === 'layout'      && <Layout />}
+          {current === 'items'       && <Items />}
+          {current === 'addons'      && <Addons />}
+          {current === 'money'       && <Money />}
+          {current === 'details'     && <VenueForm />}
+          {current === 'documents'   && <Contract />}
+          {current === 'inspiration' && <Pinterest />}
+          {ready}
+        </main>
+      </div>
     </>
+  )
+}
+
+// The menu. A column down the left on a wide screen, like the staff app's —
+// a row of sixteen tabs ran off the side of its box with no way for a mouse to
+// scroll it. On a phone it folds into one button that says where you are and
+// opens the list.
+function SideMenu({ label, visible, current, sections, onGo }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <nav className={'side' + (open ? ' is-open' : '')} aria-label={label}>
+      <button type="button" className="side-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon name={current} size={16} />
+        <span className="side-toggle-label">{TABS[current].label}</span>
+        <span className="side-toggle-more">{open ? 'Close' : 'Menu'}</span>
+      </button>
+      <div className="side-list">
+        {visible.map((k) => (
+          <button
+            key={k}
+            type="button"
+            aria-current={current === k ? 'page' : undefined}
+            className="tab"
+            onClick={() => { setOpen(false); onGo(k) }}
+          >
+            <Icon name={k} size={16} />
+            <span className="tab-label">{TABS[k].label}</span>
+            {sections && READY_LABEL[k] && <TabMark section={k} sections={sections} />}
+          </button>
+        ))}
+      </div>
+    </nav>
   )
 }
 

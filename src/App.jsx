@@ -2388,7 +2388,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-22c";
+const APP_BUILD = "2026-10-23a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7486,7 +7486,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
 // dies mid-word.
 
 const PORTAL_TABS = [
-  { id: "logins",   label: "Logins" },
+  { id: "logins",   label: "By event" },
   { id: "times",    label: "Access times" },
   { id: "suppliers",label: "Supplier directory" },
   { id: "room",     label: "The room" },
@@ -7501,8 +7501,8 @@ function PortalAdminScreen({ bookings, onBack }) {
   const [tab, setTab] = useState("logins");
   return (
     <div style={{ padding: UI_CLASSIC ? "28px 4px 0" : 0 }}>
-      <PageHeader title="Client portal" back="Events" onBack={onBack}
-        sub="Client logins, what each event shows, extras and food, the supplier directory, the room and templates"/>
+      <PageHeader title="Client portal settings" back="Events" onBack={onBack}
+        sub="What every event starts with — sections, drinks and corkage, extras and food, templates, the room and the supplier directory. Each event's own logins, drinks and bar are on the event."/>
       <TabStrip tabs={PORTAL_TABS.map(function(t){ return [t.id, t.label]; })} value={tab} onChange={setTab}/>
 
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
@@ -9287,35 +9287,64 @@ function ErrBanner({ text }) {
 
 // ─── who can sign in ─────────────────────────────────────────────────────────
 
+// The events to choose from: the next one first, then on out in time. Past
+// events are hidden — there is nothing to set up for them — but can be shown,
+// most recent first, for looking something up afterwards.
+function portalEventChoices(bookings, showPast) {
+  const today = new Date().toLocaleDateString("en-CA");   // local YYYY-MM-DD, not UTC
+  const all = (bookings || []).filter(function(b){ return b && b.id != null; });
+  const upcoming = all.filter(function(b){ const end = eventEndDate(b); return !end || end >= today; })
+    .sort(function(a, b){ return String(a.date || "9999").localeCompare(String(b.date || "9999")); });
+  const past = all.filter(function(b){ const end = eventEndDate(b); return !!end && end < today; })
+    .sort(function(a, b){ return String(b.date || "").localeCompare(String(a.date || "")); });
+  return { all: all, upcoming: upcoming, past: showPast ? past : [], pastCount: past.length };
+}
+
+function portalEventOptionLabel(b) {
+  return (isValidEventDate(b.date) ? fmtDate(b.date) : "No date") + " · " + (b.couple || b.eventType || "Event") +
+    (b.eventType && b.couple ? " (" + b.eventType + ")" : "");
+}
+
 function PortalLogins({ bookings }) {
   const [eventId, setEventId] = useState("");
-  const upcoming = (bookings || [])
-    .filter(function(b){ return b && b.id != null; })
-    .slice()
-    .sort(function(a,b){ return String(b.date||"").localeCompare(String(a.date||"")); });
+  const [showPast, setShowPast] = useState(false);
+  const ch = portalEventChoices(bookings, showPast);
 
   return (
     <div>
       <p style={{ fontSize:13, color:T.textMid, marginBottom:14, maxWidth:640, lineHeight:1.6 }}>
-        Invite a couple by adding their email here. They sign in with a link sent to
-        that address — there is no password. Both partners can be added, and a planner
-        if they want one.
+        Everything here is also on the event itself, under <b>Client portal</b> and <b>Drinks &amp; bar</b> —
+        this is for working through several events in a row. Sign-in is by a link sent to
+        each address; there is no password.
       </p>
-      <select value={eventId} onChange={function(e){ setEventId(e.target.value); }}
-        style={{ padding:"9px 12px", borderRadius:8, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14, minWidth:320, maxWidth:"100%" }}>
-        <option value="">Choose an event…</option>
-        {upcoming.map(function(b){
-          return <option key={b.id} value={b.id}>{(b.date||"—") + " · " + (b.couple || b.eventType || "Event")}</option>;
-        })}
-      </select>
+      <div style={{ display:"flex", gap:14, alignItems:"center", flexWrap:"wrap" }}>
+        <select value={eventId} onChange={function(e){ setEventId(e.target.value); }}
+          style={{ padding:"9px 12px", borderRadius:8, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14, minWidth:320, maxWidth:"100%" }}>
+          <option value="">Choose an event…</option>
+          <optgroup label="Coming up">
+            {ch.upcoming.map(function(b){ return <option key={b.id} value={b.id}>{portalEventOptionLabel(b)}</option>; })}
+          </optgroup>
+          {ch.past.length > 0 && (
+            <optgroup label="Past">
+              {ch.past.map(function(b){ return <option key={b.id} value={b.id}>{portalEventOptionLabel(b)}</option>; })}
+            </optgroup>
+          )}
+        </select>
+        {ch.pastCount > 0 && (
+          <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, cursor:"pointer" }}>
+            <input type="checkbox" checked={showPast} onChange={function(e){ setShowPast(e.target.checked); }} />
+            Include past events ({ch.pastCount})
+          </label>
+        )}
+      </div>
 
       {eventId && <PortalEventPanel eventId={Number(eventId)}
-        booking={upcoming.find(function(b){ return String(b.id) === String(eventId); })} />}
+        booking={ch.all.find(function(b){ return String(b.id) === String(eventId); })} />}
     </div>
   );
 }
 
-function PortalEventPanel({ eventId, booking }) {
+function PortalEventPanel({ eventId, booking, hideDrinks }) {
   const [rows, setRows] = useState(null);
   const [numbers, setNumbers] = useState(null);
   const [checklist, setChecklist] = useState(null);
@@ -9356,9 +9385,13 @@ function PortalEventPanel({ eventId, booking }) {
     return true;
   }
 
-  async function grant(e) {
+  function grant(e) {
     e.preventDefault();
-    const address = String(email || "").trim().toLowerCase();
+    return grantAddress(email);
+  }
+
+  async function grantAddress(raw) {
+    const address = String(raw || "").trim().toLowerCase();
     setBusy(true); setErr(""); setNote("");
 
     // Two steps, reported separately: if the access lands and the email does
@@ -9395,6 +9428,14 @@ function PortalEventPanel({ eventId, booking }) {
     catch (e2) { setErr(e2.message || String(e2)); }
     finally { setBusy(false); }
   }
+
+  // The client's addresses from the booking that do not have access yet, so
+  // giving it is one press. Revoked addresses are left out: somebody took that
+  // access away on purpose, and the form below still re-adds one if wanted.
+  const known = (rows || []).map(function(r){ return String(r.email || "").toLowerCase(); });
+  const suggested = rows === null ? [] : ["email", "email2", "email3"]
+    .map(function(k){ return String((booking && booking[k]) || "").trim().toLowerCase(); })
+    .filter(function(v, i, arr){ return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) && arr.indexOf(v) === i && known.indexOf(v) < 0; });
 
   return (
     <div style={{ marginTop:18, display:"grid", gap:16 }}>
@@ -9437,9 +9478,28 @@ function PortalEventPanel({ eventId, booking }) {
           </div>
         )}
 
+        {suggested.length > 0 && (
+          <div style={{ marginTop:12, display:"grid", gap:8 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase" }}>From the booking</div>
+            {suggested.map(function(addr){
+              return (
+                <div key={addr} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
+                  padding:"9px 12px", border:`1px dashed ${T.border}`, borderRadius:8 }}>
+                  <span style={{ fontSize:13, color:T.text, wordBreak:"break-all" }}>{addr}</span>
+                  <button onClick={function(){ grantAddress(addr); }} disabled={busy || rows === null}
+                    style={{ background:T.midBlue, color:"#fff", border:"none", padding:"6px 14px", borderRadius:7,
+                      cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
+                    Give access &amp; send invite
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <form onSubmit={grant} style={{ display:"flex", gap:8, marginTop:12, flexWrap:"wrap" }}>
           <input type="email" required value={email} onChange={function(e){ setEmail(e.target.value); }}
-            placeholder="their@email.com"
+            placeholder={suggested.length ? "or another address" : "their@email.com"}
             style={{ flex:"1 1 220px", minWidth:0, padding:"9px 12px", borderRadius:8, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:14 }} />
           <button type="submit" disabled={busy}
             style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 18px", borderRadius:8,
@@ -9490,7 +9550,7 @@ function PortalEventPanel({ eventId, booking }) {
         </div>
       </div>
 
-      <PortalEventExtras eventId={eventId} booking={booking} />
+      <PortalEventExtras eventId={eventId} booking={booking} hideDrinks={hideDrinks} />
     </div>
   );
 }
@@ -9503,7 +9563,7 @@ function PortalEventPanel({ eventId, booking }) {
 // cover photo, venue documents, and which sections each event type shows).
 
 const PORTAL_SECTION_LABEL = {
-  guests:"Guests", food:"Food", drinks:"Drinks", checklist:"Checklist", timeline:"Timeline", music:"Music",
+  guests:"Guests", food:"Food", drinks:"Drinks", bar:"Evening bar", checklist:"Checklist", timeline:"Timeline", music:"Music",
   uploads:"Photos & films", webcast:"Webcast",
   suppliers:"Suppliers", layout:"Table plan", items:"Bringing", addons:"Extras", money:"Payments",
   details:"Details", documents:"Documents", inspiration:"Inspiration",
@@ -9526,7 +9586,7 @@ function portalWhen(iso) {
 
 // One event's portal: which sections it shows, what they have sent us, and the
 // things that need a member of staff — items to tick in, extras to approve.
-function PortalEventExtras({ eventId, booking }) {
+function PortalEventExtras({ eventId, booking, hideDrinks }) {
   const [sections, setSections] = useState(null);
   const [profile, setProfile] = useState(null);
   const [items, setItems] = useState(null);
@@ -9568,7 +9628,7 @@ function PortalEventExtras({ eventId, booking }) {
   return (
     <div style={{ display:"grid", gap:14 }}>
       <PortalEventSections eventId={eventId} vis={sections.vis} status={sections.status} onChanged={load} />
-      <PortalEventDrinks eventId={eventId} booking={booking} />
+      {!hideDrinks && <PortalEventDrinks eventId={eventId} booking={booking} />}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap:14 }}>
         <PortalEventItems items={items} onChanged={load} />
         <PortalEventRequests requests={requests} onChanged={load} />
@@ -10166,8 +10226,11 @@ function PortalVenueSettings() {
 // The order as the database works it out (wp_drinks_summary — the one place
 // the arithmetic lives), the per-wedding rates, pricing anything "on request",
 // unlocking, recording money behind the bar, and making the draft invoice.
+const BAR_USAGE_LABEL = { less:"less than average", average:"average", more:"more than average" };
+
 function PortalEventDrinks({ eventId, booking }) {
   const [data, setData] = useState(null);
+  const [evening, setEvening] = useState(null);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -10182,6 +10245,10 @@ function PortalEventDrinks({ eventId, booking }) {
     try {
       const r = await sbRpc("wp_admin_drinks", { p_event_id: eventId });
       setData(r);
+      // The bar is staffed from the evening numbers; not fatal if they will not load.
+      sbRpc("wp_admin_numbers", { p_event_id: eventId })
+        .then(function(n){ setEvening(n && n.told_us ? n.evening_total : null); })
+        .catch(function(){ setEvening(null); });
       const o = r.order || {};
       setRate(o.rate_pp == null ? "" : String(o.rate_pp));
       setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
@@ -10241,7 +10308,7 @@ function PortalEventDrinks({ eventId, booking }) {
 
   return (
     <div style={panelCss}>
-      <div style={panelTitle}>Drinks <span style={{ fontWeight:400, color:T.textLight }}>· {routeName}</span></div>
+      <div style={panelTitle}>Drinks &amp; corkage <span style={{ fontWeight:400, color:T.textLight }}>· {routeName}</span></div>
       {err && <ErrBanner text={err} />}
       {note && <div style={{ fontSize:12, color:T.green, marginBottom:8 }}>{note}</div>}
 
@@ -10249,7 +10316,7 @@ function PortalEventDrinks({ eventId, booking }) {
         <div>
           {sm.numbers_missing ? <span style={{ color:T.amber }}>No numbers from them yet.</span>
             : <>{sm.adults} adults · {sm.children} children · {sm.infants} infants</>}
-          {sm.lock_date && <> · {sm.locked ? <b style={{ color:T.text }}>locked</b> : "locks"} {sm.lock_date}{o.unlocked ? " (unlocked by staff)" : ""}</>}
+          {sm.lock_date && <> · {sm.locked ? <b style={{ color:T.text }}>locked</b> : "locks"} {fmtDate(sm.lock_date)}{o.unlocked ? " (unlocked by staff)" : ""}</>}
         </div>
         {(sm.moments || []).map(function(m){
           return (
@@ -10304,18 +10371,35 @@ function PortalEventDrinks({ eventId, booking }) {
         </div>
       )}
 
-      <div style={{ marginTop:12, borderTop:`1px solid ${T.border}55`, paddingTop:10, fontSize:13, color:T.textMid }}>
-        Money behind the bar: <b style={{ color:T.text }}>{o.bar_amount ? portalMoney(o.bar_amount) : "none"}</b>
-        {o.bar_rules ? " · “" + o.bar_rules + "”" : ""}
+      <div style={{ marginTop:12, borderTop:`1px solid ${T.border}55`, paddingTop:10, fontSize:13, color:T.textMid, lineHeight:1.8 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:T.text }}>Evening bar</div>
+        {"pay_bar" in o || !data.order ? (
+          <>
+            <div>
+              Pay bar: <b style={{ color: o.pay_bar ? T.green : T.textLight }}>{o.pay_bar === true ? "yes, they would like one" : o.pay_bar === false ? "no" : "not ticked yet"}</b>
+            </div>
+            <div>
+              Expected use: <b style={{ color:T.text }}>{o.bar_usage ? BAR_USAGE_LABEL[o.bar_usage] : "not said"}</b>
+              {evening != null && <> · {evening} on site in the evening</>}
+            </div>
+          </>
+        ) : (
+          <div style={{ color:T.amber }}>The 23 Oct (c) bar migration is not applied yet — pay bar and expected use will show here once it is.</div>
+        )}
+        <div>
+          Money behind the bar: <b style={{ color:T.text }}>{o.bar_paid_amount ? portalMoney(o.bar_paid_amount) + " received" : "none received"}</b>
+          {o.bar_rules ? " · rules: “" + o.bar_rules + "”" : ""}
+          {o.bar_amount && !o.bar_paid_amount ? <span style={{ color:T.textLight }}> · they said {portalMoney(o.bar_amount)} (old form)</span> : null}
+        </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6, flexWrap:"wrap" }}>
-          <span>Received £</span>
+          <span>Received in total £</span>
           <input type="number" step="0.01" value={paid} onChange={function(e){ setPaid(e.target.value); }} style={Object.assign({}, inputCss, { width:110 })} />
           <button disabled={busy} style={btnQuiet} onClick={function(){
-            setDrinks({ p_bar_paid_amount: paid === "" ? 0 : Number(paid) }, paid === "" || Number(paid) === 0 ? "Cleared." : "Recorded.");
+            setDrinks({ p_bar_paid_amount: paid === "" ? 0 : Number(paid) }, paid === "" || Number(paid) === 0 ? "Cleared." : "Recorded — they now see it as added.");
           }}>Record</button>
-          {o.bar_paid_at && <span style={{ fontSize:12, color:T.green }}>received {portalWhen(o.bar_paid_at)}</span>}
+          {o.bar_paid_at && <span style={{ fontSize:12, color:T.green }}>updated {portalWhen(o.bar_paid_at)}</span>}
         </div>
-        <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>Find it in Stripe by the reference event-{eventId}. Refund anything unused to the same card from Stripe.</div>
+        <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>Find payments in Stripe by the reference event-{eventId}. If they top up, enter the running total. Refund anything unused to the same card from Stripe.</div>
       </div>
 
       {(o.route === "classic" || o.route === "corkage") && (
@@ -10332,7 +10416,7 @@ function PortalEventDrinks({ eventId, booking }) {
             {busy ? "Working…" : again ? "Make ANOTHER draft — sure?" : "Create drinks invoice in Xero (draft)"}
           </button>
           <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
-            {!sm.locked ? "Available once the order locks on " + (sm.lock_date || "—") + "."
+            {!sm.locked ? "Available once the order locks on " + (sm.lock_date ? fmtDate(sm.lock_date) : "—") + "."
               : sm.unpriced > 0 ? "Price " + unpricedLines.length + " line" + (unpricedLines.length === 1 ? "" : "s") + " first."
               : "Inc-VAT lines to account " + (data.xero_account || XERO_ACCOUNT_EVENTS) + ". You check and send it from Xero."}
           </div>
@@ -11091,7 +11175,7 @@ function buildSidebarNav(o) {
       children: [
         { label:"All events", on: view === "list" || view === "form", go: function() { setView("list"); } },
         { label:"Invoices", badge: o.invoiceDueCount, on: view === "invoices", go: function() { setView("invoices"); } },
-        { label:"Client portal", on: view === "portal", go: function() { setView("portal"); } },
+        { label:"Portal settings", on: view === "portal", go: function() { setView("portal"); } },
       ] },
     { id:"enquiries", icon:"enquiries", label:"Enquiries", on: view === "enquiries", go: function() { setView("enquiries"); } },
     { id:"viewings", icon:"viewings", label:"Viewings", badge: o.pendingViewings, on: view === "viewings",
@@ -12157,7 +12241,7 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
           {onOpenPortal && (
             <button onClick={onOpenPortal}
               style={{ background:"#fff", color:T.midBlue, border:`1.5px solid ${T.border}`, padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
-              Manage Client Portal
+              Client portal settings
             </button>
           )}
           {onOpenInvoices && (
@@ -12776,6 +12860,11 @@ const FORM_SECTIONS = {
   viewings:   { label:"Viewings" },
   contract:   { label:"Contract" },
   files:      { label:"Files" },
+  // These two are the client portal's, kept in its own tables — nothing here
+  // is saved with the booking, so they show what they are rather than a
+  // "filled" count.
+  drinks:     { label:"Drinks & bar", note:"from the client portal" },
+  portal:     { label:"Client portal", note:"logins and what they see" },
 };
 
 // ─── GMAIL THREAD PANEL ──────────────────────────────────────────────────────
@@ -13735,7 +13824,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
               return (
                 <button key={s} onClick={()=>setActiveSection(s)} style={{ display:"block", width:"100%", textAlign:"left", padding:"11px 14px", background:active?T.tint:"none", border:"none", borderLeft:active?`3px solid ${T.accent}`:"3px solid transparent", borderBottom:`1px solid ${T.border}`, color:active?T.accent:T.textMid, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:active?700:400 }}>
                   <span style={{ display:"block" }}>{FORM_SECTIONS[s].label}</span>
-                  <span style={{ fontSize:10, opacity:.65, color:active?T.accent:T.textLight }}>{filled}/{total} filled</span>
+                  <span style={{ fontSize:10, opacity:.65, color:active?T.accent:T.textLight }}>{FORM_SECTIONS[s].note || (filled + "/" + total + " filled")}</span>
                 </button>
               );
             })}
@@ -13861,6 +13950,16 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="files" && (
             <BookingFilesSection formData={formData} update={update} onAutoSave={onAutoSave}/>
+          )}
+
+          {(activeSection==="drinks" || activeSection==="portal") && formData.id == null && (
+            <div style={quietText}>Save the booking first — the client portal hangs off a saved event.</div>
+          )}
+          {activeSection==="drinks" && formData.id != null && (
+            <PortalEventDrinks eventId={Number(formData.id)} booking={formData} />
+          )}
+          {activeSection==="portal" && formData.id != null && (
+            <PortalEventPanel eventId={Number(formData.id)} booking={formData} hideDrinks />
           )}
 
           {activeSection==="financials" && (

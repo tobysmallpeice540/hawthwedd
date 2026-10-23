@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { supabase, rpc } from './supabase.js'
 
 // Drinks. For a wedding: the Classic Drinks Package, bring-your-own with
-// corkage, or something agreed with us. For every event: the evening bar,
-// which is always a pay bar, and money behind it if they want.
+// corkage, or something agreed with us. The evening bar is its own tab
+// (part="bar"): whether they want a pay bar, how busy they expect it to be,
+// and money behind it if they want.
 //
 // Every price here is inc VAT — that is how the whole system holds money.
 // The arithmetic is done once, in the database (wp_drinks_summary); this page
@@ -28,7 +29,7 @@ const MOMENTS = {
   toast:     { title: 'The toast', per: (s) => s.toast_per_adult + ' glass per adult' },
 }
 
-export default function Drinks() {
+export default function Drinks({ part = 'package', barTab = false, onGo }) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -43,12 +44,14 @@ export default function Drinks() {
   if (state === 'error') {
     return (
       <section className="card">
-        <h2>We couldn't load your drinks</h2>
+        <h2>We couldn't load your {part === 'bar' ? 'bar' : 'drinks'}</h2>
         <div className="alert alert-warn" style={{ fontSize: 12 }}>{error}</div>
         <button className="btn" onClick={load}>Try again</button>
       </section>
     )
   }
+
+  if (part === 'bar') return <Bar data={data} onChanged={load} />
 
   const o = data.order || {}
   const sm = data.summary || {}
@@ -56,6 +59,15 @@ export default function Drinks() {
 
   return (
     <>
+      {!data.packages_offered && barTab && (
+        <section className="card">
+          <h3>Drinks</h3>
+          <p className="muted" style={{ fontSize: 14 }}>
+            Our drinks packages are for weddings. Your evening bar has its own page.
+          </p>
+          {onGo && <div className="actions"><button className="btn-small" onClick={() => onGo('bar')}>Go to the evening bar</button></div>}
+        </section>
+      )}
       {data.packages_offered && (
         <>
           <RouteChoice data={data} locked={locked} onChanged={load} />
@@ -92,7 +104,10 @@ export default function Drinks() {
         </>
       )}
 
-      <BarCard data={data} onChanged={load} />
+      {/* Without its own tab (the bar migration not applied yet, or the venue
+          has switched the tab off for this event) the bar stays here, so
+          nothing a client could do before disappears. */}
+      {!barTab && <Bar data={data} onChanged={load} />}
     </>
   )
 }
@@ -184,6 +199,12 @@ function MomentCard({ moment, data, locked, onChanged }) {
   const over = Number(info.used) - Number(info.allowance)
   const overByLine = {}
   for (const x of info.lines || []) overByLine[x.id] = x
+  // Under corkage the bottle that runs past the allowance is free (we round up
+  // to a full bottle), so being a few drinks over is not a warning — only a
+  // whole bottle beyond it is.
+  const charged = route === 'corkage'
+    ? (info.lines || []).some((x) => Number(x.over_units) > 0)
+    : over > 0
 
   return (
     <section className="card">
@@ -196,7 +217,7 @@ function MomentCard({ moment, data, locked, onChanged }) {
             {route === 'classic' ? ' Choose how it is split.' : ' Tell us what you are bringing.'}
           </p>
         </div>
-        <span className={'count' + (over > 0 ? ' count-warn' : '')}>{Number(info.used)} / {info.allowance}</span>
+        <span className={'count' + (charged ? ' count-warn' : '')}>{Number(info.used)} / {info.allowance}</span>
       </div>
 
       {lines.length > 0 && (
@@ -214,6 +235,12 @@ function MomentCard({ moment, data, locked, onChanged }) {
       )}
       {route === 'classic' && over < 0 && lines.length > 0 && (
         <p className="hint">{-over} {info.unit} still to choose.</p>
+      )}
+      {route === 'corkage' && lines.length > 0 && (
+        <p className="hint">
+          We round up to a full bottle: the bottle that takes you past your allowance is on us.
+          Only whole bottles beyond it are charged.
+        </p>
       )}
       {route === 'corkage' && Number(info.cost) > 0 && (
         <p className="hint" style={{ color: 'var(--warn)' }}>
@@ -406,8 +433,159 @@ function TotalCard({ sm, route }) {
   )
 }
 
-// The evening: always a pay bar. Example prices, and money behind the bar.
-function BarCard({ data, onChanged }) {
+// The evening bar. A tick to say they want one; how busy they expect it, which
+// is what the staffing is planned from; and money behind it.
+//
+// Nothing here has a Save button. The tick and the choice save as they are
+// made, the rules when the box is left. Money behind the bar is added on
+// Stripe's page, and this page only ever shows what has actually arrived —
+// which staff record, so it is never a figure somebody merely typed in.
+const USAGE = [
+  { k: 'less',    label: 'Less than average' },
+  { k: 'average', label: 'Average' },
+  { k: 'more',    label: 'More than average' },
+]
+
+function Bar({ data, onChanged }) {
+  const o = data.order || {}
+  const s = data.settings || {}
+  // Older database: none of the new fields come back, and the old form is the
+  // honest thing to show.
+  const hasPrefs = 'pay_bar' in o
+  const [payBar, setPayBar] = useState(o.pay_bar === true)
+  const [usage, setUsage] = useState(o.bar_usage || '')
+  const [rules, setRules] = useState(o.bar_rules || '')
+  const [busy, setBusy] = useState(false)
+  const [savedWhat, setSavedWhat] = useState('')
+  const [err, setErr] = useState('')
+  const [email, setEmail] = useState('')
+  const [opened, setOpened] = useState(false)
+
+  useEffect(() => { supabase.auth.getSession().then(({ data: d }) => setEmail((d.session && d.session.user.email) || '')) }, [])
+
+  async function save(args, what, undo) {
+    setBusy(true); setErr(''); setSavedWhat('')
+    try {
+      await rpc('wp_save_bar_prefs', Object.assign({ p_pay_bar: null, p_usage: null, p_rules: null }, args))
+      setSavedWhat(what); await onChanged()
+    } catch (e) { if (undo) undo(); setErr(e.message || String(e)) }
+    finally { setBusy(false) }
+  }
+
+  // Their event goes along as client_reference_id, so the payment can be
+  // matched to the booking in Stripe; the amount is chosen on Stripe's page.
+  const payUrl = s.bar_link_url
+    ? s.bar_link_url + (s.bar_link_url.includes('?') ? '&' : '?') +
+      'client_reference_id=event-' + data.event_id + (email ? '&prefilled_email=' + encodeURIComponent(email) : '')
+    : null
+  const prices = (s.bar_prices || []).filter((p) => p && p.name)
+  const added = Number(o.bar_paid_amount) > 0
+
+  if (!hasPrefs) return <OldBarCard data={data} onChanged={onChanged} />
+
+  return (
+    <>
+      <section className="card">
+        <h3>The evening bar</h3>
+        <label className="check" style={{ marginBottom: 10 }}>
+          <input type="checkbox" checked={payBar} disabled={busy}
+            onChange={(e) => {
+              const v = e.target.checked
+              setPayBar(v)
+              save({ p_pay_bar: v }, v ? 'pay bar' : 'no bar', () => setPayBar(!v))
+            }} />
+          <strong style={{ fontWeight: 500 }}>We would like a pay bar</strong>
+        </label>
+        <p className="muted" style={{ fontSize: 14 }}>
+          A pay bar is where your guests buy their own drinks. If you would like to treat
+          them, you can put money behind the bar as well.
+        </p>
+        {prices.length > 0 && (
+          <div className="rows" style={{ marginTop: 12 }}>
+            {prices.map((p, i) => (
+              <div className="row" key={i}><span className="k">{p.name}</span><span className="v">{p.price === null || p.price === undefined || p.price === '' ? '—' : money(p.price)}</span></div>
+            ))}
+          </div>
+        )}
+        {s.bar_note && <p className="hint" style={{ marginTop: 10 }}>{s.bar_note}</p>}
+        {savedWhat === 'pay bar' && <div className="alert alert-ok">Noted — you would like a pay bar.</div>}
+        {savedWhat === 'no bar' && <div className="alert alert-ok">Noted — no bar for now.</div>}
+        {err && <div className="alert alert-warn">{err}</div>}
+      </section>
+
+      {payBar && (
+        <section className="card">
+          <h3>How busy will the bar be?</h3>
+          <p className="muted" style={{ fontSize: 14 }}>
+            We staff your bar according to the number of adults in the evening. Let us know
+            here if you think your crowd will use the bar less than average, average or more
+            than average — just put average if you are unsure. It helps us get the staffing right.
+          </p>
+          <div className="yesno" style={{ marginTop: 12 }}>
+            {USAGE.map((u) => (
+              <label key={u.k} className="radio">
+                <input type="radio" name="bar_usage" checked={usage === u.k} disabled={busy}
+                  onChange={() => {
+                    const was = usage
+                    setUsage(u.k)
+                    save({ p_usage: u.k }, 'usage', () => setUsage(was))
+                  }} />
+                {u.label}
+              </label>
+            ))}
+          </div>
+          {savedWhat === 'usage' && <p className="hint" style={{ color: 'var(--accent)' }}>Thank you — noted.</p>}
+        </section>
+      )}
+
+      {payBar && (
+        <section className="card">
+          <h3>Money behind the bar</h3>
+          {added ? (
+            <div className="alert alert-ok" style={{ marginTop: 0 }}>
+              <strong>{money(o.bar_paid_amount)}</strong> added behind the bar
+              {o.bar_paid_at ? ' — received ' + fmtDate(o.bar_paid_at) : ''}. Thank you.
+            </div>
+          ) : (
+            <p className="muted" style={{ fontSize: 14 }}>Nothing added yet.</p>
+          )}
+
+          <label style={{ marginTop: 14 }}>Any rules <span className="opt">optional</span></label>
+          <input value={rules} disabled={busy} onChange={(e) => setRules(e.target.value)}
+            onBlur={() => { if (rules !== (o.bar_rules || '')) save({ p_rules: rules }, 'rules') }}
+            placeholder="e.g. beer and wine only, no spirits" />
+          {savedWhat === 'rules' && <p className="hint" style={{ color: 'var(--accent)' }}>Saved.</p>}
+
+          {payUrl ? (
+            <>
+              <div className="actions">
+                <a className="btn-small" href={payUrl} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
+                  {added ? 'Add more now' : 'Add now'}
+                </a>
+              </div>
+              <p className="hint" style={{ marginTop: 8 }}>
+                Opens our secure card payment page, where you choose the amount.
+                {opened ? ' Once it reaches us it will show here — usually within a day.' : ''}
+              </p>
+            </>
+          ) : (
+            <p className="muted" style={{ fontSize: 13, marginTop: 12 }}>
+              We will send you a way to pay this nearer the time.
+            </p>
+          )}
+          <p className="hint" style={{ marginTop: 10 }}>
+            When the tab runs out, the bar goes back to pay as you go. Anything left over is refunded
+            to the card you paid with.
+          </p>
+        </section>
+      )}
+    </>
+  )
+}
+
+// Before the 23 Oct (c) migration: the form as it was, so pushing the code first
+// changes nothing for anybody.
+function OldBarCard({ data, onChanged }) {
   const o = data.order || {}
   const s = data.settings || {}
   const [amount, setAmount] = useState(o.bar_amount ?? '')
