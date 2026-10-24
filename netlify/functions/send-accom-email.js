@@ -6,6 +6,9 @@
 // POST /.netlify/functions/send-accom-email
 // Body: { bookingId: "a123", emailType: "booking_confirmed" }
 //
+// Admin only: the caller's Supabase session must belong to an active admin.
+// This sends guests real payment requests, so it is not open to the web.
+//
 // Required env vars: RESEND_API_KEY, STRIPE_SECRET_KEY
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
@@ -56,9 +59,43 @@ async function sbGet(key) {
   const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
     headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
   });
-  if (!res.ok) return null;
+  // Throws on a refused read. Returning null here used to let logEmail read
+  // a failed read as "no log yet" and overwrite the whole email log with one
+  // row; the same shape would have done it to the bookings.
+  if (!res.ok) throw new Error("sbGet " + key + " failed: " + res.status);
   const rows = await res.json();
-  return (Array.isArray(rows) && rows[0]) ? rows[0].value : null;
+  if (!Array.isArray(rows)) throw new Error("sbGet " + key + ": unexpected response");
+  return rows[0] ? rows[0].value : null;
+}
+
+// ── Who is calling ────────────────────────────────────────────────────────────
+// The staff app sends the signed-in user's Supabase session as a Bearer token.
+// Supabase checks the token; the profile (role, active) is then read with the
+// service key. Same shape as resolveAdmin in signwell.js — copied, not shared,
+// like every helper in this folder.
+async function resolveStaff(event, roles) {
+  var h = (event && event.headers) || {};
+  var jwt = String(h["authorization"] || h["Authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+  if (!jwt || !SUPABASE_KEY) return null;
+  try {
+    var res = await fetch(SUPABASE_URL + "/auth/v1/user", {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + jwt }
+    });
+    if (!res.ok) return null;
+    var user = await res.json();
+    if (!user || !user.id) return null;
+    var pr = await fetch(SUPABASE_URL + "/rest/v1/profiles?id=eq." + encodeURIComponent(user.id) + "&select=role,active,name,email", {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+    });
+    if (!pr.ok) return null;
+    var rows = await pr.json();
+    var p = Array.isArray(rows) ? rows[0] : null;
+    if (!p || p.active === false || roles.indexOf(p.role) === -1) return null;
+    return { id: user.id, role: p.role, who: p.name || p.email || user.email || "" };
+  } catch (e) {
+    console.error("resolveStaff failed:", e.message);
+    return null;
+  }
 }
 
 async function sbSet(key, value) {
@@ -316,6 +353,11 @@ exports.handler = async function(event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: JSON.stringify({ error: "Method not allowed" }) };
   }
+  var me = await resolveStaff(event, ["admin"]);
+  if (!me) {
+    return { statusCode: 403, headers: { "Content-Type": "application/json" },
+             body: JSON.stringify({ error: "Only a signed-in administrator can send lettings emails.", fn: FN_BUILD }) };
+  }
   var body;
   try { body = JSON.parse(event.body); } catch (e) {
     return { statusCode: 400, body: JSON.stringify({ error: "Invalid JSON" }) };
@@ -366,11 +408,14 @@ exports.handler = async function(event) {
 
     var extra = {};
     var linkError = "";
+    var minted = {};   // schedule label -> checkout session id made by this send
     async function linkFor(entry, label) {
       if (!entry || Number(entry.amount) <= 0) return "";
       if (entry.paid) { linkError = "The " + label + " is already marked as paid, so no payment link was created."; return ""; }
       try {
-        return await createPaymentLink(booking, entry, label);
+        var url = await createPaymentLink(booking, entry, label);
+        if (url && entry.stripeId) minted[label] = entry.stripeId;
+        return url;
       } catch (e) {
         linkError = "Stripe wouldn't create a payment link: " + (e.message || e);
         return "";
@@ -423,12 +468,15 @@ exports.handler = async function(event) {
       return { statusCode: 502, body: JSON.stringify({ error: sendResult.error }) };
     }
 
-    // Mark the send flag + persist any schedule/stripeId changes (e.g. new payment link)
-    var flags = Object.assign({}, booking.emailFlags || {});
-    flags[emailType + "Sent"] = true;
-    booking.emailFlags = flags;
-    bookings[idx] = booking;
-    await sbSet(ACCOM_KEY, bookings);
+    // Mark the send flag + persist the new payment link's session id. The
+    // array is re-read NOW, not reused from before the Stripe and Resend
+    // round-trips: writing back that old copy would erase anything saved in
+    // the meantime. Only this booking's two changes are applied to the fresh
+    // copy, and a booking deleted meanwhile stays deleted.
+    var fresh = (await sbGet(ACCOM_KEY)) || [];
+    var merged = applyEmailSent(fresh, booking.id, emailType, minted);
+    if (merged) await sbSet(ACCOM_KEY, merged);
+    else console.warn("send-accom-email: booking " + booking.id + " vanished before its flag could be saved");
 
     await logEmail(subject, booking.email, emailType, booking.id, bodyText);
 
@@ -440,3 +488,27 @@ exports.handler = async function(event) {
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
+// Apply one send's changes to a freshly read bookings array. Returns the new
+// array, or null if the booking is no longer there (never resurrect it).
+// stripeIds: { "<schedule label>": "<checkout session id>" } for a link minted
+// by this send; only an unpaid entry takes it.
+function applyEmailSent(bookings, bookingId, emailType, stripeIds) {
+  var idx = (bookings || []).findIndex(function(b) { return b && String(b.id) === String(bookingId); });
+  if (idx === -1) return null;
+  var b = Object.assign({}, bookings[idx]);
+  var flags = Object.assign({}, b.emailFlags || {});
+  flags[emailType + "Sent"] = true;
+  b.emailFlags = flags;
+  if (stripeIds && Object.keys(stripeIds).length && Array.isArray(b.schedule)) {
+    b.schedule = b.schedule.map(function(s) {
+      if (s && stripeIds[s.label] && !s.paid) return Object.assign({}, s, { stripeId: stripeIds[s.label] });
+      return s;
+    });
+  }
+  var out = bookings.slice();
+  out[idx] = b;
+  return out;
+}
+
+exports._internals = { applyEmailSent, resolveStaff };

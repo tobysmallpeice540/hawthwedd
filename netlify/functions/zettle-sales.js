@@ -176,10 +176,47 @@ async function fetchCatalogue(token) {
   return rows;
 }
 
+// ── Who is calling ────────────────────────────────────────────────────────────
+// The staff app sends the signed-in user's Supabase session as a Bearer token.
+// Supabase checks the token; the profile (role, active) is then read with the
+// service key. Same shape as resolveAdmin in signwell.js — copied, not shared,
+// like every helper in this folder.
+const AUTH_SB_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+async function resolveStaff(event, roles) {
+  var key = process.env.SUPABASE_SERVICE_KEY;
+  var h = (event && event.headers) || {};
+  var jwt = String(h["authorization"] || h["Authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+  if (!jwt || !key) return null;
+  try {
+    var res = await fetch(AUTH_SB_URL + "/auth/v1/user", {
+      headers: { "apikey": key, "Authorization": "Bearer " + jwt }
+    });
+    if (!res.ok) return null;
+    var user = await res.json();
+    if (!user || !user.id) return null;
+    var pr = await fetch(AUTH_SB_URL + "/rest/v1/profiles?id=eq." + encodeURIComponent(user.id) + "&select=role,active,name,email", {
+      headers: { "apikey": key, "Authorization": "Bearer " + key }
+    });
+    if (!pr.ok) return null;
+    var rows = await pr.json();
+    var p = Array.isArray(rows) ? rows[0] : null;
+    if (!p || p.active === false || roles.indexOf(p.role) === -1) return null;
+    return { id: user.id, role: p.role, who: p.name || p.email || user.email || "" };
+  } catch (e) {
+    console.error("resolveStaff failed:", e.message);
+    return null;
+  }
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") {
     return jsonResponse(405, { error: "Method not allowed" });
   }
+
+  // Staff only — sales figures are not public. The bar login uses this for
+  // stocktakes, so bar and cleaner logins are allowed as well as admin.
+  const me = await resolveStaff(event, ["admin", "bar", "cleaner"]);
+  if (!me) return jsonResponse(403, { error: "Please sign in to the staff app to see Zettle sales." });
 
   let body;
   try { body = JSON.parse(event.body); }

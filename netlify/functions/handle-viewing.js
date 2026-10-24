@@ -1,4 +1,8 @@
 // netlify/functions/handle-viewing.js
+// Confirm, amend or decline a website viewing request, and email the requester.
+// Admin only: the caller's Supabase session must belong to an active admin.
+// (The public page learns nothing it could use here, but a request id is not
+// a credential — the check is on the caller, not on knowing the id.)
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 // The service key, not the anon key. Server-side code has no business
 // holding the same credential the public pages carry — and once app_data
@@ -24,10 +28,8 @@ function escapeHtml(s) {
     .replace(/\n/g, "<br>");
 }
 
+// Called only by the staff app, on the same origin — no CORS headers.
 const cors = {
-  "Access-Control-Allow-Origin":  "*",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
 
@@ -35,9 +37,62 @@ async function sbGet(key) {
   const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value", {
     headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
   });
-  if (!res.ok) return null;
+  // Throws on a refused read: a failed read is not an empty list, and must
+  // never be written back as one (logEmail would otherwise replace the whole
+  // email log with a single row).
+  if (!res.ok) throw new Error("sbGet " + key + " failed: " + res.status);
   const rows = await res.json();
-  return (Array.isArray(rows) && rows[0]) ? rows[0].value : null;
+  if (!Array.isArray(rows)) throw new Error("sbGet " + key + ": unexpected response");
+  return rows[0] ? rows[0].value : null;
+}
+
+// ── Who is calling ────────────────────────────────────────────────────────────
+// The staff app sends the signed-in user's Supabase session as a Bearer token.
+// Supabase checks the token; the profile (role, active) is then read with the
+// service key. Same shape as resolveAdmin in signwell.js — copied, not shared,
+// like every helper in this folder.
+async function resolveStaff(event, roles) {
+  var h = (event && event.headers) || {};
+  var jwt = String(h["authorization"] || h["Authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+  if (!jwt || !SUPABASE_KEY) return null;
+  try {
+    var res = await fetch(SUPABASE_URL + "/auth/v1/user", {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + jwt }
+    });
+    if (!res.ok) return null;
+    var user = await res.json();
+    if (!user || !user.id) return null;
+    var pr = await fetch(SUPABASE_URL + "/rest/v1/profiles?id=eq." + encodeURIComponent(user.id) + "&select=role,active,name,email", {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+    });
+    if (!pr.ok) return null;
+    var rows = await pr.json();
+    var p = Array.isArray(rows) ? rows[0] : null;
+    if (!p || p.active === false || roles.indexOf(p.role) === -1) return null;
+    return { id: user.id, role: p.role, who: p.name || p.email || user.email || "" };
+  } catch (e) {
+    console.error("resolveStaff failed:", e.message);
+    return null;
+  }
+}
+
+// Whether an action may be taken on a request in its current state. A request
+// that has already been answered is not answered again — except by an amend,
+// which is how a confirmed viewing is moved to a new time.
+function actionAllowed(status, action) {
+  if (action === "amend") return true;
+  return status !== "confirmed" && status !== "declined";
+}
+
+// Apply this action's patch to a freshly read list. Returns null if the
+// request has gone (deleted in the app meanwhile) — never resurrect it.
+function applyViewingPatch(requests, id, patch) {
+  var found = false;
+  var out = (requests || []).map(function(r) {
+    if (r && r.id === id) { found = true; return Object.assign({}, r, patch); }
+    return r;
+  });
+  return found ? out : null;
 }
 
 async function sbSet(key, value) {
@@ -189,8 +244,10 @@ async function getTermsUrl() {
 }
 
 exports.handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: cors, body: "" };
   if (event.httpMethod !== "POST") return { statusCode: 405, headers: cors, body: JSON.stringify({ error: "Method not allowed" }) };
+
+  const me = await resolveStaff(event, ["admin"]);
+  if (!me) return { statusCode: 403, headers: cors, body: JSON.stringify({ error: "Only a signed-in administrator can answer viewing requests." }) };
 
   let body;
   try { body = JSON.parse(event.body); }
@@ -201,27 +258,31 @@ exports.handler = async (event) => {
   //   the one requested. The stored request is updated so the diary and the
   //   confirmation email both reflect what was actually agreed.
   const { id, action, newDate, newTime } = body;
+  // The office's own words for a decline, if any. Plain text, capped.
+  const declineReason = String(body.declineReason || "").trim().slice(0, 2000);
   if (!id || !action) return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "Missing id or action" }) };
+  if (action !== "confirm" && action !== "decline" && action !== "amend") {
+    return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "Unknown action" }) };
+  }
   if (action === "amend" && (!newDate || !newTime)) {
     return { statusCode: 400, headers: cors, body: JSON.stringify({ error: "amend needs newDate and newTime" }) };
   }
 
-  // Read existing requests
-  const getRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/app_data?key=eq.${STORAGE_KEY}&select=value`,
-    {
-      method: "GET",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": "Bearer " + SUPABASE_KEY,
-      }
-    }
-  );
-  const rows = await getRes.json();
-  const requests = (Array.isArray(rows) && rows[0] && Array.isArray(rows[0].value)) ? rows[0].value : [];
+  // Read existing requests. A refused read is an error, not an empty list.
+  let requests;
+  try {
+    const v = await sbGet(STORAGE_KEY);
+    requests = Array.isArray(v) ? v : [];
+  } catch (e) {
+    return { statusCode: 503, headers: cors, body: JSON.stringify({ error: "Could not read viewing requests: " + e.message }) };
+  }
 
-  const req = requests.find(function(r) { return r.id === id; });
-  if (!req) return { statusCode: 404, headers: cors, body: JSON.stringify({ error: "Request not found" }) };
+  const found = requests.find(function(r) { return r.id === id; });
+  if (!found) return { statusCode: 404, headers: cors, body: JSON.stringify({ error: "Request not found" }) };
+  if (!actionAllowed(found.status, action)) {
+    return { statusCode: 409, headers: cors, body: JSON.stringify({ error: "This request has already been " + found.status + "." }) };
+  }
+  const req = Object.assign({}, found);
 
   // Update status (and the slot itself when amending)
   const newStatus = (action === "confirm" || action === "amend") ? "confirmed" : "declined";
@@ -232,11 +293,17 @@ exports.handler = async (event) => {
     patch.time = newTime;
     patch.amendedFrom = { date: origDate, time: origTime };
   }
-  const updated = requests.map(function(r) {
-    return r.id === id ? Object.assign({}, r, patch) : r;
-  });
   // Everything below should describe the AGREED slot, not the requested one.
   if (action === "amend") { req.date = newDate; req.time = newTime; }
+
+  // Apply only this request's patch to the list as it stands now.
+  let updated;
+  try {
+    updated = applyViewingPatch(await sbGet(STORAGE_KEY), id, patch);
+  } catch (e) {
+    return { statusCode: 503, headers: cors, body: JSON.stringify({ error: "Could not read viewing requests: " + e.message }) };
+  }
+  if (!updated) return { statusCode: 404, headers: cors, body: JSON.stringify({ error: "Request not found" }) };
 
   const setRes = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
     method: "POST",
@@ -283,6 +350,7 @@ exports.handler = async (event) => {
       : "Dear " + req.name + ",\n\n" +
         "Thank you for your interest in Hawthbush Farm.\n\n" +
         "Unfortunately we're unable to accommodate a viewing on " + slotLine + ".\n\n" +
+        (declineReason ? declineReason + "\n\n" : "") +
         "Please get in touch at " + FROM_EMAIL + " and we'll find an alternative.\n\n" +
         "Warm regards,\nThe Hawthbush Farm Team";
 
@@ -321,3 +389,5 @@ exports.handler = async (event) => {
 
   return { statusCode: 200, headers: cors, body: JSON.stringify({ ok: true }) };
 };
+
+exports._internals = { actionAllowed, applyViewingPatch };

@@ -4036,7 +4036,7 @@ function ManualEmailSenders({ booking, onBuildSchedule }) {
     try {
       const res = await fetch("/.netlify/functions/send-accom-email", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ bookingId: booking.id, emailType: resolveId(id) })
       });
       const data = await res.json().catch(function(){ return {}; });
@@ -4951,7 +4951,7 @@ function ICalSettings({ properties, setProperties, onSave }) {
     try {
       const res = await fetch("/.netlify/functions/sync-property-ical", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ propertyId: pid })
       });
       const data = await res.json();
@@ -5366,7 +5366,7 @@ function TodoistSettings() {
       setSaved(true); setTimeout(function(){ setSaved(false); }, 2000);
       if (url.trim()) {
         const res = await fetch("/.netlify/functions/todoist-feed", {
-          method:"POST", headers:{ "Content-Type":"application/json" },
+          method:"POST", headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
           body: JSON.stringify({ url: url.trim(), force: true })
         });
         const d = await res.json();
@@ -5416,7 +5416,7 @@ function TodoBox() {
       let url = "";
       try { url = (await sbGet(TODOIST_ICS_KEY)) || ""; } catch (e) { url = ""; }
       const res = await fetch("/.netlify/functions/todoist-feed", {
-        method:"POST", headers:{ "Content-Type":"application/json" },
+        method:"POST", headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ url: url })
       });
       const d = await res.json();
@@ -6463,7 +6463,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     try {
       await fetch("/.netlify/functions/send-accom-email", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ bookingId: askSendConfirm.id, emailType: "booking_confirmed" }),
       });
       setFlash("Confirmation email sent");
@@ -14364,7 +14364,7 @@ function BarTakeSuggestion({ eventDate, value, onApply }) {
     try {
       const res = await fetch("/.netlify/functions/zettle-sales", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ startDate: dayBefore, endDate: dayAfter })
       });
       const d = await res.json();
@@ -18386,7 +18386,7 @@ function EventEntryView({ type, products, stock, onSave, onCancel, editingEvent,
     try {
       const res = await fetch("/.netlify/functions/zettle-sales", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ startDate: prevStocktake.date, endDate: date })
       });
       const data = await res.json();
@@ -18881,7 +18881,7 @@ function BarReconcileView({ products, events }) {
     try {
       const res = await fetch("/.netlify/functions/zettle-sales", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ startDate: fromST.date, endDate: toST.date })
       });
       const data = await res.json();
@@ -18913,7 +18913,7 @@ function BarReconcileView({ products, events }) {
     try {
       const res = await fetch("/.netlify/functions/zettle-sales", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ action: "catalogue" })
       });
       const data = await res.json();
@@ -21863,7 +21863,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
       if (!silent) {
         const res = await fetch("/.netlify/functions/handle-viewing", {
           method:"POST",
-          headers:{"Content-Type":"application/json"},
+          headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
           body: JSON.stringify({ id: req.id, action, declineReason: declineMsg||"",
             newDate: isAmend ? agreed.date : undefined, newTime: isAmend ? agreed.time : undefined }),
         });
