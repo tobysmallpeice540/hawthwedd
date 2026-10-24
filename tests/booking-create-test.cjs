@@ -207,7 +207,7 @@ console.log("\n— the contract writeback wiring (2026-09-08d) —");
   ok("an update that changes nothing leaves no note behind",
      /if \(moved \|\| !hit\) \{/.test(SRC));
   ok("updateAccomBookings re-reads the server rather than trusting tab state",
-     /const updateAccomBookings = useCallback\(async \(updates\) => \{[\s\S]{0,400}?await sbGet\(ACCOM_STORAGE\)/.test(SRC));
+     /const updateAccomBookings = useCallback\(async \(updates\) => \{[\s\S]{0,400}?await sbGet(?:Strict)?\(ACCOM_STORAGE\)/.test(SRC));
   ok("it recomputes the booking total from its stays",
      /value: stays\.reduce\(function\(sum, s\) \{ return sum \+ \(Number\(s\.value\) \|\| 0\); \}, 0\)/.test(SRC));
   ok("saveAccomBooking no longer writes the whole array from tab state",

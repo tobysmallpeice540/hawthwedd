@@ -167,7 +167,7 @@ console.log("\n— the wiring in App.jsx —");
   ok("the stamp is made by the machine, not typed",
      /addedAt: new Date\(\)\.toISOString\(\)/.test(SRC));
   ok("the enquiries screen tells the rest of the app when a pencil changes",
-     has("if (onEnquiriesChanged) onEnquiriesChanged(data);"));
+     has("if (onEnquiriesChanged) onEnquiriesChanged(d);") && has("useMergedSave(ENQUIRIES_STORAGE, enquiries, setEnquiriesBoth)"));
   ok("a pencil is written against the server's copy of the enquiries, not this screen's",
      /const savePencils = async \(id, pencils\)[\s\S]{0,900}sbGet\(ENQUIRIES_STORAGE\)/.test(SRC) &&
      /fresh\.some\(function\(e\)\{ return String\(e\.id\) === String\(id\); \}\)/.test(SRC));

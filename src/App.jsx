@@ -150,11 +150,29 @@ const sbGet = async (key) => {
   return rows?.[0]?.value ?? null;
 };
 
+// Set as soon as this tab learns a newer build is live. From then on sbSet
+// refuses every write (except publishing the build itself): an old tab holds
+// old code and an old snapshot, and the guard used to cover events only.
+let STALE_BUILD_SEEN = null;
+function noteStaleBuild(latest) { STALE_BUILD_SEEN = latest || STALE_BUILD_SEEN; }
+
+// A write sbSet refused before sending it (old build, example data). Shown in
+// the same red banner as a failed request, so a refusal is never silent.
+function noteRefusedWrite(title, msg) {
+  console.error("Refused write: " + msg);
+  try { window.dispatchEvent(new CustomEvent("hbf-data-failure", { detail: { what: "saving", status: 0, title: title, msg: msg } })); } catch (e) {}
+}
+
 const sbSet = async (key, value) => {
+  if (STALE_BUILD_SEEN && key !== "hbf_app_build_v1") {
+    const msg = "This page is running an old version (" + STALE_BUILD_SEEN + " is live). Nothing was saved — reload the page and try again.";
+    noteRefusedWrite("Nothing was saved", msg);
+    throw new Error(msg);
+  }
   // The guard that would have prevented today's near miss.
   if (SEED_FALLBACK[key]) {
     const e = new Error("refusing to save " + key + ": the app is holding example data, not yours");
-    console.error(e.message);
+    noteRefusedWrite("Nothing was saved", "This screen is showing example data because the real records could not be read, so saving was refused. Reload the page.");
     throw e;
   }
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
@@ -165,8 +183,141 @@ const sbSet = async (key, value) => {
     }),
     body: JSON.stringify({ key, value, updated_at: new Date().toISOString() })
   });
-  if (!res.ok) noteDataFailure(`saving ${key}`, res.status, await res.text());
+  if (!res.ok) {
+    noteDataFailure(`saving ${key}`, res.status, await res.text());
+    // Throw, so no caller can carry on as though it saved (24 Oct review: a
+    // dozen screens said "Saved" and autosave cleared its pending flag after
+    // a failed write).
+    throw new Error("Saving failed (" + res.status + "), so nothing was changed. Please try again.");
+  }
 };
+
+// A read that a WRITE depends on. sbGet answers null both for "no such key"
+// and for "the read failed", and every re-read-then-write path turned that
+// null into [] — so one 5xx at the wrong moment wrote an empty list over the
+// real one. This one throws instead, and the write never happens.
+const sbGetStrict = async (key) => {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}&select=value`, {
+    headers: sbAuthHeaders()
+  });
+  if (!res.ok) {
+    READ_FAILED[key] = true;
+    noteDataFailure(`reading ${key}`, res.status, await res.text());
+    throw new Error("Could not read the current data, so nothing was saved. Please try again.");
+  }
+  const rows = await res.json();
+  delete READ_FAILED[key];
+  return rows?.[0]?.value ?? null;
+};
+
+// Save a shared array without losing what other people (or the website, or a
+// webhook) added since this screen loaded. `before` is what the screen was
+// showing, `after` is what it wants; only the difference between them is
+// applied to a FRESH copy from the server:
+//   · a record in `after` but not `before` is added (unless already there);
+//   · a record that changed between them replaces the server's copy;
+//   · a record in `before` but not `after` is removed;
+//   · everything else on the server is left exactly as it is.
+// When nobody else has added or removed anything, `after`'s order is kept, so
+// a reorder still saves. Records are matched on `id`.
+function mergeById(server, before, after) {
+  const key = function(x) { return x && x.id != null ? String(x.id) : null; };
+  const srv = Array.isArray(server) ? server : [];
+  // A record with no id cannot be matched, so a merge could drop or double it.
+  // Every array this is used for gives its records ids; if one ever does not,
+  // fall back to writing the screen's list as it stands (the old behaviour).
+  if ((after || []).some(function(x) { return !key(x); })) {
+    console.warn("mergeById: a record has no id, so the list is saved as it stands");
+    return after || [];
+  }
+  const b = {}, a = {};
+  (before || []).forEach(function(x) { const k = key(x); if (k) b[k] = x; });
+  (after || []).forEach(function(x) { const k = key(x); if (k) a[k] = x; });
+  const changed = {}, added = [], removed = {};
+  Object.keys(a).forEach(function(k) {
+    if (!(k in b)) added.push(k);
+    else if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) changed[k] = true;
+  });
+  Object.keys(b).forEach(function(k) { if (!(k in a)) removed[k] = true; });
+  const srvKeys = srv.map(key);
+  const sameMembers = srvKeys.length === Object.keys(b).length && srvKeys.every(function(k) { return k && k in b; });
+  if (sameMembers) {
+    // Nobody else added or removed anything: take `after` as it stands, but
+    // keep the server's version of any record this screen did not touch.
+    const sMap = {}; srv.forEach(function(x) { sMap[key(x)] = x; });
+    return (after || []).map(function(x) {
+      const k = key(x);
+      if (k && k in b && !changed[k] && k in sMap) return sMap[k];
+      return x;
+    });
+  }
+  const out = srv.filter(function(x) { return !removed[key(x)]; })
+                 .map(function(x) { const k = key(x); return k && changed[k] ? a[k] : x; });
+  const have = {}; out.forEach(function(x) { const k = key(x); if (k) have[k] = true; });
+  added.forEach(function(k) { if (!have[k]) out.push(a[k]); });
+  return out;
+}
+// The same idea for a plain object of key → value (the till's product map).
+function mergeByKey(server, before, after) {
+  const out = Object.assign({}, server && typeof server === "object" && !Array.isArray(server) ? server : {});
+  const b = before || {}, a = after || {};
+  Object.keys(a).forEach(function(k) {
+    if (!(k in b) || JSON.stringify(a[k]) !== JSON.stringify(b[k])) out[k] = a[k];
+  });
+  Object.keys(b).forEach(function(k) { if (!(k in a)) delete out[k]; });
+  return out;
+}
+// Saves of one key from this tab run one after another: two quick saves in
+// flight together would each merge into the same server copy, and the second
+// write would drop the first one's change.
+const SAVE_CHAIN = {};
+function queueSave(storageKey, fn) {
+  const prev = SAVE_CHAIN[storageKey] || Promise.resolve();
+  const run = prev.catch(function() {}).then(fn);
+  SAVE_CHAIN[storageKey] = run;
+  return run;
+}
+function saveObjectMerged(storageKey, before, after) {
+  return queueSave(storageKey, async function() {
+    const server = await sbGetStrict(storageKey);
+    if (server != null && (typeof server !== "object" || Array.isArray(server))) throw new Error("Unexpected data for " + storageKey + ", so nothing was saved.");
+    const next = mergeByKey(server, before, after);
+    await sbSet(storageKey, next);
+    return next;
+  });
+}
+function saveArrayMerged(storageKey, before, after) {
+  return queueSave(storageKey, async function() {
+    const server = await sbGetStrict(storageKey);
+    if (server != null && !Array.isArray(server)) throw new Error("Unexpected data for " + storageKey + ", so nothing was saved.");
+    const next = mergeById(server || [], before || [], after || []);
+    await sbSet(storageKey, next);
+    return next;
+  });
+}
+
+// The usual way a screen saves a shared list: show the change at once, save
+// only the difference against a fresh read, then show what the server now
+// holds (which may include other people's additions). If the save fails the
+// screen goes back to what it showed before, so it never displays a change
+// that was not saved. Rethrows, so callers can say so.
+function useMergedSave(storageKey, value, setValue, kind) {
+  const ref = useRef(value);
+  ref.current = value;
+  return useCallback(async function(next) {
+    const before = ref.current;
+    ref.current = next;
+    setValue(next);
+    try {
+      const merged = await (kind === "object" ? saveObjectMerged : saveArrayMerged)(storageKey, before, next);
+      if (ref.current === next) { ref.current = merged; setValue(merged); }
+      return merged;
+    } catch (e) {
+      if (ref.current === next) { ref.current = before; setValue(before); }
+      throw e;
+    }
+  }, [storageKey, setValue, kind]);
+}
 
 // Calling a database function. Everything the client portal exposes to this app
 // goes through here rather than through table reads, because the wp_ tables have
@@ -253,7 +404,9 @@ async function publishBuild() {
 async function fetchLatestBuild() {
   try {
     const cur = await sbGet(APP_BUILD_KEY);
-    return (cur && cur.build) || null;
+    const latest = (cur && cur.build) || null;
+    if (latest && buildIsNewer(latest, APP_BUILD)) noteStaleBuild(latest);
+    return latest;
   } catch (e) { return null; }
 }
 
@@ -2452,7 +2605,7 @@ function stayTimes(booking, stay, prop) {
 // Log an automated email to Supabase. Called from send handlers (phase 2).
 async function logEmail(entry) {
   try {
-    const existing = await sbGet(EMAIL_LOG_STORAGE) || [];
+    const existing = await sbGetStrict(EMAIL_LOG_STORAGE) || [];
     const rec = Object.assign({ id:"el"+Date.now(), sentAt:new Date().toISOString() }, entry);
     await sbSet(EMAIL_LOG_STORAGE, existing.concat([rec]).slice(-500));
   } catch(e) { console.error("Email log:", e); }
@@ -2573,7 +2726,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-23d";
+const APP_BUILD = "2026-10-24a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4127,15 +4280,30 @@ function AccomImport({ onImported, saveBookings, bookings }) {
     reader.onload = async () => {
       try {
         const data = JSON.parse(reader.result);
-        const props = Array.isArray(data.properties) && data.properties.length ? data.properties : INITIAL_PROPERTIES;
+        const props = Array.isArray(data.properties) ? data.properties : [];
         const guests = Array.isArray(data.guests) ? data.guests : [];
         const imported = Array.isArray(data.bookings) ? data.bookings : [];
         setStatus("Saving " + imported.length + " bookings and " + guests.length + " guests…");
-        await sbSet(PROPERTIES_STORAGE, props);
-        await sbSet(ACCOM_GUESTS_STORAGE, guests);
-        await sbSet(ACCOM_STORAGE, imported);
-        setStatus("Imported " + imported.length + " bookings and " + guests.length + " guests.");
-        onImported(props, guests, imported);
+        // This used to write the file over all three lists, so running it today
+        // would have wiped every booking made since the Bookalet move (and put
+        // the example properties back if the file had none). It now only ADDS
+        // records whose id is not there already; nothing existing is changed.
+        const addNew = async function(key, rows) {
+          const server = await sbGetStrict(key);
+          if (server != null && !Array.isArray(server)) throw new Error("Unexpected data for " + key);
+          const cur = server || [];
+          const have = {}; cur.forEach(function(x) { if (x && x.id != null) have[String(x.id)] = true; });
+          const fresh = rows.filter(function(x) { return x && x.id != null && !have[String(x.id)]; });
+          const next = fresh.length ? cur.concat(fresh) : cur;
+          if (fresh.length) await sbSet(key, next);
+          return { next: next, added: fresh.length, skipped: rows.length - fresh.length };
+        };
+        const rp = await addNew(PROPERTIES_STORAGE, props);
+        const rg = await addNew(ACCOM_GUESTS_STORAGE, guests);
+        const rb = await addNew(ACCOM_STORAGE, imported);
+        setStatus("Added " + rb.added + " bookings, " + rg.added + " guests and " + rp.added + " properties" +
+          (rb.skipped + rg.skipped + rp.skipped ? " (" + (rb.skipped + rg.skipped + rp.skipped) + " already here or without an id, left as they were)." : "."));
+        onImported(rp.next, rg.next, rb.next);
       } catch (err) {
         setStatus("Import failed: " + err.message);
       }
@@ -5582,7 +5750,8 @@ function BackupPanel() {
     await sbSet(snapshotKey, snapshot);
 
     let idx = [];
-    try { idx = (await sbGet(BACKUP_INDEX_KEY)) || []; } catch (e) { idx = []; }
+    // A failed read must not write a one-entry index over the real one.
+    idx = (await sbGetStrict(BACKUP_INDEX_KEY)) || [];
     if (!Array.isArray(idx)) idx = [];
     idx = idx.filter(function(e) { return e && e.key !== snapshotKey; });
     idx.push({ key: snapshotKey, date: today, takenAt: snapshot.takenAt, counts: counts, bytes: bytes });
@@ -5702,7 +5871,7 @@ function BackupPanel() {
       for (let i = 0; i < diff.sets.length; i++) {
         const set = diff.sets[i];
         // Re-read immediately before writing so we merge into the very latest.
-        const current = (await sbGet(set.key)) || [];
+        const current = (await sbGetStrict(set.key)) || [];
         const byId = {};
         current.forEach(function(r) { if (r && r.id !== undefined) byId[String(r.id)] = r; });
 
@@ -6230,10 +6399,18 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   const [sendingConfirm, setSendingConfirm] = useState(false);
   const [askDeleteBooking, setAskDeleteBooking] = useState(false);
   const [clashWarning, setClashWarning] = useState(null);   // { rec, stayOpen, clashes } or null
+  const propsSavedRef = useRef(INITIAL_PROPERTIES);   // what the server held when last read or saved
 
   useEffect(() => {
     (async () => {
-      try { const p = await sbGet(PROPERTIES_STORAGE); if (p && p.length) setProperties(p); } catch {}
+      // On a failed read the screen keeps the built-in properties; mark that,
+      // so Save cannot write them over the real ones (prices, iCal links).
+      try {
+        const p = await sbGet(PROPERTIES_STORAGE);
+        if (p && p.length) { propsSavedRef.current = p; setProperties(p); }
+        else if (READ_FAILED[PROPERTIES_STORAGE]) noteSeedFallback(PROPERTIES_STORAGE, "The property list");
+        else propsSavedRef.current = [];   // genuinely none saved yet: the built-in list is new
+      } catch { noteSeedFallback(PROPERTIES_STORAGE, "The property list"); }
       try { const b = await sbGet(ACCOM_STORAGE);      setBookings((b || []).map(normalizeAccom)); } catch { setBookings([]); }
       try { const g = await sbGet(ACCOM_GUESTS_STORAGE); setGuests(g || []); } catch { setGuests([]); }
       try { const dc = await sbGet(DISCOUNT_CODES_STORAGE); setDiscountCodes(dc || []); } catch { setDiscountCodes([]); }
@@ -6264,7 +6441,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   // from an unknown base.
   const mutateAccom = async (mutator) => {
     let server;
-    try { server = await sbGet(ACCOM_STORAGE); }
+    try { server = await sbGetStrict(ACCOM_STORAGE); }
     catch (e) {
       console.error("Aborting lettings save — could not read current bookings:", e);
       throw new Error("Could not reach the database, so nothing was saved. Please try again.");
@@ -6286,8 +6463,14 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     return next;
   };
 
+  // Only the properties changed on this screen since it loaded are written,
+  // into a fresh read (the iCal sync stamps lastSyncedAt server-side).
   const saveProperties = async () => {
-    try { await sbSet(PROPERTIES_STORAGE, properties); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
+    try {
+      const next = await saveArrayMerged(PROPERTIES_STORAGE, propsSavedRef.current, properties);
+      propsSavedRef.current = next; setProperties(next);
+      setFlash("Saved"); setTimeout(()=>setFlash(""), 1500);
+    }
     catch (e) { console.error(e); setFlash("Save failed"); }
   };
 
@@ -6841,7 +7024,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         try { const r = await sbGet(VR_STORAGE); setViewingRequests(r || []); } catch { setViewingRequests([]); }
         try { const r = await sbGet(VB_STORAGE); setViewingBlocks(r || []); } catch { setViewingBlocks([]); }
       try { const r = await sbGet(ACCOM_STORAGE); if (READ_FAILED[ACCOM_STORAGE]) startupReadFailedRef.current.accom = true; setAccomBookings((r||[]).map(normalizeAccom)); } catch { startupReadFailedRef.current.accom = true; setAccomBookings([]); }
-      try { const r = await sbGet(PROPERTIES_STORAGE); setAccomProperties(r||INITIAL_PROPERTIES); } catch { setAccomProperties(INITIAL_PROPERTIES); }
+      try { const r = await sbGet(PROPERTIES_STORAGE); if (READ_FAILED[PROPERTIES_STORAGE]) noteSeedFallback(PROPERTIES_STORAGE, "The property list"); setAccomProperties(r||INITIAL_PROPERTIES); } catch { noteSeedFallback(PROPERTIES_STORAGE, "The property list"); setAccomProperties(INITIAL_PROPERTIES); }
       try { const r = await sbGet(EVENT_INVOICES_STORAGE); if (READ_FAILED[EVENT_INVOICES_STORAGE]) startupReadFailedRef.current.invoices = true; setInvoiceRecords(r||[]); } catch { startupReadFailedRef.current.invoices = true; setInvoiceRecords([]); }
       setLoaded(true);
     })();
@@ -6919,7 +7102,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
     let server;
     try {
-      server = await sbGet(BOOKING_STORAGE);
+      server = await sbGetStrict(BOOKING_STORAGE);
     } catch (e) {
       console.error("Aborting save — could not read current bookings:", e);
       throw new Error("Could not reach the database, so nothing was saved. Please try again.");
@@ -7001,14 +7184,16 @@ export default function App({ role = "admin", onSignOut } = {}) {
       return base.map(function(b) { return String(b.id) === String(id) ? patchFn(b) : b; });
     });
   }, [mutateBookings]);
-  const saveStaff    = useCallback(async data=>{ setStaff(data);    try{await sbSet(STAFF_STORAGE, data);}catch(e){console.error(e);} },[]);
+  const saveStaffMerged = useMergedSave(STAFF_STORAGE, staff, setStaff);
+  const saveEnquiriesMerged = useMergedSave(ENQUIRIES_STORAGE, enquiries, setEnquiries);
+  const saveStaff    = useCallback(async data=>{ try{await saveStaffMerged(data);}catch(e){console.error(e);} },[saveStaffMerged]);
 
   // Delete a lettings booking outright. Used for unpaid online bookings that
   // are never going to be paid — reads the server's copy first so a booking
   // added elsewhere since this tab loaded isn't wiped along with it.
   const deleteAccomBooking = useCallback(async (booking) => {
     try {
-      const server = await sbGet(ACCOM_STORAGE);
+      const server = await sbGetStrict(ACCOM_STORAGE);
       const base = Array.isArray(server) ? server : [];
       const next = base.filter(function(b) { return String(b.id) !== String(booking.id); });
       await sbSet(ACCOM_STORAGE, next);
@@ -7025,7 +7210,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // created since the tab loaded, and a failed write only reached the console.
   const saveAccomBooking = useCallback(async (bookingId, patch) => {
     let server;
-    try { server = await sbGet(ACCOM_STORAGE); }
+    try { server = await sbGetStrict(ACCOM_STORAGE); }
     catch (e) {
       console.error("Aborting — could not read current lettings bookings:", e);
       throw new Error("Could not reach the database, so nothing was saved. Please try again.");
@@ -7049,7 +7234,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const updateAccomBookings = useCallback(async (updates) => {
     if (!updates || !updates.length) return [];
     let server;
-    try { server = await sbGet(ACCOM_STORAGE); }
+    try { server = await sbGetStrict(ACCOM_STORAGE); }
     catch (e) {
       console.error("Aborting — could not read current lettings bookings:", e);
       throw new Error("Could not reach the database, so nothing was saved. Please try again.");
@@ -7138,7 +7323,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const createAccomBookings = useCallback(async (records, force) => {
     if (!records || !records.length) return [];
     let server;
-    try { server = await sbGet(ACCOM_STORAGE); }
+    try { server = await sbGetStrict(ACCOM_STORAGE); }
     catch (e) {
       console.error("Aborting — could not read current lettings bookings:", e);
       throw new Error("Could not reach the database, so nothing was saved. Please try again.");
@@ -7234,13 +7419,19 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // Holds the in-flight "create this brand-new event" promise so two autosaves
   // racing each other can't each mint a record. Cleared whenever we move to a
   // different event, or the next new event would be glued to the last one's id.
+  // The in-flight create of a brand-new event, tagged with the form it belongs
+  // to ({ key: formKey, promise }). Tagged rather than cleared on navigation:
+  // leaving a new form mid-create runs the unmount flush with that form's
+  // save, and with the ref cleared it minted the event a second time.
   const newEventRef = useRef(null);
-  const handleNew    = ()=>{ newEventRef.current = null; setFormKey(function(k){ return k+1; }); setFormData(emptyBooking()); setEditId(null); setView("form"); };
+  const formKeyRef = useRef(formKey);
+  formKeyRef.current = formKey;
+  const handleNew    = ()=>{ setFormKey(function(k){ return k+1; }); setFormData(emptyBooking()); setEditId(null); setView("form"); };
   // Ids arrive as numbers from the list and as strings from links and other
   // screens, so compare as strings; and an event that is not there (deleted on
   // another device, or a stale link) says so instead of opening an empty form
   // that would autosave as a new record.
-  const handleEdit   = id=>{ const b=bookings.find(x=>String(x.id)===String(id)); if (!b) { alert("That event could not be found — it may have been deleted."); return; } newEventRef.current = null; setFormKey(function(k){ return k+1; }); id = b.id; setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
+  const handleEdit   = id=>{ const b=bookings.find(x=>String(x.id)===String(id)); if (!b) { alert("That event could not be found — it may have been deleted."); return; } setFormKey(function(k){ return k+1; }); id = b.id; setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
   const handleDelete = id => {
     const b = bookings.find(x=>x.id===id);
     askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
@@ -7390,6 +7581,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
     newBooking.fromEnquiryId = enq.id;
 
     const open = function(rec) {
+      setFormKey(function(k){ return k+1; });   // a new form, so no earlier create is mistaken for this one
       setFormData(rec);
       setEditId(rec.id);
       setView("form");
@@ -7500,10 +7692,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   const filtered = bookings.filter(b=>{ const q=search.toLowerCase(); return !q||(b.couple||"").toLowerCase().includes(q)||(b.email||"").toLowerCase().includes(q)||(b.date||"").includes(q); });
 
+  const saveInvoiceRecordsMerged = useMergedSave(EVENT_INVOICES_STORAGE, invoiceRecords, setInvoiceRecords);
   const saveInvoiceRecords = useCallback(async (next) => {
-    setInvoiceRecords(next);
-    try { await sbSet(EVENT_INVOICES_STORAGE, next); } catch(e) { console.error(e); }
-  }, []);
+    try { await saveInvoiceRecordsMerged(next); } catch(e) { console.error(e); }
+  }, [saveInvoiceRecordsMerged]);
 
   // How many invoice stages are due to be raised right now (badge on the
   // Invoices button). Counts unpushed stages whose ready date has arrived,
@@ -7643,17 +7835,25 @@ export default function App({ role = "admin", onSignOut } = {}) {
               // Now the id is allocated server-side, and the in-flight create
               // is held in a ref so whoever arrives second waits for it and
               // updates that record instead of making another.
-              if (!newEventRef.current) {
-                newEventRef.current = createBookingRecord({...fd, createdAt: fd.createdAt || new Date().toISOString()})
+              //
+              // The create belongs to THIS form (myKey). If it finishes after
+              // the user has moved on to another event, its id must not be
+              // stamped onto that other event's form — it was, and the other
+              // form's later autosaves then wrote over the new record.
+              const myKey = formKey;
+              const stillHere = function() { return formKeyRef.current === myKey; };
+              const mine = newEventRef.current && newEventRef.current.key === myKey ? newEventRef.current : null;
+              if (!mine) {
+                const entry = { key: myKey, promise: null };
+                entry.promise = createBookingRecord({...fd, createdAt: fd.createdAt || new Date().toISOString()})
                   .then(function(r){ return r.record.id; })
-                  .catch(function(e){ newEventRef.current = null; throw e; });
-                const newId = await newEventRef.current;
-                setEditId(newId);
-                setFormData(f=>({...f, id:newId}));
+                  .catch(function(e){ if (newEventRef.current === entry) newEventRef.current = null; throw e; });
+                newEventRef.current = entry;
+                const newId = await entry.promise;
+                if (stillHere()) { setEditId(newId); setFormData(f=>({...f, id:newId})); }
               } else {
-                const newId = await newEventRef.current;
-                setEditId(newId);
-                setFormData(f=>({...f, id:newId}));
+                const newId = await mine.promise;
+                if (stillHere()) { setEditId(newId); setFormData(f=>({...f, id:newId})); }
                 await saveBookingRecord(newId, {...fd, id:newId});
               }
             }
@@ -7667,7 +7867,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
           enquiries={enquiries} setEnquiries={setEnquiries}
-          saveEnquiries={async(e)=>{ setEnquiries(e); await sbSet(ENQUIRIES_STORAGE,e); }}
+          saveEnquiries={saveEnquiriesMerged}
           patchBooking={patchBooking}
           onSelectEnquiry={goToEnquiry}/>}
         {view==="boxoffice"  && <BoxOfficeView bookings={bookings}/>}
@@ -13997,7 +14197,7 @@ function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, en
     // share this one record, and writing a stale copy would drop their stars.
     let base = {};
     try {
-      const server = await sbGet(STARRED_EMAILS_KEY);
+      const server = await sbGetStrict(STARRED_EMAILS_KEY);
       if (server && typeof server === "object") base = server;
     } catch (e) { base = starred; }
 
@@ -15103,13 +15303,18 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
   const latestFormRef = useRef(formData);
   const latestSaveRef = useRef(onAutoSave);
   const pendingRef    = useRef(false);
+  // Counts edits. A save only clears "pending" if no newer edit arrived while
+  // it was in flight — otherwise a keystroke typed during a slow save was
+  // marked as saved, and leaving the form then skipped the flush.
+  const editSeqRef    = useRef(0);
   latestFormRef.current = formData;
   latestSaveRef.current = onAutoSave;
 
   const runAutoSave = function(fd) {
+    const seq = editSeqRef.current;
     setAutoSaveState("saving");
     return Promise.resolve(latestSaveRef.current(fd)).then(function() {
-      pendingRef.current = false;
+      if (editSeqRef.current === seq) pendingRef.current = false;
       setAutoSaveState("saved");
       setTimeout(function() { setAutoSaveState(function(s){ return s==="saved" ? "idle" : s; }); }, 2500);
     }).catch(function(err) {
@@ -15121,6 +15326,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
     // Skip the very first run (form just loaded — nothing to save yet)
     if (autoSaveSkipFirstRef.current) { autoSaveSkipFirstRef.current = false; return; }
     if (!onAutoSave) return;
+    editSeqRef.current += 1;
     pendingRef.current = true;
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(function() { runAutoSave(latestFormRef.current); }, 1500);
@@ -15168,7 +15374,8 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
     if (!target || !onOpenEvent) return;
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     if (pendingRef.current && latestSaveRef.current) {
-      try { await latestSaveRef.current(latestFormRef.current); pendingRef.current = false; }
+      const seq = editSeqRef.current;
+      try { await latestSaveRef.current(latestFormRef.current); if (editSeqRef.current === seq) pendingRef.current = false; }
       catch (e) {
         if (!window.confirm("Your last change to this event could not be saved. Move to the other event anyway and lose it?")) return;
         pendingRef.current = false;
@@ -17861,18 +18068,20 @@ function BarView() {
 
   useEffect(() => {
     (async () => {
-      try { const r = await sbGet(BAR_PRODUCTS_KEY); if (!r) noteSeedFallback(BAR_PRODUCTS_KEY, "The bar product list"); setProducts(r || INITIAL_PRODUCTS); } catch { setProducts(INITIAL_PRODUCTS); }
-      try { const r = await sbGet(BAR_EVENTS_KEY);   if (!r) noteSeedFallback(BAR_EVENTS_KEY, "The bar event list"); setEvents(r || INITIAL_BAR_EVENTS); }   catch { setEvents(INITIAL_BAR_EVENTS); }
+      try { const r = await sbGet(BAR_PRODUCTS_KEY); if (!r) noteSeedFallback(BAR_PRODUCTS_KEY, "The bar product list"); setProducts(r || INITIAL_PRODUCTS); } catch { noteSeedFallback(BAR_PRODUCTS_KEY, "The bar product list"); setProducts(INITIAL_PRODUCTS); }
+      try { const r = await sbGet(BAR_EVENTS_KEY);   if (!r) noteSeedFallback(BAR_EVENTS_KEY, "The bar event list"); setEvents(r || INITIAL_BAR_EVENTS); }   catch { noteSeedFallback(BAR_EVENTS_KEY, "The bar event list"); setEvents(INITIAL_BAR_EVENTS); }
       // Farm events + staff, so the rota reports can live here too — bar staff
       // need their rota without being given the run of the whole app.
       try { const r = await sbGet(BOOKING_STORAGE); setFarmEvents(r || []); } catch { setFarmEvents([]); }
-      try { const r = await sbGet(STAFF_STORAGE);   if (!r) noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(r || INITIAL_STAFF); } catch { setStaff(INITIAL_STAFF); }
+      try { const r = await sbGet(STAFF_STORAGE);   if (!r) noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(r || INITIAL_STAFF); } catch { noteSeedFallback(STAFF_STORAGE, "The staff list"); setStaff(INITIAL_STAFF); }
       setLoaded(true);
     })();
   }, []);
 
-  const saveProducts = async p => { setProducts(p); try { await sbSet(BAR_PRODUCTS_KEY, p); } catch(e) { console.error(e); } };
-  const saveEvents   = async e => { setEvents(e);   try { await sbSet(BAR_EVENTS_KEY,   e); } catch(e) { console.error(e); } };
+  const saveProductsMerged = useMergedSave(BAR_PRODUCTS_KEY, products, setProducts);
+  const saveEventsMerged   = useMergedSave(BAR_EVENTS_KEY,   events,   setEvents);
+  const saveProducts = async p => { try { await saveProductsMerged(p); } catch(e) { console.error(e); } };
+  const saveEvents   = async e => { try { await saveEventsMerged(e); } catch(err) { console.error(err); } };
 
   const handleDeleteEvent = async id => {
     const ev = events.find(e=>e.id===id);
@@ -18627,14 +18836,17 @@ function BarReconcileView({ products, events }) {
 
   useEffect(function() {
     (async function() {
-      try { const r = await sbGet(BAR_POS_MAP_KEY); setMap(r || {}); } catch (e) { setMap({}); }
+      // A failed read must not leave an empty map that the next save would
+      // write over every recipe: mark it, and sbSet refuses the write.
+      try { const r = await sbGet(BAR_POS_MAP_KEY); if (READ_FAILED[BAR_POS_MAP_KEY]) noteSeedFallback(BAR_POS_MAP_KEY, "The till product map"); setMap(r || {}); }
+      catch (e) { noteSeedFallback(BAR_POS_MAP_KEY, "The till product map"); setMap({}); }
       setMapLoaded(true);
     })();
   }, []);
 
+  const saveMapMerged = useMergedSave(BAR_POS_MAP_KEY, map, setMap, "object");
   async function saveMap(next) {
-    setMap(next);
-    try { await sbSet(BAR_POS_MAP_KEY, next); } catch (e) { console.error(e); }
+    try { await saveMapMerged(next); } catch (e) { console.error(e); }
   }
 
   if (stocktakes.length < 2) {
@@ -21643,14 +21855,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
 
   const showFlash = (msg, col=T.green) => { setFlash({msg,col}); setTimeout(()=>setFlash(null),3000); };
 
-  const saveRequests = async (updated) => {
-    setRequests(updated);
-    await sbSet(VR_STORAGE, updated);
-  };
-  const saveBlocks = async (updated) => {
-    setBlocks(updated);
-    await sbSet(VB_STORAGE, updated);
-  };
+  const saveRequests = useMergedSave(VR_STORAGE, requests, setRequests);
+  const saveBlocks   = useMergedSave(VB_STORAGE, blocks, setBlocks);
 
   // Opens the confirm modal instead of acting immediately
   const handleConfirmClick = (req) => {
@@ -22238,10 +22444,11 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
   const refreshRequests = async (full=false) => {
     setRefreshing(true);
     try {
+      // A failed read keeps what is on screen rather than showing an empty list.
       const r = await sbGet(VR_STORAGE);
-      setViewingRequests(r || []);
+      if (!READ_FAILED[VR_STORAGE]) setViewingRequests(r || []);
       const b = await sbGet(VB_STORAGE);
-      setViewingBlocks(b || []);
+      if (!READ_FAILED[VB_STORAGE]) setViewingBlocks(b || []);
       const enq = await sbGet(ENQUIRIES_STORAGE);
       if (enq && setEnquiries) setEnquiries(enq);
       if (full) {
@@ -23306,7 +23513,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         const r = await sbGet(ENQUIRIES_STORAGE);
         if (!r) noteSeedFallback(ENQUIRIES_STORAGE, "The enquiry list");
         setEnquiries(r || INITIAL_ENQUIRIES);
-      } catch { setEnquiries(INITIAL_ENQUIRIES); }
+      } catch { noteSeedFallback(ENQUIRIES_STORAGE, "The enquiry list"); setEnquiries(INITIAL_ENQUIRIES); }
       setLoaded(true);
     })();
   }, []);
@@ -23398,7 +23605,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
           // written from wherever the enquiries list is open.
           let base = {};
           try {
-            const server = await sbGet(ENQUIRY_EMAIL_SEEN_KEY);
+            const server = await sbGetStrict(ENQUIRY_EMAIL_SEEN_KEY);
             if (server && typeof server === "object") base = server;
           } catch (e) { base = emailSeen; }
           const next = Object.assign({}, base, found);
@@ -23425,14 +23632,19 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
     if (focusEnquiryId) { setSelected(focusEnquiryId); setAdding(false); if (clearFocus) clearFocus(); }
   }, [focusEnquiryId]);
 
+  // The app holds its own copy of the enquiries, loaded once on startup, and
+  // it is the one the year calendar, the events list and the save-time
+  // pencil check read. Without this a pencil added here would not be seen by
+  // any of them until the page was reloaded.
+  const setEnquiriesBoth = useCallback(function(d) {
+    setEnquiries(d);
+    if (onEnquiriesChanged) onEnquiriesChanged(d);
+  }, [onEnquiriesChanged]);
+  // Only what this screen changed is applied to a fresh read, so an enquiry
+  // that arrived from the website while the list was open is kept.
+  const saveEnquiriesMerged = useMergedSave(ENQUIRIES_STORAGE, enquiries, setEnquiriesBoth);
   const save = async data => {
-    setEnquiries(data);
-    // The app holds its own copy of the enquiries, loaded once on startup, and
-    // it is the one the year calendar, the events list and the save-time
-    // pencil check read. Without this a pencil added here would not be seen by
-    // any of them until the page was reloaded.
-    if (onEnquiriesChanged) onEnquiriesChanged(data);
-    try { await sbSet(ENQUIRIES_STORAGE, data); } catch(e) { console.error(e); }
+    try { await saveEnquiriesMerged(data); } catch(e) { console.error(e); }
   };
 
   const updateEnquiry = async updated => {
@@ -27356,7 +27568,7 @@ function DataFailureBanner() {
       padding:"11px 18px", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap",
       boxShadow:"0 2px 12px rgba(0,0,0,.25)" }}>
       <span style={{ fontSize:13.5, fontWeight:700 }}>
-        {isAuth ? "The database refused that request" : "Couldn't reach the database"}
+        {fault.title || (isAuth ? "The database refused that request" : "Couldn't reach the database")}
       </span>
       <span style={{ fontSize:12, opacity:.92, flex:1, minWidth:220 }}>
         {fault.msg}
