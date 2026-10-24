@@ -26040,6 +26040,26 @@ function doorQueueRead() {
 function doorQueueWrite(q) {
   try { localStorage.setItem(BOX_DOOR_QUEUE, JSON.stringify(q)); } catch (e) {}
 }
+// Each queued check-in carries its own id, so a flush can take out exactly the
+// ones it sent from the queue AS IT IS NOW — never write back a copy taken
+// before the sends, which would throw away anything queued in the meantime.
+// Entries queued by an older build have no id; they are matched on content.
+function doorQueueKey(item) {
+  return item && item.qid ? "q:" + item.qid : "c:" + JSON.stringify(item);
+}
+function doorQueueAdd(payload) {
+  const q = doorQueueRead();
+  q.push(Object.assign({}, payload, { qid: Date.now().toString(36) + Math.random().toString(36).slice(2, 10) }));
+  doorQueueWrite(q);
+  return q.length;
+}
+function doorQueueRemove(item) {
+  const key = doorQueueKey(item);
+  const q = doorQueueRead();
+  const i = q.findIndex(function(x) { return doorQueueKey(x) === key; });
+  if (i !== -1) { q.splice(i, 1); doorQueueWrite(q); }
+  return q.length;
+}
 
 // The token is scanned as a /my-ticket/<token> URL so an ordinary phone camera
 // does something useful with a printed ticket. The door only wants the token.
@@ -26064,6 +26084,13 @@ function BoxDoorScreen() {
   const [rowBusy, setRowBusy] = useState(null);
   const [queueLen, setQueueLen] = useState(()=>doorQueueRead().length);
   const [online, setOnline]   = useState(()=> typeof navigator === "undefined" ? true : navigator.onLine);
+  // The event chosen right now, readable after an await: on a poor signal a
+  // slow list for event A must not land on event B's screen.
+  const selRef = useRef(eventId);
+  selRef.current = eventId;
+  // One flush at a time. The 30-second timer and the 'online' event can both
+  // fire together, and two flushes reading the same queue would admit twice.
+  const flushingRef = useRef(null);
 
   useEffect(function() {
     // door.events, not events.list — the latter carries takings per event and
@@ -26082,42 +26109,58 @@ function BoxDoorScreen() {
   }, []);
 
   async function openEvent(id) {
+    const switching = selRef.current !== id;
+    selRef.current = id;
     setEventId(id); setLoading(true); setErr(""); setResult(null);
     // Show whatever was cached first, so the list is usable the instant the
-    // screen opens even if the network is being slow or absent.
-    try {
-      const cached = JSON.parse(localStorage.getItem(BOX_DOOR_CACHE + id) || "null");
-      if (cached) setDoor(cached);
-    } catch (e) {}
+    // screen opens even if the network is being slow or absent. With nothing
+    // cached for a different event, show nothing rather than the last one's.
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(BOX_DOOR_CACHE + id) || "null"); } catch (e) {}
+    if (cached) setDoor(cached);
+    else if (switching) setDoor(null);
     try {
       const r = await boxAdmin("door.list", { eventId: id });
-      setDoor(r);
       try { localStorage.setItem(BOX_DOOR_CACHE + id, JSON.stringify(r)); } catch (e) {}
+      if (selRef.current !== id) return;
+      setDoor(r);
     } catch (e) {
+      if (selRef.current !== id) return;
       setErr("Working from the copy saved on this device — " + e.message);
     }
     setLoading(false);
   }
 
   // Send anything that piled up while the signal was gone.
-  const flushQueue = useCallback(async function() {
-    let q = doorQueueRead();
-    if (!q.length) return;
-    const left = [];
-    for (let i = 0; i < q.length; i++) {
-      try { await boxAdmin("door.admit", q[i]); }
-      catch (e) { left.push(q[i]); }
-    }
-    doorQueueWrite(left);
-    setQueueLen(left.length);
-    if (left.length < q.length && eventId) {
-      try {
-        const r = await boxAdmin("door.list", { eventId });
-        setDoor(r);
-        try { localStorage.setItem(BOX_DOOR_CACHE + eventId, JSON.stringify(r)); } catch (e) {}
-      } catch (e) {}
-    }
-  }, [eventId]);
+  const flushQueue = useCallback(function() {
+    if (flushingRef.current) return flushingRef.current;
+    const run = (async function() {
+      const q = doorQueueRead();
+      if (!q.length) return;
+      let sent = 0;
+      for (let i = 0; i < q.length; i++) {
+        const item = q[i];
+        const payload = Object.assign({}, item); delete payload.qid;
+        try { await boxAdmin("door.admit", payload); }
+        catch (e) { continue; }
+        sent++;
+        setQueueLen(doorQueueRemove(item));
+      }
+      setQueueLen(doorQueueRead().length);
+      const forId = selRef.current;
+      if (sent && forId) {
+        try {
+          const r = await boxAdmin("door.list", { eventId: forId });
+          try { localStorage.setItem(BOX_DOOR_CACHE + forId, JSON.stringify(r)); } catch (e) {}
+          if (selRef.current === forId) setDoor(r);
+        } catch (e) {}
+      }
+    })();
+    flushingRef.current = run;
+    function done() { if (flushingRef.current === run) flushingRef.current = null; }
+    run.then(done, done);
+    return run;
+  }, []);
 
   useEffect(function() {
     if (!online) return;
@@ -26202,7 +26245,7 @@ function BoxDoorScreen() {
     try {
       await boxAdmin("door.admit", payload);
     } catch (e) {
-      const q = doorQueueRead(); q.push(payload); doorQueueWrite(q); setQueueLen(q.length);
+      setQueueLen(doorQueueAdd(payload));
     }
     setRowBusy(null);
   }
@@ -26264,7 +26307,7 @@ function BoxDoorScreen() {
           {!online && <span style={{ display:"block", fontWeight:700 }}>Offline — check-ins are being saved on this phone</span>}
           {!!queueLen && <span style={{ display:"block" }}>{queueLen} waiting to sync</span>}
         </div>
-        <BoxBtn tone="ghost" onClick={function() { setEventId(null); setDoor(null); setDoorMode("manual"); }}
+        <BoxBtn tone="ghost" onClick={function() { selRef.current = null; setEventId(null); setDoor(null); setDoorMode("manual"); setLoading(false); }}
           style={{ background:"rgba(255,255,255,.15)", color:"#fff", border:"1.5px solid rgba(255,255,255,.4)" }}>Change event</BoxBtn>
       </div>
 
