@@ -21138,6 +21138,37 @@ const guessDocType = (filename) => {
   return "Other";
 };
 
+// A stored file's identity: its storage path (unique — it carries the upload
+// time), else its URL. Rows are keyed by it, and deletes and doc-type changes
+// find the file by it, so neither depends on where the row sits in the list.
+function storedFileKey(f) {
+  return (f && (f.path || f.url)) || ((f && f.name) || "") + "|" + ((f && f.uploadedAt) || "");
+}
+
+// Module scope, not inside BookingFilesSection: a component defined inside
+// another is a new type every render, so React rebuilt these selects (and lost
+// focus) on every keystroke anywhere in the section.
+function FileDocTypeSelect({ file, onDocType }) {
+  return (
+    <select value={file.docType||"Other"} onChange={e=>onDocType(file, e.target.value)} onClick={e=>e.stopPropagation()}
+      style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:5, color:T.text, fontFamily:"inherit", fontSize:11, padding:"3px 7px", cursor:"pointer", flexShrink:0 }}>
+      {FILE_DOC_TYPES.map(t=><option key={t}>{t}</option>)}
+    </select>
+  );
+}
+
+function FileFooterBar({ file, tight, onDocType, onDelete }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, padding:tight?"8px 14px":"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+      <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
+      <FileDocTypeSelect file={file} onDocType={onDocType}/>
+      {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
+      <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>⬇ Open</a>
+      <button onClick={()=>onDelete(file)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>✕ Remove</button>
+    </div>
+  );
+}
+
 function BookingFilesSection({ formData, update, onAutoSave, entityId, entityType="booking" }) {
   const [uploading, setUploading]   = useState(false);
   const [error, setError]           = useState(null);
@@ -21147,6 +21178,15 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
 
   const id    = entityId || formData.id || formData.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
   const files = formData.files || [];
+
+  // The record as it is NOW, for anything that finishes after an await. An
+  // upload takes seconds; building the new list from the render it started in
+  // would drop a file attached (or a change made) in the meantime.
+  const latestRef = useRef(formData);
+  latestRef.current = formData;
+  // Set synchronously, so a second drop in the same moment is refused before
+  // React has re-rendered with uploading=true.
+  const uploadingRef = useRef(false);
 
   const isPdf  = (f) => /\.pdf$/i.test(f.name||"") || f.type==="application/pdf";
   const isHeic = (f) => /\.heic$/i.test(f.name||"") || f.type==="image/heic" || f.type==="image/heif";
@@ -21159,6 +21199,20 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   const [blobUrls, setBlobUrls] = useState({});
   const [pdfUrls,  setPdfUrls]  = useState({});
   const [fileErrs, setFileErrs] = useState({});
+  // Every object URL this section has made, by file URL. Revoked only when its
+  // file leaves the list, or when the section goes — the old per-effect
+  // cleanups revoked URLs still on screen from a stale closure.
+  const objUrlsRef = useRef({});
+  const inFlightRef = useRef({});
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      Object.values(objUrlsRef.current).forEach(u=>URL.revokeObjectURL(u));
+      objUrlsRef.current = {};
+    };
+  }, []);
 
   // fetch().then(r => r.blob()) succeeds on a 400 as happily as on a 200: the
   // error page becomes a blob, gets an object URL, and renders as a blank
@@ -21166,88 +21220,106 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   // answering managed to look like nothing at all. Check the response before
   // believing it, and put the reason on screen when it fails.
   const loadPreview = async (file, setter) => {
+    if (inFlightRef.current[file.url]) return;
+    inFlightRef.current[file.url] = true;
     const url = storageUrl(file.url);
     try {
       const res = await fetch(url, { headers: sbAuthHeaders() });
       if (!res.ok) throw new Error(res.status + " — " + (await res.text()).slice(0, 160));
       const blob = await res.blob();
       if (!blob.size) throw new Error("the file came back empty");
-      setter(p => ({ ...p, [file.url]: URL.createObjectURL(blob) }));
-      setFileErrs(p => { const n = { ...p }; delete n[file.url]; return n; });
+      if (!aliveRef.current) return;
+      const obj = URL.createObjectURL(blob);
+      if (objUrlsRef.current[file.url]) URL.revokeObjectURL(objUrlsRef.current[file.url]);
+      objUrlsRef.current[file.url] = obj;
+      setter(p => ({ ...p, [file.url]: obj }));
+      setFileErrs(p => { if (!(file.url in p)) return p; const n = { ...p }; delete n[file.url]; return n; });
     } catch (e) {
       console.warn("File preview failed:", url, e);
-      setFileErrs(p => ({ ...p, [file.url]: String(e.message || e) }));
+      if (aliveRef.current) setFileErrs(p => ({ ...p, [file.url]: String(e.message || e) }));
+    } finally {
+      delete inFlightRef.current[file.url];
     }
   };
 
+  // A file that has left the list gives its object URL back.
   useEffect(() => {
-    files.filter(f=>isImage(f)).forEach(file => {
-      if (blobUrls[file.url] || fileErrs[file.url]) return;
-      loadPreview(file, setBlobUrls);
-    });
-    return () => { Object.values(blobUrls).forEach(u=>URL.revokeObjectURL(u)); };
+    const live = {};
+    files.forEach(f => { live[f.url] = true; });
+    const gone = Object.keys(objUrlsRef.current).filter(u => !live[u]);
+    if (!gone.length) return;
+    gone.forEach(u => { URL.revokeObjectURL(objUrlsRef.current[u]); delete objUrlsRef.current[u]; });
+    const drop = p => { const n = { ...p }; gone.forEach(u => { delete n[u]; }); return n; };
+    setBlobUrls(drop); setPdfUrls(drop);
   }, [files]);
 
+  // fileErrs is a dependency so Retry (which clears the error) loads again.
   useEffect(() => {
-    files.filter(f=>isPdf(f)).forEach(file => {
-      if (pdfUrls[file.url] || fileErrs[file.url]) return;
-      loadPreview(file, setPdfUrls);
+    files.forEach(file => {
+      if (!file.url || fileErrs[file.url]) return;
+      if (isImage(file)) { if (!blobUrls[file.url]) loadPreview(file, setBlobUrls); }
+      else if (isPdf(file)) { if (!pdfUrls[file.url]) loadPreview(file, setPdfUrls); }
     });
-    return () => { Object.values(pdfUrls).forEach(u=>URL.revokeObjectURL(u)); };
-  }, [files]);
+  }, [files, fileErrs]);
 
   const processFiles = async (picked) => {
     if (!picked.length) return;
+    if (uploadingRef.current) { setError("One upload at a time — wait for this one to finish, then add the rest."); return; }
+    uploadingRef.current = true;
     setUploading(true); setError(null);
+    const made = [];
     try {
-      const newFiles = [...files];
       for (const file of picked) {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
         const url  = await sbUploadFile(path, file);
-        newFiles.push({ name:file.name, url, path, type:file.type||"", docType:guessDocType(file.name), uploadedAt:new Date().toISOString().slice(0,10) });
+        made.push({ name:file.name, url, path, type:file.type||"", docType:guessDocType(file.name), uploadedAt:new Date().toISOString().slice(0,10) });
       }
+    } catch(err) { setError("Upload failed: "+err.message + (made.length ? " — the " + made.length + " before it uploaded and are attached." : "")); }
+    // Whatever reached the bucket is attached, onto the list as it is now.
+    if (made.length) {
+      const latest = latestRef.current;
+      const newFiles = (latest.files || []).concat(made);
       update("files", newFiles);
-      if (onAutoSave) { await onAutoSave({...formData, files:newFiles}); flash(); }
-    } catch(err) { setError("Upload failed: "+err.message); }
-    finally { setUploading(false); }
+      if (onAutoSave) {
+        try { await onAutoSave({...latest, files:newFiles}); flash(); }
+        catch(err) { setError("Uploaded, but saving the record failed: " + err.message); }
+      }
+    }
+    uploadingRef.current = false;
+    setUploading(false);
   };
 
-  const handleUpload    = async (e) => { await processFiles(Array.from(e.target.files)); e.target.value=""; };
+  const handleUpload    = async (e) => { const picked = Array.from(e.target.files); e.target.value=""; await processFiles(picked); };
   const handleDrop      = async (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); await processFiles(Array.from(e.dataTransfer.files)); };
-  const handleDragOver  = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); };
+  const handleDragOver  = (e) => { e.preventDefault(); e.stopPropagation(); if (!uploadingRef.current) setDragOver(true); };
   const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); };
 
-  const handleDelete = async (idx) => {
-    const file = files[idx];
+  const handleDelete = async (file) => {
+    const key = storedFileKey(file);
     try { if (file.path) await sbDeleteFile(file.path); } catch(e) { console.warn("Delete failed:",e); }
-    const updated = files.filter((_,i)=>i!==idx);
+    const latest = latestRef.current;
+    const updated = (latest.files || []).filter(f=>storedFileKey(f)!==key);
     update("files", updated);
-    if (onAutoSave) { await onAutoSave({...formData, files:updated}); flash(); }
+    if (onAutoSave) { await onAutoSave({...latest, files:updated}); flash(); }
   };
 
-  const updateDocType = (idx, docType) => {
-    const updated = files.map((f,i)=>i===idx?{...f,docType}:f);
+  const updateDocType = (file, docType) => {
+    const key = storedFileKey(file);
+    const latest = latestRef.current;
+    const updated = (latest.files || []).map(f=>storedFileKey(f)===key?{...f,docType}:f);
     update("files", updated);
-    if (onAutoSave) onAutoSave({...formData, files:updated});
+    if (onAutoSave) onAutoSave({...latest, files:updated});
   };
 
-  const DocTypeSelect = ({file, idx}) => (
-    <select value={file.docType||"Other"} onChange={e=>updateDocType(idx,e.target.value)} onClick={e=>e.stopPropagation()}
-      style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:5, color:T.text, fontFamily:"inherit", fontSize:11, padding:"3px 7px", cursor:"pointer", flexShrink:0 }}>
-      {FILE_DOC_TYPES.map(t=><option key={t}>{t}</option>)}
-    </select>
-  );
-
-  const FooterBar = ({file, idx, tight}) => (
-    <div style={{ display:"flex", alignItems:"center", gap:8, padding:tight?"8px 14px":"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-      <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
-      <DocTypeSelect file={file} idx={idx}/>
-      {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
-      <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>⬇ Open</a>
-      <button onClick={()=>handleDelete(idx)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>✕ Remove</button>
-    </div>
-  );
+  // Keys for the rows; a repeat (an older record with two identical entries)
+  // gets a suffix so React still sees distinct rows.
+  const seenKeys = {};
+  const rowKey = (file) => {
+    const k = storedFileKey(file);
+    seenKeys[k] = (seenKeys[k] || 0) + 1;
+    return seenKeys[k] > 1 ? k + "#" + seenKeys[k] : k;
+  };
 
   return (
     <div>
@@ -21265,16 +21337,16 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       {error && <div style={{ background:T.redBg, border:`1px solid #fca5a5`, borderRadius:6, padding:"8px 12px", color:T.red, fontSize:13, marginBottom:12 }}>{error}</div>}
 
       <label onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
-        style={{ display:"block", textAlign:"center", padding:files.length===0?"44px 20px":"14px 20px", color:dragOver?T.midBlue:T.textLight, border:`2px dashed ${dragOver?T.midBlue:T.border}`, borderRadius:10, background:dragOver?T.accentLight:"transparent", cursor:"pointer", transition:"all .15s", marginBottom:files.length>0?12:0 }}>
+        style={{ display:"block", textAlign:"center", padding:files.length===0?"44px 20px":"14px 20px", color:dragOver?T.midBlue:T.textLight, border:`2px dashed ${dragOver?T.midBlue:T.border}`, borderRadius:10, background:dragOver?T.accentLight:"transparent", cursor:uploading?"wait":"pointer", opacity:uploading?0.6:1, transition:"all .15s", marginBottom:files.length>0?12:0 }}>
         <div style={{ fontSize:files.length===0?30:16, marginBottom:4 }}>{dragOver?"⬇":"📎"}</div>
-        <div style={{ fontSize:13, fontWeight:dragOver?600:400 }}>{dragOver?"Drop to upload":files.length===0?"Drag files here, or click Upload Files above":"Drag more files here to upload"}</div>
+        <div style={{ fontSize:13, fontWeight:dragOver?600:400 }}>{uploading?"Uploading — drop more once it finishes":dragOver?"Drop to upload":files.length===0?"Drag files here, or click Upload Files above":"Drag more files here to upload"}</div>
         <input type="file" multiple onChange={handleUpload} disabled={uploading} style={{ display:"none" }}/>
       </label>
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {files.map((file, idx) => {
+        {files.map((file) => {
           if (isImage(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               {blobUrls[file.url]
                 ? <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
                     <img src={blobUrls[file.url]} alt={file.name} style={{ width:"100%", maxHeight:360, objectFit:"contain", background:T.bgInput, display:"block", cursor:"pointer" }}/>
@@ -21288,11 +21360,11 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                     </div>
                   : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:T.bgInput, color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading preview…</div>
               }
-              <FooterBar file={file} idx={idx} tight/>
+              <FileFooterBar file={file} tight onDocType={updateDocType} onDelete={handleDelete}/>
             </div>
           );
           if (isPdf(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               {pdfUrls[file.url]
                 ? <iframe src={pdfUrls[file.url]} title={file.name} style={{ width:"100%", height:500, border:"none", background:T.bgInput, display:"block" }}/>
                 : fileErrs[file.url]
@@ -21304,11 +21376,11 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                     </div>
                   : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:T.bgInput, color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading PDF…</div>
               }
-              <FooterBar file={file} idx={idx} tight/>
+              <FileFooterBar file={file} tight onDocType={updateDocType} onDelete={handleDelete}/>
             </div>
           );
           if (isHeic(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               <div style={{ display:"flex", alignItems:"center", gap:12, padding:"16px", background:"#fffbeb", borderBottom:`1px solid #fde68a` }}>
                 <span style={{ fontSize:24 }}>📷</span>
                 <div>
@@ -21316,20 +21388,20 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                   <div style={{ fontSize:12, color:"#a16207", marginTop:2 }}>Use the Open button to download and view in Photos or another app</div>
                 </div>
               </div>
-              <FooterBar file={file} idx={idx}/>
+              <FileFooterBar file={file} onDocType={updateDocType} onDelete={handleDelete}/>
             </div>
           );
           return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               <div style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px" }}>
                 <div style={{ fontSize:26, flexShrink:0 }}>{/\.(doc|docx)$/i.test(file.name)?"📝":/\.(xls|xlsx)$/i.test(file.name)?"📊":"📎"}</div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</div>
                   {file.uploadedAt && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Uploaded {file.uploadedAt}</div>}
                 </div>
-                <DocTypeSelect file={file} idx={idx}/>
+                <FileDocTypeSelect file={file} onDocType={updateDocType}/>
                 <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>⬇ Open</a>
-                <button onClick={()=>handleDelete(idx)} style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>✕ Remove</button>
+                <button onClick={()=>handleDelete(file)} style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>✕ Remove</button>
               </div>
             </div>
           );
