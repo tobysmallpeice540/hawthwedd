@@ -166,6 +166,10 @@ exports.handler = async function(event) {
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
+      // An abandoned checkout tab used to stay payable for Stripe's 24 hours,
+      // so finishing it after the office had sent (and the guest had paid) a
+      // deposit link took the deposit twice. An hour is ample to pay.
+      expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
       payment_method_types: ["card"],
       customer_email: email,
       line_items: lineItems,
@@ -387,6 +391,35 @@ function maxNightsForProp(prop, ds) {
   return (v && v > 0) ? v : (Number(prop && prop.maxNights) || 28);
 }
 
+// The page's stay rules, mirrored from book-accom.html (minNightsForProp,
+// checkInAllowedForProp, checkOutAllowedForProp, withinHorizonForProp), so a
+// request the page could not have made is refused here too.
+function minNightsForProp(prop, ds) {
+  var s = ds ? seasonForDate(prop, ds) : null;
+  var v = s && Number(s.minNights);
+  return (v && v > 0) ? v : (Number(prop && prop.minNights) || 2);
+}
+function isoWeekday(ds) { return (parseISO(ds).getUTCDay() + 6) % 7; }   // 0=Mon..6=Sun
+function allowedDays(prop, ds, field) {
+  var season = seasonForDate(prop, ds);
+  if (season && season[field] && season[field].length) return season[field];
+  if (prop[field] && prop[field].length) return prop[field];
+  return null;
+}
+function dayAllowed(prop, ds, field) {
+  var allowed = allowedDays(prop, ds, field);
+  return !allowed || allowed.indexOf(isoWeekday(ds)) !== -1;
+}
+// The page works the window out from the guest's own clock; a day's slack
+// keeps a guest near midnight from being refused for the page's answer.
+function withinHorizon(prop, ds, todayIso) {
+  var months = Number(prop.bookingHorizonMonths);
+  if (!months || !todayIso) return true;
+  var t = parseISO(todayIso);
+  var limit = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + months, t.getUTCDate() + 1));
+  return ds <= toISO(limit);
+}
+
 // Today's date in London, as YYYY-MM-DD.
 function londonToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" })
@@ -419,6 +452,11 @@ function priceBooking(properties, stays, todayIso) {
     var q = quoteStay(prop, st.checkIn, st.checkOut);
     if (!q) return { error: "Check-out must be after check-in." };
     if (q.nights > maxNightsForProp(prop, st.checkIn)) return { error: "That stay is longer than " + prop.name + " can be booked for online." };
+    if (q.nights < minNightsForProp(prop, st.checkIn)) return { error: prop.name + " needs a stay of at least " + minNightsForProp(prop, st.checkIn) + " nights from that date." };
+    if (!dayAllowed(prop, st.checkIn, "checkInDays")) return { error: prop.name + " can't be booked to arrive on that day of the week." };
+    if (!dayAllowed(prop, st.checkOut, "checkOutDays")) return { error: prop.name + " can't be booked to leave on that day of the week." };
+    var lastNight = toISO(new Date(parseISO(st.checkOut).getTime() - 86400000));
+    if (!withinHorizon(prop, lastNight, todayIso)) return { error: "Those dates are further ahead than " + prop.name + " can be booked online yet." };
     if (!(q.total > 0)) return { error: "We can't price those dates online. Please call us and we'll help." };
     props.push(prop);
     out.push({ propertyId: prop.id, propertyName: prop.name || prop.id, checkIn: st.checkIn, checkOut: st.checkOut,

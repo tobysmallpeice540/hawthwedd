@@ -441,6 +441,21 @@ exports.handler = async function(event) {
       return { statusCode: 200, body: JSON.stringify({ received: true, cancelled: true }) };
     }
 
+    if (r.setAside) {
+      await notifyOffice(
+        (r.setAside === "entry_already_paid" ? "Possible DOUBLE payment on " : "Lettings payment needs matching on ") + String(booking.id).toUpperCase(),
+        (r.setAside === "entry_already_paid"
+          ? "A lettings payment came in for a payment that is already marked paid by a different Stripe payment, so the same instalment may have been paid twice. "
+          : "A lettings payment came in, but no payment on the booking matches it (it was for \"" + (session.metadata.scheduleLabel || "") + "\", which may have been renamed or split since the link went out). ") +
+        "It has been recorded on the booking under payments to match, nothing has been marked paid, and the guest has not been emailed.\n\n" +
+        "Booking: " + String(booking.id).toUpperCase() + " — " + (booking.guestName || "") + " " + (booking.email || "") + "\n" +
+        buildStayDetailsText(booking) + "\n" +
+        "Amount: £" + (amountPence / 100).toFixed(2) + "\n" +
+        "Checkout session: " + sessionId + "\n\n" +
+        (r.setAside === "entry_already_paid" ? "Refund one of the two in Stripe if it is a duplicate." : "Mark the right payment paid in the app."));
+      return { statusCode: 200, body: JSON.stringify({ received: true, setAside: r.setAside }) };
+    }
+
     if (r.alreadyPaid) {
       console.log("Schedule entry already marked paid — skipping duplicate email for session", sessionId);
       return { statusCode: 200, body: JSON.stringify({ received: true }) };
@@ -503,26 +518,54 @@ function applyPayment(bookings, p) {
     ? function(s) { return s.stripeId === p.sessionId || s.label === "Deposit"; }
     : function(s) { return s.label === p.scheduleLabel; };
 
-  // A retried delivery: the matching entry already carries this very payment.
-  var dup = (booking.schedule || []).some(function(s) {
-    return s && matches(s) && s.paid &&
-      ((p.paymentIntentId && s.paymentIntentId === p.paymentIntentId) || s.paidSessionId === p.sessionId);
-  });
+  var thisPayment = function(s) {
+    return s && ((p.paymentIntentId && s.paymentIntentId === p.paymentIntentId) || (p.sessionId && s.paidSessionId === p.sessionId));
+  };
+  // A retried delivery: this very payment is already on the record, on a
+  // schedule entry or among the payments set aside below.
+  var dup = (booking.schedule || []).some(function(s) { return s && s.paid && thisPayment(s); }) ||
+            (booking.unmatchedPayments || []).some(thisPayment);
   if (dup) return { duplicate: true };
 
+  var paymentRecord = {
+    paidDate: p.paidDate,
+    paidAmount: Math.round(p.amountPence) / 100,
+    receiptUrl: p.receiptUrl,
+    paymentIntentId: p.paymentIntentId,
+    paidSessionId: p.sessionId
+  };
+  // The entry this pays: the first matching one not yet paid, else the first
+  // matching one.
+  var sched = booking.schedule || [];
+  var target = sched.findIndex(function(s) { return s && matches(s) && !s.paid; });
+  if (target === -1) target = sched.findIndex(function(s) { return s && matches(s); });
+
+  // Set aside rather than lost or written over (24 Oct second review):
+  //   · no entry matches — the label was renamed or split after the link was
+  //     sent. Nothing was marked paid and the guest was told "received";
+  //   · the entry is already paid by a DIFFERENT Stripe payment — the same
+  //     instalment paid twice (an old checkout tab finished after a link was
+  //     paid). Overwriting it hid the first payment.
+  // Either way the money is recorded on the booking, the office is told, and
+  // the guest is not emailed.
+  var setAside = null;
+  if (target === -1) setAside = "no_matching_entry";
+  else if (sched[target].paid && (sched[target].paidSessionId || sched[target].paymentIntentId)) setAside = "entry_already_paid";
+
   var alreadyPaid = false;
-  booking.schedule = (booking.schedule || []).map(function(s) {
-    if (!s || !matches(s)) return s;
-    if (s.paid) alreadyPaid = true;
-    return Object.assign({}, s, {
-      paid: true, paidDate: p.paidDate,
-      paidAmount: Math.round(p.amountPence) / 100,
-      receiptUrl: p.receiptUrl,
-      paymentIntentId: p.paymentIntentId,
-      paidSessionId: p.sessionId
+  if (setAside) {
+    booking.unmatchedPayments = (booking.unmatchedPayments || []).concat([Object.assign({
+      reason: setAside, label: p.metaType === "accom_deposit" ? "Deposit" : (p.scheduleLabel || "")
+    }, paymentRecord)]);
+  } else {
+    // Paid by hand, or by an older delivery that recorded no Stripe ids: the
+    // details are recorded, the guest is not emailed again.
+    if (sched[target].paid) alreadyPaid = true;
+    booking.schedule = sched.map(function(s, i) {
+      return i === target ? Object.assign({}, s, { paid: true }, paymentRecord) : s;
     });
-  });
-  if (p.metaType === "accom_deposit" && p.paymentIntent) booking.depositStripeId = p.paymentIntent;
+  }
+  if (p.metaType === "accom_deposit" && p.paymentIntent && !setAside) booking.depositStripeId = p.paymentIntent;
 
   var cancelled = booking.status === "cancelled";
 
@@ -530,12 +573,12 @@ function applyPayment(bookings, p) {
   // the deposit is often paid against a reminder session rather than the
   // original checkout (booking W15032 sat pending with £1,170 banked).
   // Deliberately only promotes FROM pending.
-  if (booking.status === "pending" && booking.schedule.some(function(s) { return s && s.paid; })) {
+  if (booking.status === "pending" && ((booking.schedule || []).some(function(s) { return s && s.paid; }) || setAside)) {
     booking.status = "confirmed";
   }
 
   var sendBookingConfirmed = false;
-  if (!cancelled && !alreadyPaid && p.metaType === "accom_deposit" && booking.email &&
+  if (!cancelled && !alreadyPaid && !setAside && p.metaType === "accom_deposit" && booking.email &&
       !(booking.emailFlags || {}).bookingConfirmedSent) {
     sendBookingConfirmed = true;
     booking.emailFlags = Object.assign({}, booking.emailFlags || {}, { bookingConfirmedSent: true });
@@ -545,7 +588,7 @@ function applyPayment(bookings, p) {
   // alreadyPaid without being a duplicate: the entry was already marked paid
   // (by hand, or by an older delivery before paidSessionId was recorded). The
   // Stripe details are recorded, but the guest is not emailed again.
-  return { list: list, booking: booking, cancelled: cancelled, sendBookingConfirmed: sendBookingConfirmed, alreadyPaid: alreadyPaid };
+  return { list: list, booking: booking, cancelled: cancelled, sendBookingConfirmed: sendBookingConfirmed, alreadyPaid: alreadyPaid, setAside: setAside };
 }
 
 async function notifyOffice(subject, text) {

@@ -22,15 +22,23 @@
 --
 -- Functions are patched IN PLACE from the live catalogue (pg_get_functiondef),
 -- each anchor asserted to appear exactly once — the house rule. CREATE OR
--- REPLACE keeps each function's existing grants.
+-- REPLACE keeps each function's existing grants. Safe to run twice: a
+-- function already carrying its replacement is skipped with a notice.
 
 begin;
 
 create or replace function pg_temp.patch_fn(p_sig regprocedure, p_find text, p_repl text)
 returns void language plpgsql as $$
-declare d text := pg_get_functiondef(p_sig); n integer;
+declare d text := pg_get_functiondef(p_sig); n integer; m integer;
 begin
   n := (length(d) - length(replace(d, p_find, ''))) / length(p_find);
+  m := (length(d) - length(replace(d, p_repl, ''))) / length(p_repl);
+  -- Already patched (a second run): the anchor is gone and the replacement
+  -- is there. Skip it, so the file is safe to run again.
+  if n = 0 and m >= 1 then
+    raise notice 'patch of % already applied — skipped', p_sig;
+    return;
+  end if;
   if n <> 1 then
     raise exception 'patch of % expected the anchor exactly once, found % times: %', p_sig, n, p_find;
   end if;

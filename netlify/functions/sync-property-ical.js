@@ -275,7 +275,12 @@ exports.handler = async function(event) {
     }
 
     // ── 7. Update property lastSyncedAt ──────────────────────────────────────
-    var updatedProps = properties.map(function(p) {
+    // Re-read first: `properties` was read before the Airbnb fetch, and
+    // writing that copy back put any property edit made meanwhile back to
+    // what it was (the hourly sync was fixed the same way).
+    var freshProps = await sbGet(PROPS_KEY);
+    if (!Array.isArray(freshProps)) throw new Error("Could not re-read the properties, so the sync time was not recorded");
+    var updatedProps = freshProps.map(function(p) {
       if (p.id !== propertyId) return p;
       return Object.assign({}, p, { lastSyncedAt: now });
     });

@@ -458,24 +458,28 @@ async function handleBarRefund(charge) {
 // A balance payment for an order that is no longer live. Noted on the order
 // (keyed by the session, so a retried delivery adds nothing and emails nobody
 // twice) and the office is told.
-async function recordStrayBalance(order, session) {
-  var tag = "[stray balance " + session.id + "]";
+// what: "balance" (default) or "payment" — the first payment of a new order
+// that was refunded or cancelled before Stripe's message arrived.
+async function recordStrayBalance(order, session, what) {
+  var word = what === "payment" ? "payment" : "balance";
+  var Word = word.charAt(0).toUpperCase() + word.slice(1);
+  var tag = "[stray " + word + " " + session.id + "]";
   if ((order.notes || "").indexOf(tag) !== -1) return;
   var amount = "£" + ((session.amount_total || 0) / 100).toFixed(2);
   await sbRest("box_orders?id=eq." + order.id, {
     method: "PATCH", prefer: "return=minimal",
-    body: { notes: (order.notes ? order.notes + "\n" : "") + tag + " " + amount + " balance paid in Stripe on " +
+    body: { notes: (order.notes ? order.notes + "\n" : "") + tag + " " + amount + " " + word + " paid in Stripe on " +
       new Date().toISOString().slice(0, 10) + " after the order was " + order.status + ". Not applied — refund or reinstate by hand." }
   });
-  if (!RESEND_KEY) { console.error("office alert not sent — RESEND_API_KEY missing: stray balance on " + order.order_ref); return; }
+  if (!RESEND_KEY) { console.error("office alert not sent — RESEND_API_KEY missing: stray " + word + " on " + order.order_ref); return; }
   try {
     var res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({ from: FROM_HEADER, to: OFFICE_EMAIL,
-        subject: "Balance paid on a " + order.status + " box office order " + (order.order_ref || "") + " — please check",
+        subject: Word + " paid on a " + order.status + " box office order " + (order.order_ref || "") + " — please check",
         html: barEmailHtml([
-          "A balance payment of <strong>" + barEsc(amount) + "</strong> came through Stripe for box office order <strong>" +
+          "A " + word + " of <strong>" + barEsc(amount) + "</strong> came through Stripe for box office order <strong>" +
             barEsc(order.order_ref || order.id) + "</strong>, which is marked <strong>" + barEsc(order.status) + "</strong>.",
           "It has <strong>not</strong> been marked paid and no tickets have been issued. It is noted on the order.",
           "Buyer: " + barEsc(((order.first_name || "") + " " + (order.last_name || "")).trim()) + " " + barEsc(order.email || "") + "<br>Checkout session: " + barEsc(session.id),
@@ -683,6 +687,9 @@ exports.handler = async function(event) {
     // booking back to life by issuing its tickets.
     if (order.status === "refunded" || order.status === "cancelled") {
       console.error("checkout.session.completed for " + order.order_ref + " arrived after it was " + order.status + " — left as it is");
+      // Money taken on an order that is no longer live: noted on the order and
+      // the office told (once per session), as the balance path does.
+      await recordStrayBalance(order, session, "payment");
       return { statusCode: 200, body: JSON.stringify({ received: true, note: "order already " + order.status }) };
     }
 
@@ -707,6 +714,11 @@ exports.handler = async function(event) {
     });
     if (!Array.isArray(newRows) || !newRows.length) {
       console.warn("checkout.session.completed for " + order.order_ref + ": order was no longer pending — nothing changed");
+      // A parallel delivery that marked it paid is normal. A cancellation or
+      // refund that got in first is money on a dead order: tell the office.
+      var nowRows = await sbRest("box_orders?id=eq." + order.id + "&select=*");
+      var nowOrder = Array.isArray(nowRows) && nowRows[0];
+      if (nowOrder && (nowOrder.status === "refunded" || nowOrder.status === "cancelled")) await recordStrayBalance(nowOrder, session, "payment");
       return { statusCode: 200, body: JSON.stringify({ received: true, note: "order no longer pending" }) };
     }
 

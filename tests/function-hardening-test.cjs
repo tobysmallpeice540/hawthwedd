@@ -122,6 +122,35 @@ console.log("\n— server-side pricing (create-accom-checkout) —");
   ok("a stay over max nights is refused", !!checkout.priceBooking(PROPS, [{ propertyId: "amly", checkIn: "2027-01-01", checkOut: "2027-02-15" }], today).error);
   ok("an unpriced (£0) stay is refused", !!checkout.priceBooking([{ id: "x", name: "X", baseRate: 0 }], [{ propertyId: "x", checkIn: "2027-01-01", checkOut: "2027-01-03" }], today).error);
 
+  // The page's stay rules, enforced on the server too (24 Oct second review).
+  // Compared with the page's own functions, lifted, over every check-in day of
+  // a year and stay lengths 1–9, so the server refuses exactly what the page
+  // would not offer.
+  {
+    const rules = {};
+    eval(["parseISO", "toISO", "seasonForDate", "isoWeekday", "allowedCheckInDaysForProp", "allowedCheckOutDaysForProp",
+          "minNightsForProp", "maxNightsForProp", "checkInAllowedForProp", "checkOutAllowedForProp"]
+      .map(n => lift(PAGE, n)).join("\n") +
+      "\nrules.min = minNightsForProp; rules.max = maxNightsForProp; rules.ci = checkInAllowedForProp; rules.co = checkOutAllowedForProp; rules.p = parseISO; rules.t = toISO;");
+    const strict = { id: "strict", name: "Strict", baseRate: 100, minNights: 3, checkInDays: [4, 0], checkOutDays: [0, 4],
+      seasons: [{ startDate: "2027-07-01", endDate: "2027-09-01", ratePerNight: 150, minNights: 7, checkInDays: [5], checkOutDays: [5] }] };
+    let agree = 0, disagree = 0, firstBad = null;
+    const d0 = rules.p("2027-01-01");
+    for (let i = 0; i < 365; i++) {
+      const ci = rules.t(new Date(d0.getTime() + i * 86400000));
+      for (let n = 1; n <= 9; n++) {
+        const co = rules.t(new Date(d0.getTime() + (i + n) * 86400000));
+        const pageOk = n >= rules.min(strict, ci) && n <= rules.max(strict, ci) && rules.ci(strict, ci) && rules.co(strict, co);
+        const srvOk = !checkout.priceBooking([strict], [{ propertyId: "strict", checkIn: ci, checkOut: co }], today).error;
+        if (pageOk === srvOk) agree++; else { disagree++; firstBad = firstBad || [ci, co, pageOk, srvOk]; }
+      }
+    }
+    ok("stay rules match the page on " + (agree + disagree) + " stays" + (firstBad ? " — first difference " + JSON.stringify(firstBad) : ""), disagree === 0);
+    const horizon = { id: "h", name: "H", baseRate: 100, minNights: 1, bookingHorizonMonths: 6 };
+    ok("inside the booking window is allowed", !checkout.priceBooking([horizon], [{ propertyId: "h", checkIn: "2027-04-20", checkOut: "2027-04-22" }], today).error);
+    ok("beyond the booking window is refused", !!checkout.priceBooking([horizon], [{ propertyId: "h", checkIn: "2027-05-20", checkOut: "2027-05-22" }], today).error);
+  }
+
   // The clash check covers blocks and Airbnb imports (they are bookings too).
   const diary = [
     { id: "B1", bookingType: "Blocked", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2027-02-02", checkOut: "2027-02-04" }] },
@@ -214,6 +243,25 @@ console.log("\n— stripe-accom-webhook: the payment, applied —");
   const done = I.applyPayment(base("completed"), Object.assign({}, pay, { metaType: "accom_reminder", bookingId: "W1", scheduleLabel: "Balance" }));
   eq("only pending is promoted — completed stays completed", done.booking.status, "completed");
   ok("an unknown booking is reported as not found", I.applyPayment([{ id: "W2" }], pay).notFound === true);
+
+  // 24 Oct second review: a renamed entry, and the same instalment paid twice.
+  const rem = { metaType: "accom_reminder", bookingId: "W1", scheduleLabel: "Final balance", sessionId: "cs_9", amountPence: 5000, paidDate: "2026-10-24", paymentIntentId: "pi_9", receiptUrl: "r9" };
+  const nm = I.applyPayment(base("confirmed"), rem);
+  eq("no matching entry: set aside", nm.setAside, "no_matching_entry");
+  ok("…nothing marked paid", nm.booking.schedule.every(function(s) { return !s.paid; }));
+  ok("…the money is recorded on the booking", nm.booking.unmatchedPayments.length === 1 && nm.booking.unmatchedPayments[0].paymentIntentId === "pi_9" && nm.booking.unmatchedPayments[0].paidAmount === 50);
+  ok("…a retry of it is a duplicate", I.applyPayment(nm.list, rem).duplicate === true);
+  eq("…money on a pending booking still confirms it", I.applyPayment(base("pending"), rem).booking.status, "confirmed");
+  const paidOnce = I.applyPayment(base("confirmed"), Object.assign({}, rem, { scheduleLabel: "Balance", sessionId: "cs_a", paymentIntentId: "pi_a" }));
+  const twice = I.applyPayment(paidOnce.list, Object.assign({}, rem, { scheduleLabel: "Balance", sessionId: "cs_b", paymentIntentId: "pi_b" }));
+  eq("an entry already paid by another payment: set aside", twice.setAside, "entry_already_paid");
+  ok("…the first payment is not written over", twice.booking.schedule[1].paymentIntentId === "pi_a");
+  ok("…the second is recorded", twice.booking.unmatchedPayments[0].paymentIntentId === "pi_b");
+  ok("…and claims no confirmation email", !twice.sendBookingConfirmed);
+  const byHand = I.applyPayment([{ id: "W1", status: "confirmed", schedule: [{ label: "Balance", paid: true }] }], Object.assign({}, rem, { scheduleLabel: "Balance" }));
+  ok("an entry ticked paid by hand takes the Stripe details, quietly", !byHand.setAside && byHand.alreadyPaid && byHand.booking.schedule[0].paymentIntentId === "pi_9");
+  const two = I.applyPayment([{ id: "W1", status: "confirmed", schedule: [{ label: "Balance", paid: true, paymentIntentId: "pi_x" }, { label: "Balance", paid: false }] }], Object.assign({}, rem, { scheduleLabel: "Balance" }));
+  ok("two entries with one label: the unpaid one is paid", !two.setAside && two.booking.schedule[1].paid && two.booking.schedule[0].paymentIntentId === "pi_x");
 }
 
 // ── 3. Calendar feed ────────────────────────────────────────────────────────

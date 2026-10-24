@@ -110,15 +110,15 @@ console.log("\n— dedupe runs BEFORE the guard —");
 console.log("\n— the shipped code follows those rules —");
 {
   const fn = SRC.slice(SRC.indexOf("const createBookingRecord"), SRC.indexOf("// Apply a change to a single event"));
-  ok("createBookingRecord takes (data, dedupe, guard)",
-     /createBookingRecord = useCallback\(async \(data, dedupe, guard\)/.test(fn));
+  ok("createBookingRecord takes (data, dedupe, guard, fk)",
+     /createBookingRecord = useCallback\(async \(data, dedupe, guard, fk\)/.test(fn));
   ok("dedupe is checked before the guard",
      fn.indexOf("existing = base.find(dedupe)") < fn.indexOf("if (guard) guard(base)"));
   ok("the id comes from the mutator's base, not component state",
      /const id = nextBookingId\(base\)/.test(fn));
 
   ok("saveBookingRecord accepts a guard and runs it first",
-     /saveBookingRecord = useCallback\(\(id, data, guard(, formBase)?\) => \{\s*return mutateBookings\(function\(base\) \{\s*(\/\/[^\n]*\n\s*)*if \(guard\) guard\(base\);/.test(SRC));
+     /saveBookingRecord = useCallback\(\(id, data, guard(, fk)?\) => \{\s*return mutateBookings\(function\(base\) \{\s*(\/\/[^\n]*\n\s*)*if \(guard\) guard\(base\);/.test(SRC));
   ok("the enquiry conversion stamps fromEnquiryId",
      /newBooking\.fromEnquiryId = enq\.id/.test(SRC));
   ok("the enquiry conversion dedupes on it",
@@ -263,7 +263,7 @@ console.log("\n— pending-but-paid, both routes closed (W15032) —");
 {
   const HOOK = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "stripe-accom-webhook.js"), "utf8");
   ok("the webhook promotes a pending booking on ANY payment, not only the deposit session",
-     /if \(booking\.status === "pending" && \(?booking\.schedule( \|\| \[\]\))?\)?\.some/.test(HOOK));
+     /if \(booking\.status === "pending" && \(*booking\.schedule( \|\| \[\]\))?\)?\.some/.test(HOOK));
   ok("the promotion sits outside the accom_deposit branch",
      HOOK.indexOf('booking.schedule = schedule2;') <
      HOOK.indexOf('if (booking.status === "pending"'));

@@ -49,6 +49,20 @@ begin
   exception when others then passes:=passes+1;
   end;
 
+  -- S3g all eleven carry the admin check, from the catalogue (only four are
+  -- called above), and the any-staff functions beside them were not touched.
+  select count(*) into q from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname = any(array['wp_grant_access','wp_revoke_access','wp_list_access','wp_admin_access',
+       'wp_admin_sync_invoices','wp_admin_add_bar_payment','wp_admin_remove_bar_payment','wp_admin_set_drinks',
+       'wp_admin_decide_addon','wp_admin_price_drinks_line','wp_admin_mark_drinks_invoiced'])
+     and p.prosrc like '%not wp_is_admin()%' and p.prosrc not like '%not is_staff()%';
+  if q::int = 11 then passes:=passes+1; else fails:=fails||('S3g admin check in '||q||' of 11 functions'); end if;
+  if not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public' and p.proname = 'wp_admin_numbers'
+                    and p.prosrc like '%wp_is_admin()%')
+  then passes:=passes+1; else fails:=fails||text 'S3h an any-staff function became admin only'; end if;
+
   perform set_config('request.jwt.claims', json_build_object('sub',uA,'email','sa@test.invalid')::text, true);
   r := wp_admin_sync_invoices(ev, jsonb_build_array(
     jsonb_build_object('xero_invoice_id','t-1','status','AUTHORISED','total','10','amount_due','10','online_url','javascript:alert(1)'),
