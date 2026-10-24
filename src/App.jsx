@@ -10,6 +10,7 @@ import "@fontsource/barlow-condensed/700.css";
 import { dayOrder } from "./shared/dayOrder.js";
 import { snapToNeighbours, boxesOverlap, tableFootprint } from "./shared/tableSnap.js";
 import { roleFirst, fullName, downloadGuestsCsv, printGuests, ACCOM_LABEL as GUEST_ACCOM_LABEL } from "./portal/guestSort.js";
+import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
 // Pure viewport-width detection (no device/user-agent sniffing) — recalculates
@@ -562,6 +563,47 @@ function PageHeader({ title, sub, actions, back, onBack }) {
       {actions && <div className="hb-actions">{actions}</div>}
     </div>
   );
+}
+
+// Catches a render error in one page so it shows a small panel instead of a
+// white screen, and the sidebar (or top menu) stays usable to go elsewhere.
+// Rendered keyed by the page, so moving to another page starts it fresh.
+// Nothing is saved from here: Reload is a plain reload, and whatever the page
+// had already autosaved is what comes back.
+class PageErrorBoundary extends ReactComponent {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error: error }; }
+  componentDidCatch(error, info) {
+    console.error("Page crashed:", this.props.page || "", error, info && info.componentStack);
+  }
+  render() {
+    const error = this.state.error;
+    if (!error) return this.props.children;
+    const self = this;
+    const message = (error && (error.message || String(error))) || "Unknown error";
+    return (
+      <div role="alert" style={{ background:T.redBg, border:`1px solid ${T.border}`, borderLeft:`4px solid ${T.red}`, borderRadius:10,
+        padding:"18px 20px", margin:"8px 0 20px", maxWidth:720 }}>
+        <div style={{ fontSize:15, fontWeight:700, color:T.red, marginBottom:6 }}>Something went wrong on this page — reload</div>
+        <div style={{ fontSize:13, color:T.textMid, lineHeight:1.6, marginBottom:12 }}>
+          Anything already saved is safe. The rest of the app still works — use the menu to go elsewhere,
+          or reload to try this page again.
+        </div>
+        <pre style={{ fontSize:12, color:T.text, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
+          padding:"8px 10px", margin:"0 0 14px", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace" }}>{message}</pre>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          <button type="button" onClick={function(){ window.location.reload(); }}
+            style={{ background:T.red, color:"#fff", border:"none", padding:"9px 20px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            Reload
+          </button>
+          <button type="button" onClick={function(){ self.setState({ error: null }); }}
+            style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"9px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>
+            Try again without reloading
+          </button>
+        </div>
+      </div>
+    );
+  }
 }
 
 // One style of tab strip for every tab row that stays on the page — tabs
@@ -1570,48 +1612,6 @@ function FCheck({ checked, onChange, label, bold }) {
   );
 }
 
-// ─── ACCOMMODATION FIELD ──────────────────────────────────────────────────────
-function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData, update }) {
-  const [f,setF] = useState(false);
-  const val = formData[bookedKey] || "undecided";
-  const isYes = val === "yes";
-  const bgMap = { yes: T.accentLight, no: T.redBg, undecided: T.amberBg };
-  const borderMap = { yes: T.accentMid, no: "#fca5a5", undecided: "#fcd34d" };
-  return (
-    <div style={{ background:bgMap[val]||T.bgInput, border:`1.5px solid ${borderMap[val]||T.border}`, borderRadius:8, padding:"14px 16px", transition:"all .2s" }}>
-      <div style={{ display:"flex", alignItems:"center", flexWrap:"wrap", gap:12 }}>
-        <span style={{ fontSize:15, fontWeight:600, color:T.text, minWidth:70 }}>{label}</span>
-        <select value={val} onChange={e=>update(bookedKey,e.target.value)}
-          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"6px 10px", outline:"none", cursor:"pointer" }}>
-          <option value="undecided">Undecided</option>
-          <option value="yes">Yes</option>
-          <option value="no">No</option>
-        </select>
-        {isYes && (
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ fontSize:13, color:T.textMid, fontWeight:500 }}>Fee: £</span>
-            <input type="number" value={formData[feeKey]||""} onChange={e=>update(feeKey,e.target.value)} placeholder="0"
-              onFocus={()=>setF(true)} onBlur={()=>setF(false)}
-              style={{ width:90, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"6px 10px", outline:"none", boxShadow:f?`0 0 0 3px ${T.accentLight}`:"none" }} />
-          </div>
-        )}
-        {isYes && paid50Key && (
-          <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-            <input type="checkbox" checked={!!formData[paid50Key]} onChange={e=>update(paid50Key,e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
-            50% paid
-          </label>
-        )}
-        {isYes && paid100Key && (
-          <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-            <input type="checkbox" checked={!!formData[paid100Key]} onChange={e=>update(paid100Key,e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
-            100% paid
-          </label>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // Find lettings bookings whose check-in falls within windowDays of an event date
 function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
   if (!eventDate || !accomBookings) return [];
@@ -2583,13 +2583,6 @@ const CAL_DARK  = "#1e40af";   // outgoing half of a changeover
 
 // Grace period before an unpaid invoice is called overdue on the dashboard.
 const OVERDUE_AFTER_DAYS = 3;
-
-function hexWithAlpha(hex, alphaHex) {
-  var h = String(hex || "#000000").replace("#", "");
-  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
-  if (h.length !== 6) h = "000000";
-  return "#" + h + alphaHex;
-}
 
 const DEFAULT_EMAIL_TEMPLATES = [
   {
@@ -7243,7 +7236,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // different event, or the next new event would be glued to the last one's id.
   const newEventRef = useRef(null);
   const handleNew    = ()=>{ newEventRef.current = null; setFormKey(function(k){ return k+1; }); setFormData(emptyBooking()); setEditId(null); setView("form"); };
-  const handleEdit   = id=>{ newEventRef.current = null; setFormKey(function(k){ return k+1; }); const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
+  // Ids arrive as numbers from the list and as strings from links and other
+  // screens, so compare as strings; and an event that is not there (deleted on
+  // another device, or a stale link) says so instead of opening an empty form
+  // that would autosave as a new record.
+  const handleEdit   = id=>{ const b=bookings.find(x=>String(x.id)===String(id)); if (!b) { alert("That event could not be found — it may have been deleted."); return; } newEventRef.current = null; setFormKey(function(k){ return k+1; }); id = b.id; setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
   const handleDelete = id => {
     const b = bookings.find(x=>x.id===id);
     askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
@@ -7577,9 +7574,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
         </header>
         <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-mini"} style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
           {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
+          <PageErrorBoundary key={cleanerOnly ? "cleaner" : "bar-" + barSection} page={cleanerOnly ? "cleaner" : barSection}>
           {cleanerOnly && <CleanerView/>}
           {barOnly && barSection === "bar"  && <BarView/>}
           {barOnly && barSection === "door" && <BoxDoorScreen/>}
+          </PageErrorBoundary>
         </div>
       </div>
     );
@@ -7613,6 +7612,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   const pageArea = (
       <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-content"} style={UI_CLASSIC ? { maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" } : undefined}>
+        {/* One boundary round whichever page is showing, keyed by it (and by
+            the event, on the event form) so a crash on one page clears when
+            you move to another. pageArea is used by both layouts. */}
+        <PageErrorBoundary key={view === "form" ? "form-" + formKey : view} page={view}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
@@ -7672,6 +7675,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
         {view==="activity"   && <ActivityView/>}
         {view==="emails"     && <EmailsView/>}
+        </PageErrorBoundary>
       </div>
   );
 
@@ -8296,7 +8300,18 @@ function TemplateBlocks({ eventType, days, blocks, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  useEffect(function(){ setRows(blocks); setDirty(false); }, [eventType, blocks]);
+  // The parent reloads every template whenever any of its panels saves, which
+  // hands this a new blocks array. Re-syncing on that wiped unsaved timings, so
+  // only take the new rows when nothing here is unsaved — or when a different
+  // event type has been picked, which is a different template altogether.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const typeRef = useRef(eventType);
+  useEffect(function(){
+    const typeChanged = typeRef.current !== eventType;
+    typeRef.current = eventType;
+    if (typeChanged || !dirtyRef.current) { setRows(blocks); setDirty(false); }
+  }, [eventType, blocks]);
 
   const offered = days.filter(function(d){ return d.offered; });
 
@@ -8434,7 +8449,11 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  useEffect(function(){ setRows(initial); setDirty(false); }, [initial]);
+  // As in TemplateBlocks: another panel's save reloads the parent, which must
+  // not throw away checklist edits that have not been saved yet.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(function(){ if (!dirtyRef.current) { setRows(initial); setDirty(false); } }, [initial]);
 
   function edit(i, patch) {
     setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
@@ -8911,10 +8930,14 @@ function CoupleTimelines({ bookings }) {
     .sort(function(a,b){ return String(b.date||"").localeCompare(String(a.date||"")); });
 
   useEffect(function(){
-    if (!eventId) { setData(null); return; }
+    if (!eventId) { setData(null); setErr(""); return; }
+    // A slow answer for the event chosen before must not land under this one.
+    let off = false;
     setErr(""); setData(null);
     sbRpc("wp_admin_event_timeline", { p_event_id: Number(eventId) })
-      .then(setData).catch(function(e){ setErr(e.message || String(e)); });
+      .then(function(r){ if (!off) setData(r); })
+      .catch(function(e){ if (!off) setErr(e.message || String(e)); });
+    return function(){ off = true; };
   }, [eventId]);
 
   return (
@@ -9575,10 +9598,25 @@ function PortalLogins({ bookings }) {
         )}
       </div>
 
-      {eventId && <PortalEventPanel eventId={Number(eventId)}
+      {eventId && <PortalEventPanel key={eventId} eventId={Number(eventId)}
         booking={ch.all.find(function(b){ return String(b.id) === String(eventId); })} />}
     </div>
   );
+}
+
+// Which event a per-event panel is showing NOW, readable after an await. A load
+// that comes back for an event the panel has moved on from (or after it has
+// gone) must not land: it would put event A's figures and drafts on event B's
+// screen, and the next Save would write them onto B. Panels are also keyed by
+// event id where they are rendered, so this is the second line, not the first.
+function useEventGuard(eventId) {
+  const ref = useRef({ id: eventId, alive: true });
+  ref.current.id = eventId;
+  useEffect(function(){
+    ref.current.alive = true;
+    return function(){ ref.current.alive = false; };
+  }, []);
+  return function isCurrent(id) { return ref.current.alive && ref.current.id === id; };
 }
 
 function PortalEventPanel({ eventId, booking, hideDrinks }) {
@@ -9589,19 +9627,27 @@ function PortalEventPanel({ eventId, booking, hideDrinks }) {
   const [note, setNote] = useState("");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
+  const isCurrent = useEventGuard(eventId);
 
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
-      const a = await sbRpc("wp_list_access", { p_event_id: eventId });
+      const a = await sbRpc("wp_list_access", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setRows(a.access || []);
-      const n = await sbRpc("wp_admin_numbers", { p_event_id: eventId });
+      const n = await sbRpc("wp_admin_numbers", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setNumbers(n);
-      const c = await sbRpc("wp_admin_checklist", { p_event_id: eventId });
+      const c = await sbRpc("wp_admin_checklist", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setChecklist(c);
-    } catch (e) { setErr(e.message || String(e)); }
+    } catch (e) { if (isCurrent(forId)) setErr(e.message || String(e)); }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){
+    setRows(null); setNumbers(null); setChecklist(null); setEmail(""); setNote("");
+    load();
+  }, [eventId]);
 
   // Granting access and telling somebody about it are one action as far as
   // anyone here is concerned. wp_grant_access only writes the row — nothing
@@ -9831,8 +9877,10 @@ function PortalEventExtras({ eventId, booking, hideDrinks }) {
   const [food, setFood] = useState(null);
   const [music, setMusic] = useState(null);
   const [err, setErr] = useState("");
+  const isCurrent = useEventGuard(eventId);
 
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
       const results = await Promise.all([
@@ -9844,6 +9892,7 @@ function PortalEventExtras({ eventId, booking, hideDrinks }) {
         sbRpc("wp_admin_food", { p_event_id: eventId }),
         sbRpc("wp_admin_music", { p_event_id: eventId }),
       ]);
+      if (!isCurrent(forId)) return;
       setSections({ vis: results[0], status: results[1].sections || [] });
       setProfile(results[2]);
       setItems(results[3].items || []);
@@ -9851,13 +9900,17 @@ function PortalEventExtras({ eventId, booking, hideDrinks }) {
       setFood(results[5].choice);
       setMusic(results[6].items || []);
     } catch (e) {
+      if (!isCurrent(forId)) return;
       // Most likely the 23 Oct migration is not applied yet. Say so plainly
       // rather than showing half a panel.
       setErr("The newer portal panels could not load (" + (e.message || String(e)) +
         "). If the 2026-10-23 portal migration has not been applied yet, that is why.");
     }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){
+    setSections(null); setProfile(null); setItems(null); setRequests(null); setFood(null); setMusic(null);
+    load();
+  }, [eventId]);
 
   if (err) return <ErrBanner text={err} />;
   if (!sections) return <div style={quietText}>Loading…</div>;
@@ -10475,23 +10528,37 @@ function PortalEventDrinks({ eventId, booking }) {
   const [childRate, setChildRate] = useState("");
   const [bespoke, setBespoke] = useState("");
   const [again, setAgain] = useState(false);
+  const isCurrent = useEventGuard(eventId);
+
+  // The drafts (rates, bespoke note) and the order they came from belong to one
+  // event. When the event changes or a load fails they go, so neither Save nor
+  // the Invoice button can act on another event's figures.
+  function clearDrafts() {
+    setData(null); setEvening(null); setRate(""); setChildRate(""); setBespoke(""); setAgain(false);
+  }
 
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
-      const r = await sbRpc("wp_admin_drinks", { p_event_id: eventId });
+      const r = await sbRpc("wp_admin_drinks", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setData(r);
       // The bar is staffed from the evening numbers; not fatal if they will not load.
-      sbRpc("wp_admin_numbers", { p_event_id: eventId })
-        .then(function(n){ setEvening(n && n.told_us ? n.evening_total : null); })
-        .catch(function(){ setEvening(null); });
+      sbRpc("wp_admin_numbers", { p_event_id: forId })
+        .then(function(n){ if (isCurrent(forId)) setEvening(n && n.told_us ? n.evening_total : null); })
+        .catch(function(){ if (isCurrent(forId)) setEvening(null); });
       const o = r.order || {};
       setRate(o.rate_pp == null ? "" : String(o.rate_pp));
       setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
       setBespoke(o.bespoke_note || "");
-    } catch (e) { setErr(e.message || String(e)); }
+    } catch (e) {
+      if (!isCurrent(forId)) return;
+      clearDrafts();
+      setErr(e.message || String(e));
+    }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){ clearDrafts(); load(); }, [eventId]);
 
   async function setDrinks(args, msg) {
     setBusy(true); setErr(""); setNote("");
@@ -10728,25 +10795,38 @@ function EventGuestsPanel({ eventId, booking }) {
     setEvening(n && n.evening_extras != null ? String(n.evening_extras) : "");
   }
 
+  const isCurrent = useEventGuard(eventId);
+
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
-      const r = await sbRpc("wp_admin_guests", { p_event_id: eventId });
+      const r = await sbRpc("wp_admin_guests", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setData(r); setAdminOnly(false); fill(r.numbers);
     } catch (e) {
+      if (!isCurrent(forId)) return;
       if (e.code === "not_admin") {
         // Bar and cleaning logins: numbers, but not names and dietary notes.
         try {
-          const n = await sbRpc("wp_admin_numbers", { p_event_id: eventId });
+          const n = await sbRpc("wp_admin_numbers", { p_event_id: forId });
+          if (!isCurrent(forId)) return;
           setData({ numbers: Object.assign({}, n, { told_us: !!n.told_us }), guests: [] }); setAdminOnly(true); fill(n);
-        } catch (e2) { setErr(e2.message || String(e2)); }
+        } catch (e2) {
+          if (!isCurrent(forId)) return;
+          setData(null); fill(null);
+          setErr(e2.message || String(e2));
+        }
       } else {
+        // No numbers on screen means no Save button, so nothing typed for
+        // another event (or left from before) can be written here.
+        setData(null); fill(null);
         setErr("The guest list could not load (" + (e.message || String(e)) +
           "). If the 23 Oct (d) migration has not been run yet, that is why.");
       }
     }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){ setData(null); fill(null); load(); }, [eventId]);
 
   function num(v) { if (v === "" || v == null) return null; const x = parseInt(v, 10); return Number.isFinite(x) ? x : null; }
 
@@ -11513,13 +11593,21 @@ function PortalEventWebcast({ eventId }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
+  const isCurrent = useEventGuard(eventId);
+  function clearDrafts() { setD(null); setUrl(""); setPw(""); setNotes(""); }
   async function load() {
+    const forId = eventId;
     try {
-      const r = await sbRpc("wp_admin_webcast", { p_event_id: eventId });
+      const r = await sbRpc("wp_admin_webcast", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setD(r); setUrl(r.stream_url || ""); setPw(r.password || ""); setNotes(r.notes || "");
-    } catch (e) { setErr(e.message || String(e)); }
+    } catch (e) {
+      if (!isCurrent(forId)) return;
+      clearDrafts();
+      setErr(e.message || String(e));
+    }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){ clearDrafts(); setErr(""); setNote(""); load(); }, [eventId]);
   async function save() {
     setBusy(true); setErr(""); setNote("");
     try { await sbRpc("wp_admin_save_webcast", { p_event_id: eventId, p_stream_url: url, p_password: pw, p_notes: notes }); setNote("Saved."); await load(); }
@@ -12055,7 +12143,6 @@ function PhoneAppPanel() {
 // layout). Ids are the sections' own tab ids, unchanged.
 const LETTINGS_TABS = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"],["settings","Settings"]];
 const BOX_TABS      = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
-const VIEWINGS_TABS = [["viewings","Viewings"],["blocks","Blocks"]];
 const BAR_TABS = [
   ["stock","Current Stock"], ["order","+ New Order"], ["stocktake","+ New Stocktake"], ["history","History"],
   ["report","Usage Report"], ["reconcile","Till Reconciliation"], ["products","Products"],
@@ -15278,10 +15365,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <div style={quietText}>Save the booking first — the client portal hangs off a saved event.</div>
           )}
           {activeSection==="drinks" && formData.id != null && (
-            <PortalEventDrinks eventId={Number(formData.id)} booking={formData} />
+            <PortalEventDrinks key={formData.id} eventId={Number(formData.id)} booking={formData} />
           )}
           {activeSection==="portal" && formData.id != null && (
-            <PortalEventPanel eventId={Number(formData.id)} booking={formData} hideDrinks />
+            <PortalEventPanel key={formData.id} eventId={Number(formData.id)} booking={formData} hideDrinks />
           )}
 
           {activeSection==="financials" && (
@@ -15372,10 +15459,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <div style={quietText}>Save the booking first — guest numbers and suppliers come from its client portal.</div>
           )}
           {activeSection==="guests" && formData.id != null && (
-            <EventGuestsPanel eventId={Number(formData.id)} booking={formData} />
+            <EventGuestsPanel key={formData.id} eventId={Number(formData.id)} booking={formData} />
           )}
           {activeSection==="vendors" && formData.id != null && (
-            <EventVendorsPanel eventId={Number(formData.id)} booking={formData} />
+            <EventVendorsPanel key={formData.id} eventId={Number(formData.id)} booking={formData} />
           )}
 
           {["staffing","financials","viewings","files","guests","vendors","drinks","portal"].indexOf(activeSection) === -1 && (
@@ -16486,105 +16573,6 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
   );
 }
 
-function AccommodationReport({ bookings, accomBookings, accomProperties }) {
-  // Wedding events sorted by date
-  var rows = bookings.filter(function(b){ return b.couple && b.date; })
-    .sort(function(a,z){ return a.date > z.date ? 1 : -1; });
-
-  // For each event, find linked lettings bookings (check-in within 7 days)
-  var rowsWithAccom = rows.map(function(b) {
-    return { event:b, linked: findLinkedAccom(b.date, accomBookings, 7, b.endDate) };
-  });
-
-  // Stats: count events that have at least one linked accom booking + total revenue
-  var linkedEvents = rowsWithAccom.filter(function(r){ return r.linked.length > 0; });
-  var totalAccomRevenue = accomBookings.filter(function(b){ return b.status!=="cancelled"; })
-    .reduce(function(s,b){ return s + (Number(b.value)||0); }, 0);
-
-  // Per-property stats
-  var propStats = {};
-  (accomProperties||[]).forEach(function(p) { propStats[p.id] = { count:0, revenue:0 }; });
-  accomBookings.filter(function(b){ return b.status!=="cancelled"; }).forEach(function(b) {
-    var stays = (b.stays&&b.stays.length) ? b.stays : [b];
-    var perStay = (Number(b.value)||0) / (stays.length||1);
-    stays.forEach(function(s) {
-      if (!propStats[s.propertyId]) propStats[s.propertyId] = { count:0, revenue:0 };
-      propStats[s.propertyId].count++;
-      propStats[s.propertyId].revenue += perStay;
-    });
-  });
-
-  return (
-    <div>
-      {/* Summary cards */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr " + (accomProperties||[]).map(function(){ return "1fr"; }).join(" "), gap:16, marginBottom:22, flexWrap:"wrap" }}>
-        <StatCard label="Events with Accom" value={linkedEvents.length} sub={rows.length + " events total"}/>
-        <StatCard label="Total Accom Revenue" value={fmtMoney(totalAccomRevenue)} sub="all non-cancelled bookings"/>
-        {(accomProperties||[]).map(function(p) {
-          var st = propStats[p.id] || { count:0, revenue:0 };
-          return (
-            <StatCard key={p.id} label={p.name} value={st.count + " stays"} sub={fmtMoney(st.revenue)}/>
-          );
-        })}
-      </div>
-
-      {/* Per-event table */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
-        <div style={{ padding:"10px 14px", background:T.tint, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:1 }}>
-          Events and linked lettings bookings
-        </div>
-        {rowsWithAccom.map(function(row, i) {
-          var ev = row.event;
-          var linked = row.linked;
-          return (
-            <div key={ev.id} style={{ borderTop: i>0 ? `1px solid ${T.border}` : "none", padding:"12px 14px" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom: linked.length ? 8 : 0 }}>
-                <span style={{ fontSize:12, color:T.accent, fontWeight:600, minWidth:90 }}>{fmtDate(ev.date)}</span>
-                <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{ev.couple}</span>
-                {ev.eventType && <span style={{ fontSize:11, color:T.midBlue, background:T.midBlueBg, padding:"1px 7px", borderRadius:5, fontWeight:600 }}>{ev.eventType}</span>}
-                {!linked.length && <span style={{ fontSize:11, color:T.textLight, fontStyle:"italic" }}>No lettings bookings linked</span>}
-              </div>
-              {linked.length > 0 && (
-                <div style={{ paddingLeft:102, display:"flex", flexDirection:"column", gap:6 }}>
-                  {linked.map(function(ab) {
-                    var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
-                    var paidAmt = (ab.schedule||[]).filter(function(s){ return s.paid; }).reduce(function(sum,s){ return sum+(Number(s.amount)||0); }, 0);
-                    var outstanding = (Number(ab.value)||0) - paidAmt;
-                    return (
-                      <div key={ab.id} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7, padding:"8px 12px", fontSize:12 }}>
-                        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                          <span style={{ fontWeight:600, color:T.text }}>{ab.guestName||"(no name)"}</span>
-                          {stays.map(function(s, si) {
-                            var prop = (accomProperties||[]).find(function(p){ return p.id===s.propertyId; });
-                            return (
-                              <span key={si} style={{ display:"inline-flex", alignItems:"center", gap:4, color:T.textMid }}>
-                                {prop && <span style={{ width:7, height:7, borderRadius:"50%", background:prop.colour, display:"inline-block" }}/>}
-                                {s.propertyName||s.propertyId}
-                                {" "}{fmtDate(s.checkIn)}–{fmtDate(s.checkOut)}
-                              </span>
-                            );
-                          })}
-                          <span style={{ marginLeft:"auto", fontWeight:700, color:T.text }}>{fmtMoney(Number(ab.value)||0)}</span>
-                          {outstanding <= 0 && (Number(ab.value)||0) > 0
-                            ? <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"1px 7px", borderRadius:5 }}>Paid</span>
-                            : outstanding > 0
-                              ? <span style={{ fontSize:11, fontWeight:700, color:T.amber, background:T.amberBg, padding:"1px 7px", borderRadius:5 }}>{fmtMoney(outstanding)} outstanding</span>
-                              : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {!rows.length && <div style={{ padding:24, textAlign:"center", color:T.textLight, fontSize:13 }}>No bookings yet.</div>}
-      </div>
-    </div>
-  );
-}
-
 function StaffingRota({ bookings, staff }) {
   const [printMode, setPrintMode] = useState(false);
   const today=new Date().toISOString().slice(0,10);
@@ -16635,220 +16623,6 @@ function StaffingRota({ bookings, staff }) {
         </table>
       </div>
     </div>
-    </div>
-  );
-}
-
-function PipelineReport({ bookings }) {
-  const [printMode, setPrintMode] = useState(false);
-  const today=new Date().toISOString().slice(0,10);
-  const rows=bookings.filter(b=>b.couple&&b.date>=today&&parseMoney(b.venueFee)>0);
-  const printText = [
-    "Payment Pipeline — Upcoming Bookings",
-    "",
-    ...rows.map(b=>{
-      const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep);
-      return `${b.date} | ${b.couple}\n  Venue Fee: £${fee.toLocaleString()} | Deposit: £${dep.toLocaleString()} | Balance: ${balance===0?"PAID IN FULL":"£"+balance.toLocaleString()}`;
-    })
-  ].join("\n\n");
-  if(printMode) return (
-    <div>
-      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
-    </div>
-  );
-  return (
-    <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
-      </div>
-      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings with outstanding balance (deposit is advance on venue fee)</p>
-      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        {rows.map(b=>{
-          const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep),pct=fee>0?Math.min(100,Math.round((dep/fee)*100)):0;
-          return (
-            <div key={b.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:T.shadowCard }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
-                <div><div style={{ fontWeight:600, color:T.text }}>{b.couple}</div><div style={{ fontSize:12, color:T.textLight }}>{fmtDate(b.date)}</div></div>
-                <div style={{ textAlign:"right" }}><div style={{ fontSize:18, color:T.midBlue, fontWeight:700 }}>£{fee.toLocaleString()}</div><div style={{ fontSize:11, color:T.textLight }}>{dep>0?`Deposit: £${dep.toLocaleString()}`:"No deposit"}</div></div>
-              </div>
-              <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}><div style={{ background:balance===0?T.green:T.accentMid, height:"100%", width:`${pct}%`, borderRadius:4 }}/></div>
-              <div style={{ display:"flex", justifyContent:"space-between", marginTop:6, fontSize:11, color:T.textLight }}>
-                <span>Balance remaining: {balance===0?"✓ Paid in full":`£${balance.toLocaleString()}`}</span>
-                <span style={{ color:balance===0?T.green:T.accent, fontWeight:700 }}>{pct}% deposit paid</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function StaffWorkloadReport({ bookings, staff }) {
-  const [printMode, setPrintMode] = useState(false);
-  const today=new Date().toISOString().slice(0,10);
-  const upcoming=bookings.filter(b=>b.date>=today);
-  const workload=staff.filter(s=>s.active).map(s=>{
-    const assigned=upcoming.filter(b=>["setup",...STAFFING_FIELDS].some(f=>(b[f]||[]).includes(s.id)));
-    const roles={};
-    upcoming.forEach(b=>["setup",...STAFFING_FIELDS].forEach(f=>{ if((b[f]||[]).includes(s.id)) roles[f]=(roles[f]||0)+1; }));
-    return {...s, count:assigned.length, roles};
-  }).sort((a,b)=>b.count-a.count);
-  const max=Math.max(1,...workload.map(w=>w.count));
-  const printText = [
-    "Staff Workload — Upcoming Events",
-    "",
-    ...workload.filter(w=>w.count>0).map(w=>`${w.name} (${w.role}): ${w.count} upcoming\n  ${Object.entries(w.roles).map(([r,c])=>`${r==="setup"?"Friday Set-Up":STAFFING_LABELS[r]}: ${c}`).join(", ")}`)
-  ].join("\n\n");
-  if(printMode) return (
-    <div>
-      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
-    </div>
-  );
-  return (
-    <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
-      </div>
-      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings per active staff member</p>
-      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {workload.map(w=>(
-          <div key={w.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", boxShadow:T.shadowCard }}>
-            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
-              <StaffChip initials={w.id} staff={staff} size="lg"/>
-              <div style={{ flex:1 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
-                  <span style={{ fontWeight:700, color:T.text }}>{w.name}</span>
-                  <span style={{ fontSize:11, color:T.textLight }}>{w.role}</span>
-                  <span style={{ marginLeft:"auto", fontSize:13, color:T.midBlue, fontWeight:700 }}>{w.count} upcoming</span>
-                </div>
-                <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}>
-                  <div style={{ background:w.count>5?T.red:w.count>2?T.amber:T.green, height:"100%", width:`${(w.count/max)*100}%`, minWidth:w.count>0?4:0, borderRadius:4 }}/>
-                </div>
-              </div>
-            </div>
-            {w.count>0&&(
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {Object.entries(w.roles).map(([role,cnt])=>(
-                  <span key={role} style={{ fontSize:11, background:T.accentLight, border:`1px solid ${T.border}`, borderRadius:4, padding:"2px 8px", color:T.accent, fontWeight:600 }}>{role==="setup"?"Friday Friday Set-Up":STAFFING_LABELS[role]}: {cnt}</span>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── HOURS SECTION (in booking form) ─────────────────────────────────────────
-function HoursSection({ formData, update, staff, staffShifts }) {
-  const hw = formData.hoursWorked || {};
-  const updateHours = (id, val) => {
-    const updated = { ...hw };
-    if (val === "") delete updated[id];
-    else updated[id] = parseFloat(val) || 0;
-    update("hoursWorked", updated);
-  };
-
-  // Which staff are already assigned to this booking
-  const assignedIds = new Set([
-    ...(formData.setup||[]),
-    ...(formData.dayManager||[]),
-    ...(formData.dayStaff||[]),
-    ...(formData.barSupervisor||[]),
-    ...(formData.sunday||[]),
-    ...(formData.bar||[]),
-    ...(formData.dayHandy||[]),
-    ...(formData.eveHandy||[]),
-  ]);
-
-  const assignedStaff = staff.filter(s => assignedIds.has(s.id));
-  const otherStaff    = staff.filter(s => s.active && !assignedIds.has(s.id));
-
-  const totalHours = Object.values(hw).reduce((a,b)=>a+b,0);
-
-  return (
-    <div>
-      <p style={{ margin:"0 0 16px", fontSize:13, color:T.textMid }}>
-        Enter actual hours worked by each staff member at this event.
-      </p>
-
-      {assignedStaff.length > 0 && (
-        <div style={{ marginBottom:20 }}>
-          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>Assigned Staff</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
-            {assignedStaff.map(s => {
-              const sh = staffShifts[s.id];
-              let expectedHrs = null;
-              if (sh?.start && sh?.end) {
-                const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
-                const diff = toMins(sh.end) - toMins(sh.start);
-                if (diff > 0) expectedHrs = +(diff/60).toFixed(2);
-              }
-              return <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} highlighted expectedHrs={expectedHrs}/>;
-            })}
-          </div>
-        </div>
-      )}
-
-      {otherStaff.length > 0 && (
-        <div>
-          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:700, marginBottom:10 }}>Other Staff</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
-            {otherStaff.map(s => {
-              const sh = staffShifts[s.id];
-              let expectedHrs = null;
-              if (sh?.start && sh?.end) {
-                const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
-                const diff = toMins(sh.end) - toMins(sh.start);
-                if (diff > 0) expectedHrs = +(diff/60).toFixed(2);
-              }
-              return <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} expectedHrs={expectedHrs}/>;
-            })}
-          </div>
-        </div>
-      )}
-
-      {totalHours > 0 && (
-        <div style={{ marginTop:20, padding:"12px 16px", background:T.accentLight, borderRadius:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontSize:13, color:T.midBlue, fontWeight:600 }}>Total hours this event</span>
-          <span style={{ fontSize:20, color:T.midBlue, fontWeight:700 }}>{totalHours.toLocaleString()}h</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HoursRow({ s, hw, updateHours, highlighted, expectedHrs }) {
-  const [f, setF] = useState(false);
-  const val = hw[s.id] || "";
-  return (
-    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background: highlighted ? T.accentLight : T.bgInput, border:`1.5px solid ${f ? T.borderFocus : highlighted && val ? T.accentMid : T.border}`, borderRadius:8, transition:"all .15s" }}>
-      <StaffChip initials={s.id} staff={[s]} />
-      <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500 }}>{s.name}</span>
-      {expectedHrs !== null && (
-        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", marginRight:4 }}>
-          <span style={{ fontSize:9, letterSpacing:.8, textTransform:"uppercase", color:T.textLight, fontWeight:600 }}>Expected</span>
-          <span style={{ fontSize:14, fontWeight:700, color:T.midBlue }}>{expectedHrs}h</span>
-        </div>
-      )}
-      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-        <input
-          type="number"
-          min="0"
-          step="0.5"
-          value={val}
-          onChange={e => updateHours(s.id, e.target.value)}
-          onFocus={() => setF(true)}
-          onBlur={() => setF(false)}
-          placeholder="0"
-          style={{ width:70, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 8px", outline:"none", textAlign:"center", boxShadow:f?`0 0 0 3px ${T.accentLight}`:"none" }}
-        />
-        <span style={{ fontSize:12, color:T.textLight }}>hrs</span>
-      </div>
     </div>
   );
 }
@@ -19508,7 +19282,6 @@ function ProductsView({ products, onSave }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ENQUIRIES_STORAGE = "hbf_enquiries_v1";
-const VIEWINGS_STORAGE  = "hbf_viewings_v1";
 const VR_STORAGE        = "hbf_viewing_requests_v1";
 const VB_STORAGE        = "hbf_viewing_blocks_v1";
 
@@ -21012,8 +20785,6 @@ function StaffTimelineReport({ bookings, staff }) {
 
 // ─── VIEWINGS COMPONENTS ──────────────────────────────────────────────────────
 
-const VIEWING_STORAGE_KEY = "hbf_viewings_v1";
-
 function ViewingForm({ viewing, onChange, onSave, onCancel, saveLabel="Add" }) {
   const iStyle = { width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 9px", outline:"none", boxSizing:"border-box" };
   return (
@@ -21073,6 +20844,37 @@ const guessDocType = (filename) => {
   return "Other";
 };
 
+// A stored file's identity: its storage path (unique — it carries the upload
+// time), else its URL. Rows are keyed by it, and deletes and doc-type changes
+// find the file by it, so neither depends on where the row sits in the list.
+function storedFileKey(f) {
+  return (f && (f.path || f.url)) || ((f && f.name) || "") + "|" + ((f && f.uploadedAt) || "");
+}
+
+// Module scope, not inside BookingFilesSection: a component defined inside
+// another is a new type every render, so React rebuilt these selects (and lost
+// focus) on every keystroke anywhere in the section.
+function FileDocTypeSelect({ file, onDocType }) {
+  return (
+    <select value={file.docType||"Other"} onChange={e=>onDocType(file, e.target.value)} onClick={e=>e.stopPropagation()}
+      style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:5, color:T.text, fontFamily:"inherit", fontSize:11, padding:"3px 7px", cursor:"pointer", flexShrink:0 }}>
+      {FILE_DOC_TYPES.map(t=><option key={t}>{t}</option>)}
+    </select>
+  );
+}
+
+function FileFooterBar({ file, tight, onDocType, onDelete }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, padding:tight?"8px 14px":"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+      <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
+      <FileDocTypeSelect file={file} onDocType={onDocType}/>
+      {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
+      <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>⬇ Open</a>
+      <button onClick={()=>onDelete(file)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>✕ Remove</button>
+    </div>
+  );
+}
+
 function BookingFilesSection({ formData, update, onAutoSave, entityId, entityType="booking" }) {
   const [uploading, setUploading]   = useState(false);
   const [error, setError]           = useState(null);
@@ -21082,6 +20884,15 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
 
   const id    = entityId || formData.id || formData.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
   const files = formData.files || [];
+
+  // The record as it is NOW, for anything that finishes after an await. An
+  // upload takes seconds; building the new list from the render it started in
+  // would drop a file attached (or a change made) in the meantime.
+  const latestRef = useRef(formData);
+  latestRef.current = formData;
+  // Set synchronously, so a second drop in the same moment is refused before
+  // React has re-rendered with uploading=true.
+  const uploadingRef = useRef(false);
 
   const isPdf  = (f) => /\.pdf$/i.test(f.name||"") || f.type==="application/pdf";
   const isHeic = (f) => /\.heic$/i.test(f.name||"") || f.type==="image/heic" || f.type==="image/heif";
@@ -21094,6 +20905,20 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   const [blobUrls, setBlobUrls] = useState({});
   const [pdfUrls,  setPdfUrls]  = useState({});
   const [fileErrs, setFileErrs] = useState({});
+  // Every object URL this section has made, by file URL. Revoked only when its
+  // file leaves the list, or when the section goes — the old per-effect
+  // cleanups revoked URLs still on screen from a stale closure.
+  const objUrlsRef = useRef({});
+  const inFlightRef = useRef({});
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      Object.values(objUrlsRef.current).forEach(u=>URL.revokeObjectURL(u));
+      objUrlsRef.current = {};
+    };
+  }, []);
 
   // fetch().then(r => r.blob()) succeeds on a 400 as happily as on a 200: the
   // error page becomes a blob, gets an object URL, and renders as a blank
@@ -21101,88 +20926,106 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   // answering managed to look like nothing at all. Check the response before
   // believing it, and put the reason on screen when it fails.
   const loadPreview = async (file, setter) => {
+    if (inFlightRef.current[file.url]) return;
+    inFlightRef.current[file.url] = true;
     const url = storageUrl(file.url);
     try {
       const res = await fetch(url, { headers: sbAuthHeaders() });
       if (!res.ok) throw new Error(res.status + " — " + (await res.text()).slice(0, 160));
       const blob = await res.blob();
       if (!blob.size) throw new Error("the file came back empty");
-      setter(p => ({ ...p, [file.url]: URL.createObjectURL(blob) }));
-      setFileErrs(p => { const n = { ...p }; delete n[file.url]; return n; });
+      if (!aliveRef.current) return;
+      const obj = URL.createObjectURL(blob);
+      if (objUrlsRef.current[file.url]) URL.revokeObjectURL(objUrlsRef.current[file.url]);
+      objUrlsRef.current[file.url] = obj;
+      setter(p => ({ ...p, [file.url]: obj }));
+      setFileErrs(p => { if (!(file.url in p)) return p; const n = { ...p }; delete n[file.url]; return n; });
     } catch (e) {
       console.warn("File preview failed:", url, e);
-      setFileErrs(p => ({ ...p, [file.url]: String(e.message || e) }));
+      if (aliveRef.current) setFileErrs(p => ({ ...p, [file.url]: String(e.message || e) }));
+    } finally {
+      delete inFlightRef.current[file.url];
     }
   };
 
+  // A file that has left the list gives its object URL back.
   useEffect(() => {
-    files.filter(f=>isImage(f)).forEach(file => {
-      if (blobUrls[file.url] || fileErrs[file.url]) return;
-      loadPreview(file, setBlobUrls);
-    });
-    return () => { Object.values(blobUrls).forEach(u=>URL.revokeObjectURL(u)); };
+    const live = {};
+    files.forEach(f => { live[f.url] = true; });
+    const gone = Object.keys(objUrlsRef.current).filter(u => !live[u]);
+    if (!gone.length) return;
+    gone.forEach(u => { URL.revokeObjectURL(objUrlsRef.current[u]); delete objUrlsRef.current[u]; });
+    const drop = p => { const n = { ...p }; gone.forEach(u => { delete n[u]; }); return n; };
+    setBlobUrls(drop); setPdfUrls(drop);
   }, [files]);
 
+  // fileErrs is a dependency so Retry (which clears the error) loads again.
   useEffect(() => {
-    files.filter(f=>isPdf(f)).forEach(file => {
-      if (pdfUrls[file.url] || fileErrs[file.url]) return;
-      loadPreview(file, setPdfUrls);
+    files.forEach(file => {
+      if (!file.url || fileErrs[file.url]) return;
+      if (isImage(file)) { if (!blobUrls[file.url]) loadPreview(file, setBlobUrls); }
+      else if (isPdf(file)) { if (!pdfUrls[file.url]) loadPreview(file, setPdfUrls); }
     });
-    return () => { Object.values(pdfUrls).forEach(u=>URL.revokeObjectURL(u)); };
-  }, [files]);
+  }, [files, fileErrs]);
 
   const processFiles = async (picked) => {
     if (!picked.length) return;
+    if (uploadingRef.current) { setError("One upload at a time — wait for this one to finish, then add the rest."); return; }
+    uploadingRef.current = true;
     setUploading(true); setError(null);
+    const made = [];
     try {
-      const newFiles = [...files];
       for (const file of picked) {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
         const url  = await sbUploadFile(path, file);
-        newFiles.push({ name:file.name, url, path, type:file.type||"", docType:guessDocType(file.name), uploadedAt:new Date().toISOString().slice(0,10) });
+        made.push({ name:file.name, url, path, type:file.type||"", docType:guessDocType(file.name), uploadedAt:new Date().toISOString().slice(0,10) });
       }
+    } catch(err) { setError("Upload failed: "+err.message + (made.length ? " — the " + made.length + " before it uploaded and are attached." : "")); }
+    // Whatever reached the bucket is attached, onto the list as it is now.
+    if (made.length) {
+      const latest = latestRef.current;
+      const newFiles = (latest.files || []).concat(made);
       update("files", newFiles);
-      if (onAutoSave) { await onAutoSave({...formData, files:newFiles}); flash(); }
-    } catch(err) { setError("Upload failed: "+err.message); }
-    finally { setUploading(false); }
+      if (onAutoSave) {
+        try { await onAutoSave({...latest, files:newFiles}); flash(); }
+        catch(err) { setError("Uploaded, but saving the record failed: " + err.message); }
+      }
+    }
+    uploadingRef.current = false;
+    setUploading(false);
   };
 
-  const handleUpload    = async (e) => { await processFiles(Array.from(e.target.files)); e.target.value=""; };
+  const handleUpload    = async (e) => { const picked = Array.from(e.target.files); e.target.value=""; await processFiles(picked); };
   const handleDrop      = async (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); await processFiles(Array.from(e.dataTransfer.files)); };
-  const handleDragOver  = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); };
+  const handleDragOver  = (e) => { e.preventDefault(); e.stopPropagation(); if (!uploadingRef.current) setDragOver(true); };
   const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); };
 
-  const handleDelete = async (idx) => {
-    const file = files[idx];
+  const handleDelete = async (file) => {
+    const key = storedFileKey(file);
     try { if (file.path) await sbDeleteFile(file.path); } catch(e) { console.warn("Delete failed:",e); }
-    const updated = files.filter((_,i)=>i!==idx);
+    const latest = latestRef.current;
+    const updated = (latest.files || []).filter(f=>storedFileKey(f)!==key);
     update("files", updated);
-    if (onAutoSave) { await onAutoSave({...formData, files:updated}); flash(); }
+    if (onAutoSave) { await onAutoSave({...latest, files:updated}); flash(); }
   };
 
-  const updateDocType = (idx, docType) => {
-    const updated = files.map((f,i)=>i===idx?{...f,docType}:f);
+  const updateDocType = (file, docType) => {
+    const key = storedFileKey(file);
+    const latest = latestRef.current;
+    const updated = (latest.files || []).map(f=>storedFileKey(f)===key?{...f,docType}:f);
     update("files", updated);
-    if (onAutoSave) onAutoSave({...formData, files:updated});
+    if (onAutoSave) onAutoSave({...latest, files:updated});
   };
 
-  const DocTypeSelect = ({file, idx}) => (
-    <select value={file.docType||"Other"} onChange={e=>updateDocType(idx,e.target.value)} onClick={e=>e.stopPropagation()}
-      style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:5, color:T.text, fontFamily:"inherit", fontSize:11, padding:"3px 7px", cursor:"pointer", flexShrink:0 }}>
-      {FILE_DOC_TYPES.map(t=><option key={t}>{t}</option>)}
-    </select>
-  );
-
-  const FooterBar = ({file, idx, tight}) => (
-    <div style={{ display:"flex", alignItems:"center", gap:8, padding:tight?"8px 14px":"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
-      <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
-      <DocTypeSelect file={file} idx={idx}/>
-      {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
-      <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>⬇ Open</a>
-      <button onClick={()=>handleDelete(idx)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>✕ Remove</button>
-    </div>
-  );
+  // Keys for the rows; a repeat (an older record with two identical entries)
+  // gets a suffix so React still sees distinct rows.
+  const seenKeys = {};
+  const rowKey = (file) => {
+    const k = storedFileKey(file);
+    seenKeys[k] = (seenKeys[k] || 0) + 1;
+    return seenKeys[k] > 1 ? k + "#" + seenKeys[k] : k;
+  };
 
   return (
     <div>
@@ -21200,16 +21043,16 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
       {error && <div style={{ background:T.redBg, border:`1px solid #fca5a5`, borderRadius:6, padding:"8px 12px", color:T.red, fontSize:13, marginBottom:12 }}>{error}</div>}
 
       <label onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
-        style={{ display:"block", textAlign:"center", padding:files.length===0?"44px 20px":"14px 20px", color:dragOver?T.midBlue:T.textLight, border:`2px dashed ${dragOver?T.midBlue:T.border}`, borderRadius:10, background:dragOver?T.accentLight:"transparent", cursor:"pointer", transition:"all .15s", marginBottom:files.length>0?12:0 }}>
+        style={{ display:"block", textAlign:"center", padding:files.length===0?"44px 20px":"14px 20px", color:dragOver?T.midBlue:T.textLight, border:`2px dashed ${dragOver?T.midBlue:T.border}`, borderRadius:10, background:dragOver?T.accentLight:"transparent", cursor:uploading?"wait":"pointer", opacity:uploading?0.6:1, transition:"all .15s", marginBottom:files.length>0?12:0 }}>
         <div style={{ fontSize:files.length===0?30:16, marginBottom:4 }}>{dragOver?"⬇":"📎"}</div>
-        <div style={{ fontSize:13, fontWeight:dragOver?600:400 }}>{dragOver?"Drop to upload":files.length===0?"Drag files here, or click Upload Files above":"Drag more files here to upload"}</div>
+        <div style={{ fontSize:13, fontWeight:dragOver?600:400 }}>{uploading?"Uploading — drop more once it finishes":dragOver?"Drop to upload":files.length===0?"Drag files here, or click Upload Files above":"Drag more files here to upload"}</div>
         <input type="file" multiple onChange={handleUpload} disabled={uploading} style={{ display:"none" }}/>
       </label>
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {files.map((file, idx) => {
+        {files.map((file) => {
           if (isImage(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               {blobUrls[file.url]
                 ? <a href={blobUrls[file.url]} target="_blank" rel="noreferrer" style={{ display:"block" }}>
                     <img src={blobUrls[file.url]} alt={file.name} style={{ width:"100%", maxHeight:360, objectFit:"contain", background:T.bgInput, display:"block", cursor:"pointer" }}/>
@@ -21223,11 +21066,11 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                     </div>
                   : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:T.bgInput, color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading preview…</div>
               }
-              <FooterBar file={file} idx={idx} tight/>
+              <FileFooterBar file={file} tight onDocType={updateDocType} onDelete={handleDelete}/>
             </div>
           );
           if (isPdf(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               {pdfUrls[file.url]
                 ? <iframe src={pdfUrls[file.url]} title={file.name} style={{ width:"100%", height:500, border:"none", background:T.bgInput, display:"block" }}/>
                 : fileErrs[file.url]
@@ -21239,11 +21082,11 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                     </div>
                   : <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:80, background:T.bgInput, color:T.textLight, fontSize:12, gap:8 }}><span>⟳</span> Loading PDF…</div>
               }
-              <FooterBar file={file} idx={idx} tight/>
+              <FileFooterBar file={file} tight onDocType={updateDocType} onDelete={handleDelete}/>
             </div>
           );
           if (isHeic(file)) return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               <div style={{ display:"flex", alignItems:"center", gap:12, padding:"16px", background:"#fffbeb", borderBottom:`1px solid #fde68a` }}>
                 <span style={{ fontSize:24 }}>📷</span>
                 <div>
@@ -21251,20 +21094,20 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                   <div style={{ fontSize:12, color:"#a16207", marginTop:2 }}>Use the Open button to download and view in Photos or another app</div>
                 </div>
               </div>
-              <FooterBar file={file} idx={idx}/>
+              <FileFooterBar file={file} onDocType={updateDocType} onDelete={handleDelete}/>
             </div>
           );
           return (
-            <div key={idx} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
+            <div key={rowKey(file)} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,.05)" }}>
               <div style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px" }}>
                 <div style={{ fontSize:26, flexShrink:0 }}>{/\.(doc|docx)$/i.test(file.name)?"📝":/\.(xls|xlsx)$/i.test(file.name)?"📊":"📎"}</div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</div>
                   {file.uploadedAt && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Uploaded {file.uploadedAt}</div>}
                 </div>
-                <DocTypeSelect file={file} idx={idx}/>
+                <FileDocTypeSelect file={file} onDocType={updateDocType}/>
                 <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>⬇ Open</a>
-                <button onClick={()=>handleDelete(idx)} style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>✕ Remove</button>
+                <button onClick={()=>handleDelete(file)} style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>✕ Remove</button>
               </div>
             </div>
           );
@@ -23486,8 +23329,27 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   // Then ask Gmail for anything that has moved. Runs once per set of
   // addresses — scannedRef holds the set already done, so switching filters or
   // opening an enquiry doesn't set the whole thing going again.
+  //
+  // One scan at a time, and an edit does NOT cancel it. It used to: enquiries
+  // is a dependency, so saving any enquiry mid-scan ran the cleanup, the scan
+  // stopped, its results were thrown away, busy stayed true for ever, and
+  // scannedRef (already set) stopped it ever being tried again. Now only
+  // leaving the page cancels a scan; whatever it found is still kept; a
+  // cancelled scan frees its addresses for the next run; and when a scan ends
+  // the effect runs once more (scanTick) to pick up anything added meanwhile.
+  const scanJobRef = useRef(null);
+  const scanMountedRef = useRef(true);
+  const [scanTick, setScanTick] = useState(0);
+  useEffect(() => {
+    scanMountedRef.current = true;
+    return () => {
+      scanMountedRef.current = false;
+      if (scanJobRef.current) scanJobRef.current.cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     if (!loaded || !gmailToken || !seenLoaded) return;
+    if (scanJobRef.current) return;   // the running scan re-runs this when it ends
     const all = Array.from(new Set(
       enquiries.map(e => String(e.email || "").trim().toLowerCase()).filter(e => e.indexOf("@") > 0)
     )).sort();
@@ -23505,47 +23367,58 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
     if (!emails.length) return;
     const sig = emails.join(",");
     if (scannedRef.current === sig) return;
+    const token = gmailGetValidToken();
+    if (!token) return;
     scannedRef.current = sig;
 
-    let cancelled = false;
+    const job = { cancelled: false };
+    scanJobRef.current = job;
     (async () => {
-      const token = gmailGetValidToken();
-      if (!token) return;
-      setEmailScan({ busy:true, done:0, total:emails.length, error:"" });
-      let done = 0;
       const found = {};
-      await mapWithLimit(emails, 4, async (em) => {
-        if (cancelled) return;
-        try {
-          const date = await gmailLastMessageDate(em, token.access_token);
-          // A null date is a real answer — "we have never emailed them" — and
-          // is cached too, or every address with no history is looked up again
-          // on every visit.
-          found[em] = { date: date || null, at: new Date().toISOString() };
-        } catch (e) {
-          if (!cancelled) setEmailScan(s => ({ ...s, error: e.message || String(e) }));
-        }
-        done++;
-        if (!cancelled) setEmailScan(s => ({ ...s, done }));
-      });
-      if (cancelled) return;
-      setEmailScan(s => ({ ...s, busy:false }));
-      if (!Object.keys(found).length) return;
-
-      // Merge onto the server's copy rather than this tab's: the same key is
-      // written from wherever the enquiries list is open.
-      let base = {};
       try {
-        const server = await sbGet(ENQUIRY_EMAIL_SEEN_KEY);
-        if (server && typeof server === "object") base = server;
-      } catch (e) { base = emailSeen; }
-      const next = Object.assign({}, base, found);
-      setEmailSeen(next);
-      try { await sbSet(ENQUIRY_EMAIL_SEEN_KEY, next); }
-      catch (e) { console.error("Could not cache email dates:", e); }
+        setEmailScan({ busy:true, done:0, total:emails.length, error:"" });
+        let done = 0;
+        await mapWithLimit(emails, 4, async (em) => {
+          if (job.cancelled) return;
+          try {
+            const date = await gmailLastMessageDate(em, token.access_token);
+            // A null date is a real answer — "we have never emailed them" — and
+            // is cached too, or every address with no history is looked up again
+            // on every visit.
+            found[em] = { date: date || null, at: new Date().toISOString() };
+          } catch (e) {
+            if (scanMountedRef.current) setEmailScan(s => ({ ...s, error: e.message || String(e) }));
+          }
+          done++;
+          if (scanMountedRef.current) setEmailScan(s => ({ ...s, done }));
+        });
+
+        if (Object.keys(found).length) {
+          // Merge onto the server's copy rather than this tab's: the same key is
+          // written from wherever the enquiries list is open.
+          let base = {};
+          try {
+            const server = await sbGet(ENQUIRY_EMAIL_SEEN_KEY);
+            if (server && typeof server === "object") base = server;
+          } catch (e) { base = emailSeen; }
+          const next = Object.assign({}, base, found);
+          if (scanMountedRef.current) setEmailSeen(next);
+          try { await sbSet(ENQUIRY_EMAIL_SEEN_KEY, next); }
+          catch (e) { console.error("Could not cache email dates:", e); }
+        }
+      } finally {
+        // Addresses a cancelled scan never reached are free for the next run.
+        // (Ones that errored stay signed off until the set changes, so a Gmail
+        // outage is not retried in a loop.)
+        if (job.cancelled) scannedRef.current = "";
+        if (scanJobRef.current === job) scanJobRef.current = null;
+        if (scanMountedRef.current) {
+          setEmailScan(s => ({ ...s, busy:false }));
+          setScanTick(t => t + 1);
+        }
+      }
     })();
-    return () => { cancelled = true; };
-  }, [loaded, seenLoaded, gmailToken, enquiries]);
+  }, [loaded, seenLoaded, gmailToken, enquiries, scanTick]);
 
   // Deep-link: when arriving with a focus enquiry id (e.g. clicked from Viewings or Year Calendar), open it
   useEffect(() => {
@@ -25975,6 +25848,26 @@ function doorQueueRead() {
 function doorQueueWrite(q) {
   try { localStorage.setItem(BOX_DOOR_QUEUE, JSON.stringify(q)); } catch (e) {}
 }
+// Each queued check-in carries its own id, so a flush can take out exactly the
+// ones it sent from the queue AS IT IS NOW — never write back a copy taken
+// before the sends, which would throw away anything queued in the meantime.
+// Entries queued by an older build have no id; they are matched on content.
+function doorQueueKey(item) {
+  return item && item.qid ? "q:" + item.qid : "c:" + JSON.stringify(item);
+}
+function doorQueueAdd(payload) {
+  const q = doorQueueRead();
+  q.push(Object.assign({}, payload, { qid: Date.now().toString(36) + Math.random().toString(36).slice(2, 10) }));
+  doorQueueWrite(q);
+  return q.length;
+}
+function doorQueueRemove(item) {
+  const key = doorQueueKey(item);
+  const q = doorQueueRead();
+  const i = q.findIndex(function(x) { return doorQueueKey(x) === key; });
+  if (i !== -1) { q.splice(i, 1); doorQueueWrite(q); }
+  return q.length;
+}
 
 // The token is scanned as a /my-ticket/<token> URL so an ordinary phone camera
 // does something useful with a printed ticket. The door only wants the token.
@@ -25999,6 +25892,13 @@ function BoxDoorScreen() {
   const [rowBusy, setRowBusy] = useState(null);
   const [queueLen, setQueueLen] = useState(()=>doorQueueRead().length);
   const [online, setOnline]   = useState(()=> typeof navigator === "undefined" ? true : navigator.onLine);
+  // The event chosen right now, readable after an await: on a poor signal a
+  // slow list for event A must not land on event B's screen.
+  const selRef = useRef(eventId);
+  selRef.current = eventId;
+  // One flush at a time. The 30-second timer and the 'online' event can both
+  // fire together, and two flushes reading the same queue would admit twice.
+  const flushingRef = useRef(null);
 
   useEffect(function() {
     // door.events, not events.list — the latter carries takings per event and
@@ -26017,42 +25917,58 @@ function BoxDoorScreen() {
   }, []);
 
   async function openEvent(id) {
+    const switching = selRef.current !== id;
+    selRef.current = id;
     setEventId(id); setLoading(true); setErr(""); setResult(null);
     // Show whatever was cached first, so the list is usable the instant the
-    // screen opens even if the network is being slow or absent.
-    try {
-      const cached = JSON.parse(localStorage.getItem(BOX_DOOR_CACHE + id) || "null");
-      if (cached) setDoor(cached);
-    } catch (e) {}
+    // screen opens even if the network is being slow or absent. With nothing
+    // cached for a different event, show nothing rather than the last one's.
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(BOX_DOOR_CACHE + id) || "null"); } catch (e) {}
+    if (cached) setDoor(cached);
+    else if (switching) setDoor(null);
     try {
       const r = await boxAdmin("door.list", { eventId: id });
-      setDoor(r);
       try { localStorage.setItem(BOX_DOOR_CACHE + id, JSON.stringify(r)); } catch (e) {}
+      if (selRef.current !== id) return;
+      setDoor(r);
     } catch (e) {
+      if (selRef.current !== id) return;
       setErr("Working from the copy saved on this device — " + e.message);
     }
     setLoading(false);
   }
 
   // Send anything that piled up while the signal was gone.
-  const flushQueue = useCallback(async function() {
-    let q = doorQueueRead();
-    if (!q.length) return;
-    const left = [];
-    for (let i = 0; i < q.length; i++) {
-      try { await boxAdmin("door.admit", q[i]); }
-      catch (e) { left.push(q[i]); }
-    }
-    doorQueueWrite(left);
-    setQueueLen(left.length);
-    if (left.length < q.length && eventId) {
-      try {
-        const r = await boxAdmin("door.list", { eventId });
-        setDoor(r);
-        try { localStorage.setItem(BOX_DOOR_CACHE + eventId, JSON.stringify(r)); } catch (e) {}
-      } catch (e) {}
-    }
-  }, [eventId]);
+  const flushQueue = useCallback(function() {
+    if (flushingRef.current) return flushingRef.current;
+    const run = (async function() {
+      const q = doorQueueRead();
+      if (!q.length) return;
+      let sent = 0;
+      for (let i = 0; i < q.length; i++) {
+        const item = q[i];
+        const payload = Object.assign({}, item); delete payload.qid;
+        try { await boxAdmin("door.admit", payload); }
+        catch (e) { continue; }
+        sent++;
+        setQueueLen(doorQueueRemove(item));
+      }
+      setQueueLen(doorQueueRead().length);
+      const forId = selRef.current;
+      if (sent && forId) {
+        try {
+          const r = await boxAdmin("door.list", { eventId: forId });
+          try { localStorage.setItem(BOX_DOOR_CACHE + forId, JSON.stringify(r)); } catch (e) {}
+          if (selRef.current === forId) setDoor(r);
+        } catch (e) {}
+      }
+    })();
+    flushingRef.current = run;
+    function done() { if (flushingRef.current === run) flushingRef.current = null; }
+    run.then(done, done);
+    return run;
+  }, []);
 
   useEffect(function() {
     if (!online) return;
@@ -26137,7 +26053,7 @@ function BoxDoorScreen() {
     try {
       await boxAdmin("door.admit", payload);
     } catch (e) {
-      const q = doorQueueRead(); q.push(payload); doorQueueWrite(q); setQueueLen(q.length);
+      setQueueLen(doorQueueAdd(payload));
     }
     setRowBusy(null);
   }
@@ -26199,7 +26115,7 @@ function BoxDoorScreen() {
           {!online && <span style={{ display:"block", fontWeight:700 }}>Offline — check-ins are being saved on this phone</span>}
           {!!queueLen && <span style={{ display:"block" }}>{queueLen} waiting to sync</span>}
         </div>
-        <BoxBtn tone="ghost" onClick={function() { setEventId(null); setDoor(null); setDoorMode("manual"); }}
+        <BoxBtn tone="ghost" onClick={function() { selRef.current = null; setEventId(null); setDoor(null); setDoorMode("manual"); setLoading(false); }}
           style={{ background:"rgba(255,255,255,.15)", color:"#fff", border:"1.5px solid rgba(255,255,255,.4)" }}>Change event</BoxBtn>
       </div>
 
@@ -27977,6 +27893,35 @@ function CField({ label, k, type, hint, f, up }) {
   );
 }
 
+// A money field on the Contract tab. parseMoney keeps every digit and dot, so
+// "4,500 + 1,200" typed into a text box became 45001200 on the event. This box
+// takes a plain amount only: "£" and thousands commas are tidied away as you
+// type, and anything else (a "+", a word, a second point) is refused rather
+// than stored. A value saved before this that is not a plain amount is shown
+// as it is, with a warning, so nothing is silently blanked.
+const PLAIN_AMOUNT = /^\d*(\.\d{0,2})?$/;
+function CMoneyField({ label, k, hint, f, up }) {
+  const [refused, setRefused] = useState(false);
+  const raw = f[k] == null ? "" : String(f[k]);
+  const odd = raw.trim() !== "" && !PLAIN_AMOUNT.test(raw.trim());
+  return (
+    <BoxField label={label} hint={refused ? "Numbers only — a plain amount like 4500 or 4500.50. Put any sum or note in Non standard terms."
+      : odd ? "“" + raw + "” is not a plain amount — retype it as a number." : hint}>
+      <BoxInput type="text" value={raw} style={odd || refused ? { borderColor:T.amber } : null}
+        onChange={function(v){
+          const clean = String(v).replace(/[£,\s]/g, "");
+          if (!PLAIN_AMOUNT.test(clean)) {
+            // An old value that is not an amount can still be deleted away.
+            if (odd && String(v).length < raw.length) { setRefused(false); up(k, v); return; }
+            setRefused(true); return;
+          }
+          setRefused(false);
+          up(k, clean);
+        }}/>
+    </BoxField>
+  );
+}
+
 // Contract fields that ARE the event's own values. Editing one of these on the
 // Contract tab edits the event itself (and so autosaves with it), and the tab
 // always reads them fresh from the event — never from an old snapshot. Before
@@ -28024,6 +27969,11 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
   // with something already booked. Turns the button into a deliberate override
   // rather than silently double booking.
   const [forceAccom, setForceAccom] = useState(false);
+  // The event as it is NOW. SignWell calls and the PDF download take seconds;
+  // anything written after them is built on this, not on the render they
+  // started in, or a file uploaded (or a field typed) meanwhile would be lost.
+  const latestRef = useRef(formData);
+  latestRef.current = formData;
 
   // Every edit is written onto the event record, so the form's autosave keeps
   // it. Event-backed values go to the event field itself; the rest are kept as
@@ -28110,7 +28060,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         fields: f,
       };
       update("contract", record);
-      if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, { contract: record }));
       setMsg(testMode ? "Test contract created — nothing was emailed to anyone." : "Contract sent.");
     } catch (e) { setErr(e.message); }
     setBusy(false);
@@ -28133,8 +28083,13 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
     if (!silent) setBusy(true);
     setErr("");
     try {
-      const d = await signWell("document", { documentId: saved.documentId });
-      const record = Object.assign({}, saved, {
+      const docId = saved.documentId;
+      const d = await signWell("document", { documentId: docId });
+      // Built on the contract as it is now — and if a different contract has
+      // been sent while this one was being checked, this answer is not for it.
+      const curContract = latestRef.current.contract || {};
+      if (curContract.documentId !== docId) { if (!silent) setBusy(false); return; }
+      const record = Object.assign({}, curContract, {
         status: d.status, values: d.values, recipients: d.recipients,
         raw: d.raw, checkedAt: new Date().toISOString()
       });
@@ -28144,12 +28099,15 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       const patch = { contract: record };
       let filed = false;
       const done = String(d.status || "").toLowerCase() === "completed";
-      const already = (formData.files || []).some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
-      if (done && !already) {
+      const isFiled = function(list) { return (list || []).some(function(fl) { return fl.signwellDocumentId === docId; }); };
+      if (done && !isFiled(latestRef.current.files)) {
         try {
           const made = await attachPdf(record);
-          if (made) {
-            patch.files = (formData.files || []).concat([made]);
+          // Appended to the files as they are after the download, and only if
+          // another check has not filed it in the meantime.
+          const nowFiles = latestRef.current.files || [];
+          if (made && !isFiled(nowFiles)) {
+            patch.files = nowFiles.concat([made]);
             update("files", patch.files);
             filed = true;
           }
@@ -28160,7 +28118,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       }
 
       update("contract", record);
-      if (onAutoSave) await onAutoSave(Object.assign({}, formData, patch));
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, patch));
       buildReview(d.values);
       if (!silent) setMsg("Status: " + (d.status || "unknown") + (filed ? " — signed copy filed as the Event Booking Form." : ""));
       else if (filed) setMsg("Contract signed — signed copy filed as the Event Booking Form.");
@@ -28327,15 +28285,16 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       }
 
       // The PDF only exists once everybody has signed.
-      let files = formData.files || [];
       let filed = false;
       const done = String(saved.status || "").toLowerCase() === "completed";
-      const already = files.some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
+      const isFiled = function(list) { return (list || []).some(function(fl) { return fl.signwellDocumentId === saved.documentId; }); };
       let pdfProblem = "";
-      if (done && !already) {
+      if (done && !isFiled(latestRef.current.files)) {
         try {
           const made = await attachPdf(saved);
-          if (made) { files = files.concat([made]); patch.files = files; filed = true; }
+          // Onto the files as they are now, after the lettings calls and the download.
+          const nowFiles = latestRef.current.files || [];
+          if (made && !isFiled(nowFiles)) { patch.files = nowFiles.concat([made]); filed = true; }
         } catch (e) {
           // The details and the bookings are the valuable part; losing them
           // because a PDF wouldn't download would be the wrong trade.
@@ -28344,12 +28303,12 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       }
 
       Object.keys(patch).forEach(function(k) { update(k, patch[k]); });
-      const rec = Object.assign({}, saved, { appliedAt: new Date().toISOString() });
+      const rec = Object.assign({}, latestRef.current.contract || saved, { appliedAt: new Date().toISOString() });
       update("contract", rec);
       // One save covering the details and the applied stamp together — saving
       // twice would leave a window where the event has the new details but
       // still looks unapplied.
-      if (onAutoSave) await onAutoSave(Object.assign({}, formData, patch, { contract: rec }));
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, patch, { contract: rec }));
 
       const bits = [];
       if (Object.keys(patch).length) bits.push(Object.keys(patch).length + " detail" + (Object.keys(patch).length===1?"":"s") + " written to the event");
@@ -28608,7 +28567,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         <CField f={f} up={up} label="Event type" k="eventType"/>
         <CField f={f} up={up} label="Event date" k="eventDate" type="date"/>
         <CField f={f} up={up} label="Max guests" k="maxGuests"/>
-        <CField f={f} up={up} label="Venue fee (inc VAT)" k="venueFee" hint="Saved to the event's Financials."/>
+        <CMoneyField f={f} up={up} label="Venue fee (inc VAT)" k="venueFee" hint="Saved to the event's Financials."/>
       </div>
 
       {/* Full width — these run to a few lines and are the one place the
@@ -28631,16 +28590,16 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
         <CField f={f} up={up} label="Amly from" k="amlyFrom" type="date"/>
         <CField f={f} up={up} label="Amly to" k="amlyTo" type="date"/>
-        <CField f={f} up={up} label="Amly fee" k="amlyFee" hint="Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Amly fee" k="amlyFee" hint="Saved to the event."/>
         <CField f={f} up={up} label="Hamlet from" k="hamletFrom" type="date"/>
         <CField f={f} up={up} label="Hamlet to" k="hamletTo" type="date"/>
-        <CField f={f} up={up} label="Hamlet fee" k="hamletFee" hint="Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Hamlet fee" k="hamletFee" hint="Saved to the event."/>
         <CField f={f} up={up} label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
         <CField f={f} up={up} label="Glamping, 1 night — to" k="glampingTo" type="date"/>
-        <CField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night. Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night. Saved to the event."/>
         <CField f={f} up={up} label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
         <CField f={f} up={up} label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
-        <CField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights. Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights. Saved to the event."/>
       </div>
       <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
         All four choices — Amly, Hamlet, and the two glamping options — are the client's to make on the form.
