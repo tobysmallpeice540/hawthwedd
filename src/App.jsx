@@ -23676,8 +23676,27 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   // Then ask Gmail for anything that has moved. Runs once per set of
   // addresses — scannedRef holds the set already done, so switching filters or
   // opening an enquiry doesn't set the whole thing going again.
+  //
+  // One scan at a time, and an edit does NOT cancel it. It used to: enquiries
+  // is a dependency, so saving any enquiry mid-scan ran the cleanup, the scan
+  // stopped, its results were thrown away, busy stayed true for ever, and
+  // scannedRef (already set) stopped it ever being tried again. Now only
+  // leaving the page cancels a scan; whatever it found is still kept; a
+  // cancelled scan frees its addresses for the next run; and when a scan ends
+  // the effect runs once more (scanTick) to pick up anything added meanwhile.
+  const scanJobRef = useRef(null);
+  const scanMountedRef = useRef(true);
+  const [scanTick, setScanTick] = useState(0);
+  useEffect(() => {
+    scanMountedRef.current = true;
+    return () => {
+      scanMountedRef.current = false;
+      if (scanJobRef.current) scanJobRef.current.cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     if (!loaded || !gmailToken || !seenLoaded) return;
+    if (scanJobRef.current) return;   // the running scan re-runs this when it ends
     const all = Array.from(new Set(
       enquiries.map(e => String(e.email || "").trim().toLowerCase()).filter(e => e.indexOf("@") > 0)
     )).sort();
@@ -23695,47 +23714,58 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
     if (!emails.length) return;
     const sig = emails.join(",");
     if (scannedRef.current === sig) return;
+    const token = gmailGetValidToken();
+    if (!token) return;
     scannedRef.current = sig;
 
-    let cancelled = false;
+    const job = { cancelled: false };
+    scanJobRef.current = job;
     (async () => {
-      const token = gmailGetValidToken();
-      if (!token) return;
-      setEmailScan({ busy:true, done:0, total:emails.length, error:"" });
-      let done = 0;
       const found = {};
-      await mapWithLimit(emails, 4, async (em) => {
-        if (cancelled) return;
-        try {
-          const date = await gmailLastMessageDate(em, token.access_token);
-          // A null date is a real answer — "we have never emailed them" — and
-          // is cached too, or every address with no history is looked up again
-          // on every visit.
-          found[em] = { date: date || null, at: new Date().toISOString() };
-        } catch (e) {
-          if (!cancelled) setEmailScan(s => ({ ...s, error: e.message || String(e) }));
-        }
-        done++;
-        if (!cancelled) setEmailScan(s => ({ ...s, done }));
-      });
-      if (cancelled) return;
-      setEmailScan(s => ({ ...s, busy:false }));
-      if (!Object.keys(found).length) return;
-
-      // Merge onto the server's copy rather than this tab's: the same key is
-      // written from wherever the enquiries list is open.
-      let base = {};
       try {
-        const server = await sbGet(ENQUIRY_EMAIL_SEEN_KEY);
-        if (server && typeof server === "object") base = server;
-      } catch (e) { base = emailSeen; }
-      const next = Object.assign({}, base, found);
-      setEmailSeen(next);
-      try { await sbSet(ENQUIRY_EMAIL_SEEN_KEY, next); }
-      catch (e) { console.error("Could not cache email dates:", e); }
+        setEmailScan({ busy:true, done:0, total:emails.length, error:"" });
+        let done = 0;
+        await mapWithLimit(emails, 4, async (em) => {
+          if (job.cancelled) return;
+          try {
+            const date = await gmailLastMessageDate(em, token.access_token);
+            // A null date is a real answer — "we have never emailed them" — and
+            // is cached too, or every address with no history is looked up again
+            // on every visit.
+            found[em] = { date: date || null, at: new Date().toISOString() };
+          } catch (e) {
+            if (scanMountedRef.current) setEmailScan(s => ({ ...s, error: e.message || String(e) }));
+          }
+          done++;
+          if (scanMountedRef.current) setEmailScan(s => ({ ...s, done }));
+        });
+
+        if (Object.keys(found).length) {
+          // Merge onto the server's copy rather than this tab's: the same key is
+          // written from wherever the enquiries list is open.
+          let base = {};
+          try {
+            const server = await sbGet(ENQUIRY_EMAIL_SEEN_KEY);
+            if (server && typeof server === "object") base = server;
+          } catch (e) { base = emailSeen; }
+          const next = Object.assign({}, base, found);
+          if (scanMountedRef.current) setEmailSeen(next);
+          try { await sbSet(ENQUIRY_EMAIL_SEEN_KEY, next); }
+          catch (e) { console.error("Could not cache email dates:", e); }
+        }
+      } finally {
+        // Addresses a cancelled scan never reached are free for the next run.
+        // (Ones that errored stay signed off until the set changes, so a Gmail
+        // outage is not retried in a loop.)
+        if (job.cancelled) scannedRef.current = "";
+        if (scanJobRef.current === job) scanJobRef.current = null;
+        if (scanMountedRef.current) {
+          setEmailScan(s => ({ ...s, busy:false }));
+          setScanTick(t => t + 1);
+        }
+      }
     })();
-    return () => { cancelled = true; };
-  }, [loaded, seenLoaded, gmailToken, enquiries]);
+  }, [loaded, seenLoaded, gmailToken, enquiries, scanTick]);
 
   // Deep-link: when arriving with a focus enquiry id (e.g. clicked from Viewings or Year Calendar), open it
   useEffect(() => {
