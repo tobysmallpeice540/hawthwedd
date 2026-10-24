@@ -1,4 +1,4 @@
-import { StrictMode, useState, useEffect } from 'react'
+import { StrictMode, useState, useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createClient } from '@supabase/supabase-js'
 import App, { setSessionToken, UI_CLASSIC, LOGO_B64, THEME } from './App.jsx'
@@ -223,25 +223,49 @@ function Root() {
   const [ready, setReady]     = useState(false)
   const [problem, setProblem] = useState('')
 
+  // The last role the database gave, and for whom. A silent token refresh
+  // re-reads it; if that read fails for a moment (a phone between wifi and 4G),
+  // the person keeps the role they had rather than being thrown back to the
+  // sign-in screen with whatever they were typing lost. Only a sign-out, or a
+  // definite "no role" / "switched off" answer, takes the role away.
+  const roleFor = useRef({ userId: null, role: null })
+  // Reads overlap (getSession and INITIAL_SESSION both start one); only the
+  // most recently started may set the role.
+  const roleSeq = useRef(0)
+
   // The role is read from the database, never from anything the browser holds.
   const loadRole = async (sess) => {
+    const seq = ++roleSeq.current
+    const latest = () => seq === roleSeq.current
     setSessionToken(sess?.access_token || null)
-    if (!sess) { setRole(null); return }
+    if (!sess) { roleFor.current = { userId: null, role: null }; setRole(null); return }
+    const userId = sess.user?.id || null
     try {
       const { data, error } = await supabase.rpc('my_profile')
       if (error) throw error
+      if (!latest()) return
       if (!data || !data.role) {
         setProblem('Your account has no role set yet. Ask Toby to finish setting it up.')
+        roleFor.current = { userId: null, role: null }
         setRole(null); return
       }
       if (data.active === false) {
         setProblem('That account has been switched off.')
+        roleFor.current = { userId: null, role: null }
+        setRole(null)
         await supabase.auth.signOut()
-        setRole(null); return
+        return
       }
       setProblem('')
+      roleFor.current = { userId, role: data.role }
       setRole(data.role)
     } catch (e) {
+      if (!latest()) return
+      if (userId && roleFor.current.userId === userId && roleFor.current.role) {
+        // Same person, still signed in, and we already know their role:
+        // keep it. The next refresh will try again.
+        return
+      }
       setProblem('Signed in, but your role could not be read. Try again in a moment.')
       setRole(null)
     }
@@ -285,14 +309,24 @@ function Root() {
 
     // Fires on sign-in, sign-out and every silent token refresh, so the token
     // App.jsx sends never goes stale.
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, sess) => {
+    //
+    // Nothing in this callback may await a Supabase call: supabase-js holds its
+    // auth lock while it runs the callback, so an awaited rpc (which waits on
+    // that same lock for the session) can deadlock. The token is handed over at
+    // once; the role read is deferred to the next tick, outside the lock.
+    const timers = []
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
       if (!live) return
       setSession(sess)
-      await loadRole(sess)
-      // A session arriving after the watchdog gave up still gets us in.
-      done()
+      setSessionToken(sess?.access_token || null)
+      timers.push(setTimeout(async () => {
+        if (!live) return
+        await loadRole(sess)
+        // A session arriving after the watchdog gave up still gets us in.
+        done()
+      }, 0))
     })
-    return () => { live = false; clearTimeout(watchdog); sub?.subscription?.unsubscribe() }
+    return () => { live = false; clearTimeout(watchdog); timers.forEach(clearTimeout); sub?.subscription?.unsubscribe() }
   }, [])
 
   const signOut = async () => {
