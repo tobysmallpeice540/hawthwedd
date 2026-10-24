@@ -361,6 +361,24 @@ own header.
   does not show that list yet. Accommodation checkout sessions expire after an
   hour, and the server enforces the page's stay rules as well as its price.
 
+### Portal tidy-up (24 Oct 2026, migrations j and k)
+
+- **Bespoke packages are written by staff, per event.** Drinks: `wp_drinks.bespoke_name`,
+  `bespoke_note`, `bespoke_pp` (per adult, through `wp_drinks_summary`); the client only
+  sees a bespoke option once one is written (`bespoke_offered`), and `wp_set_drinks_route`
+  refuses it otherwise. Food: `wp_food_packages.event_id` — a menu only that event sees.
+  The settings list and its save leave event menus alone (`event_id is null`).
+- **Details questions can live on another page** (`wp_venue_form_questions.in_form`):
+  drop-off and collection are saved from Bringing and not drawn on Details. The admin
+  form editor deletes and re-inserts every question, so it carries `in_form` across by key.
+- `photos` is a section of LINKS (`wp_media_links`); `uploads` (files) is labelled Uploads.
+- A timeline line can name a key contact (`contact_id`) as well as a supplier.
+  `wp_set_block_who` SETS both — `wp_update_block` can only ever add a supplier (coalesce).
+- Checklist items can fall on a fixed day each year (`due_md` "MM-DD", the last one before
+  the event — `wp_fixed_due`). Interim payment is 15 January.
+- The evening bar links to a menu (`wp_drinks_settings.bar_menu_url`); the example price
+  list is emptied.
+
 ## Working in this folder from a Claude session
 
 The repo is reached through a mount that does not allow deletion, and two

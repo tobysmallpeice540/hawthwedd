@@ -2763,7 +2763,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-24d";
+const APP_BUILD = "2026-10-24e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8785,10 +8785,13 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
   async function save() {
     setBusy(true); setErr("");
     try {
+      const bad = rows.find(function(r){ return String(r.due_md_text || "").trim() && !checklistMd(r.due_md_text); });
+      if (bad) throw new Error("“" + (bad.title || "An item") + "”: a fixed date is a day and month, like 15/01.");
       await sbRpc("wp_admin_save_checklist_template", {
         p_rows: rows.map(function(r, i){
           return { title: r.title, detail: r.detail || null,
-                   days_before: Number(r.days_before) || 0, sort: (i + 1) * 10 };
+                   days_before: Number(r.days_before) || 0, sort: (i + 1) * 10,
+                   due_md: r.due_md_text !== undefined ? checklistMd(r.due_md_text) : (r.due_md || null) };
         }),
       });
       setDirty(false);
@@ -8804,7 +8807,7 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
     <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
       <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>The checklist</div>
       <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
-        Seeded into every wedding, with each date worked backwards from the wedding day.
+        Seeded into every wedding, with each date worked backwards from the wedding day — or on a fixed day each year (the last one before the wedding).
         <b> These are still the placeholder deadlines</b> — they were a guess at your real
         ones and want your eye before a couple sees them.
       </p>
@@ -8816,7 +8819,12 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
             display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
             <Field label="Days before" width={96}>
               <input type="number" min="0" value={r.days_before == null ? 0 : r.days_before}
+                disabled={!!(r.due_md_text !== undefined ? String(r.due_md_text).trim() : r.due_md)}
                 onChange={function(e){ edit(i, { days_before:e.target.value }); }} style={inputCss} />
+            </Field>
+            <Field label="Or each year on" width={104}>
+              <input value={r.due_md_text !== undefined ? r.due_md_text : checklistMdText(r.due_md)} placeholder="dd/mm"
+                onChange={function(e){ edit(i, { due_md_text:e.target.value }); }} style={inputCss} />
             </Field>
             <Field label="What they need to do" width={260}>
               <input value={r.title || ""} onChange={function(e){ edit(i, { title:e.target.value }); }} style={inputCss} />
@@ -9140,6 +9148,21 @@ function PortalFormBuilder() {
       </div>
     </div>
   );
+}
+
+// A checklist item can fall on the same day every year (an interim payment on
+// 15 January) instead of so many days before the wedding. Stored "MM-DD";
+// typed and shown as "dd/mm". The database works out which year: the last such
+// date before the wedding.
+function checklistMd(text) {
+  const m = String(text || "").trim().match(/^(\d{1,2})\s*[\/.\- ]\s*(\d{1,2})$/);
+  if (!m) return null;
+  const d = Number(m[1]), mo = Number(m[2]);
+  if (mo < 1 || mo > 12 || d < 1 || d > [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]) return null;
+  return String(mo).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+}
+function checklistMdText(md) {
+  return md ? md.slice(3, 5) + "/" + md.slice(0, 2) : "";
 }
 
 // ── the farm's own inspiration boards ───────────────────────────────────────
