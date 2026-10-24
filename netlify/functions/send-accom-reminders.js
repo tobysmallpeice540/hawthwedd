@@ -315,6 +315,73 @@ function getTmpl(templates, id) {
   return templates.find(function(t) { return t.id === id; }) || DEFAULT_TEMPLATES.find(function(t) { return t.id === id; });
 }
 
+// ── Writing flags back ────────────────────────────────────────────────────────
+// Each email is CLAIMED before it is sent: the bookings array is re-read, the
+// flag is checked on the fresh record and set there, and that is written —
+// all before Stripe or Resend is touched. A run cut off part way can therefore
+// miss somebody (picked up tomorrow, since an unsent claim is released) but
+// can never email anyone twice. Only this booking's flag changes; every other
+// record in the fresh copy is written back exactly as read, and a booking
+// deleted meanwhile stays deleted (no send, no write).
+//
+// Pure: returns { list, booking } or null when there is nothing to do.
+//   still(b) — must be true of the FRESH record for the send to go ahead.
+function claimFlag(fresh, bookingId, flag, still) {
+  var idx = (fresh || []).findIndex(function(b) { return b && String(b.id) === String(bookingId); });
+  if (idx === -1) return null;
+  var b = fresh[idx];
+  if ((b.emailFlags || {})[flag]) return null;
+  if (still && !still(b)) return null;
+  var nb = Object.assign({}, b, { emailFlags: Object.assign({}, b.emailFlags || {}, { [flag]: true }) });
+  var list = fresh.slice(); list[idx] = nb;
+  return { list: list, booking: nb };
+}
+
+// After the send: keep the flag (and record the payment link's session id on
+// its unpaid schedule entry), or release the flag if the send failed.
+function settleFlag(fresh, bookingId, flag, sent, stripeIds) {
+  var idx = (fresh || []).findIndex(function(b) { return b && String(b.id) === String(bookingId); });
+  if (idx === -1) return null;
+  var b = Object.assign({}, fresh[idx]);
+  var changed = false;
+  if (!sent && (b.emailFlags || {})[flag]) {
+    var f = Object.assign({}, b.emailFlags); delete f[flag]; b.emailFlags = f; changed = true;
+  }
+  if (sent && stripeIds && Array.isArray(b.schedule)) {
+    b.schedule = b.schedule.map(function(s) {
+      if (s && stripeIds[s.label] && !s.paid && s.stripeId !== stripeIds[s.label]) {
+        changed = true;
+        return Object.assign({}, s, { stripeId: stripeIds[s.label] });
+      }
+      return s;
+    });
+  }
+  if (!changed) return null;
+  var list = fresh.slice(); list[idx] = b;
+  return { list: list, booking: b };
+}
+
+async function claim(bookingId, flag, still) {
+  var r = claimFlag((await sbGet(ACCOM_KEY)) || [], bookingId, flag, still);
+  if (!r) return null;
+  await sbSet(ACCOM_KEY, r.list);
+  return r.booking;
+}
+
+async function settle(bookingId, flag, sent, stripeIds) {
+  try {
+    var r = settleFlag((await sbGet(ACCOM_KEY)) || [], bookingId, flag, sent, stripeIds);
+    if (r) await sbSet(ACCOM_KEY, r.list);
+  } catch (e) {
+    // Failing to release a claim means one email is skipped, never doubled.
+    console.error("[send-accom-reminders] could not settle " + flag + " on " + bookingId + ":", e.message);
+  }
+}
+
+function entryFor(b, label) {
+  return (b.schedule || []).find(function(s) { return s.label === label; });
+}
+
 exports.handler = async function() {
   var today = todayStr();
   console.log("[send-accom-reminders] Running for " + today);
@@ -323,14 +390,67 @@ exports.handler = async function() {
   var errors = [];
 
   try {
+    // This read only chooses who is due. Every send re-reads before acting.
     var bookings   = (await sbGet(ACCOM_KEY)) || [];
     var properties = (await sbGet(PROPS_KEY)) || [];
     var templates  = (await sbGet(TEMPLATES_KEY)) || DEFAULT_TEMPLATES;
 
-    var changed = false;
+    var live = function(b) { return b.status !== "cancelled" && b.bookingType !== "Blocked" && !!b.email; };
+
+    // One payment request: claim, mint the link, send, settle.
+    async function sendMoney(bookingId, flag, label, tmplId, tokenKey) {
+      var tmpl = getTmpl(templates, tmplId);
+      var booking = await claim(bookingId, flag, function(b) {
+        var e = entryFor(b, label);
+        return live(b) && !b.linkedEventId && e && !e.paid && Number(e.amount) > 0;
+      });
+      if (!booking) return;
+      var sent = false, minted = {};
+      try {
+        var entry = entryFor(booking, label);
+        var property = properties.find(function(p) { return p.id === (booking.propertyId || ((booking.stays || [])[0] || {}).propertyId); });
+        var link = await createPaymentLink(booking, entry, label);
+        if (entry.stripeId) minted[label] = entry.stripeId;
+        var tokens = buildTokens(booking, property, { paymentLink: link });
+        var subject = fillTemplate(tmpl.subject, tokens);
+        var body = fillTemplate(tmpl.body, tokens);
+        var res = await sendViaResend(booking.email, subject, body, link, "Pay " + label.toLowerCase() + " £" + Number(entry.amount || 0).toFixed(2));
+        if (res.ok) {
+          sent = true;
+          sentCount++;
+          await logEmail(subject, booking.email, tmplId, booking.id, body);
+        } else {
+          errors.push("Booking " + bookingId + " " + tmplId + ": " + res.error);
+        }
+      } catch (e) { errors.push("Booking " + bookingId + " " + tmplId + ": " + e.message); }
+      await settle(bookingId, flag, sent, minted);
+    }
+
+    async function sendArrival(bookingId, flag, arrivalId, which) {
+      var tmpl = getTmpl(templates, arrivalId);
+      var booking = await claim(bookingId, flag, live);
+      if (!booking) return;
+      var sent = false;
+      try {
+        var property = properties.find(function(p) { return p.id === (booking.propertyId || ((booking.stays || [])[0] || {}).propertyId); });
+        var tokens = buildTokens(booking, property, {});
+        var subject = fillTemplate(tmpl.subject, tokens);
+        var body = fillTemplate(tmpl.body, tokens);
+        var res = await sendViaResend(booking.email, subject, body);
+        if (res.ok) {
+          sent = true;
+          sentCount++;
+          await logEmail(subject, booking.email, arrivalId, booking.id, body);
+        } else {
+          errors.push("Booking " + bookingId + " " + arrivalId + " (" + which + "): " + res.error);
+        }
+      } catch (e) { errors.push("Booking " + bookingId + " " + arrivalId + " (" + which + "): " + e.message); }
+      await settle(bookingId, flag, sent, null);
+    }
 
     for (var i = 0; i < bookings.length; i++) {
       var booking = bookings[i];
+      if (!booking) continue;
 
       if (booking.status === "cancelled" || booking.bookingType === "Blocked") continue;
 
@@ -340,7 +460,7 @@ exports.handler = async function() {
       // live payment link. The status is flipped to "confirmed" by the webhook
       // the moment payment lands, so a real booking is only ever skipped in the
       // few minutes it sits at the card screen.
-      var depositRow = (booking.schedule || []).find(function(s) { return s.label === "Deposit"; });
+      var depositRow = entryFor(booking, "Deposit");
       if (booking.status === "pending" && !(depositRow && depositRow.paid)) continue;
 
       // Accommodation attached to a farm event is billed through that event's
@@ -351,113 +471,56 @@ exports.handler = async function() {
 
       if (!booking.email) continue;
 
-      var flags = Object.assign({}, booking.emailFlags || {});
-      var propId = booking.propertyId || ((booking.stays || [])[0] || {}).propertyId;
-      var property = properties.find(function(p) { return p.id === propId; });
+      var flags = booking.emailFlags || {};
 
-      var didSend = false;
-
-      // ── Deposit request ──────────────────────────────────────────────────
-      var depositEntry = (booking.schedule || []).find(function(s) { return s.label === "Deposit"; });
-      // A zero deposit is nothing to ask for — chasing £0.00 looks broken and
-      // the payment link would fail anyway.
-      if (!billedViaEvent && depositEntry && !depositEntry.paid && depositEntry.dueDate
-          && Number(depositEntry.amount) > 0 && !flags.depositRequestSent) {
-        var depTmpl = getTmpl(templates, "deposit_request");
-        var depDays = (depTmpl.triggerDays !== undefined && depTmpl.triggerDays !== null) ? depTmpl.triggerDays : 3;
-        if (depDays > 0 && daysBetween(today, depositEntry.dueDate) <= depDays) {
-          try {
-            var depLink = await createPaymentLink(booking, depositEntry, "Deposit");
-            var depTokens = buildTokens(booking, property, { paymentLink: depLink });
-            var depSubject = fillTemplate(depTmpl.subject, depTokens);
-            var depBody = fillTemplate(depTmpl.body, depTokens);
-            var depRes = await sendViaResend(booking.email, depSubject, depBody, depLink, "Pay deposit £" + Number(depositEntry.amount || 0).toFixed(2));
-            if (depRes.ok) {
-              await logEmail(depSubject, booking.email, "deposit_request", booking.id, depBody);
-              flags.depositRequestSent = true;
-              didSend = true;
-              sentCount++;
-            } else {
-              errors.push("Booking " + booking.id + " deposit_request: " + depRes.error);
-            }
-          } catch (e) { errors.push("Booking " + booking.id + " deposit_request: " + e.message); }
-        }
-      }
-
-      // ── Balance request ──────────────────────────────────────────────────
-      var balanceEntry = (booking.schedule || []).find(function(s) { return s.label === "Balance"; });
-      if (!billedViaEvent && balanceEntry && !balanceEntry.paid && balanceEntry.dueDate
-          && Number(balanceEntry.amount) > 0 && !flags.balanceRequestSent) {
-        var balTmpl = getTmpl(templates, "balance_request");
-        var balDays = (balTmpl.triggerDays !== undefined && balTmpl.triggerDays !== null) ? balTmpl.triggerDays : 28;
-        if (balDays > 0 && daysBetween(today, balanceEntry.dueDate) <= balDays) {
-          try {
-            var balLink = await createPaymentLink(booking, balanceEntry, "Balance");
-            var balTokens = buildTokens(booking, property, { paymentLink: balLink });
-            var balSubject = fillTemplate(balTmpl.subject, balTokens);
-            var balBody = fillTemplate(balTmpl.body, balTokens);
-            var balRes = await sendViaResend(booking.email, balSubject, balBody, balLink, "Pay balance £" + Number(balanceEntry.amount || 0).toFixed(2));
-            if (balRes.ok) {
-              await logEmail(balSubject, booking.email, "balance_request", booking.id, balBody);
-              flags.balanceRequestSent = true;
-              didSend = true;
-              sentCount++;
-            } else {
-              errors.push("Booking " + booking.id + " balance_request: " + balRes.error);
-            }
-          } catch (e) { errors.push("Booking " + booking.id + " balance_request: " + e.message); }
-        }
-      }
-
-      // ── Arrival info (general or wedding), two reminder points ────────────
-      if (booking.checkIn) {
-        var arrivalId = booking.bookingType === "Wedding" ? "arrival_event" : "arrival_general";
-        var arrTmpl = getTmpl(templates, arrivalId);
-        var arrTokens = buildTokens(booking, property, {});
-        var arrSubject = fillTemplate(arrTmpl.subject, arrTokens);
-        var arrBody = fillTemplate(arrTmpl.body, arrTokens);
-        var daysToArrival = daysBetween(today, booking.checkIn);
-
-        var days1 = (arrTmpl.triggerDays !== undefined && arrTmpl.triggerDays !== null) ? arrTmpl.triggerDays : 28;
-        if (!flags.arrivalInfo1Sent && days1 > 0 && daysToArrival >= 0 && daysToArrival <= days1) {
-          try {
-            var arr1Res = await sendViaResend(booking.email, arrSubject, arrBody);
-            if (arr1Res.ok) {
-              await logEmail(arrSubject, booking.email, arrivalId, booking.id, arrBody);
-              flags.arrivalInfo1Sent = true;
-              didSend = true;
-              sentCount++;
-            } else {
-              errors.push("Booking " + booking.id + " " + arrivalId + " (1st): " + arr1Res.error);
-            }
-          } catch (e) { errors.push("Booking " + booking.id + " " + arrivalId + " (1st): " + e.message); }
+      try {
+        // ── Deposit request ──────────────────────────────────────────────────
+        var depositEntry = entryFor(booking, "Deposit");
+        // A zero deposit is nothing to ask for — chasing £0.00 looks broken and
+        // the payment link would fail anyway.
+        if (!billedViaEvent && depositEntry && !depositEntry.paid && depositEntry.dueDate
+            && Number(depositEntry.amount) > 0 && !flags.depositRequestSent) {
+          var depTmpl = getTmpl(templates, "deposit_request");
+          var depDays = (depTmpl.triggerDays !== undefined && depTmpl.triggerDays !== null) ? depTmpl.triggerDays : 3;
+          if (depDays > 0 && daysBetween(today, depositEntry.dueDate) <= depDays) {
+            await sendMoney(booking.id, "depositRequestSent", "Deposit", "deposit_request");
+          }
         }
 
-        var days2 = (arrTmpl.triggerDays2 !== undefined && arrTmpl.triggerDays2 !== null) ? arrTmpl.triggerDays2 : 3;
-        if (arrTmpl.triggerDays2Enabled && !flags.arrivalInfo2Sent && days2 > 0 && daysToArrival >= 0 && daysToArrival <= days2) {
-          try {
-            var arr2Res = await sendViaResend(booking.email, arrSubject, arrBody);
-            if (arr2Res.ok) {
-              await logEmail(arrSubject, booking.email, arrivalId, booking.id, arrBody);
-              flags.arrivalInfo2Sent = true;
-              didSend = true;
-              sentCount++;
-            } else {
-              errors.push("Booking " + booking.id + " " + arrivalId + " (2nd): " + arr2Res.error);
-            }
-          } catch (e) { errors.push("Booking " + booking.id + " " + arrivalId + " (2nd): " + e.message); }
+        // ── Balance request ──────────────────────────────────────────────────
+        var balanceEntry = entryFor(booking, "Balance");
+        if (!billedViaEvent && balanceEntry && !balanceEntry.paid && balanceEntry.dueDate
+            && Number(balanceEntry.amount) > 0 && !flags.balanceRequestSent) {
+          var balTmpl = getTmpl(templates, "balance_request");
+          var balDays = (balTmpl.triggerDays !== undefined && balTmpl.triggerDays !== null) ? balTmpl.triggerDays : 28;
+          if (balDays > 0 && daysBetween(today, balanceEntry.dueDate) <= balDays) {
+            await sendMoney(booking.id, "balanceRequestSent", "Balance", "balance_request");
+          }
         }
-      }
 
-      if (didSend) {
-        booking.emailFlags = flags;
-        bookings[i] = booking;
-        changed = true;
-      }
-    }
+        // ── Arrival info (general or wedding), two reminder points ────────────
+        // The flat checkIn field, as before: the email's {{checkIn}} token reads
+        // it too. Online bookings now carry it (create-accom-checkout.js).
+        var checkIn = booking.checkIn;
+        if (checkIn) {
+          var arrivalId = booking.bookingType === "Wedding" ? "arrival_event" : "arrival_general";
+          var arrTmpl = getTmpl(templates, arrivalId);
+          var daysToArrival = daysBetween(today, checkIn);
 
-    if (changed) {
-      await sbSet(ACCOM_KEY, bookings);
+          var days1 = (arrTmpl.triggerDays !== undefined && arrTmpl.triggerDays !== null) ? arrTmpl.triggerDays : 28;
+          if (!flags.arrivalInfo1Sent && days1 > 0 && daysToArrival >= 0 && daysToArrival <= days1) {
+            await sendArrival(booking.id, "arrivalInfo1Sent", arrivalId, "1st");
+          }
+
+          var days2 = (arrTmpl.triggerDays2 !== undefined && arrTmpl.triggerDays2 !== null) ? arrTmpl.triggerDays2 : 3;
+          if (arrTmpl.triggerDays2Enabled && !flags.arrivalInfo2Sent && days2 > 0 && daysToArrival >= 0 && daysToArrival <= days2) {
+            await sendArrival(booking.id, "arrivalInfo2Sent", arrivalId, "2nd");
+          }
+        }
+      } catch (e) {
+        // A failed claim (read or write refused) stops this booking, not the run.
+        errors.push("Booking " + booking.id + ": " + e.message);
+      }
     }
 
     console.log("[send-accom-reminders] Sent " + sentCount + " emails. Errors: " + errors.length);
@@ -470,3 +533,5 @@ exports.handler = async function() {
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
+exports._internals = { claimFlag, settleFlag };

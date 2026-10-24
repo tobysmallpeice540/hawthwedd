@@ -183,28 +183,37 @@ exports.handler = async function() {
         if (result.newBlocks && result.newBlocks.length) {
           allNewBlocks = allNewBlocks.concat(result.newBlocks);
         }
-        results.push({ property: prop.name, imported: result.imported, total: result.total });
+        results.push({ id: prop.id, property: prop.name, imported: result.imported, total: result.total });
         console.log("[sync-all-icals] " + prop.name + ": " + result.imported + " new / " + result.total + " total");
       } catch (propErr) {
         console.error("[sync-all-icals] Error syncing " + prop.name + ":", propErr.message);
-        results.push({ property: prop.name, error: propErr.message });
+        results.push({ id: prop.id, property: prop.name, error: propErr.message });
       }
     }
 
-    // Persist new bookings (if any)
+    // Persist new bookings (if any). The Airbnb fetches above can take many
+    // seconds, so the array read at the start is stale by now: re-read it and
+    // append only the imports that are still missing (by airbnbUid). Nothing
+    // else in the fresh copy is touched, so an edit or a deletion made in the
+    // app meanwhile survives.
+    var totalImported = 0;
     if (allNewBlocks.length) {
-      await sbSet(ACCOM_KEY, bookings.concat(allNewBlocks));
-      console.log("[sync-all-icals] Saved " + allNewBlocks.length + " new blocks total.");
+      var merged = mergeNewImports(await sbGet(ACCOM_KEY) || [], allNewBlocks);
+      if (merged.added) {
+        await sbSet(ACCOM_KEY, merged.list);
+        console.log("[sync-all-icals] Saved " + merged.added + " new blocks total.");
+      }
+      totalImported = merged.added;
     }
 
-    // Update lastSyncedAt on all synced properties
-    var updatedProps = properties.map(function(p) {
-      if (!p.airbnbImportUrl) return p;
-      return Object.assign({}, p, { lastSyncedAt: now });
-    });
-    await sbSet(PROPS_KEY, updatedProps);
+    // Stamp lastSyncedAt on the properties that actually synced, onto a fresh
+    // copy of the settings — and only write if one did.
+    var syncedIds = results.filter(function(r) { return !r.error; }).map(function(r) { return r.id; });
+    if (syncedIds.length) {
+      var stamped = stampSynced(await sbGet(PROPS_KEY) || [], syncedIds, now);
+      if (stamped.changed) await sbSet(PROPS_KEY, stamped.list);
+    }
 
-    var totalImported = allNewBlocks.length;
     console.log("[sync-all-icals] Done. Total imported: " + totalImported);
     return {
       statusCode: 200,
@@ -216,3 +225,33 @@ exports.handler = async function() {
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
+// Append imported blocks to a freshly read bookings array, skipping any whose
+// airbnbUid is already there (another sync, or the per-property button, may
+// have imported it meanwhile). Returns { list, added }.
+function mergeNewImports(fresh, newBlocks) {
+  var list = Array.isArray(fresh) ? fresh.slice() : [];
+  var have = {};
+  list.forEach(function(b) { if (b && b.airbnbUid) have[b.airbnbUid] = true; });
+  var added = 0;
+  (newBlocks || []).forEach(function(nb) {
+    if (!nb || (nb.airbnbUid && have[nb.airbnbUid])) return;
+    if (nb.airbnbUid) have[nb.airbnbUid] = true;
+    list.push(nb);
+    added++;
+  });
+  return { list: list, added: added };
+}
+
+// Set lastSyncedAt on the given property ids in a freshly read settings list.
+function stampSynced(fresh, ids, now) {
+  var changed = false;
+  var list = (Array.isArray(fresh) ? fresh : []).map(function(p) {
+    if (!p || ids.indexOf(p.id) === -1 || !p.airbnbImportUrl) return p;
+    changed = true;
+    return Object.assign({}, p, { lastSyncedAt: now });
+  });
+  return { list: list, changed: changed };
+}
+
+exports._internals = { mergeNewImports, stampSynced, parseIcal };
