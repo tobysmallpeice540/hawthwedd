@@ -4385,15 +4385,15 @@ function AccomReport({ properties, bookings }) {
 
   return (
     <div>
-      {/* Year navigator */}
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22 }}>
-        <button onClick={()=>setYear(prevYear)} disabled={!prevYear} style={{ ...navBtn, opacity:prevYear?1:.4 }}>&#8249;</button>
-        <div style={{ display:"flex", gap:6 }}>
-          {allYears.map(y=>(
-            <button key={y} onClick={()=>setYear(y)} style={{ background:y===year?T.midBlue:"#fff", color:y===year?"#fff":T.textMid, border:`1.5px solid ${y===year?T.midBlue:T.border}`, padding:"6px 16px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:y===year?700:400 }}>{y}</button>
-          ))}
-        </div>
-        <button onClick={()=>setYear(nextYear)} disabled={!nextYear} style={{ ...navBtn, opacity:nextYear?1:.4 }}>&#8250;</button>
+      {/* Year navigator — the same control as the lettings calendar: arrows
+          either side of the year, and a button back to this year. */}
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:22, flexWrap:"nowrap" }}>
+        <button onClick={()=>setYear(String(parseInt(year, 10) - 1))} style={navBtn} aria-label="Previous year">&#8249;</button>
+        <div style={{ fontSize:20, fontWeight:800, color:T.text, minWidth:70, textAlign:"center" }}>{year}</div>
+        <button onClick={()=>setYear(String(parseInt(year, 10) + 1))} style={navBtn} aria-label="Next year">&#8250;</button>
+        {year !== currentYear && (
+          <button onClick={()=>setYear(currentYear)} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600, whiteSpace:"nowrap" }}>This year</button>
+        )}
       </div>
 
       {/* Summary cards */}
