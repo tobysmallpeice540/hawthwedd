@@ -84,14 +84,15 @@ select pg_temp.patch_fn('public.wp_get_venue_form()'::regprocedure,
 
 -- The admin editor deletes and re-inserts every question. Remember each key's
 -- in_form across that, or saving the editor would put drop-off back on the form.
-select pg_temp.patch_fn('public.wp_admin_save_form_questions(jsonb)'::regprocedure,
-  $f$  delete from wp_venue_form_questions;$f$,
-  $r$  select coalesce(jsonb_object_agg(qkey, in_form), '{}'::jsonb) into v_inform from wp_venue_form_questions;
-  delete from wp_venue_form_questions;$r$);
+-- The declaration first: each patch is compiled as it is applied.
 select pg_temp.patch_fn('public.wp_admin_save_form_questions(jsonb)'::regprocedure,
   $f$  v_n      integer := 0;$f$,
   $r$  v_n      integer := 0;
   v_inform jsonb;$r$);
+select pg_temp.patch_fn('public.wp_admin_save_form_questions(jsonb)'::regprocedure,
+  $f$  delete from wp_venue_form_questions;$f$,
+  $r$  select coalesce(jsonb_object_agg(qkey, in_form), '{}'::jsonb) into v_inform from wp_venue_form_questions;
+  delete from wp_venue_form_questions;$r$);
 select pg_temp.patch_fn('public.wp_admin_save_form_questions(jsonb)'::regprocedure,
   $f$insert into wp_venue_form_questions (qkey, section, label, help, kind, options, sort)$f$,
   $r$insert into wp_venue_form_questions (qkey, section, label, help, kind, options, sort, in_form)$r$);

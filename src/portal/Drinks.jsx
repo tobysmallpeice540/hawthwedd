@@ -604,7 +604,7 @@ function Bar({ data, onChanged }) {
           {savedWhat === 'rules' && <p className="hint" style={{ color: 'var(--accent)' }}>Saved.</p>}
           <p className="hint" style={{ marginTop: 10 }}>
             When the tab runs out, the bar goes back to pay as you go. Anything left over is refunded
-            to the card you paid with.
+            to the card you paid with. The refund will be processed within 2 working days of the event.
           </p>
         </section>
       )}
@@ -838,7 +838,7 @@ function OldBarCard({ data, onChanged }) {
         ) : null}
         <p className="hint" style={{ marginTop: 10 }}>
           When the tab runs out, the bar goes back to pay as you go. Anything left over is refunded
-          to the card you paid with.
+          to the card you paid with. The refund will be processed within 2 working days of the event.
         </p>
       </form>
     </>
