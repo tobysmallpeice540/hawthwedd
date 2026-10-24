@@ -1612,48 +1612,6 @@ function FCheck({ checked, onChange, label, bold }) {
   );
 }
 
-// ─── ACCOMMODATION FIELD ──────────────────────────────────────────────────────
-function AccomField({ bookedKey, feeKey, paid50Key, paid100Key, label, formData, update }) {
-  const [f,setF] = useState(false);
-  const val = formData[bookedKey] || "undecided";
-  const isYes = val === "yes";
-  const bgMap = { yes: T.accentLight, no: T.redBg, undecided: T.amberBg };
-  const borderMap = { yes: T.accentMid, no: "#fca5a5", undecided: "#fcd34d" };
-  return (
-    <div style={{ background:bgMap[val]||T.bgInput, border:`1.5px solid ${borderMap[val]||T.border}`, borderRadius:8, padding:"14px 16px", transition:"all .2s" }}>
-      <div style={{ display:"flex", alignItems:"center", flexWrap:"wrap", gap:12 }}>
-        <span style={{ fontSize:15, fontWeight:600, color:T.text, minWidth:70 }}>{label}</span>
-        <select value={val} onChange={e=>update(bookedKey,e.target.value)}
-          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"6px 10px", outline:"none", cursor:"pointer" }}>
-          <option value="undecided">Undecided</option>
-          <option value="yes">Yes</option>
-          <option value="no">No</option>
-        </select>
-        {isYes && (
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ fontSize:13, color:T.textMid, fontWeight:500 }}>Fee: £</span>
-            <input type="number" value={formData[feeKey]||""} onChange={e=>update(feeKey,e.target.value)} placeholder="0"
-              onFocus={()=>setF(true)} onBlur={()=>setF(false)}
-              style={{ width:90, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"6px 10px", outline:"none", boxShadow:f?`0 0 0 3px ${T.accentLight}`:"none" }} />
-          </div>
-        )}
-        {isYes && paid50Key && (
-          <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-            <input type="checkbox" checked={!!formData[paid50Key]} onChange={e=>update(paid50Key,e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
-            50% paid
-          </label>
-        )}
-        {isYes && paid100Key && (
-          <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:13, color:T.textMid, whiteSpace:"nowrap" }}>
-            <input type="checkbox" checked={!!formData[paid100Key]} onChange={e=>update(paid100Key,e.target.checked)} style={{ width:14, height:14, accentColor:T.accent, cursor:"pointer" }}/>
-            100% paid
-          </label>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // Find lettings bookings whose check-in falls within windowDays of an event date
 function findLinkedAccom(eventDate, accomBookings, windowDays, eventEndDate) {
   if (!eventDate || !accomBookings) return [];
@@ -2625,13 +2583,6 @@ const CAL_DARK  = "#1e40af";   // outgoing half of a changeover
 
 // Grace period before an unpaid invoice is called overdue on the dashboard.
 const OVERDUE_AFTER_DAYS = 3;
-
-function hexWithAlpha(hex, alphaHex) {
-  var h = String(hex || "#000000").replace("#", "");
-  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
-  if (h.length !== 6) h = "000000";
-  return "#" + h + alphaHex;
-}
 
 const DEFAULT_EMAIL_TEMPLATES = [
   {
@@ -12192,7 +12143,6 @@ function PhoneAppPanel() {
 // layout). Ids are the sections' own tab ids, unchanged.
 const LETTINGS_TABS = [["calendar","Calendar"],["list","Bookings"],["report","Report"],["import","Import"],["settings","Settings"]];
 const BOX_TABS      = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
-const VIEWINGS_TABS = [["viewings","Viewings"],["blocks","Blocks"]];
 const BAR_TABS = [
   ["stock","Current Stock"], ["order","+ New Order"], ["stocktake","+ New Stocktake"], ["history","History"],
   ["report","Usage Report"], ["reconcile","Till Reconciliation"], ["products","Products"],
@@ -16623,105 +16573,6 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
   );
 }
 
-function AccommodationReport({ bookings, accomBookings, accomProperties }) {
-  // Wedding events sorted by date
-  var rows = bookings.filter(function(b){ return b.couple && b.date; })
-    .sort(function(a,z){ return a.date > z.date ? 1 : -1; });
-
-  // For each event, find linked lettings bookings (check-in within 7 days)
-  var rowsWithAccom = rows.map(function(b) {
-    return { event:b, linked: findLinkedAccom(b.date, accomBookings, 7, b.endDate) };
-  });
-
-  // Stats: count events that have at least one linked accom booking + total revenue
-  var linkedEvents = rowsWithAccom.filter(function(r){ return r.linked.length > 0; });
-  var totalAccomRevenue = accomBookings.filter(function(b){ return b.status!=="cancelled"; })
-    .reduce(function(s,b){ return s + (Number(b.value)||0); }, 0);
-
-  // Per-property stats
-  var propStats = {};
-  (accomProperties||[]).forEach(function(p) { propStats[p.id] = { count:0, revenue:0 }; });
-  accomBookings.filter(function(b){ return b.status!=="cancelled"; }).forEach(function(b) {
-    var stays = (b.stays&&b.stays.length) ? b.stays : [b];
-    var perStay = (Number(b.value)||0) / (stays.length||1);
-    stays.forEach(function(s) {
-      if (!propStats[s.propertyId]) propStats[s.propertyId] = { count:0, revenue:0 };
-      propStats[s.propertyId].count++;
-      propStats[s.propertyId].revenue += perStay;
-    });
-  });
-
-  return (
-    <div>
-      {/* Summary cards */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr " + (accomProperties||[]).map(function(){ return "1fr"; }).join(" "), gap:16, marginBottom:22, flexWrap:"wrap" }}>
-        <StatCard label="Events with Accom" value={linkedEvents.length} sub={rows.length + " events total"}/>
-        <StatCard label="Total Accom Revenue" value={fmtMoney(totalAccomRevenue)} sub="all non-cancelled bookings"/>
-        {(accomProperties||[]).map(function(p) {
-          var st = propStats[p.id] || { count:0, revenue:0 };
-          return (
-            <StatCard key={p.id} label={p.name} value={st.count + " stays"} sub={fmtMoney(st.revenue)}/>
-          );
-        })}
-      </div>
-
-      {/* Per-event table */}
-      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
-        <div style={{ padding:"10px 14px", background:T.tint, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:1 }}>
-          Events and linked lettings bookings
-        </div>
-        {rowsWithAccom.map(function(row, i) {
-          var ev = row.event;
-          var linked = row.linked;
-          return (
-            <div key={ev.id} style={{ borderTop: i>0 ? `1px solid ${T.border}` : "none", padding:"12px 14px" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom: linked.length ? 8 : 0 }}>
-                <span style={{ fontSize:12, color:T.accent, fontWeight:600, minWidth:90 }}>{fmtDate(ev.date)}</span>
-                <span style={{ fontSize:14, fontWeight:700, color:T.text }}>{ev.couple}</span>
-                {ev.eventType && <span style={{ fontSize:11, color:T.midBlue, background:T.midBlueBg, padding:"1px 7px", borderRadius:5, fontWeight:600 }}>{ev.eventType}</span>}
-                {!linked.length && <span style={{ fontSize:11, color:T.textLight, fontStyle:"italic" }}>No lettings bookings linked</span>}
-              </div>
-              {linked.length > 0 && (
-                <div style={{ paddingLeft:102, display:"flex", flexDirection:"column", gap:6 }}>
-                  {linked.map(function(ab) {
-                    var stays = (ab.stays&&ab.stays.length) ? ab.stays : [ab];
-                    var paidAmt = (ab.schedule||[]).filter(function(s){ return s.paid; }).reduce(function(sum,s){ return sum+(Number(s.amount)||0); }, 0);
-                    var outstanding = (Number(ab.value)||0) - paidAmt;
-                    return (
-                      <div key={ab.id} style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7, padding:"8px 12px", fontSize:12 }}>
-                        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                          <span style={{ fontWeight:600, color:T.text }}>{ab.guestName||"(no name)"}</span>
-                          {stays.map(function(s, si) {
-                            var prop = (accomProperties||[]).find(function(p){ return p.id===s.propertyId; });
-                            return (
-                              <span key={si} style={{ display:"inline-flex", alignItems:"center", gap:4, color:T.textMid }}>
-                                {prop && <span style={{ width:7, height:7, borderRadius:"50%", background:prop.colour, display:"inline-block" }}/>}
-                                {s.propertyName||s.propertyId}
-                                {" "}{fmtDate(s.checkIn)}–{fmtDate(s.checkOut)}
-                              </span>
-                            );
-                          })}
-                          <span style={{ marginLeft:"auto", fontWeight:700, color:T.text }}>{fmtMoney(Number(ab.value)||0)}</span>
-                          {outstanding <= 0 && (Number(ab.value)||0) > 0
-                            ? <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"1px 7px", borderRadius:5 }}>Paid</span>
-                            : outstanding > 0
-                              ? <span style={{ fontSize:11, fontWeight:700, color:T.amber, background:T.amberBg, padding:"1px 7px", borderRadius:5 }}>{fmtMoney(outstanding)} outstanding</span>
-                              : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {!rows.length && <div style={{ padding:24, textAlign:"center", color:T.textLight, fontSize:13 }}>No bookings yet.</div>}
-      </div>
-    </div>
-  );
-}
-
 function StaffingRota({ bookings, staff }) {
   const [printMode, setPrintMode] = useState(false);
   const today=new Date().toISOString().slice(0,10);
@@ -16772,220 +16623,6 @@ function StaffingRota({ bookings, staff }) {
         </table>
       </div>
     </div>
-    </div>
-  );
-}
-
-function PipelineReport({ bookings }) {
-  const [printMode, setPrintMode] = useState(false);
-  const today=new Date().toISOString().slice(0,10);
-  const rows=bookings.filter(b=>b.couple&&b.date>=today&&parseMoney(b.venueFee)>0);
-  const printText = [
-    "Payment Pipeline — Upcoming Bookings",
-    "",
-    ...rows.map(b=>{
-      const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep);
-      return `${b.date} | ${b.couple}\n  Venue Fee: £${fee.toLocaleString()} | Deposit: £${dep.toLocaleString()} | Balance: ${balance===0?"PAID IN FULL":"£"+balance.toLocaleString()}`;
-    })
-  ].join("\n\n");
-  if(printMode) return (
-    <div>
-      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
-    </div>
-  );
-  return (
-    <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
-      </div>
-      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings with outstanding balance (deposit is advance on venue fee)</p>
-      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        {rows.map(b=>{
-          const fee=parseMoney(b.venueFee),dep=parseMoney(b.deposit),balance=Math.max(0,fee-dep),pct=fee>0?Math.min(100,Math.round((dep/fee)*100)):0;
-          return (
-            <div key={b.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:T.shadowCard }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
-                <div><div style={{ fontWeight:600, color:T.text }}>{b.couple}</div><div style={{ fontSize:12, color:T.textLight }}>{fmtDate(b.date)}</div></div>
-                <div style={{ textAlign:"right" }}><div style={{ fontSize:18, color:T.midBlue, fontWeight:700 }}>£{fee.toLocaleString()}</div><div style={{ fontSize:11, color:T.textLight }}>{dep>0?`Deposit: £${dep.toLocaleString()}`:"No deposit"}</div></div>
-              </div>
-              <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}><div style={{ background:balance===0?T.green:T.accentMid, height:"100%", width:`${pct}%`, borderRadius:4 }}/></div>
-              <div style={{ display:"flex", justifyContent:"space-between", marginTop:6, fontSize:11, color:T.textLight }}>
-                <span>Balance remaining: {balance===0?"✓ Paid in full":`£${balance.toLocaleString()}`}</span>
-                <span style={{ color:balance===0?T.green:T.accent, fontWeight:700 }}>{pct}% deposit paid</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function StaffWorkloadReport({ bookings, staff }) {
-  const [printMode, setPrintMode] = useState(false);
-  const today=new Date().toISOString().slice(0,10);
-  const upcoming=bookings.filter(b=>b.date>=today);
-  const workload=staff.filter(s=>s.active).map(s=>{
-    const assigned=upcoming.filter(b=>["setup",...STAFFING_FIELDS].some(f=>(b[f]||[]).includes(s.id)));
-    const roles={};
-    upcoming.forEach(b=>["setup",...STAFFING_FIELDS].forEach(f=>{ if((b[f]||[]).includes(s.id)) roles[f]=(roles[f]||0)+1; }));
-    return {...s, count:assigned.length, roles};
-  }).sort((a,b)=>b.count-a.count);
-  const max=Math.max(1,...workload.map(w=>w.count));
-  const printText = [
-    "Staff Workload — Upcoming Events",
-    "",
-    ...workload.filter(w=>w.count>0).map(w=>`${w.name} (${w.role}): ${w.count} upcoming\n  ${Object.entries(w.roles).map(([r,c])=>`${r==="setup"?"Friday Set-Up":STAFFING_LABELS[r]}: ${c}`).join(", ")}`)
-  ].join("\n\n");
-  if(printMode) return (
-    <div>
-      <button onClick={()=>setPrintMode(false)} style={{ marginBottom:14, background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>← Back</button>
-      <pre style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px", fontSize:13, fontFamily:"inherit", lineHeight:1.8, whiteSpace:"pre-wrap", color:T.text }}>{printText}</pre>
-    </div>
-  );
-  return (
-    <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
-      </div>
-      <p style={{ color:T.textMid, fontSize:13, marginBottom:18 }}>Upcoming bookings per active staff member</p>
-      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {workload.map(w=>(
-          <div key={w.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 20px", boxShadow:T.shadowCard }}>
-            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
-              <StaffChip initials={w.id} staff={staff} size="lg"/>
-              <div style={{ flex:1 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
-                  <span style={{ fontWeight:700, color:T.text }}>{w.name}</span>
-                  <span style={{ fontSize:11, color:T.textLight }}>{w.role}</span>
-                  <span style={{ marginLeft:"auto", fontSize:13, color:T.midBlue, fontWeight:700 }}>{w.count} upcoming</span>
-                </div>
-                <div style={{ background:T.bg, borderRadius:4, height:8, overflow:"hidden" }}>
-                  <div style={{ background:w.count>5?T.red:w.count>2?T.amber:T.green, height:"100%", width:`${(w.count/max)*100}%`, minWidth:w.count>0?4:0, borderRadius:4 }}/>
-                </div>
-              </div>
-            </div>
-            {w.count>0&&(
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {Object.entries(w.roles).map(([role,cnt])=>(
-                  <span key={role} style={{ fontSize:11, background:T.accentLight, border:`1px solid ${T.border}`, borderRadius:4, padding:"2px 8px", color:T.accent, fontWeight:600 }}>{role==="setup"?"Friday Friday Set-Up":STAFFING_LABELS[role]}: {cnt}</span>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── HOURS SECTION (in booking form) ─────────────────────────────────────────
-function HoursSection({ formData, update, staff, staffShifts }) {
-  const hw = formData.hoursWorked || {};
-  const updateHours = (id, val) => {
-    const updated = { ...hw };
-    if (val === "") delete updated[id];
-    else updated[id] = parseFloat(val) || 0;
-    update("hoursWorked", updated);
-  };
-
-  // Which staff are already assigned to this booking
-  const assignedIds = new Set([
-    ...(formData.setup||[]),
-    ...(formData.dayManager||[]),
-    ...(formData.dayStaff||[]),
-    ...(formData.barSupervisor||[]),
-    ...(formData.sunday||[]),
-    ...(formData.bar||[]),
-    ...(formData.dayHandy||[]),
-    ...(formData.eveHandy||[]),
-  ]);
-
-  const assignedStaff = staff.filter(s => assignedIds.has(s.id));
-  const otherStaff    = staff.filter(s => s.active && !assignedIds.has(s.id));
-
-  const totalHours = Object.values(hw).reduce((a,b)=>a+b,0);
-
-  return (
-    <div>
-      <p style={{ margin:"0 0 16px", fontSize:13, color:T.textMid }}>
-        Enter actual hours worked by each staff member at this event.
-      </p>
-
-      {assignedStaff.length > 0 && (
-        <div style={{ marginBottom:20 }}>
-          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>Assigned Staff</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
-            {assignedStaff.map(s => {
-              const sh = staffShifts[s.id];
-              let expectedHrs = null;
-              if (sh?.start && sh?.end) {
-                const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
-                const diff = toMins(sh.end) - toMins(sh.start);
-                if (diff > 0) expectedHrs = +(diff/60).toFixed(2);
-              }
-              return <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} highlighted expectedHrs={expectedHrs}/>;
-            })}
-          </div>
-        </div>
-      )}
-
-      {otherStaff.length > 0 && (
-        <div>
-          <div style={{ fontSize:11, letterSpacing:1.5, textTransform:"uppercase", color:T.textLight, fontWeight:700, marginBottom:10 }}>Other Staff</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px 20px" }}>
-            {otherStaff.map(s => {
-              const sh = staffShifts[s.id];
-              let expectedHrs = null;
-              if (sh?.start && sh?.end) {
-                const toMins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
-                const diff = toMins(sh.end) - toMins(sh.start);
-                if (diff > 0) expectedHrs = +(diff/60).toFixed(2);
-              }
-              return <HoursRow key={s.id} s={s} hw={hw} updateHours={updateHours} expectedHrs={expectedHrs}/>;
-            })}
-          </div>
-        </div>
-      )}
-
-      {totalHours > 0 && (
-        <div style={{ marginTop:20, padding:"12px 16px", background:T.accentLight, borderRadius:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontSize:13, color:T.midBlue, fontWeight:600 }}>Total hours this event</span>
-          <span style={{ fontSize:20, color:T.midBlue, fontWeight:700 }}>{totalHours.toLocaleString()}h</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HoursRow({ s, hw, updateHours, highlighted, expectedHrs }) {
-  const [f, setF] = useState(false);
-  const val = hw[s.id] || "";
-  return (
-    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background: highlighted ? T.accentLight : T.bgInput, border:`1.5px solid ${f ? T.borderFocus : highlighted && val ? T.accentMid : T.border}`, borderRadius:8, transition:"all .15s" }}>
-      <StaffChip initials={s.id} staff={[s]} />
-      <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500 }}>{s.name}</span>
-      {expectedHrs !== null && (
-        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", marginRight:4 }}>
-          <span style={{ fontSize:9, letterSpacing:.8, textTransform:"uppercase", color:T.textLight, fontWeight:600 }}>Expected</span>
-          <span style={{ fontSize:14, fontWeight:700, color:T.midBlue }}>{expectedHrs}h</span>
-        </div>
-      )}
-      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-        <input
-          type="number"
-          min="0"
-          step="0.5"
-          value={val}
-          onChange={e => updateHours(s.id, e.target.value)}
-          onFocus={() => setF(true)}
-          onBlur={() => setF(false)}
-          placeholder="0"
-          style={{ width:70, background:"#fff", border:`1.5px solid ${f?T.borderFocus:T.border}`, borderRadius:6, color:T.text, fontSize:14, padding:"5px 8px", outline:"none", textAlign:"center", boxShadow:f?`0 0 0 3px ${T.accentLight}`:"none" }}
-        />
-        <span style={{ fontSize:12, color:T.textLight }}>hrs</span>
-      </div>
     </div>
   );
 }
@@ -19645,7 +19282,6 @@ function ProductsView({ products, onSave }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ENQUIRIES_STORAGE = "hbf_enquiries_v1";
-const VIEWINGS_STORAGE  = "hbf_viewings_v1";
 const VR_STORAGE        = "hbf_viewing_requests_v1";
 const VB_STORAGE        = "hbf_viewing_blocks_v1";
 
@@ -21148,8 +20784,6 @@ function StaffTimelineReport({ bookings, staff }) {
 }
 
 // ─── VIEWINGS COMPONENTS ──────────────────────────────────────────────────────
-
-const VIEWING_STORAGE_KEY = "hbf_viewings_v1";
 
 function ViewingForm({ viewing, onChange, onSave, onCancel, saveLabel="Add" }) {
   const iStyle = { width:"100%", background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"7px 9px", outline:"none", boxSizing:"border-box" };
