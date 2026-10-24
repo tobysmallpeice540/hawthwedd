@@ -33,10 +33,30 @@ own header.
 ### Data integrity
 
 - **Anything that writes a shared array re-reads it first.** Writing an array
-  back from a component's snapshot has lost records four times. `mutateBookings`,
-  `mutateAccom`, `createBookingRecord`, `updateAccomBookings`, `saveAccomBooking`
-  and the nightly job all re-read. Two paths still do not —
-  `netlify/functions/stripe-accom-webhook.js` and `AccomImport`. Fix on sight.
+  back from a component's snapshot has lost records four times. Every writer in
+  the app and the functions now re-reads (24 Oct review). The tools, in
+  `App.jsx` near the top:
+  - `sbGetStrict(key)` — the read a write depends on. **Throws** on a failed
+    read (`sbGet` returns null for both "missing" and "failed", which is how an
+    empty list got written over a real one).
+  - `sbSet` **throws** on failure, and refuses (throws, with the red banner)
+    when the tab is a stale build or the key is holding example data
+    (`SEED_FALLBACK`). Never wrap it in a catch that carries on as if saved —
+    rethrow, or tell the person.
+  - `useMergedSave(key, value, setValue[, "object"])` — the way a screen saves
+    a shared list. Applies only this screen's difference (`mergeById` /
+    `mergeByKey`) to a fresh read, saves of one key run one at a time
+    (`queueSave`), rolls the screen back on failure and rethrows. **Pass an
+    updater (`prev => next`) whenever the list is built after an await** — a
+    list from a closure taken before the await has no record added meanwhile,
+    and the merge reads that as a delete. `saveArrayMerged` is the same without
+    the hook.
+  - `mutateBookings(mutator, onWritten)` — events. Queued per key too.
+  - The event form writes only the fields it changed (`mergeFormFields`
+    against `formBasesRef[formKey]`). Pass the **form key** to
+    `saveBookingRecord` / `createBookingRecord`, never a base: the base is read
+    and moved inside the save queue, or two overlapping autosaves drop a field
+    set back. Top-level fields only — editing one payment rewrites the schedule.
 - **Check `res.ok` before believing anything.** Four silent-failure incidents,
   all the same shape: an unchecked response treated as valid data. The worst
   replaced 42 real weddings on screen with built-in seed data and would have
@@ -46,8 +66,15 @@ own header.
 
 ### Database
 
-- RLS is on with **no policies**. Every read and write goes through a
-  `SECURITY DEFINER` function. Add functions; do not add policies.
+- RLS is on everywhere. The `wp_` and `box_` tables have **no policies** —
+  every read and write goes through a `SECURITY DEFINER` function; add
+  functions, not policies. The exceptions: 4 policies on public tables
+  (among them `app_data_staff` and the public terms policy on `app_data`) and 4 storage
+  policies on `booking-files`, which require `is_staff()` from migration
+  `2026-10-24i`. Table privileges for anon/authenticated were trimmed there too.
+- **Admin-only portal functions check `wp_is_admin()`**, not `is_staff()`
+  (bar and cleaner logins are staff). Granting/revoking portal access, the
+  invoice mirror and the drinks and bar money functions are admin only.
 - **Never paste a live function body back from a copy you did not read out of
   the catalogue in the same breath.** Read it with `pg_get_functiondef()`, apply
   a string patch, assert the anchor appears exactly once, raise otherwise. A
@@ -269,7 +296,6 @@ own header.
   token lives in the browser's `sessionStorage`. Workable while only staff can
   sign in; it must not be extended to any client-facing feature. See
   `claude/scope-client-portal.md`.
-- The two array-write paths named above.
 - The portal's Supabase client needs `detectSessionInUrl: true` (a magic link
   arrives in the URL fragment) and its **own `storageKey`** — the staff app and
   the portal share an origin, so on the default key signing into one silently
@@ -313,6 +339,27 @@ own header.
   When a write is meant to reach a person, the sending is a second, separate
   step — and it is reported separately, so "the row landed but the email did
   not" never reads as outright failure and prompt a duplicate grant.
+
+### Build guard and deploys (24 Oct 2026)
+
+- **Bump `APP_BUILD` in `App.jsx` on every deploy** ("YYYY-MM-DD" + letter).
+  `vite.config.js` copies it into `dist/build.json`; open tabs poll that file
+  and a tab whose build is not the one deployed refuses every write (inside
+  `sbSet`), older or newer — so a Netlify rollback works. The database key
+  `hbf_app_build_v1` is still written, only for tabs of builds before
+  2026-10-24b. Rolling back to a build older than that would leave those tabs
+  refusing saves until the key is set back by hand.
+- Netlify env vars added in this round: `CALENDAR_FEED_TOKEN` (the calendar
+  feed shows contact details only with `?t=<token>`), and `HBF_ADMIN_TOKEN` is
+  required. Staff-only functions check the caller's Supabase session
+  (`resolveStaff`); the app sends `sbAuthHeaders()` to them.
+- `send-cleaning-summary-cron.js` is the schedule shim (Netlify returns 403 to
+  HTTP calls on a scheduled function), like `brevo-sync-cron`.
+- Lettings webhook: a payment that matches no schedule row, or lands on a row
+  already paid by a different Stripe payment, is set aside on the booking as
+  `unmatchedPayments[]` and the office is emailed; the guest is not. The app
+  does not show that list yet. Accommodation checkout sessions expire after an
+  hour, and the server enforces the page's stay rules as well as its price.
 
 ## Working in this folder from a Claude session
 
