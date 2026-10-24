@@ -22,7 +22,9 @@
 # 02:00 and 03:00 UTC and the function sends only when it is 3am in London —
 # that way it lands at 3am local through GMT and BST alike. The run that isn't
 # 3am local exits immediately, as does any run on the wrong weekday.
-[functions."send-cleaning-summary"]
+# The schedule is on the shim, not on send-cleaning-summary itself, so the
+# app's "Send one now" button can reach the worker (see brevo-sync-cron).
+[functions."send-cleaning-summary-cron"]
   schedule = "0 2,3 * * *"
 
 # Box office: balance emails, the single overdue chase, and event reminders.

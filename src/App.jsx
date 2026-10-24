@@ -5926,7 +5926,7 @@ function CleaningSummarySettings() {
     setBusy(true); setFlash("");
     try {
       const res = await fetch("/.netlify/functions/send-cleaning-summary", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
         body: JSON.stringify({ force: true })
       });
       const data = await res.json().catch(function(){ return {}; });

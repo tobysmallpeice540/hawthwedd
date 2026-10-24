@@ -292,7 +292,6 @@
 var SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 var SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcWJ5aXNmbXZ3dWxzeXh6d2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NTI0MzgsImV4cCI6MjA5NjUyODQzOH0._CsyhvFrtHFC0KrfiLzbrLUaKcvxtbWlHydaH20tvfo";
 var CHECKOUT_FN   = "/.netlify/functions/create-accom-checkout";
-var SYNC_FN       = "/.netlify/functions/sync-all-icals";
 var MONTH_NAMES   = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 var DOW_LABELS    = ["M","T","W","T","F","S","S"];
 var MAX_PROPERTIES_PER_BOOKING = 3;
@@ -1326,16 +1325,12 @@ function showSuccess(prop, ci, co) {
     });
   }
 
-  // Trigger an Airbnb iCal sync so availability is up to date before the
-  // guest sees the calendar. We race it against a 6-second timeout — if
-  // Airbnb is slow we fall through and show existing data rather than
-  // making the guest wait.
-  var syncPromise = fetch(SYNC_FN, { method: "POST" }).then(function() {}).catch(function() {});
-  var timeout = new Promise(function(resolve) { setTimeout(resolve, 6000); });
-
-  Promise.race([syncPromise, timeout]).then(function() {
-    return loadAndRender();
-  }).catch(function(e) {
+  // There used to be a call to sync-all-icals here, raced against a 6-second
+  // timeout. It never worked: that function is scheduled, and Netlify answers
+  // 403 to any HTTP request aimed at a scheduled function. The hourly sync
+  // keeps Airbnb nights current, and create-accom-checkout re-checks the
+  // dates against the live diary before any money is taken.
+  loadAndRender().catch(function(e) {
     console.error(e);
     mount('<div class="alert alert-error">Could not load availability. Please refresh the page.</div>');
   });

@@ -4,16 +4,21 @@
 // changeovers and farm events — to whoever is set up in
 // Settings → Weekly cleaning summary.
 //
-// Scheduled from netlify.toml at 02:00 and 03:00 UTC and sends only when it is
-// 3am in London. Netlify cron is UTC-only, so a single "0 3 * * *" would
-// arrive at 4am through British Summer Time. Firing on both hours and checking
-// the London clock lands it at 3am local all year, and the guard below makes
-// the second run a no-op.
+// A plain HTTP function. The timer lives on send-cleaning-summary-cron.js,
+// because Netlify answers 403 to any HTTP request aimed at a function that
+// carries a schedule — which is why the app's "Send one now" button never
+// worked while the schedule sat here.
 //
-// Can also be POSTed to with { force: true } from the app to send one on the
-// spot, which is what the "Send one now" button does.
+// Two callers, told apart by how they prove who they are:
+//   · the cron shim, with x-admin-token = HBF_ADMIN_TOKEN — the scheduled
+//     path. It fires at 02:00 and 03:00 UTC and this sends only when it is
+//     3am in London (Netlify cron is UTC-only, so a single "0 3 * * *" would
+//     arrive at 4am through BST), on the chosen weekday, once per day.
+//   · the app's "Send one now" button, with an admin's Supabase session —
+//     sends on the spot, whatever the time, and records nothing.
 //
-// Required env var: RESEND_API_KEY
+// Required env vars: RESEND_API_KEY · SUPABASE_SERVICE_KEY · HBF_ADMIN_TOKEN
+const crypto = require("crypto");
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 // The service key, not the anon key. Server-side code has no business
@@ -249,10 +254,57 @@ function buildText(model) {
   return out;
 }
 
+// ── Who is calling ────────────────────────────────────────────────────────────
+// The staff app sends the signed-in user's Supabase session as a Bearer token.
+// Supabase checks the token; the profile (role, active) is then read with the
+// service key. Same shape as resolveAdmin in signwell.js — copied, not shared,
+// like every helper in this folder.
+const AUTH_SB_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+async function resolveStaff(event, roles) {
+  var key = process.env.SUPABASE_SERVICE_KEY;
+  var h = (event && event.headers) || {};
+  var jwt = String(h["authorization"] || h["Authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+  if (!jwt || !key) return null;
+  try {
+    var res = await fetch(AUTH_SB_URL + "/auth/v1/user", {
+      headers: { "apikey": key, "Authorization": "Bearer " + jwt }
+    });
+    if (!res.ok) return null;
+    var user = await res.json();
+    if (!user || !user.id) return null;
+    var pr = await fetch(AUTH_SB_URL + "/rest/v1/profiles?id=eq." + encodeURIComponent(user.id) + "&select=role,active,name,email", {
+      headers: { "apikey": key, "Authorization": "Bearer " + key }
+    });
+    if (!pr.ok) return null;
+    var rows = await pr.json();
+    var p = Array.isArray(rows) ? rows[0] : null;
+    if (!p || p.active === false || roles.indexOf(p.role) === -1) return null;
+    return { id: user.id, role: p.role, who: p.name || p.email || user.email || "" };
+  } catch (e) {
+    console.error("resolveStaff failed:", e.message);
+    return null;
+  }
+}
+
+// Constant-time compare; unequal lengths (or no token configured) never match.
+function tokenMatches(given, expected) {
+  if (!expected || typeof given !== "string" || !given) return false;
+  var a = Buffer.from(given, "utf8"), b = Buffer.from(String(expected), "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 exports.handler = async function(event) {
-  let body = {};
-  if (event && event.body) { try { body = JSON.parse(event.body); } catch (e) { body = {}; } }
-  const force = !!body.force;
+  const headers = (event && event.headers) || {};
+  const fromCron = tokenMatches(headers["x-admin-token"] || "", process.env.HBF_ADMIN_TOKEN);
+  let force;
+  if (fromCron) {
+    force = false;              // the clock: 3am London, chosen day, once
+  } else if (await resolveStaff(event, ["admin"])) {
+    force = true;               // the button: now
+  } else {
+    return jsonResponse(403, { error: "Only a signed-in administrator can send the cleaning summary." });
+  }
 
   try {
     const cfg = (await sbGet(CONFIG_KEY)) || {};
@@ -295,8 +347,9 @@ exports.handler = async function(event) {
 
     // Only the scheduled path records the date — a test send must not stop the
     // real one going out later the same morning.
+    // Re-read rather than writing back the copy from the start of the run.
     if (!force) {
-      await sbSet(CONFIG_KEY, Object.assign({}, cfg, { lastSentDate: london.date }));
+      await sbSet(CONFIG_KEY, Object.assign({}, (await sbGet(CONFIG_KEY)) || {}, { lastSentDate: london.date }));
     }
 
     return jsonResponse(200, {
