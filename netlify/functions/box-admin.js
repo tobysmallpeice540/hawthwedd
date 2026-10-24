@@ -30,6 +30,16 @@
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const ADMIN_TOKEN  = process.env.HBF_ADMIN_TOKEN;
+
+// Constant-time compare for the office token. A plain === leaks, through its
+// timing, how much of a guess was right. Unequal lengths (or no token set)
+// never match; timingSafeEqual itself throws on unequal lengths.
+function tokenMatches(given, expected) {
+  if (!expected || typeof given !== "string" || !given) return false;
+  var a = Buffer.from(given, "utf8"), b = Buffer.from(String(expected), "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 const SITE_ORIGIN  = "https://hawthbushfarm.netlify.app";
 
 // Stripe is needed only for the chef actions (payees.invite / payees.refresh),
@@ -194,7 +204,7 @@ function cachePut(jwt, caller) {
 // sent.
 async function resolveCaller(event) {
   var headerToken = event.headers["x-admin-token"];
-  if (ADMIN_TOKEN && headerToken === ADMIN_TOKEN) {
+  if (tokenMatches(headerToken || "", ADMIN_TOKEN)) {
     return { role: "admin", who: "office key" };
   }
 

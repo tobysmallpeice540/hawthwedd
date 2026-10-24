@@ -28,6 +28,17 @@
 const SUPABASE_URL   = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const ADMIN_TOKEN    = process.env.HBF_ADMIN_TOKEN;
+const crypto = require("crypto");
+
+// Constant-time compare for the office token. A plain === leaks, through its
+// timing, how much of a guess was right. Unequal lengths (or no token set)
+// never match; timingSafeEqual itself throws on unequal lengths.
+function tokenMatches(given, expected) {
+  if (!expected || typeof given !== "string" || !given) return false;
+  var a = Buffer.from(given, "utf8"), b = Buffer.from(String(expected), "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 const RESEND_KEY     = process.env.RESEND_API_KEY;
 const FROM_EMAIL     = "hello@hawthbushfarm.co.uk";
 // What the recipient sees in their inbox. Without a display name, mail clients
@@ -354,7 +365,7 @@ exports.handler = async function(event) {
   catch (e) { return { statusCode: 400, body: JSON.stringify({ error: "Invalid JSON" }) }; }
 
   var token = body.token || event.headers["x-admin-token"];
-  if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+  if (!tokenMatches(String(token || ""), ADMIN_TOKEN)) {
     return { statusCode: 401, body: JSON.stringify({ error: "Unauthorised" }) };
   }
 

@@ -32,6 +32,17 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const BREVO_KEY    = process.env.BREVO_API_KEY;
 const BREVO_API    = "https://api.brevo.com/v3";
 const ADMIN_TOKEN  = process.env.HBF_ADMIN_TOKEN;
+const crypto = require("crypto");
+
+// Constant-time compare for the office token. A plain === leaks, through its
+// timing, how much of a guess was right. Unequal lengths (or no token set)
+// never match; timingSafeEqual itself throws on unequal lengths.
+function tokenMatches(given, expected) {
+  if (!expected || typeof given !== "string" || !given) return false;
+  var a = Buffer.from(given, "utf8"), b = Buffer.from(String(expected), "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 // Attributes created automatically on first run.
 //
@@ -235,7 +246,7 @@ function without(contacts, out) {
 // ── Handler ──────────────────────────────────────────────────────────────────
 exports.handler = async function(event) {
   var token = (event && event.headers && event.headers["x-admin-token"]) || "";
-  if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+  if (!tokenMatches(String(token), ADMIN_TOKEN)) {
     return { statusCode: 401, body: JSON.stringify({ error: "Unauthorised" }) };
   }
 
