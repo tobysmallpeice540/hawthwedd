@@ -1,6 +1,18 @@
 // netlify/functions/calendar-feed.js
 // Hosted iCalendar (.ics) feed — events, viewings, and lettings bookings.
 // Subscribe via: https://hawthbushfarm.netlify.app/calendar.ics
+//
+// The address is public, so by default the feed carries names, dates, times
+// and types only. Phone numbers, email addresses, guest counts and free-text
+// notes are added only when the request carries ?t=<CALENDAR_FEED_TOKEN>:
+//   https://hawthbushfarm.netlify.app/calendar.ics?t=<token>
+// No token configured = contact details are never included.
+//
+// A failed read never publishes a short calendar: if the events, enquiries or
+// lettings read fails the feed answers 503, and every subscriber keeps the copy
+// it already has rather than seeing the diary empty itself.
+
+const crypto = require("crypto");
 
 const SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 // The service key, not the anon key. Server-side code has no business
@@ -41,10 +53,23 @@ const sbGet = async (key) => {
     SUPABASE_URL + "/rest/v1/app_data?key=eq." + key + "&select=value",
     { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } }
   );
-  if (!res.ok) return null;
+  // Throws on a refused read. A missing row is a genuine "nothing yet";
+  // a 401/500 is not, and must never be drawn as an empty diary.
+  if (!res.ok) throw new Error("app_data " + key + " " + res.status);
   const rows = await res.json();
-  return (Array.isArray(rows) && rows[0]) ? rows[0].value : null;
+  if (!Array.isArray(rows)) throw new Error("app_data " + key + " unexpected shape");
+  return rows[0] ? rows[0].value : null;
 };
+
+// Constant-time compare. Unequal lengths fail before timingSafeEqual (which
+// throws on them); no token configured never matches.
+function tokenMatches(given, expected) {
+  if (!expected || typeof given !== "string" || !given) return false;
+  const a = Buffer.from(given, "utf8");
+  const b = Buffer.from(String(expected), "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 const esc = (s) => String(s == null ? "" : s)
   .replace(/\\/g, "\\\\")
@@ -147,20 +172,50 @@ const londonParts = (iso) => {
   return p.year + p.month + p.day + "T" + (p.hour === "24" ? "00" : p.hour) + p.minute + "00";
 };
 
-exports.handler = async () => {
-  let bookings  = [];
-  let enquiries = [];
-  let accom     = [];
-  let ticketed  = [];
+exports.handler = async (event) => {
+  const q = (event && event.queryStringParameters) || {};
+  const full = tokenMatches(q.t, process.env.CALENDAR_FEED_TOKEN);
 
-  try { bookings  = (await sbGet(BOOKINGS_KEY))  || []; } catch (e) { bookings = []; }
-  try { enquiries = (await sbGet(ENQUIRIES_KEY)) || []; } catch (e) { enquiries = []; }
-  try { accom     = (await sbGet(ACCOM_KEY))     || []; } catch (e) { accom = []; }
+  let bookings, enquiries, accom;
+  try {
+    bookings  = (await sbGet(BOOKINGS_KEY))  || [];
+    enquiries = (await sbGet(ENQUIRIES_KEY)) || [];
+    accom     = (await sbGet(ACCOM_KEY))     || [];
+  } catch (e) {
+    console.error("calendar-feed: core read failed —", e.message);
+    return {
+      statusCode: 503,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Retry-After": "600", "Cache-Control": "no-store" },
+      body: "Calendar temporarily unavailable — try again shortly.",
+    };
+  }
+  let ticketed = [];
   try { ticketed  = (await boxEvents())          || []; } catch (e) { ticketed = []; }
   // Guest numbers now live in the client portal (wp_guest_numbers). Read with
   // the service key; if that read fails the diary's own fields still show.
   let portalNums = {};
-  try { portalNums = await portalNumbers(); } catch (e) { portalNums = {}; }
+  if (full) { try { portalNums = await portalNumbers(); } catch (e) { portalNums = {}; } }
+
+  return {
+    statusCode: 200,
+    headers: {
+      "Content-Type": "text/calendar; charset=utf-8",
+      "Content-Disposition": "inline; filename=\"hawthbush-farm.ics\"",
+      // private: the tokened copy carries contact details, and must not sit
+      // in a shared cache keyed loosely enough to be served to anyone else.
+      "Cache-Control": "private, max-age=600",
+    },
+    body: buildIcs({ bookings, enquiries, accom, ticketed, portalNums }, full),
+  };
+};
+
+// full = true adds phone, email, guest counts and free-text notes.
+function buildIcs(data, full) {
+  const bookings   = data.bookings   || [];
+  const enquiries  = data.enquiries  || [];
+  const accom      = data.accom      || [];
+  const ticketed   = data.ticketed   || [];
+  const portalNums = data.portalNums || {};
 
   const stamp = dtStamp();
   const lines = [];
@@ -177,10 +232,10 @@ exports.handler = async () => {
     const pn = b.id != null ? portalNums[String(b.id)] : null;
     const dayG = pn ? pn.seated : b.mealGuests;
     const eveG = pn ? pn.evening : b.eveGuests;
-    if (dayG) descParts.push("Day guests: " + dayG);
-    if (eveG) descParts.push("Eve guests: " + eveG);
-    if (b.phone)      descParts.push("Phone: " + b.phone);
-    if (b.email)      descParts.push("Email: " + b.email);
+    if (full && dayG) descParts.push("Day guests: " + dayG);
+    if (full && eveG) descParts.push("Eve guests: " + eveG);
+    if (full && b.phone) descParts.push("Phone: " + b.phone);
+    if (full && b.email) descParts.push("Email: " + b.email);
     // Multi-day: use endDate if present
     const endYmd = (b.endDate && b.endDate > b.date) ? b.endDate : b.date;
     lines.push("BEGIN:VEVENT");
@@ -218,7 +273,7 @@ exports.handler = async () => {
       lines.push("DTEND;VALUE=DATE:" + addDay(v.date));
     }
     lines.push(fold("SUMMARY:" + esc("Viewing: " + (name || (kind === "booking" ? "Booking" : "Enquiry")))));
-    if (v.notes) lines.push(fold("DESCRIPTION:" + esc(v.notes)));
+    if (full && v.notes) lines.push(fold("DESCRIPTION:" + esc(v.notes)));
     lines.push("CATEGORIES:Viewing");
     lines.push("TRANSP:TRANSPARENT");
     lines.push("END:VEVENT");
@@ -255,9 +310,9 @@ exports.handler = async () => {
       const summary  = propName + ": " + guest;
       const descParts = [];
       if (ab.guestName)   descParts.push("Guest: " + ab.guestName);
-      if (ab.phone)       descParts.push("Phone: " + ab.phone);
-      if (ab.email)       descParts.push("Email: " + ab.email);
-      if (ab.guestCount)  descParts.push("Guests: " + ab.guestCount);
+      if (full && ab.phone)      descParts.push("Phone: " + ab.phone);
+      if (full && ab.email)      descParts.push("Email: " + ab.email);
+      if (full && ab.guestCount) descParts.push("Guests: " + ab.guestCount);
       if (ab.source && ab.source !== "manual") descParts.push("Source: " + ab.source);
       if (ab.bookingType) descParts.push("Type: " + ab.bookingType);
       const uid = "accom-" + (ab.id || "x") + "-" + si + "@hawthbushfarm.co.uk";
@@ -298,7 +353,7 @@ exports.handler = async () => {
     lines.push("END:VEVENT");
   });
 
-  const ics = [
+  return [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//Hawthbush Farm//Venue Ops//EN",
@@ -313,15 +368,6 @@ exports.handler = async () => {
     .concat(lines)
     .concat(["END:VCALENDAR"])
     .join("\r\n") + "\r\n";
+}
 
-  return {
-    statusCode: 200,
-    headers: {
-      "Content-Type": "text/calendar; charset=utf-8",
-      "Content-Disposition": "inline; filename=\"hawthbush-farm.ics\"",
-      "Cache-Control": "public, max-age=600",
-      "Access-Control-Allow-Origin": "*",
-    },
-    body: ics,
-  };
-};
+exports._internals = { buildIcs, tokenMatches };
