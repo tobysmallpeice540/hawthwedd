@@ -20,6 +20,12 @@ const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 // loudly rather than quietly reopen what this change closes.
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const ACCOM_KEY    = "hbf_accom_v1";
+const PROPS_KEY    = "hbf_properties_v1";
+const MAX_PROPERTIES_PER_BOOKING = 3;   // as on the booking page
+// How far the browser's figure may drift from the server's before the booking
+// is refused. Both run the same arithmetic, so in practice they agree to the
+// penny; the pound is headroom for float rounding, not for a discount.
+const PRICE_TOLERANCE = 1;
 
 // ── Supabase helpers (no header spread) ──────────────────────────────────────
 async function sbGet(key) {
@@ -71,23 +77,44 @@ exports.handler = async function(event) {
     stays = [{ propertyId: body.propertyId, propertyName: body.propertyName, checkIn: body.checkIn, checkOut: body.checkOut, nights: body.nights, value: body.totalAmount }];
   }
 
-  const { totalAmount, depositAmount, guestName, email, phone, guestCount, notes } = body;
+  const { guestName, email, phone, guestCount, notes } = body;
 
-  if (!totalAmount || !depositAmount || !guestName || !email) {
+  if (!body.totalAmount || !body.depositAmount || !guestName || !email) {
     return { statusCode: 400, body: JSON.stringify({ error: "Missing required fields" }) };
   }
 
-  // Primary stay for metadata / URLs
-  const primaryStay = stays[0];
-  const propNamesJoined = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
-  const checkIn  = primaryStay.checkIn;
-  const checkOut = primaryStay.checkOut;
-
-  // Determine origin for success/cancel URLs
-  const origin = event.headers["origin"] || event.headers["referer"] || "https://hawthbushfarm.netlify.app";
-  const baseUrl = origin.replace(/\/$/, "");
+  // The success and cancel addresses below are fixed (the website's /book
+  // page), so nothing here is built from the request's Origin or Referer.
 
   try {
+    // ── 0. Price on the server ───────────────────────────────────────────────
+    // The browser's figures are a claim, not a price. The stays are re-priced
+    // here from the stored property settings with the booking page's own
+    // rules, and it is the server's deposit that Stripe is asked to take.
+    const properties = (await sbGet(PROPS_KEY)) || [];
+    const quote = priceBooking(properties, stays, londonToday());
+    if (quote.error) {
+      return { statusCode: 400, headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({ error: quote.error }) };
+    }
+    if (Math.abs(Number(body.totalAmount) - quote.total) > PRICE_TOLERANCE ||
+        Math.abs(Number(body.depositAmount) - quote.deposit) > PRICE_TOLERANCE) {
+      console.warn("create-accom-checkout: price mismatch — browser", body.totalAmount, body.depositAmount,
+                   "server", quote.total, quote.deposit);
+      return { statusCode: 400, headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({ error: "The price for these dates has changed since the page was loaded. " +
+                                            "Please refresh the page to see the current price, then try again." }) };
+    }
+    stays = quote.stays;
+    const totalAmount   = quote.total;
+    const depositAmount = quote.deposit;
+
+    // Primary stay for metadata / URLs
+    const primaryStay = stays[0];
+    const propNamesJoined = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
+    const checkIn  = primaryStay.checkIn;
+    const checkOut = primaryStay.checkOut;
+
     // ── 1. Create Stripe Checkout session ────────────────────────────────────
     const depositPence = Math.round(depositAmount * 100);
 
@@ -168,12 +195,13 @@ exports.handler = async function(event) {
     // digits, e.g. W10432. The existing list is loaded first so the number is
     // checked for collisions rather than assumed unique — it is the primary
     // key for this booking everywhere, including the Stripe webhook.
-    const bookingId    = newBookingRef(bookedAlready, "W");
+    let bookingId      = newBookingRef(bookedAlready, "W");
     const todayISO     = new Date().toISOString().slice(0,10);
     // Balance timing should follow the booking's earliest check-in (not
     // necessarily the first stay added), and respect whatever balanceWeeks
     // the booking page computed from the properties in the cart.
-    const balanceWeeks  = Number(body.balanceWeeks) > 0 ? Number(body.balanceWeeks) : 6;
+    // From the stored settings, by the page's rule — not from the browser.
+    const balanceWeeks  = quote.balanceWeeks > 0 ? quote.balanceWeeks : 6;
     const earliestCheckIn = stays.reduce(function(a, s) {
       return (!a || (s.checkIn && s.checkIn < a)) ? s.checkIn : a;
     }, null) || checkIn;
@@ -224,6 +252,15 @@ exports.handler = async function(event) {
 
     const booking = {
       id:              bookingId,
+      // The flat fields the office app writes for every booking (see
+      // handleSave in App.jsx). send-accom-reminders and older readers look
+      // at these, not at stays[].
+      propertyId:      normStays[0].propertyId,
+      propertyName:    normStays[0].propertyName,
+      propertyIds:     normStays.map(function(s) { return s.propertyId; }),
+      checkIn:         normStays[0].checkIn,
+      checkOut:        normStays[0].checkOut,
+      nights:          normStays[0].nights || null,
       guestName:       guestName,
       email:           email,
       phone:           phone || "",
@@ -257,7 +294,29 @@ exports.handler = async function(event) {
     // Re-read immediately before writing: another booking may have landed
     // while this guest was filling in the form, and appending to the stale
     // copy would erase it.
+    //
+    // And re-check the dates against that same fresh copy: the first check
+    // ran before the Stripe round-trip, and a booking, an Airbnb import or a
+    // block may have landed in between.
     const latest = await sbGet(ACCOM_KEY) || [];
+    const lateClashes = findClashes(latest, stays);
+    if (lateClashes.length) {
+      try { await stripe.checkout.sessions.expire(session.id); }
+      catch (e) { console.error("Could not expire checkout session " + session.id + ":", e.message); }
+      var lateNames = lateClashes.map(function(c) { return c.propertyName; })
+        .filter(function(v, i, a) { return a.indexOf(v) === i; }).join(" and ");
+      return {
+        statusCode: 409,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          error: "Sorry — " + lateNames + " has just been booked for those dates. Please choose different dates.",
+          clashes: lateClashes
+        })
+      };
+    }
+    if (latest.some(function(b) { return b && String(b.id).toUpperCase() === String(booking.id).toUpperCase(); })) {
+      booking.id = bookingId = newBookingRef(latest, "W");
+    }
     await sbSet(ACCOM_KEY, latest.concat([booking]));
 
     return {
@@ -274,6 +333,103 @@ exports.handler = async function(event) {
     };
   }
 };
+
+// ── Pricing ───────────────────────────────────────────────────────────────────
+// Ported verbatim from public/book-accom.html (which mirrors App.jsx). The
+// three must agree, or the price a guest is shown, the price they are charged
+// and the price the office sees drift apart. UTC-anchored date arithmetic, as
+// on the page.
+function parseISO(iso) {
+  var parts = iso.split("-");
+  return new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+}
+function toISO(d) {
+  return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
+}
+function seasonForDate(prop, ds) {
+  if (!prop.seasons) return null;
+  for (var i = 0; i < prop.seasons.length; i++) {
+    var s = prop.seasons[i];
+    if (s.startDate && s.endDate && ds >= s.startDate && ds < s.endDate) return s;
+  }
+  return null;
+}
+function getPriceForNight(prop, dateStr) {
+  if (!prop) return 0;
+  var s = seasonForDate(prop, dateStr);
+  if (s) return Number(s.ratePerNight) || 0;
+  return Number(prop.baseRate) || 0;
+}
+function longStayDiscountAmount(prop, nights, subtotal) {
+  if (!prop || !(prop.longStayThreshold > 0) || !(nights >= prop.longStayThreshold)) return 0;
+  var r2 = function(n) { return Math.round(n * 100) / 100; };
+  var pct = Number(prop.longStayDiscountPct) || 0;
+  if (pct > 0) return Math.min(r2(subtotal), r2(subtotal * pct / 100));
+  var legacyPerNight = Number(prop.longStayDiscount) || 0;
+  return legacyPerNight > 0 ? Math.min(r2(subtotal), r2(legacyPerNight * nights)) : 0;
+}
+function quoteStay(prop, ci, co) {
+  if (!prop || !ci || !co) return null;
+  var nights = Math.round((parseISO(co) - parseISO(ci)) / 86400000);
+  if (nights <= 0) return null;
+  var sub = 0;
+  var d = parseISO(ci);
+  for (var i = 0; i < nights; i++) {
+    sub += getPriceForNight(prop, toISO(d));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  var disc = longStayDiscountAmount(prop, nights, sub);
+  return { nights: nights, subtotal: sub, discount: disc, total: Math.max(0, Math.round((sub - disc) * 100) / 100) };
+}
+function maxNightsForProp(prop, ds) {
+  var s = ds ? seasonForDate(prop, ds) : null;
+  var v = s && Number(s.maxNights);
+  return (v && v > 0) ? v : (Number(prop && prop.maxNights) || 28);
+}
+
+// Today's date in London, as YYYY-MM-DD.
+function londonToday() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date());
+}
+
+// The whole basket, priced as the booking page prices it:
+//   each stay = quoteStay(...).total; total = their sum, in cart order;
+//   deposit % = the highest depositPct in the basket, never below 50
+//     (the page's reduce starts at 50 — see the report: glamping's 20% is
+//     therefore never applied online);
+//   balance weeks = the smallest balanceWeeks in the basket, at most 6;
+//   deposit = Math.round(total * pct) / 100.
+// Returns { error } for anything the page could not have produced.
+function priceBooking(properties, stays, todayIso) {
+  if (!Array.isArray(stays) || !stays.length) return { error: "Please choose at least one property." };
+  if (stays.length > MAX_PROPERTIES_PER_BOOKING) return { error: "Please book at most " + MAX_PROPERTIES_PER_BOOKING + " properties at once." };
+  var ISO = /^\d{4}-\d{2}-\d{2}$/;
+  var seen = {};
+  var out = [];
+  var props = [];
+  for (var i = 0; i < stays.length; i++) {
+    var st = stays[i] || {};
+    var prop = (properties || []).filter(function(p) { return p && p.id === st.propertyId; })[0];
+    if (!prop || prop.publicBookable === false) return { error: "That property can't be booked online. Please call us and we'll help." };
+    if (seen[prop.id]) return { error: "Each property can only appear once in a booking." };
+    seen[prop.id] = true;
+    if (!ISO.test(String(st.checkIn || "")) || !ISO.test(String(st.checkOut || ""))) return { error: "Those dates aren't valid. Please choose them again." };
+    if (todayIso && st.checkIn < todayIso) return { error: "Check-in can't be in the past. Please choose new dates." };
+    var q = quoteStay(prop, st.checkIn, st.checkOut);
+    if (!q) return { error: "Check-out must be after check-in." };
+    if (q.nights > maxNightsForProp(prop, st.checkIn)) return { error: "That stay is longer than " + prop.name + " can be booked for online." };
+    if (!(q.total > 0)) return { error: "We can't price those dates online. Please call us and we'll help." };
+    props.push(prop);
+    out.push({ propertyId: prop.id, propertyName: prop.name || prop.id, checkIn: st.checkIn, checkOut: st.checkOut,
+               nights: q.nights, value: q.total });
+  }
+  var total = out.reduce(function(a, s) { return a + s.value; }, 0);
+  var depPct = props.reduce(function(a, p) { return Math.max(a, p.depositPct || 50); }, 50);
+  var balWks = props.reduce(function(a, p) { return Math.min(a, p.balanceWeeks != null ? p.balanceWeeks : 6); }, 6);
+  var deposit = Math.round(total * depPct) / 100;
+  return { stays: out, total: total, deposit: deposit, depositPct: depPct, balanceWeeks: Number(balWks) };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // A short booking reference: one letter and five digits, e.g. "W10432".
@@ -330,3 +486,5 @@ function addWeeksISO(iso, weeks) {
   d.setDate(d.getDate() + weeks * 7);
   return d.toISOString().slice(0,10);
 }
+
+exports._internals = { priceBooking, quoteStay, findClashes, londonToday };
