@@ -455,6 +455,37 @@ async function handleBarRefund(charge) {
   ], r.event_id);
 }
 
+// A balance payment for an order that is no longer live. Noted on the order
+// (keyed by the session, so a retried delivery adds nothing and emails nobody
+// twice) and the office is told.
+async function recordStrayBalance(order, session) {
+  var tag = "[stray balance " + session.id + "]";
+  if ((order.notes || "").indexOf(tag) !== -1) return;
+  var amount = "£" + ((session.amount_total || 0) / 100).toFixed(2);
+  await sbRest("box_orders?id=eq." + order.id, {
+    method: "PATCH", prefer: "return=minimal",
+    body: { notes: (order.notes ? order.notes + "\n" : "") + tag + " " + amount + " balance paid in Stripe on " +
+      new Date().toISOString().slice(0, 10) + " after the order was " + order.status + ". Not applied — refund or reinstate by hand." }
+  });
+  if (!RESEND_KEY) { console.error("office alert not sent — RESEND_API_KEY missing: stray balance on " + order.order_ref); return; }
+  try {
+    var res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: FROM_HEADER, to: OFFICE_EMAIL,
+        subject: "Balance paid on a " + order.status + " box office order " + (order.order_ref || "") + " — please check",
+        html: barEmailHtml([
+          "A balance payment of <strong>" + barEsc(amount) + "</strong> came through Stripe for box office order <strong>" +
+            barEsc(order.order_ref || order.id) + "</strong>, which is marked <strong>" + barEsc(order.status) + "</strong>.",
+          "It has <strong>not</strong> been marked paid and no tickets have been issued. It is noted on the order.",
+          "Buyer: " + barEsc(((order.first_name || "") + " " + (order.last_name || "")).trim()) + " " + barEsc(order.email || "") + "<br>Checkout session: " + barEsc(session.id),
+          "Refund it in Stripe, or reinstate the order in the app."
+        ]) })
+    });
+    if (!res.ok) console.error("office alert failed:", (await res.text()).slice(0, 300));
+  } catch (e) { console.error("office alert threw:", e.message); }
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method not allowed" };
@@ -607,8 +638,19 @@ exports.handler = async function(event) {
       if (order.balance_paid_at) {
         return { statusCode: 200, body: JSON.stringify({ received: true, note: "balance already paid" }) };
       }
-      await sbRest("box_orders?id=eq." + order.id, {
-        method: "PATCH", prefer: "return=minimal",
+      // A balance paid on an order that has since been cancelled or refunded
+      // must not bring it back: no "paid", no tickets. The money is real, so
+      // it is written into the order's notes (once per session) and the
+      // office is told to refund or reinstate by hand.
+      if (order.status === "cancelled" || order.status === "refunded") {
+        await recordStrayBalance(order, session);
+        return { statusCode: 200, body: JSON.stringify({ received: true, note: "order " + order.status + " — balance recorded, office told" }) };
+      }
+      // Conditional on the state just read, so a cancellation (or another
+      // delivery) landing in between makes this change nothing.
+      var balRows = await sbRest("box_orders?id=eq." + order.id +
+          "&balance_paid_at=is.null&status=not.in.(cancelled,refunded)", {
+        method: "PATCH", prefer: "return=representation",
         body: {
           status: "paid",
           balance_paid_at: nowIso,
@@ -616,6 +658,16 @@ exports.handler = async function(event) {
           tickets_issued_at: order.tickets_issued_at || nowIso
         }
       });
+      if (!Array.isArray(balRows) || !balRows.length) {
+        // Re-read to tell "another delivery got there first" from "it was
+        // cancelled in the meantime" — only the second needs a human.
+        var nowRows = await sbRest("box_orders?id=eq." + order.id + "&select=*");
+        var nowOrd = nowRows && nowRows[0];
+        if (nowOrd && (nowOrd.status === "cancelled" || nowOrd.status === "refunded") && !nowOrd.balance_paid_at) {
+          await recordStrayBalance(nowOrd, session);
+        }
+        return { statusCode: 200, body: JSON.stringify({ received: true, note: "balance not applied — order changed" }) };
+      }
       // The balance clearing is exactly what issues the tickets, so the QR
       // goes out now and not before.
       await sendEmail("tickets_issued", order.id);
@@ -646,10 +698,17 @@ exports.handler = async function(event) {
       paidFields.stripe_payment_intent_id = typeof session.payment_intent === "string"
         ? session.payment_intent : session.payment_intent.id;
     }
-    await sbRest("box_orders?id=eq." + order.id, {
-      method: "PATCH", prefer: "return=minimal",
+    // Conditional on the order still being pending: if a cancellation or a
+    // parallel delivery got there first, this changes nothing and nobody is
+    // emailed. Only a PATCH that actually moved a row sends the confirmation.
+    var newRows = await sbRest("box_orders?id=eq." + order.id + "&status=eq.pending", {
+      method: "PATCH", prefer: "return=representation",
       body: paidFields
     });
+    if (!Array.isArray(newRows) || !newRows.length) {
+      console.warn("checkout.session.completed for " + order.order_ref + ": order was no longer pending — nothing changed");
+      return { statusCode: 200, body: JSON.stringify({ received: true, note: "order no longer pending" }) };
+    }
 
     await flagIfOversold(order);
 
