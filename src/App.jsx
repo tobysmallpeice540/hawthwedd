@@ -28157,6 +28157,35 @@ function CField({ label, k, type, hint, f, up }) {
   );
 }
 
+// A money field on the Contract tab. parseMoney keeps every digit and dot, so
+// "4,500 + 1,200" typed into a text box became 45001200 on the event. This box
+// takes a plain amount only: "£" and thousands commas are tidied away as you
+// type, and anything else (a "+", a word, a second point) is refused rather
+// than stored. A value saved before this that is not a plain amount is shown
+// as it is, with a warning, so nothing is silently blanked.
+const PLAIN_AMOUNT = /^\d*(\.\d{0,2})?$/;
+function CMoneyField({ label, k, hint, f, up }) {
+  const [refused, setRefused] = useState(false);
+  const raw = f[k] == null ? "" : String(f[k]);
+  const odd = raw.trim() !== "" && !PLAIN_AMOUNT.test(raw.trim());
+  return (
+    <BoxField label={label} hint={refused ? "Numbers only — a plain amount like 4500 or 4500.50. Put any sum or note in Non standard terms."
+      : odd ? "“" + raw + "” is not a plain amount — retype it as a number." : hint}>
+      <BoxInput type="text" value={raw} style={odd || refused ? { borderColor:T.amber } : null}
+        onChange={function(v){
+          const clean = String(v).replace(/[£,\s]/g, "");
+          if (!PLAIN_AMOUNT.test(clean)) {
+            // An old value that is not an amount can still be deleted away.
+            if (odd && String(v).length < raw.length) { setRefused(false); up(k, v); return; }
+            setRefused(true); return;
+          }
+          setRefused(false);
+          up(k, clean);
+        }}/>
+    </BoxField>
+  );
+}
+
 // Contract fields that ARE the event's own values. Editing one of these on the
 // Contract tab edits the event itself (and so autosaves with it), and the tab
 // always reads them fresh from the event — never from an old snapshot. Before
@@ -28802,7 +28831,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         <CField f={f} up={up} label="Event type" k="eventType"/>
         <CField f={f} up={up} label="Event date" k="eventDate" type="date"/>
         <CField f={f} up={up} label="Max guests" k="maxGuests"/>
-        <CField f={f} up={up} label="Venue fee (inc VAT)" k="venueFee" hint="Saved to the event's Financials."/>
+        <CMoneyField f={f} up={up} label="Venue fee (inc VAT)" k="venueFee" hint="Saved to the event's Financials."/>
       </div>
 
       {/* Full width — these run to a few lines and are the one place the
@@ -28825,16 +28854,16 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
         <CField f={f} up={up} label="Amly from" k="amlyFrom" type="date"/>
         <CField f={f} up={up} label="Amly to" k="amlyTo" type="date"/>
-        <CField f={f} up={up} label="Amly fee" k="amlyFee" hint="Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Amly fee" k="amlyFee" hint="Saved to the event."/>
         <CField f={f} up={up} label="Hamlet from" k="hamletFrom" type="date"/>
         <CField f={f} up={up} label="Hamlet to" k="hamletTo" type="date"/>
-        <CField f={f} up={up} label="Hamlet fee" k="hamletFee" hint="Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Hamlet fee" k="hamletFee" hint="Saved to the event."/>
         <CField f={f} up={up} label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
         <CField f={f} up={up} label="Glamping, 1 night — to" k="glampingTo" type="date"/>
-        <CField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night. Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night. Saved to the event."/>
         <CField f={f} up={up} label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
         <CField f={f} up={up} label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
-        <CField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights. Saved to the event."/>
+        <CMoneyField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights. Saved to the event."/>
       </div>
       <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
         All four choices — Amly, Hamlet, and the two glamping options — are the client's to make on the form.
