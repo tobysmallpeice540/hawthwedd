@@ -28204,6 +28204,11 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
   // with something already booked. Turns the button into a deliberate override
   // rather than silently double booking.
   const [forceAccom, setForceAccom] = useState(false);
+  // The event as it is NOW. SignWell calls and the PDF download take seconds;
+  // anything written after them is built on this, not on the render they
+  // started in, or a file uploaded (or a field typed) meanwhile would be lost.
+  const latestRef = useRef(formData);
+  latestRef.current = formData;
 
   // Every edit is written onto the event record, so the form's autosave keeps
   // it. Event-backed values go to the event field itself; the rest are kept as
@@ -28290,7 +28295,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
         fields: f,
       };
       update("contract", record);
-      if (onAutoSave) await onAutoSave(Object.assign({}, formData, { contract: record }));
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, { contract: record }));
       setMsg(testMode ? "Test contract created — nothing was emailed to anyone." : "Contract sent.");
     } catch (e) { setErr(e.message); }
     setBusy(false);
@@ -28313,8 +28318,13 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
     if (!silent) setBusy(true);
     setErr("");
     try {
-      const d = await signWell("document", { documentId: saved.documentId });
-      const record = Object.assign({}, saved, {
+      const docId = saved.documentId;
+      const d = await signWell("document", { documentId: docId });
+      // Built on the contract as it is now — and if a different contract has
+      // been sent while this one was being checked, this answer is not for it.
+      const curContract = latestRef.current.contract || {};
+      if (curContract.documentId !== docId) { if (!silent) setBusy(false); return; }
+      const record = Object.assign({}, curContract, {
         status: d.status, values: d.values, recipients: d.recipients,
         raw: d.raw, checkedAt: new Date().toISOString()
       });
@@ -28324,12 +28334,15 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       const patch = { contract: record };
       let filed = false;
       const done = String(d.status || "").toLowerCase() === "completed";
-      const already = (formData.files || []).some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
-      if (done && !already) {
+      const isFiled = function(list) { return (list || []).some(function(fl) { return fl.signwellDocumentId === docId; }); };
+      if (done && !isFiled(latestRef.current.files)) {
         try {
           const made = await attachPdf(record);
-          if (made) {
-            patch.files = (formData.files || []).concat([made]);
+          // Appended to the files as they are after the download, and only if
+          // another check has not filed it in the meantime.
+          const nowFiles = latestRef.current.files || [];
+          if (made && !isFiled(nowFiles)) {
+            patch.files = nowFiles.concat([made]);
             update("files", patch.files);
             filed = true;
           }
@@ -28340,7 +28353,7 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       }
 
       update("contract", record);
-      if (onAutoSave) await onAutoSave(Object.assign({}, formData, patch));
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, patch));
       buildReview(d.values);
       if (!silent) setMsg("Status: " + (d.status || "unknown") + (filed ? " — signed copy filed as the Event Booking Form." : ""));
       else if (filed) setMsg("Contract signed — signed copy filed as the Event Booking Form.");
@@ -28507,15 +28520,16 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       }
 
       // The PDF only exists once everybody has signed.
-      let files = formData.files || [];
       let filed = false;
       const done = String(saved.status || "").toLowerCase() === "completed";
-      const already = files.some(function(fl) { return fl.signwellDocumentId === saved.documentId; });
+      const isFiled = function(list) { return (list || []).some(function(fl) { return fl.signwellDocumentId === saved.documentId; }); };
       let pdfProblem = "";
-      if (done && !already) {
+      if (done && !isFiled(latestRef.current.files)) {
         try {
           const made = await attachPdf(saved);
-          if (made) { files = files.concat([made]); patch.files = files; filed = true; }
+          // Onto the files as they are now, after the lettings calls and the download.
+          const nowFiles = latestRef.current.files || [];
+          if (made && !isFiled(nowFiles)) { patch.files = nowFiles.concat([made]); filed = true; }
         } catch (e) {
           // The details and the bookings are the valuable part; losing them
           // because a PDF wouldn't download would be the wrong trade.
@@ -28524,12 +28538,12 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       }
 
       Object.keys(patch).forEach(function(k) { update(k, patch[k]); });
-      const rec = Object.assign({}, saved, { appliedAt: new Date().toISOString() });
+      const rec = Object.assign({}, latestRef.current.contract || saved, { appliedAt: new Date().toISOString() });
       update("contract", rec);
       // One save covering the details and the applied stamp together — saving
       // twice would leave a window where the event has the new details but
       // still looks unapplied.
-      if (onAutoSave) await onAutoSave(Object.assign({}, formData, patch, { contract: rec }));
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, patch, { contract: rec }));
 
       const bits = [];
       if (Object.keys(patch).length) bits.push(Object.keys(patch).length + " detail" + (Object.keys(patch).length===1?"":"s") + " written to the event");
