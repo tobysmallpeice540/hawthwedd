@@ -15775,7 +15775,7 @@ function SalesFunnelReport({ enquiries, bookings }) {
 //     date. Bookings billed through a linked event are skipped — they are on
 //     the event's invoices already — and unpaid lines already past due are
 //     shown as overdue rather than dropped.
-function cashflowForecast(bookings, accomBookings, accomFallback, todayIso) {
+function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, properties) {
   const today = todayIso || new Date().toISOString().slice(0, 10);
   const startM = today.slice(0, 7);
   const months = [];
@@ -15802,8 +15802,28 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso) {
       r.items.push({ kind: holding ? "Holding event" : "Event", who: ev.couple || "(no name)", what: st.label, when: when, amount: st.total });
     });
   });
+  const unpriced = [];
   (accomBookings || []).forEach(function(b) {
     if (!b || b.status === "cancelled" || b.linkedEventId) return;
+    if (b.bookingType === "Blocked") return;
+    // Airbnb pays us itself, after the guest has stayed: the money is taken
+    // as arriving on the last day of the let. Its payment schedule is
+    // ignored — on an imported booking it is a placeholder, often ticked
+    // "paid" before anything has arrived. The figure is the one recorded on
+    // the booking, or failing that the calendar-based estimate the lettings
+    // reports use (lettingValue). A stay already over is taken as received.
+    if (b.source === "airbnb") {
+      const stays = (b.stays && b.stays.length) ? b.stays : [b];
+      const out = stays.map(function(st) { return st && st.checkOut; }).filter(isValidEventDate).sort().pop();
+      if (!out || out < today) return;
+      const v = lettingValue(b, properties || []);
+      if (!(v.value > 0)) { unpriced.push({ who: b.guestName || "(no name)", when: out }); return; }
+      const m = out.slice(0, 7);
+      if (!rows[m]) return;
+      rows[m].lets += v.value;
+      rows[m].items.push({ kind: "Lettings", who: b.guestName || "(no name)", what: "Airbnb payout" + (v.estimated ? " (estimated)" : ""), when: out, amount: round2(v.value) });
+      return;
+    }
     (b.schedule || []).forEach(function(line) {
       if (!line || line.paid) return;
       const owed = round2((Number(line.amount) || 0) - (Number(line.paidAmount) || 0));
@@ -15815,11 +15835,11 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso) {
       rows[m].lets += owed; rows[m].items.push(item);
     });
   });
-  return { months: months.map(function(m) { return rows[m]; }), overdue: overdue };
+  return { months: months.map(function(m) { return rows[m]; }), overdue: overdue, unpriced: unpriced };
 }
-function CashflowReport({ bookings, accomBookings }) {
+function CashflowReport({ bookings, accomBookings, accomProperties }) {
   const [open, setOpen] = useState(null);
-  const f = cashflowForecast(bookings, accomBookings);
+  const f = cashflowForecast(bookings, accomBookings, null, null, accomProperties);
   const totals = f.months.reduce(function(a, r) { return { conf:a.conf + r.conf, hold:a.hold + r.hold, lets:a.lets + r.lets }; }, { conf:0, hold:0, lets:0 });
   const max = Math.max.apply(null, [1].concat(f.months.map(function(r) { return r.conf + r.hold + r.lets; })));
   const th = { textAlign:"right", padding:"9px 12px", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, whiteSpace:"nowrap" };
@@ -15829,8 +15849,13 @@ function CashflowReport({ bookings, accomBookings }) {
     <div>
       <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12.5, color:T.infoText, lineHeight:1.6 }}>
         What is expected in, inc VAT. Events follow the invoice schedule (deposit at booking, 1 December, final 28 days before);
-        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule.
+        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule; Airbnb bookings are counted on the last day of the let, at the figure recorded or, where there is none, the estimate from our own calendar rate plus {AIRBNB_UPLIFT_PCT}%.
       </div>
+      {f.unpriced.length > 0 && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:13, color:"#92400e" }}>
+          {f.unpriced.length} coming Airbnb booking{f.unpriced.length !== 1 ? "s have" : " has"} no figure and could not be estimated (no calendar rate for the property), so {f.unpriced.length !== 1 ? "they are" : "it is"} not included: {f.unpriced.map(function(u){ return u.who + " (" + fmtDate(u.when) + ")"; }).join(", ")}.
+        </div>
+      )}
       {f.overdue.lets > 0 && (
         <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:13, color:"#92400e" }}>
           <strong>{fmtMoney(f.overdue.lets)}</strong> of lettings payments are past their due date and not marked paid ({f.overdue.items.length} line{f.overdue.items.length !== 1 ? "s" : ""}).
@@ -15905,7 +15930,7 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
       {activeType==="hours"     && <HoursReport bookings={bookings} staff={staff}/>}
       {activeType==="timeline"  && <StaffTimelineReport bookings={bookings} staff={staff}/>}
       {activeType==="funnel"    && <SalesFunnelReport enquiries={enquiries||[]} bookings={bookings}/>}
-      {activeType==="cashflow"  && <CashflowReport bookings={bookings} accomBookings={accomBookings||[]}/>}
+      {activeType==="cashflow"  && <CashflowReport bookings={bookings} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]}/>}
     </div>
   );
 }

@@ -49,13 +49,14 @@ function liftConst(name) {
 
 const CONSTS = ["XERO_ACCOUNT_EVENTS", "XERO_ACCOUNT_ACCOM", "INVOICE_STAGE_LABELS", "INVOICE_FIRST_EVENT_YEAR",
                 "DAMAGE_DEPOSIT_STATES", "STATEMENT_STAGE_LABELS", "VAT_CATEGORIES", "STAFFING_FIELDS",
-                "STAFFING_LABELS", "BAR_USAGE_LABEL", "DEFAULT_AUTOMATIONS"];
+                "STAFFING_LABELS", "BAR_USAGE_LABEL", "DEFAULT_AUTOMATIONS", "AIRBNB_UPLIFT_PCT"];
 const NAMES = ["round2", "parseMoney", "isValidEventDate", "addDaysIso", "fmtDateLong", "fmtWeekdayLong", "eventTypeLabel",
                "eventAccomStays", "eventAccomExtras", "accomLineDescription", "invoiceStageDates",
                "computeEventInvoiceStages", "findPushedInvoice", "isInvoiceableYear", "fmtMoney", "hhmm",
                "damageDepositInfo", "eventStatementRows", "vatOfInclusive", "signedAmount", "eventVatSplit",
                "venueAnswerText", "venueFormAnswered", "fsEsc", "functionSheetHtml",
-               "lastContactFrom", "automationDays", "enquiryGoneQuiet", "gmailCheckedOnDay"];
+               "lastContactFrom", "automationDays", "enquiryGoneQuiet", "gmailCheckedOnDay",
+               "lettingValue", "estimateLettingValue", "cashflowForecast"];
 const ctx = {};
 eval(DAY + "\n" + CONSTS.map(liftConst).join("\n") + "\n" + NAMES.map(lift).join("\n\n") + "\n" +
      NAMES.concat(CONSTS).map(n => "ctx." + n + " = " + n + ";").join("\n"));
@@ -173,6 +174,26 @@ console.log("function sheet");
   ok("other venue-form answers in notes", html.indexOf("Confetti?") !== -1 && html.indexOf(">Yes<") !== -1);
   ok("a part that failed says so", html.indexOf("Drinks could not be loaded") !== -1);
   ok("non-admin is told why dietary notes are missing", html.indexOf("only shown to an admin login") !== -1);
+}
+
+console.log("cashflow: Airbnb paid on the last day of the let");
+{
+  const lets = [
+    { id: "a1", source: "airbnb", status: "confirmed", guestName: "Sam Airbnb", value: 900,
+      stays: [{ propertyId: "hamlet", checkIn: "2026-11-27", checkOut: "2026-12-01", value: 900 }],
+      schedule: [{ label: "Deposit", amount: 450, paid: true }, { label: "Balance", amount: 450, paid: false, dueDate: "2026-11-01" }] },
+    { id: "a2", source: "airbnb", status: "confirmed", guestName: "Gone Airbnb", value: 500, stays: [{ propertyId: "hamlet", checkIn: "2026-10-01", checkOut: "2026-10-03" }] },
+    { id: "a3", source: "airbnb", status: "confirmed", guestName: "Unpriced Airbnb", value: 0, stays: [{ propertyId: "nowhere", checkIn: "2026-11-05", checkOut: "2026-11-07" }] },
+    { id: "a4", source: "airbnb", status: "cancelled", guestName: "Cancelled", value: 700, stays: [{ propertyId: "hamlet", checkIn: "2026-11-05", checkOut: "2026-11-07" }] },
+    { id: "d1", source: "direct", status: "confirmed", guestName: "Direct", schedule: [{ label: "Balance", amount: 300, paid: false, dueDate: "2026-11-10" }] }
+  ];
+  const f = ctx.cashflowForecast([], lets, null, "2026-10-24", []);
+  const month = (m) => f.months.find((r) => r.month === m);
+  eq("counted in the month the let ends, not by its schedule", [month("2026-11").lets, month("2026-12").lets], [300, 900]);
+  ok("labelled as an Airbnb payout", month("2026-12").items.some((i) => i.what === "Airbnb payout" && i.when === "2026-12-01"));
+  eq("a let already over is taken as received", f.months.reduce((a, r) => a + r.items.filter((i) => i.who === "Gone Airbnb").length, 0), 0);
+  eq("one with no figure and no rate is reported, not counted", f.unpriced.map((u) => u.who), ["Unpriced Airbnb"]);
+  eq("not reported as overdue", f.overdue.lets, 0);
 }
 
 console.log("gone-quiet flag (app side, mirrors automations.js)");
