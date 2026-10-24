@@ -42,6 +42,13 @@ const PROPS_KEY     = "hbf_properties_v1";
 const TEMPLATES_KEY = "hbf_email_templates_v1";
 const EMAIL_LOG_KEY = "hbf_email_log_v1";
 const TERMS_KEY     = "hbf_terms_v1";
+// Used by getTermsUrl below. It was referenced but never defined, so the
+// ReferenceError was swallowed by getTermsUrl's catch and the T&C link never
+// appeared on these emails.
+const SITE_ORIGIN   = "https://hawthbushfarm.netlify.app";
+// Where "this needs a human" emails go — same address as the ticket webhook's
+// OFFICE_EMAIL and submit-brochure's default notifyEmail.
+const OFFICE_EMAIL  = "hello@hawthbushfarm.co.uk";
 
 const DEFAULT_TEMPLATES = [
   { id: "booking_confirmed", subject: "Booking Confirmed – {{propertyName}} – Ref {{bookingRef}}",
@@ -306,8 +313,11 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
   var property = properties.find(function(p) { return p.id === (booking.propertyId || ((booking.stays || [])[0] || {}).propertyId); });
   var amountPaid = (amountPaidPence / 100).toFixed(2);
 
-  // Booking Confirmed — only for the very first (accom_deposit) payment on a booking
-  if (opts.sendBookingConfirmed && booking.email && !(booking.emailFlags || {}).bookingConfirmedSent) {
+  opts.result = opts.result || {};
+  // Booking Confirmed — only for the very first (accom_deposit) payment on a
+  // booking. The flag was already claimed in the record written before this
+  // ran (see applyPayment), so the caller says whether to send it.
+  if (opts.sendBookingConfirmed && booking.email) {
     var bcTmpl = templates.find(function(t) { return t.id === "booking_confirmed"; }) || DEFAULT_TEMPLATES.find(function(t) { return t.id === "booking_confirmed"; });
     var bcTokens = buildTokens(booking, property, {});
     var bcSubject = fillTemplate(bcTmpl.subject, bcTokens);
@@ -315,9 +325,9 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
     var bcRes = await sendViaResend(booking.email, bcSubject, bcBody);
     if (bcRes.ok) {
       await logEmail(bcSubject, booking.email, "booking_confirmed", booking.id, bcBody);
-      booking.emailFlags = Object.assign({}, booking.emailFlags || {}, { bookingConfirmedSent: true });
     } else {
       console.error("booking_confirmed send failed:", bcRes.error);
+      opts.result.bookingConfirmedFailed = true;
     }
   }
 
@@ -375,94 +385,87 @@ exports.handler = async function(event) {
     const paidDate  = paidAt.slice(0, 10);
     const amountPence = session.amount_total || 0;
 
+    // The slow Stripe call comes first, so the bookings array is read only
+    // once everything else is in hand and written straight back.
     const receipt = await fetchReceiptUrl(session);
 
-    const bookings   = (await sbGet(ACCOM_KEY)) || [];
     const properties = (await sbGet(PROPS_KEY)) || [];
     const templates   = (await sbGet(TEMPLATES_KEY)) || DEFAULT_TEMPLATES;
 
-    let found = false;
-    let alreadyPaid = false;
-    let targetIdx = -1;
+    // Re-read immediately before the write, and change only this booking.
+    const bookings   = (await sbGet(ACCOM_KEY)) || [];
+    const r = applyPayment(bookings, {
+      metaType: metaType, sessionId: sessionId,
+      bookingId: session.metadata.bookingId, scheduleLabel: session.metadata.scheduleLabel,
+      amountPence: amountPence, paidDate: paidDate,
+      receiptUrl: receipt.receiptUrl, paymentIntentId: receipt.paymentIntentId,
+      paymentIntent: session.payment_intent
+    });
 
-    if (metaType === "accom_deposit") {
-      targetIdx = bookings.findIndex(function(b) { return b.stripeSessionId === sessionId; });
-    } else {
-      const bookingId = session.metadata.bookingId;
-      targetIdx = bookings.findIndex(function(b) { return String(b.id) === String(bookingId); });
-    }
-
-    if (targetIdx === -1) {
+    if (r.notFound) {
       console.warn("No booking found for Stripe session:", sessionId, metaType);
+      await notifyOffice("Lettings payment received but no booking matches — please check Stripe",
+        "A lettings payment came through Stripe, but no booking in the app matches it — it may have been deleted.\n\n" +
+        "Amount: £" + (amountPence / 100).toFixed(2) + "\n" +
+        "Type: " + metaType + "\n" +
+        "Booking ref (from Stripe): " + (session.metadata.bookingId || "—") + "\n" +
+        "Guest: " + (session.metadata.guestName || "—") + " " + (session.customer_email || session.metadata.email || "") + "\n" +
+        "Checkout session: " + sessionId + "\n\n" +
+        "Nothing has been recorded. Refund it in Stripe, or re-create the booking and mark the payment by hand.");
       return { statusCode: 200, body: JSON.stringify({ received: true, warning: "Booking not found" }) };
     }
 
-    found = true;
-    var booking = Object.assign({}, bookings[targetIdx]);
-
-    if (metaType === "accom_deposit") {
-      booking.status = "confirmed";
-      var schedule1 = (booking.schedule || []).map(function(s) {
-        if (s.stripeId === sessionId || s.label === "Deposit") {
-          if (s.paid) alreadyPaid = true;
-          return Object.assign({}, s, {
-            paid: true, paidDate: paidDate,
-            paidAmount: Math.round(amountPence) / 100,
-            receiptUrl: receipt.receiptUrl,
-            paymentIntentId: receipt.paymentIntentId
-          });
-        }
-        return s;
-      });
-      booking.schedule = schedule1;
-      if (session.payment_intent) booking.depositStripeId = session.payment_intent;
-    } else {
-      var scheduleLabel = session.metadata.scheduleLabel;
-      var schedule2 = (booking.schedule || []).map(function(s) {
-        if (s.label === scheduleLabel) {
-          if (s.paid) alreadyPaid = true;
-          return Object.assign({}, s, {
-            paid: true, paidDate: paidDate,
-            paidAmount: Math.round(amountPence) / 100,
-            receiptUrl: receipt.receiptUrl,
-            paymentIntentId: receipt.paymentIntentId
-          });
-        }
-        return s;
-      });
-      booking.schedule = schedule2;
+    if (r.duplicate) {
+      console.log("Payment already recorded — retried delivery for session", sessionId);
+      return { statusCode: 200, body: JSON.stringify({ received: true, duplicate: true }) };
     }
 
-    // Money received on a pending booking confirms it, however it arrived.
-    //
-    // This used to happen only in the accom_deposit branch above — the Stripe
-    // session created by the public checkout page. But a deposit is very often
-    // paid against a different session: the guest abandons the original
-    // checkout, somebody sends a deposit request from the app, and that
-    // payment arrives here as a scheduled payment and takes the else branch.
-    // It marked the schedule entry paid, sent the confirmation email, and left
-    // the booking pending for ever. Booking W15032 sat like that with £1,170
-    // banked and its confirmation email sent.
-    //
-    // Deliberately only promotes FROM pending: a completed or cancelled
-    // booking taking a late payment must not be dragged back to confirmed.
-    if (booking.status === "pending" && (booking.schedule || []).some(function(s) { return s && s.paid; })) {
-      console.log("Promoting booking " + booking.id + " from pending to confirmed — payment received");
-      booking.status = "confirmed";
-    }
-
-    if (!alreadyPaid) {
-      booking = await sendPaymentEmails(booking, amountPence, templates, properties, {
-        sendBookingConfirmed: metaType === "accom_deposit",
-        receiptUrl: receipt.receiptUrl
-      });
-    } else {
-      console.log("Schedule entry already marked paid — skipping duplicate email for session", sessionId);
-    }
-
-    bookings[targetIdx] = booking;
-    await sbSet(ACCOM_KEY, bookings);
+    // The record goes in BEFORE any email. If this write fails Stripe retries
+    // and nothing has been sent; once it has landed, a retry finds the entry
+    // already paid and sends nothing.
+    await sbSet(ACCOM_KEY, r.list);
     console.log("Booking updated for Stripe session:", sessionId, metaType);
+
+    var booking = r.booking;
+
+    if (r.cancelled) {
+      // Money on a cancelled booking: recorded, status untouched, no guest
+      // email — somebody has to decide between a refund and a reinstatement.
+      await notifyOffice("Payment received on a CANCELLED booking " + String(booking.id).toUpperCase() + " — please check",
+        "A lettings payment came in for a booking that is marked cancelled. It has been recorded against the booking, " +
+        "but the booking has been left cancelled and the guest has not been emailed.\n\n" +
+        "Booking: " + String(booking.id).toUpperCase() + " — " + (booking.guestName || "") + " " + (booking.email || "") + "\n" +
+        buildStayDetailsText(booking) + "\n" +
+        "Amount: £" + (amountPence / 100).toFixed(2) + "\n\n" +
+        "Refund it in Stripe, or reinstate the booking in the app.");
+      return { statusCode: 200, body: JSON.stringify({ received: true, cancelled: true }) };
+    }
+
+    if (r.alreadyPaid) {
+      console.log("Schedule entry already marked paid — skipping duplicate email for session", sessionId);
+      return { statusCode: 200, body: JSON.stringify({ received: true }) };
+    }
+
+    var result = {};
+    await sendPaymentEmails(booking, amountPence, templates, properties, {
+      sendBookingConfirmed: r.sendBookingConfirmed,
+      receiptUrl: receipt.receiptUrl,
+      result: result
+    });
+
+    // The confirmation flag was claimed in the write above. If that email
+    // then failed, give the flag back so the office can see it was not sent.
+    if (r.sendBookingConfirmed && result.bookingConfirmedFailed) {
+      try {
+        var fresh = (await sbGet(ACCOM_KEY)) || [];
+        var k = fresh.findIndex(function(b) { return b && String(b.id) === String(booking.id); });
+        if (k !== -1 && (fresh[k].emailFlags || {}).bookingConfirmedSent) {
+          var fl = Object.assign({}, fresh[k].emailFlags); delete fl.bookingConfirmedSent;
+          fresh = fresh.slice(); fresh[k] = Object.assign({}, fresh[k], { emailFlags: fl });
+          await sbSet(ACCOM_KEY, fresh);
+        }
+      } catch (e) { console.error("Could not release bookingConfirmedSent:", e.message); }
+    }
 
     return { statusCode: 200, body: JSON.stringify({ received: true }) };
 
@@ -472,3 +475,89 @@ exports.handler = async function(event) {
     return { statusCode: 500, body: "Internal error — Stripe will retry" };
   }
 };
+
+// ── The payment, applied to a freshly read bookings array ─────────────────────
+// Pure, so it can be tested. Returns one of:
+//   { notFound: true }
+//   { duplicate: true }            — this payment is already on the record
+//   { list, booking, cancelled, sendBookingConfirmed }
+// Rules:
+//   · only the matched booking changes; everything else is written as read;
+//   · the schedule entry is marked paid with this payment's details;
+//   · status is promoted from "pending" to "confirmed" and from nothing else —
+//     a cancelled booking stays cancelled (the caller tells the office);
+//   · for the first online payment the bookingConfirmedSent flag is claimed
+//     here, in the same write, so a retry can never send it twice.
+function applyPayment(bookings, p) {
+  var list = Array.isArray(bookings) ? bookings.slice() : [];
+  var idx;
+  if (p.metaType === "accom_deposit") {
+    idx = list.findIndex(function(b) { return b && b.stripeSessionId === p.sessionId; });
+  } else {
+    idx = list.findIndex(function(b) { return b && String(b.id) === String(p.bookingId); });
+  }
+  if (idx === -1) return { notFound: true };
+
+  var booking = Object.assign({}, list[idx]);
+  var matches = p.metaType === "accom_deposit"
+    ? function(s) { return s.stripeId === p.sessionId || s.label === "Deposit"; }
+    : function(s) { return s.label === p.scheduleLabel; };
+
+  // A retried delivery: the matching entry already carries this very payment.
+  var dup = (booking.schedule || []).some(function(s) {
+    return s && matches(s) && s.paid &&
+      ((p.paymentIntentId && s.paymentIntentId === p.paymentIntentId) || s.paidSessionId === p.sessionId);
+  });
+  if (dup) return { duplicate: true };
+
+  var alreadyPaid = false;
+  booking.schedule = (booking.schedule || []).map(function(s) {
+    if (!s || !matches(s)) return s;
+    if (s.paid) alreadyPaid = true;
+    return Object.assign({}, s, {
+      paid: true, paidDate: p.paidDate,
+      paidAmount: Math.round(p.amountPence) / 100,
+      receiptUrl: p.receiptUrl,
+      paymentIntentId: p.paymentIntentId,
+      paidSessionId: p.sessionId
+    });
+  });
+  if (p.metaType === "accom_deposit" && p.paymentIntent) booking.depositStripeId = p.paymentIntent;
+
+  var cancelled = booking.status === "cancelled";
+
+  // Money received on a pending booking confirms it, however it arrived —
+  // the deposit is often paid against a reminder session rather than the
+  // original checkout (booking W15032 sat pending with £1,170 banked).
+  // Deliberately only promotes FROM pending.
+  if (booking.status === "pending" && booking.schedule.some(function(s) { return s && s.paid; })) {
+    booking.status = "confirmed";
+  }
+
+  var sendBookingConfirmed = false;
+  if (!cancelled && !alreadyPaid && p.metaType === "accom_deposit" && booking.email &&
+      !(booking.emailFlags || {}).bookingConfirmedSent) {
+    sendBookingConfirmed = true;
+    booking.emailFlags = Object.assign({}, booking.emailFlags || {}, { bookingConfirmedSent: true });
+  }
+
+  list[idx] = booking;
+  // alreadyPaid without being a duplicate: the entry was already marked paid
+  // (by hand, or by an older delivery before paidSessionId was recorded). The
+  // Stripe details are recorded, but the guest is not emailed again.
+  return { list: list, booking: booking, cancelled: cancelled, sendBookingConfirmed: sendBookingConfirmed, alreadyPaid: alreadyPaid };
+}
+
+async function notifyOffice(subject, text) {
+  try {
+    if (!RESEND_KEY) { console.error("notifyOffice: RESEND_API_KEY not set —", subject); return; }
+    var res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: FROM_HEADER, to: OFFICE_EMAIL, subject: subject, html: buildEmailHtml(text, {}) }),
+    });
+    if (!res.ok) console.error("notifyOffice failed:", await res.text());
+  } catch (e) { console.error("notifyOffice failed:", e.message); }
+}
+
+exports._internals = { applyPayment };
