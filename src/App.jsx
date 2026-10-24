@@ -9575,10 +9575,25 @@ function PortalLogins({ bookings }) {
         )}
       </div>
 
-      {eventId && <PortalEventPanel eventId={Number(eventId)}
+      {eventId && <PortalEventPanel key={eventId} eventId={Number(eventId)}
         booking={ch.all.find(function(b){ return String(b.id) === String(eventId); })} />}
     </div>
   );
+}
+
+// Which event a per-event panel is showing NOW, readable after an await. A load
+// that comes back for an event the panel has moved on from (or after it has
+// gone) must not land: it would put event A's figures and drafts on event B's
+// screen, and the next Save would write them onto B. Panels are also keyed by
+// event id where they are rendered, so this is the second line, not the first.
+function useEventGuard(eventId) {
+  const ref = useRef({ id: eventId, alive: true });
+  ref.current.id = eventId;
+  useEffect(function(){
+    ref.current.alive = true;
+    return function(){ ref.current.alive = false; };
+  }, []);
+  return function isCurrent(id) { return ref.current.alive && ref.current.id === id; };
 }
 
 function PortalEventPanel({ eventId, booking, hideDrinks }) {
@@ -9589,19 +9604,27 @@ function PortalEventPanel({ eventId, booking, hideDrinks }) {
   const [note, setNote] = useState("");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
+  const isCurrent = useEventGuard(eventId);
 
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
-      const a = await sbRpc("wp_list_access", { p_event_id: eventId });
+      const a = await sbRpc("wp_list_access", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setRows(a.access || []);
-      const n = await sbRpc("wp_admin_numbers", { p_event_id: eventId });
+      const n = await sbRpc("wp_admin_numbers", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setNumbers(n);
-      const c = await sbRpc("wp_admin_checklist", { p_event_id: eventId });
+      const c = await sbRpc("wp_admin_checklist", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setChecklist(c);
-    } catch (e) { setErr(e.message || String(e)); }
+    } catch (e) { if (isCurrent(forId)) setErr(e.message || String(e)); }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){
+    setRows(null); setNumbers(null); setChecklist(null); setEmail(""); setNote("");
+    load();
+  }, [eventId]);
 
   // Granting access and telling somebody about it are one action as far as
   // anyone here is concerned. wp_grant_access only writes the row — nothing
@@ -9831,8 +9854,10 @@ function PortalEventExtras({ eventId, booking, hideDrinks }) {
   const [food, setFood] = useState(null);
   const [music, setMusic] = useState(null);
   const [err, setErr] = useState("");
+  const isCurrent = useEventGuard(eventId);
 
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
       const results = await Promise.all([
@@ -9844,6 +9869,7 @@ function PortalEventExtras({ eventId, booking, hideDrinks }) {
         sbRpc("wp_admin_food", { p_event_id: eventId }),
         sbRpc("wp_admin_music", { p_event_id: eventId }),
       ]);
+      if (!isCurrent(forId)) return;
       setSections({ vis: results[0], status: results[1].sections || [] });
       setProfile(results[2]);
       setItems(results[3].items || []);
@@ -9851,13 +9877,17 @@ function PortalEventExtras({ eventId, booking, hideDrinks }) {
       setFood(results[5].choice);
       setMusic(results[6].items || []);
     } catch (e) {
+      if (!isCurrent(forId)) return;
       // Most likely the 23 Oct migration is not applied yet. Say so plainly
       // rather than showing half a panel.
       setErr("The newer portal panels could not load (" + (e.message || String(e)) +
         "). If the 2026-10-23 portal migration has not been applied yet, that is why.");
     }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){
+    setSections(null); setProfile(null); setItems(null); setRequests(null); setFood(null); setMusic(null);
+    load();
+  }, [eventId]);
 
   if (err) return <ErrBanner text={err} />;
   if (!sections) return <div style={quietText}>Loading…</div>;
@@ -10475,23 +10505,37 @@ function PortalEventDrinks({ eventId, booking }) {
   const [childRate, setChildRate] = useState("");
   const [bespoke, setBespoke] = useState("");
   const [again, setAgain] = useState(false);
+  const isCurrent = useEventGuard(eventId);
+
+  // The drafts (rates, bespoke note) and the order they came from belong to one
+  // event. When the event changes or a load fails they go, so neither Save nor
+  // the Invoice button can act on another event's figures.
+  function clearDrafts() {
+    setData(null); setEvening(null); setRate(""); setChildRate(""); setBespoke(""); setAgain(false);
+  }
 
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
-      const r = await sbRpc("wp_admin_drinks", { p_event_id: eventId });
+      const r = await sbRpc("wp_admin_drinks", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setData(r);
       // The bar is staffed from the evening numbers; not fatal if they will not load.
-      sbRpc("wp_admin_numbers", { p_event_id: eventId })
-        .then(function(n){ setEvening(n && n.told_us ? n.evening_total : null); })
-        .catch(function(){ setEvening(null); });
+      sbRpc("wp_admin_numbers", { p_event_id: forId })
+        .then(function(n){ if (isCurrent(forId)) setEvening(n && n.told_us ? n.evening_total : null); })
+        .catch(function(){ if (isCurrent(forId)) setEvening(null); });
       const o = r.order || {};
       setRate(o.rate_pp == null ? "" : String(o.rate_pp));
       setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
       setBespoke(o.bespoke_note || "");
-    } catch (e) { setErr(e.message || String(e)); }
+    } catch (e) {
+      if (!isCurrent(forId)) return;
+      clearDrafts();
+      setErr(e.message || String(e));
+    }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){ clearDrafts(); load(); }, [eventId]);
 
   async function setDrinks(args, msg) {
     setBusy(true); setErr(""); setNote("");
@@ -10728,25 +10772,38 @@ function EventGuestsPanel({ eventId, booking }) {
     setEvening(n && n.evening_extras != null ? String(n.evening_extras) : "");
   }
 
+  const isCurrent = useEventGuard(eventId);
+
   async function load() {
+    const forId = eventId;
     setErr("");
     try {
-      const r = await sbRpc("wp_admin_guests", { p_event_id: eventId });
+      const r = await sbRpc("wp_admin_guests", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setData(r); setAdminOnly(false); fill(r.numbers);
     } catch (e) {
+      if (!isCurrent(forId)) return;
       if (e.code === "not_admin") {
         // Bar and cleaning logins: numbers, but not names and dietary notes.
         try {
-          const n = await sbRpc("wp_admin_numbers", { p_event_id: eventId });
+          const n = await sbRpc("wp_admin_numbers", { p_event_id: forId });
+          if (!isCurrent(forId)) return;
           setData({ numbers: Object.assign({}, n, { told_us: !!n.told_us }), guests: [] }); setAdminOnly(true); fill(n);
-        } catch (e2) { setErr(e2.message || String(e2)); }
+        } catch (e2) {
+          if (!isCurrent(forId)) return;
+          setData(null); fill(null);
+          setErr(e2.message || String(e2));
+        }
       } else {
+        // No numbers on screen means no Save button, so nothing typed for
+        // another event (or left from before) can be written here.
+        setData(null); fill(null);
         setErr("The guest list could not load (" + (e.message || String(e)) +
           "). If the 23 Oct (d) migration has not been run yet, that is why.");
       }
     }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){ setData(null); fill(null); load(); }, [eventId]);
 
   function num(v) { if (v === "" || v == null) return null; const x = parseInt(v, 10); return Number.isFinite(x) ? x : null; }
 
@@ -11513,13 +11570,21 @@ function PortalEventWebcast({ eventId }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
+  const isCurrent = useEventGuard(eventId);
+  function clearDrafts() { setD(null); setUrl(""); setPw(""); setNotes(""); }
   async function load() {
+    const forId = eventId;
     try {
-      const r = await sbRpc("wp_admin_webcast", { p_event_id: eventId });
+      const r = await sbRpc("wp_admin_webcast", { p_event_id: forId });
+      if (!isCurrent(forId)) return;
       setD(r); setUrl(r.stream_url || ""); setPw(r.password || ""); setNotes(r.notes || "");
-    } catch (e) { setErr(e.message || String(e)); }
+    } catch (e) {
+      if (!isCurrent(forId)) return;
+      clearDrafts();
+      setErr(e.message || String(e));
+    }
   }
-  useEffect(function(){ load(); }, [eventId]);
+  useEffect(function(){ clearDrafts(); setErr(""); setNote(""); load(); }, [eventId]);
   async function save() {
     setBusy(true); setErr(""); setNote("");
     try { await sbRpc("wp_admin_save_webcast", { p_event_id: eventId, p_stream_url: url, p_password: pw, p_notes: notes }); setNote("Saved."); await load(); }
@@ -15278,10 +15343,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <div style={quietText}>Save the booking first — the client portal hangs off a saved event.</div>
           )}
           {activeSection==="drinks" && formData.id != null && (
-            <PortalEventDrinks eventId={Number(formData.id)} booking={formData} />
+            <PortalEventDrinks key={formData.id} eventId={Number(formData.id)} booking={formData} />
           )}
           {activeSection==="portal" && formData.id != null && (
-            <PortalEventPanel eventId={Number(formData.id)} booking={formData} hideDrinks />
+            <PortalEventPanel key={formData.id} eventId={Number(formData.id)} booking={formData} hideDrinks />
           )}
 
           {activeSection==="financials" && (
@@ -15372,10 +15437,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <div style={quietText}>Save the booking first — guest numbers and suppliers come from its client portal.</div>
           )}
           {activeSection==="guests" && formData.id != null && (
-            <EventGuestsPanel eventId={Number(formData.id)} booking={formData} />
+            <EventGuestsPanel key={formData.id} eventId={Number(formData.id)} booking={formData} />
           )}
           {activeSection==="vendors" && formData.id != null && (
-            <EventVendorsPanel eventId={Number(formData.id)} booking={formData} />
+            <EventVendorsPanel key={formData.id} eventId={Number(formData.id)} booking={formData} />
           )}
 
           {["staffing","financials","viewings","files","guests","vendors","drinks","portal"].indexOf(activeSection) === -1 && (
