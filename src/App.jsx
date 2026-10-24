@@ -16232,16 +16232,15 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
 
   return (
     <div>
-      {/* Year nav */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:16, marginBottom:24 }}>
-        <button onClick={()=>setYear(String(yearInt-1))} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.midBlue, width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>‹</button>
-        <div style={{ display:"flex", gap:8 }}>
-          {allYears.map(y=>(
-            <button key={y} onClick={()=>setYear(y)} style={{ background:y===year?T.midBlue:"#fff", color:y===year?"#fff":T.textMid, border:`1.5px solid ${y===year?T.midBlue:T.border}`, padding:"6px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:y===year?700:400 }}>{y}</button>
-          ))}
-          {!allYears.includes(String(yearInt)) && <button style={{ background:T.midBlue, color:"#fff", border:`1.5px solid ${T.midBlue}`, padding:"6px 18px", borderRadius:8, fontFamily:"inherit", fontSize:15, fontWeight:700 }}>{year}</button>}
-        </div>
-        <button onClick={()=>setYear(String(yearInt+1))} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.midBlue, width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>›</button>
+      {/* Year nav — the same control as the lettings calendar: arrows either
+          side of the year, and a button back to this year. */}
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18, flexWrap:"nowrap" }}>
+        <button onClick={()=>setYear(String(yearInt-1))} style={navBtn} aria-label="Previous year">&#8249;</button>
+        <div style={{ fontSize:20, fontWeight:800, color:T.text, minWidth:70, textAlign:"center" }}>{year}</div>
+        <button onClick={()=>setYear(String(yearInt+1))} style={navBtn} aria-label="Next year">&#8250;</button>
+        {year !== currentYear && (
+          <button onClick={()=>setYear(currentYear)} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600, whiteSpace:"nowrap" }}>This year</button>
+        )}
       </div>
 
       {/* Legend + toggle */}
