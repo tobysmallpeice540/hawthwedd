@@ -88,7 +88,7 @@ const code = [
   lift("queueSave"),
   lift("saveObjectMerged"),
   lift("saveArrayMerged"),
-  "return { mergeFormFields, mergeById, mergeByKey, saveArrayMerged, saveObjectMerged, sbSet, sbGetStrict, noteStaleBuild, SEED_FALLBACK, READ_FAILED };",
+  "return { mergeFormFields, mergeById, mergeByKey, saveArrayMerged, saveObjectMerged, queueSave, sbSet, sbGetStrict, noteStaleBuild, SEED_FALLBACK, READ_FAILED };",
 ].join("\n");
 const F = new Function("SUPABASE_URL", "sbAuthHeaders", "window", "CustomEvent", "fetch", "console", code)(
   env.SUPABASE_URL, env.sbAuthHeaders, env.window, env.CustomEvent, env.fetch, { error: function() {}, warn: function() {}, log: console.log });
@@ -152,8 +152,41 @@ const r = function(id, v) { return { id: id, v: v }; };
      { id: 7, a: 1 }, "a field the form removed is removed");
   eq(F.mergeFormFields({ id: 7, a: 1 }, { id: 7, a: 1 }, { id: "7", a: 1, c: 3 }),
      { id: 7, a: 1, c: 3 }, "a field the form added is added; the server's id kept");
-  ok(SRC.indexOf("await saveBookingRecord(editId, fd, null, formBasesRef.current[fk]);") > -1, "autosave passes the form's base");
-  ok(SRC.indexOf("await saveBookingRecord(editId, saved, clashGuard, formBasesRef.current[fk]);") > -1, "Save passes the form's base");
+  ok(SRC.indexOf("await saveBookingRecord(editId, fd, null, fk);") > -1, "autosave passes its form key");
+  ok(SRC.indexOf("await saveBookingRecord(editId, saved, clashGuard, fk);") > -1, "Save passes its form key");
+  // The base is read and moved INSIDE the save queue (24 Oct second review):
+  // read at call time, a second autosave started while the first was in
+  // flight compared against the old base and dropped a field set back.
+  {
+    const sbr = SRC.slice(SRC.indexOf("const saveBookingRecord = useCallback"), SRC.indexOf("const createBookingRecord = useCallback"));
+    ok(/return mutateBookings\(function\(base\) \{[\s\S]*const formBase = fk != null \? formBasesRef\.current\[fk\] : null;/.test(sbr), "the form base is read inside the mutator");
+    ok(/\}, function\(\) \{ if \(fk != null\) formBasesRef\.current\[fk\] = data; \}\);/.test(sbr), "the base moves on inside the queue, after the write");
+    ok(/const mutateBookings = useCallback\(\(mutator, onWritten\) => queueSave\(BOOKING_STORAGE,/.test(SRC), "event saves are queued per key");
+    const mb = SRC.slice(SRC.indexOf("const mutateBookings = useCallback"), SRC.indexOf("const saveBookingRecord = useCallback"));
+    ok(mb.indexOf("await sbSet(BOOKING_STORAGE, next);") > -1 && mb.indexOf("await sbSet(BOOKING_STORAGE, next);") < mb.indexOf("if (onWritten) onWritten(next);"), "onWritten runs after the write");
+    ok(SRC.indexOf("formBasesRef.current[fk] = saved") === -1 && SRC.indexOf("formBasesRef.current[myKey] = {...fd") === -1, "no base is moved outside the queue");
+  }
+
+  // The queue really does order a read-modify-write with its base: set a
+  // field, set it back, two saves in flight — the server ends as the form.
+  {
+    const bases = { f: { id: 1, x: "undecided" } };
+    db.ev = [{ id: 1, x: "undecided" }];
+    readDelay = 15;
+    const save = function(data) {
+      return F.queueSave("ev", async function() {
+        const server = await F.sbGetStrict("ev");
+        const next = server.map(function(b) { return F.mergeFormFields(b, bases.f, data); });
+        await F.sbSet("ev", next);
+        bases.f = data;
+      });
+    };
+    const a = save({ id: 1, x: "yes" });
+    const b = save({ id: 1, x: "undecided" });
+    await Promise.all([a, b]);
+    readDelay = 0;
+    eq(db.ev, [{ id: 1, x: "undecided" }], "set and set back, two saves in flight: the second wins");
+  }
 
   // ── saveArrayMerged against the fake table ───────────────────────────────
   db.k = [r(1, "a"), r(2, "b"), r(3, "web")];
@@ -215,7 +248,7 @@ const r = function(id, v) { return { id: id, v: v }; };
   // Stale build: every write refused except the build marker itself.
   F.noteStaleBuild("2099-01-01a"); threw = null; calls.length = 0;
   try { await F.sbSet("k", []); } catch (e) { threw = e; }
-  ok(threw && /old version/.test(threw.message), "stale build refuses writes");
+  ok(threw && /out-of-date version/.test(threw.message), "stale build refuses writes");
   ok(calls.length === 0, "stale build: nothing sent");
   await F.sbSet("hbf_app_build_v1", { build: "x" });
   eq(calls, ["write"], "stale build: the build marker still writes");

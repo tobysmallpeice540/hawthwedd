@@ -165,7 +165,7 @@ function noteRefusedWrite(title, msg) {
 
 const sbSet = async (key, value) => {
   if (STALE_BUILD_SEEN && key !== "hbf_app_build_v1") {
-    const msg = "This page is running an old version (" + STALE_BUILD_SEEN + " is live). Nothing was saved — reload the page and try again.";
+    const msg = "This page is running an out-of-date version (" + STALE_BUILD_SEEN + " is live). Nothing was saved — reload the page and try again.";
     noteRefusedWrite("Nothing was saved", msg);
     throw new Error(msg);
   }
@@ -318,11 +318,18 @@ function saveArrayMerged(storageKey, before, after) {
 // holds (which may include other people's additions). If the save fails the
 // screen goes back to what it showed before, so it never displays a change
 // that was not saved. Rethrows, so callers can say so.
+//
+// Pass an UPDATER (prev => next) whenever the new list is built after an
+// await: a list built from a closure captured before the await does not hold
+// records added in the meantime, and the merge reads their absence as a
+// delete (24 Oct review: two Xero pushes at once lost the first one's record).
+// The updater runs against what this screen holds at the moment of the call.
 function useMergedSave(storageKey, value, setValue, kind) {
   const ref = useRef(value);
   ref.current = value;
-  return useCallback(async function(next) {
+  return useCallback(async function(nextOrFn) {
     const before = ref.current;
+    const next = typeof nextOrFn === "function" ? nextOrFn(before) : nextOrFn;
     ref.current = next;
     setValue(next);
     try {
@@ -418,14 +425,27 @@ async function publishBuild() {
   } catch (e) { return null; }
 }
 
+// What is live is read from /build.json, which vite.config.js writes into
+// every deploy. It used to be read from the database key above, which only
+// ever moves forward — so after a Netlify rollback every tab of the live
+// (older) build counted as stale and refused every save, app-wide, until a
+// newer build shipped. The deployed file is the truth either way round: a tab
+// whose build is not the one deployed is stale, whether it is older (a tab
+// left open over a deploy) or newer (a tab left open over a rollback).
+// Not there (local dev, or a fault) means unknown, and unknown blocks nothing.
+// The database key is still written by publishBuild, for tabs of builds
+// from before this one, which only know how to read that.
 async function fetchLatestBuild() {
   try {
-    const cur = await sbGet(APP_BUILD_KEY);
-    const latest = (cur && cur.build) || null;
-    if (latest && buildIsNewer(latest, APP_BUILD)) noteStaleBuild(latest);
+    const res = await fetch("/build.json?ts=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const latest = (j && typeof j.build === "string" && j.build) || null;
+    if (latest && latest !== APP_BUILD) noteStaleBuild(latest);
     return latest;
   } catch (e) { return null; }
 }
+function buildIsStale(latest) { return !!latest && latest !== APP_BUILD; }
 
 const sbDelete = async (key) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${key}`, {
@@ -2743,7 +2763,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-24a";
+const APP_BUILD = "2026-10-24b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4285,7 +4305,7 @@ const smallBtn = { background:"#fff", border:`1.5px solid ${T.border}`, borderRa
 const inlineInput = { background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"8px 10px", outline:"none" };
 
 // ── One-off Bookalet importer (file upload) ──────────────────────────────────
-function AccomImport({ onImported, saveBookings, bookings }) {
+function AccomImport({ onImported, mutateAccom, bookings }) {
   const [status, setStatus] = useState("");
   const [mergeStatus, setMergeStatus] = useState("");
   const [mergePreview, setMergePreview] = useState(null);
@@ -4370,10 +4390,21 @@ function AccomImport({ onImported, saveBookings, bookings }) {
   const runMerge = async () => {
     if (!mergePreview || !mergePreview.length) return;
     setMergeStatus("Merging…");
+    // Applied to a fresh read (mutateAccom), not to this screen's copy, which
+    // wrote the whole lettings diary back and lost anything booked since it
+    // loaded. A pair is merged only if both halves are still there unchanged;
+    // anything touched meanwhile is skipped and counted.
+    var newBookings = [], skipped = 0;
+    try {
+    await mutateAccom(function(base) {
+    var byId = {}; base.forEach(function(b) { byId[String(b.id)] = b; });
     var removeIds = new Set();
-    var newBookings = [];
+    newBookings = []; skipped = 0;
     mergePreview.forEach(function(pair) {
       var b1 = pair.b1, b2 = pair.b2, s1 = pair.s1, s2 = pair.s2;
+      var c1 = byId[String(b1.id)], c2 = byId[String(b2.id)];
+      if (!c1 || !c2 || removeIds.has(b1.id) || removeIds.has(b2.id) ||
+          JSON.stringify(c1) !== JSON.stringify(normalizeAccom(b1)) || JSON.stringify(c2) !== JSON.stringify(normalizeAccom(b2))) { skipped++; return; }
       var merged = Object.assign({}, b1, {
         guestName: b1.guestName || b2.guestName,
         value: (Number(b1.value)||0) + (Number(b2.value)||0),
@@ -4392,9 +4423,11 @@ function AccomImport({ onImported, saveBookings, bookings }) {
       newBookings.push(merged);
       removeIds.add(b1.id); removeIds.add(b2.id);
     });
-    var updated = (bookings||[]).filter(function(b){ return !removeIds.has(b.id); }).concat(newBookings);
-    await saveBookings(updated);
-    setMergeStatus("Merged " + mergePreview.length + " pair" + (mergePreview.length===1?"":"s") + " — " + newBookings.length + " multi-property booking" + (newBookings.length===1?"":"s") + " created.");
+    return base.filter(function(b){ return !removeIds.has(b.id); }).concat(newBookings);
+    }, mergePreview.length);
+    } catch (e) { setMergeStatus("Merge failed — nothing was changed: " + (e.message || e)); return; }
+    setMergeStatus("Merged " + newBookings.length + " pair" + (newBookings.length===1?"":"s") + " into multi-property bookings." +
+      (skipped ? " " + skipped + " skipped because they changed since this screen loaded — reload and check them." : ""));
     setMergePreview(null);
   };
 
@@ -4709,7 +4742,8 @@ function PropertyEditor({ properties, setProperties, onSave }) {
     ));
 
   const handleSave = async () => {
-    await onSave();
+    // onSave rethrows a failed write; say so here rather than "Saved".
+    try { await onSave(); } catch (e) { setFlash("Save failed"); return; }
     setFlash("Saved");
     setTimeout(() => setFlash(""), 2500);
   };
@@ -5018,7 +5052,8 @@ function DiscountCodesEditor({ codes, setCodes, onSave }) {
   const removeCode = (id) => setCodes(cs => cs.filter(c => c.id !== id));
 
   const handleSave = async () => {
-    await onSave();
+    // onSave rethrows a failed write; say so here rather than "Saved".
+    try { await onSave(); } catch (e) { setFlash("Save failed"); return; }
     setFlash("Saved");
     setTimeout(() => setFlash(""), 2000);
   };
@@ -5119,7 +5154,8 @@ function ICalSettings({ properties, setProperties, onSave }) {
     setProperties(ps => ps.map(p => p.id === pid ? Object.assign({}, p, { [key]: val }) : p));
 
   const handleSave = async () => {
-    await onSave();
+    // onSave rethrows a failed write; say so here rather than "Saved".
+    try { await onSave(); } catch (e) { setFlash("Save failed"); return; }
     setFlash("Saved");
     setTimeout(() => setFlash(""), 2000);
   };
@@ -5325,7 +5361,7 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
   };
 
   const handleSave = async function() {
-    await onSave();
+    try { await onSave(); } catch (e) { setFlash("Save failed"); return; }
     setFlash("Saved");
     setTimeout(function() { setFlash(""); }, 2000);
   };
@@ -6424,7 +6460,10 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       // so Save cannot write them over the real ones (prices, iCal links).
       try {
         const p = await sbGet(PROPERTIES_STORAGE);
-        if (p && p.length) { propsSavedRef.current = p; setProperties(p); }
+        // A good read here means this screen holds the real list, so the
+        // start-up read's refusal (if that one failed) no longer applies:
+        // every write of this key merges into a fresh read anyway.
+        if (p && p.length) { delete SEED_FALLBACK[PROPERTIES_STORAGE]; propsSavedRef.current = p; setProperties(p); }
         else if (READ_FAILED[PROPERTIES_STORAGE]) noteSeedFallback(PROPERTIES_STORAGE, "The property list");
         else propsSavedRef.current = [];   // genuinely none saved yet: the built-in list is new
       } catch { noteSeedFallback(PROPERTIES_STORAGE, "The property list"); }
@@ -6435,12 +6474,6 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       setLoaded(true);
     })();
   }, []);
-
-  const saveBookings = async (data) => {
-    setBookings(data);
-    try { await sbSet(ACCOM_STORAGE, data); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
-    catch (e) { console.error(e); setFlash("Save failed"); }
-  };
 
   // Change ONE lettings booking without rewriting the array from this tab's
   // copy of it.
@@ -6456,7 +6489,10 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   //
   // Re-read, apply, write back. If the read fails we abort rather than write
   // from an unknown base.
-  const mutateAccom = async (mutator) => {
+  // allowDrop: how many records this one change may remove (1 — a delete — by
+  // default). Merging N split bookings removes N net, and says so.
+  const mutateAccom = async (mutator, allowDrop) => {
+    const mayDrop = allowDrop == null ? 1 : allowDrop;
     let server;
     try { server = await sbGetStrict(ACCOM_STORAGE); }
     catch (e) {
@@ -6468,7 +6504,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     if (!Array.isArray(next)) throw new Error("Internal error: lettings mutation produced no array");
     // Same tripwire as the events array: one edit should never drop more than
     // the single record a delete targets.
-    if (next.length < base.length - 1) {
+    if (next.length < base.length - mayDrop) {
       console.error("Refusing to save: would drop " + (base.length - next.length) + " lettings bookings");
       throw new Error(
         "Save cancelled — this would have deleted " + (base.length - next.length) + " bookings. " +
@@ -6488,17 +6524,17 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       propsSavedRef.current = next; setProperties(next);
       setFlash("Saved"); setTimeout(()=>setFlash(""), 1500);
     }
-    catch (e) { console.error(e); setFlash("Save failed"); }
+    catch (e) { console.error(e); setFlash("Save failed"); throw e; }
   };
 
   const saveDiscountCodes = async () => {
     try { await sbSet(DISCOUNT_CODES_STORAGE, discountCodes); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
-    catch (e) { console.error(e); setFlash("Save failed"); }
+    catch (e) { console.error(e); setFlash("Save failed"); throw e; }
   };
 
   const saveEmailTemplates = async () => {
     try { await sbSet(EMAIL_TEMPLATES_STORAGE, emailTemplates); setFlash("Saved"); setTimeout(()=>setFlash(""), 1500); }
-    catch (e) { console.error(e); setFlash("Save failed"); }
+    catch (e) { console.error(e); setFlash("Save failed"); throw e; }
   };
 
   const openNew  = () => { setForm(blankAccom(null, bookings)); setEditId(null); setTab("form"); };
@@ -6790,7 +6826,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} onViewEventsCalendar={setAppView && setAppReportType ? function(){ setAppReportType("calendar"); setAppView("reports"); } : null} />}
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
       {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
-      {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} saveBookings={saveBookings} bookings={bookings} />}
+      {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} mutateAccom={mutateAccom} bookings={bookings} />}
       {loaded && tab==="settings" && (
         <LettingsSetup
           properties={properties} setProperties={setProperties} onSaveProperties={saveProperties}
@@ -6968,17 +7004,20 @@ export default function App({ role = "admin", onSignOut } = {}) {
   useEffect(function() {
     let stopped = false;
     (async function() {
-      const latest = await publishBuild();
-      if (!stopped && latest && buildIsNewer(latest, APP_BUILD)) setStaleBuild(latest);
+      // The database key is only for older tabs; what is live comes from
+      // the deploy itself (see fetchLatestBuild).
+      await publishBuild();
+      const latest = await fetchLatestBuild();
+      if (!stopped && buildIsStale(latest)) setStaleBuild(latest);
     })();
     const t = setInterval(async function() {
       const latest = await fetchLatestBuild();
-      if (!stopped && latest && buildIsNewer(latest, APP_BUILD)) setStaleBuild(latest);
+      if (!stopped && buildIsStale(latest)) setStaleBuild(latest);
     }, 60000);
     // Also check the moment the tab is brought back to the front.
     function onFocus() {
       fetchLatestBuild().then(function(latest) {
-        if (!stopped && latest && buildIsNewer(latest, APP_BUILD)) setStaleBuild(latest);
+        if (!stopped && buildIsStale(latest)) setStaleBuild(latest);
       });
     }
     window.addEventListener("focus", onFocus);
@@ -7104,15 +7143,19 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // So: re-read the current array from Supabase, apply the change to THAT, and
   // write it straight back. If the read fails we abort rather than write, since
   // writing from an unknown base is exactly what causes the damage.
-  const mutateBookings = useCallback(async (mutator) => {
+  // Saves run one after another (queueSave), so two autosaves in flight at
+  // once cannot each merge into the same server copy. onWritten runs inside
+  // that queue, straight after the write: it is how the event form moves its
+  // base forward before the next save reads it.
+  const mutateBookings = useCallback((mutator, onWritten) => queueSave(BOOKING_STORAGE, async () => {
     // Refuse to write from a tab running an out-of-date build. An old tab holds
     // old code AND an old snapshot of the data, so letting it save is exactly
     // how events and Xero ids were wiped after a fix had already gone live.
     const latest = await fetchLatestBuild();
-    if (latest && buildIsNewer(latest, APP_BUILD)) {
+    if (buildIsStale(latest)) {
       setStaleBuild(latest);
       throw new Error(
-        "This page is running an old version (" + APP_BUILD + "; " + latest + " is live). " +
+        "This page is running an out-of-date version (" + APP_BUILD + "; " + latest + " is live). " +
         "Nothing was saved — reload the page and try again."
       );
     }
@@ -7139,9 +7182,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
       );
     }
     await sbSet(BOOKING_STORAGE, next);
+    if (onWritten) onWritten(next);
     setBookings(next);
     return next;
-  }, []);
+  }), []);
 
   // Insert or update one event, leaving every other record exactly as the
   // server has it.
@@ -7149,13 +7193,22 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // just before the write. Throwing from it aborts the save without writing
   // anything — which is how the clash check gets to see events created on
   // another device since this tab loaded, rather than only this tab's copy.
-  // formBase: what the form was showing when it opened (or last saved). When
-  // given, only the fields that differ from it are written over the server's
-  // copy; every other field keeps whatever the server now holds. Without it
-  // the record is replaced whole, as before.
-  const saveBookingRecord = useCallback((id, data, guard, formBase) => {
+  // fk: the key of the form doing the saving. Its base — what it was showing
+  // when it opened, or last saved — is read INSIDE the save queue, and moved
+  // on to `data` straight after the write, still inside the queue. Only the
+  // fields that differ from the base are written over the server's copy;
+  // every other field keeps whatever the server now holds. With no base (no
+  // fk, or a form whose record did not exist when it opened) the record is
+  // replaced whole, as before.
+  //
+  // The base used to be read when the save was CALLED and moved when it
+  // finished, so an autosave that started while another was still in flight
+  // compared against the old base: set a field and set it back, and the second
+  // save thought it unchanged and the first one's value stuck (24 Oct review).
+  const saveBookingRecord = useCallback((id, data, guard, fk) => {
     return mutateBookings(function(base) {
       if (guard) guard(base);
+      const formBase = fk != null ? formBasesRef.current[fk] : null;
       let found = false;
       let next = base.map(function(b) {
         if (String(b.id) !== String(id)) return b;
@@ -7165,7 +7218,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
       });
       if (!found) next = next.concat([Object.assign({}, data, { id: id })]);
       return next.sort(function(a, b) { return (a.date || "") > (b.date || "") ? 1 : -1; });
-    });
+    }, function() { if (fk != null) formBasesRef.current[fk] = data; });
   }, [mutateBookings]);
 
   // Create a NEW event, choosing its id from the array the server actually
@@ -7183,7 +7236,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // a record, nothing is created and that record is returned instead — which
   // is how converting the same enquiry twice stops producing two events.
   // Returns { record, created }.
-  const createBookingRecord = useCallback(async (data, dedupe, guard) => {
+  // fk: the form this create belongs to; its base is set to the new record
+  // inside the save queue, so the form's next save merges rather than
+  // replacing the record whole.
+  const createBookingRecord = useCallback(async (data, dedupe, guard, fk) => {
     let made = null, existing = null;
     await mutateBookings(function(base) {
       // Dedupe BEFORE the guard: if this has already been created, there is
@@ -7197,6 +7253,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
       const id = nextBookingId(base);
       made = Object.assign({}, data, { id: id, createdAt: data.createdAt || new Date().toISOString() });
       return base.concat([made]).sort(function(a, b) { return (a.date || "") > (b.date || "") ? 1 : -1; });
+    }, function() {
+      // The base is what the FORM holds (data plus its new id), not the stored
+      // record: `made` carries createdAt, which a form that never had it would
+      // then look as if it had deleted.
+      if (fk != null && made) formBasesRef.current[fk] = Object.assign({}, data, { id: made.id });
     });
     return existing ? { record: existing, created: false } : { record: made, created: true };
   }, [mutateBookings]);
@@ -7209,7 +7270,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
   }, [mutateBookings]);
   const saveStaffMerged = useMergedSave(STAFF_STORAGE, staff, setStaff);
   const saveEnquiriesMerged = useMergedSave(ENQUIRIES_STORAGE, enquiries, setEnquiries);
-  const saveStaff    = useCallback(async data=>{ try{await saveStaffMerged(data);}catch(e){console.error(e);} },[saveStaffMerged]);
+  // Rethrows: the callers decide what to tell the person (the form used to
+  // close as though saved).
+  const saveStaff    = saveStaffMerged;
 
   // Delete a lettings booking outright. Used for unpaid online bookings that
   // are never going to be paid — reads the server's copy first so a booking
@@ -7528,11 +7591,25 @@ export default function App({ role = "admin", onSignOut } = {}) {
       if (editId != null) {
         const fk = formKeyRef.current;
         const saved = {...formData, id: editId, createdAt: formData.createdAt || new Date().toISOString()};
-        await saveBookingRecord(editId, saved, clashGuard, formBasesRef.current[fk]);
-        if (formBasesRef.current[fk]) formBasesRef.current[fk] = saved;
+        await saveBookingRecord(editId, saved, clashGuard, fk);
       } else {
-        const res = await createBookingRecord({...formData}, null, clashGuard);
-        id = res.record.id;
+        // An autosave may already be creating this event. Wait for it and
+        // save onto that record, or pressing Save mid-create made a second one.
+        const fk = formKeyRef.current;
+        const mine = newEventRef.current && newEventRef.current.key === fk ? newEventRef.current : null;
+        if (mine) {
+          id = await mine.promise;
+          await saveBookingRecord(id, {...formData, id: id}, clashGuard, fk);
+        } else {
+          // Registered like an autosave's create, so an autosave that fires
+          // meanwhile waits for this one instead of minting its own.
+          const entry = { key: fk, promise: null };
+          entry.promise = createBookingRecord({...formData}, null, clashGuard, fk)
+            .then(function(r){ return r.record.id; })
+            .catch(function(e){ if (newEventRef.current === entry) newEventRef.current = null; throw e; });
+          newEventRef.current = entry;
+          id = await entry.promise;
+        }
       }
     } catch (e) {
       if (e.clashes) {
@@ -7717,7 +7794,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
       async () => {
         setConfirmDlg(null);
         try { await removeStaffFromRotas(id); } catch (e) { console.error(e); }
-        await saveStaff(staff.filter(x=>x.id!==id));
+        try { await saveStaff(function(prev) { return prev.filter(x=>x.id!==id); }); }
+        catch (e) { alert(e.message || "Could not remove them from the staff list."); }
       });
   };
   const handleSubmitStaff = async ()=>{
@@ -7725,15 +7803,18 @@ export default function App({ role = "admin", onSignOut } = {}) {
     let updated;
     if(editStaffId) updated=staff.map(s=>s.id===editStaffId?{...staffForm}:s);
     else { if(staff.find(s=>s.id===staffForm.id)){ alert(`Initials "${staffForm.id}" already exists.`); return; } updated=[...staff,staffForm]; }
-    await saveStaff(updated); setStaffForm(null); setEditStaffId(null);
+    try { await saveStaff(updated); }
+    catch (e) { alert(e.message || "Could not save. Nothing was changed."); return; }   // the form stays open with their edit in it
+    setStaffForm(null); setEditStaffId(null);
   };
 
   const filtered = bookings.filter(b=>{ const q=search.toLowerCase(); return !q||(b.couple||"").toLowerCase().includes(q)||(b.email||"").toLowerCase().includes(q)||(b.date||"").includes(q); });
 
   const saveInvoiceRecordsMerged = useMergedSave(EVENT_INVOICES_STORAGE, invoiceRecords, setInvoiceRecords);
-  const saveInvoiceRecords = useCallback(async (next) => {
-    try { await saveInvoiceRecordsMerged(next); } catch(e) { console.error(e); }
-  }, [saveInvoiceRecordsMerged]);
+  // Rethrows, and takes an updater: invoice pushes await Xero before saving,
+  // so a list built before that await would miss a record another push made
+  // meanwhile, and the merge would remove it.
+  const saveInvoiceRecords = saveInvoiceRecordsMerged;
 
   // How many invoice stages are due to be raised right now (badge on the
   // Invoices button). Counts unpushed stages whose ready date has arrived,
@@ -7860,8 +7941,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
             if(!fd.couple) { const e=new Error("no-name"); e.code="no-name"; throw e; }
             if(editId) {
               const fk = formKey;
-              await saveBookingRecord(editId, fd, null, formBasesRef.current[fk]);
-              if (formBasesRef.current[fk]) formBasesRef.current[fk] = fd;
+              await saveBookingRecord(editId, fd, null, fk);
             } else {
               // First autosave of a brand-new booking mints the record.
               //
@@ -7885,18 +7965,18 @@ export default function App({ role = "admin", onSignOut } = {}) {
               const mine = newEventRef.current && newEventRef.current.key === myKey ? newEventRef.current : null;
               if (!mine) {
                 const entry = { key: myKey, promise: null };
-                entry.promise = createBookingRecord({...fd, createdAt: fd.createdAt || new Date().toISOString()})
+                // createdAt is stamped by createBookingRecord; the form's base is
+                // set there too, inside the save queue.
+                entry.promise = createBookingRecord({...fd}, null, null, myKey)
                   .then(function(r){ return r.record.id; })
                   .catch(function(e){ if (newEventRef.current === entry) newEventRef.current = null; throw e; });
                 newEventRef.current = entry;
                 const newId = await entry.promise;
-                formBasesRef.current[myKey] = {...fd, id:newId};
                 if (stillHere()) { setEditId(newId); setFormData(f=>({...f, id:newId})); }
               } else {
                 const newId = await mine.promise;
                 if (stillHere()) { setEditId(newId); setFormData(f=>({...f, id:newId})); }
-                await saveBookingRecord(newId, {...fd, id:newId}, null, formBasesRef.current[myKey]);
-                if (formBasesRef.current[myKey]) formBasesRef.current[myKey] = {...fd, id:newId};
+                await saveBookingRecord(newId, {...fd, id:newId}, null, myKey);
               }
             }
           }}
@@ -13162,6 +13242,21 @@ function InvoiceStageRow({ ev, stageObj, linked, drifted, blockers, busy, candid
   );
 }
 
+// The invoice-records list with one event's stage replaced by `rec` (or
+// removed, with rec null). Used as an updater, against the latest list.
+function replaceInvoiceStage(list, eventId, stage, rec) {
+  const out = (list||[]).filter(function(r){
+    return !(String(r.eventId)===String(eventId) && Number(r.stage)===Number(stage));
+  });
+  return rec ? out.concat([rec]) : out;
+}
+// The draft exists in Xero but the app has no record of it: say so plainly,
+// or the row shows "not pushed" and invites a second, duplicate draft.
+function invoiceNotRecordedText(invoiceNumber, e) {
+  return "Draft " + (invoiceNumber || "") + " WAS created in Xero, but recording it here failed (" +
+    (e && e.message || e) + "). Do not push again — reload, then use Link to attach the existing draft.";
+}
+
 function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, onBack, onEdit, xeroToken }) {
   const today = new Date().toISOString().slice(0,10);
   const [busyKey, setBusyKey] = useState(null);
@@ -13243,7 +13338,10 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
     });
     if (additions.length) {
       setAutoLinked(additions.length);
-      onSaveRecords((records||[]).concat(additions));
+      onSaveRecords(function(prev) {
+        const have = {}; (prev||[]).forEach(function(r){ have[r.id] = true; });
+        return (prev||[]).concat(additions.filter(function(a){ return !have[a.id]; }));
+      }).catch(function(e) { setAutoLinked(0); setMsg({ kind:"error", text: "Matching Xero invoices were found but could not be recorded: " + (e.message || e) }); });
     }
   }, [xeroByContact]);
 
@@ -13315,16 +13413,13 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
       xeroInvoiceId: inv.InvoiceID, invoiceNumber: inv.InvoiceNumber || "",
       pushedAt: new Date().toISOString(), source: "manual"
     };
-    const next = (records||[]).filter(function(r){
-      return !(String(r.eventId)===String(ev.id) && Number(r.stage)===Number(st.stage));
-    }).concat([rec]);
-    onSaveRecords(next);
+    onSaveRecords(function(prev) { return replaceInvoiceStage(prev, ev.id, st.stage, rec); })
+      .catch(function(e) { setMsg({ kind:"error", text: "Could not link it: " + (e.message || e) }); });
   }
 
   function unlink(ev, st) {
-    onSaveRecords((records||[]).filter(function(r){
-      return !(String(r.eventId)===String(ev.id) && Number(r.stage)===Number(st.stage));
-    }));
+    onSaveRecords(function(prev) { return replaceInvoiceStage(prev, ev.id, st.stage, null); })
+      .catch(function(e) { setMsg({ kind:"error", text: "Could not unlink it: " + (e.message || e) }); });
   }
 
   async function doPush(ev, st) {
@@ -13341,10 +13436,11 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
         pushedAt: new Date().toISOString(), source: "push",
         totalMismatch: !!res.totalMismatch
       };
-      const next = (records||[]).filter(function(r){
-        return !(String(r.eventId)===String(ev.id) && Number(r.stage)===Number(st.stage));
-      }).concat([rec]);
-      await onSaveRecords(next);
+      try {
+        await onSaveRecords(function(prev) { return replaceInvoiceStage(prev, ev.id, st.stage, rec); });
+      } catch (e) {
+        throw new Error(invoiceNotRecordedText(res.invoiceNumber, e));
+      }
       setMsg({
         kind: res.totalMismatch ? "error" : "ok",
         text: res.totalMismatch
@@ -14947,10 +15043,13 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
         pushedAt: new Date().toISOString(), source: "push",
         totalMismatch: !!res.totalMismatch
       };
-      const next = (invoiceRecords||[]).filter(function(r){
-        return !(String(r.eventId)===String(formData.id) && Number(r.stage)===Number(st.stage));
-      }).concat([rec]);
-      if (onSaveInvoiceRecords) await onSaveInvoiceRecords(next);
+      if (onSaveInvoiceRecords) {
+        try {
+          await onSaveInvoiceRecords(function(prev) { return replaceInvoiceStage(prev, formData.id, st.stage, rec); });
+        } catch (e) {
+          throw new Error(invoiceNotRecordedText(res.invoiceNumber, e));
+        }
+      }
       setNote({ kind: res.totalMismatch ? "error" : "ok",
         text: res.totalMismatch ? res.warning : "Draft " + (res.invoiceNumber||"") + " created in Xero." });
     } catch (e) {
@@ -21930,8 +22029,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
 
   // Remove a request entirely — no email is sent (for test/duplicate requests)
   const handleDeleteRequest = async (req) => {
-    const updated = requests.filter(r => r.id !== req.id);
-    await saveRequests(updated);
+    try { await saveRequests(function(prev) { return prev.filter(r => r.id !== req.id); }); }
+    catch (e) { showFlash("Not deleted: " + e.message, T.red); return; }
     setDeleteModal(null);
     showFlash("Request deleted", T.textMid);
   };
@@ -21961,8 +22060,10 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
         if (!res.ok) throw new Error("Function failed");
       }
 
-      // Update request status
-      const updatedRequests = requests.map(r => r.id===req.id
+      // Update request status — against the list as it is NOW (updater), not
+      // as it was before the await above, or a request that arrived in the
+      // meantime would be merged away as a delete.
+      await saveRequests(function(prev) { return prev.map(r => r.id===req.id
         ? Object.assign({}, r, {
             status: (action==="confirm"||isAmend) ? "confirmed" : "declined",
             date: agreed.date, time: agreed.time,
@@ -21972,8 +22073,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             // whether the person was told.
             declinedSilently: silent ? true : undefined
           })
-        : r);
-      await saveRequests(updatedRequests);
+        : r); });
 
       if (action === "confirm" || isAmend) {
         const newViewing = {
@@ -21999,12 +22099,11 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
           showFlash("Confirmed - viewing added to booking: " + (bkg?.couple||""));
         } else if (mode === "existing" && existingEnqId) {
           // Attach viewing to existing enquiry
-          const updatedEnq = (enquiries||[]).map(e =>
+          await saveEnquiries(function(prev) { return (prev||[]).map(e =>
             e.id === existingEnqId
               ? { ...e, viewings: [...(e.viewings||[]), newViewing] }
               : e
-          );
-          await saveEnquiries(updatedEnq);
+          ); });
           const enq = (enquiries||[]).find(e=>e.id===existingEnqId);
           showFlash("Confirmed - viewing added to " + (enq?.name||"existing enquiry"));
         } else {
@@ -22024,7 +22123,7 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
             contacts: [],
             viewings: [newViewing],
           };
-          await saveEnquiries([...(enquiries||[]), newEnq]);
+          await saveEnquiries(function(prev) { return (prev||[]).concat([newEnq]); });
           showFlash("Confirmed - new enquiry created for " + req.name);
         }
       } else {
@@ -22053,8 +22152,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
     } else {
       newBlocks.push({ id:`blk_${Date.now()}`, date:blockDate, slot:blockSlot||null, note:blockNote||"", kind:blockKind, addedAt:new Date().toISOString() });
     }
-    const updated = [...blocks, ...newBlocks];
-    await saveBlocks(updated);
+    try { await saveBlocks(function(prev) { return prev.concat(newBlocks); }); }
+    catch (e) { showFlash("Not saved: " + e.message, T.red); return; }
     setBlockDate(""); setBlockDateTo(""); setBlockSlot(""); setBlockNote("");
     showFlash(newBlocks.length > 1
       ? (blockKind === "open" ? "Opened " : "Blocked ") + newBlocks.length + " days"
@@ -22062,7 +22161,8 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   };
 
   const removeBlock = async (id) => {
-    await saveBlocks(blocks.filter(b=>b.id!==id));
+    try { await saveBlocks(function(prev) { return prev.filter(b=>b.id!==id); }); }
+    catch (e) { showFlash("Not removed: " + e.message, T.red); }
   };
 
   const pending   = requests.filter(r=>r.status==="pending");
@@ -22521,6 +22621,9 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
 
   // Update / delete a viewing back onto its source booking or enquiry
   const saveViewingEdit = async (v) => {
+    try { await saveViewingEditInner(v); } catch (e) { alert(e.message || "Could not save. Nothing was changed."); }
+  };
+  const saveViewingEditInner = async (v) => {
     if (v.sourceType==="booking") {
       if (patchBooking) await patchBooking(v.sourceId, function(b) {
         return Object.assign({}, b, { viewings:(b.viewings||[]).map(function(vv,idx){
@@ -22537,6 +22640,9 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
   };
 
   const deleteViewing = async (v) => {
+    try { await deleteViewingInner(v); } catch (e) { alert(e.message || "Could not delete. Nothing was changed."); }
+  };
+  const deleteViewingInner = async (v) => {
     if (v.sourceType==="booking") {
       if (patchBooking) await patchBooking(v.sourceId, function(b) {
         return Object.assign({}, b, { viewings:(b.viewings||[]).filter(function(_,idx){ return idx!==v.vIndex; }) });
@@ -28157,7 +28263,9 @@ const PLAIN_AMOUNT = /^\d*(\.\d{0,2})?$/;
 function CMoneyField({ label, k, hint, f, up }) {
   const [refused, setRefused] = useState(false);
   const raw = f[k] == null ? "" : String(f[k]);
-  const odd = raw.trim() !== "" && !PLAIN_AMOUNT.test(raw.trim());
+  // Judged on the cleaned string, as typing is: an old "£4,500" is a fine
+  // amount, not something to retype.
+  const odd = raw.trim() !== "" && !PLAIN_AMOUNT.test(raw.replace(/[£,\s]/g, ""));
   return (
     <BoxField label={label} hint={refused ? "Numbers only — a plain amount like 4500 or 4500.50. Put any sum or note in Non standard terms."
       : odd ? "“" + raw + "” is not a plain amount — retype it as a number." : hint}>
