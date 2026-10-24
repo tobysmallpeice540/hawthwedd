@@ -263,15 +263,17 @@ console.log("\n— pending-but-paid, both routes closed (W15032) —");
 {
   const HOOK = fs.readFileSync(path.join(__dirname, "..", "netlify", "functions", "stripe-accom-webhook.js"), "utf8");
   ok("the webhook promotes a pending booking on ANY payment, not only the deposit session",
-     /if \(booking\.status === "pending" && \(booking\.schedule \|\| \[\]\)\.some/.test(HOOK));
+     /if \(booking\.status === "pending" && \(?booking\.schedule( \|\| \[\]\))?\)?\.some/.test(HOOK));
   ok("the promotion sits outside the accom_deposit branch",
      HOOK.indexOf('booking.schedule = schedule2;') <
      HOOK.indexOf('if (booking.status === "pending"'));
   ok("it only ever promotes FROM pending, never drags a completed booking back",
      /booking\.status === "pending" &&/.test(HOOK) && !/booking\.status = "pending"/.test(HOOK));
   ok("the promotion happens before the emails are composed",
-     HOOK.indexOf('booking.status = "confirmed";\n    }\n\n    if (!alreadyPaid)') > -1 ||
-     HOOK.indexOf('if (booking.status === "pending"') < HOOK.indexOf('if (!alreadyPaid)'));
+     // Since 24 Oct the booking is promoted inside applyPayment, which runs
+     // (and is written) before any email is composed or sent.
+     HOOK.indexOf('if (booking.status === "pending"') > -1 &&
+     HOOK.indexOf('if (booking.status === "pending"') < HOOK.indexOf('sendBookingConfirmed = true'));
 
   ok("ticking a payment paid in the app confirms a pending booking too",
      /const nowPaid = k === "paid" && v && f\.status === "pending";/.test(SRC));

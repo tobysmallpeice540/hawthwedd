@@ -97,7 +97,9 @@ async function resolveStaff(event) {
   var rows = await sbRest("profiles?id=eq." + user.id + "&select=role,active,name,email");
   var p = rows && rows[0];
   if (!p || p.active === false) return null;
-  if (["admin", "bar", "cleaner"].indexOf(p.role) === -1) return null;
+  // Admin only (24 Oct review): sending somebody a sign-in link to a wedding
+  // is granting access, and granting access is admin-only in the database.
+  if (p.role !== "admin") return null;
   return { id: user.id, who: p.name || p.email || "staff" };
 }
 
