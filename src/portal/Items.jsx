@@ -49,6 +49,13 @@ export default function Items() {
           <span className="count">{data.items.length}</span>
         </div>
 
+        <div className="alert alert-warn" style={{ fontSize: 13 }}>
+          <strong>Decorations for hanging in the barn</strong> — bunting, drapes, fabric, paper
+          or anything else hung or draped — must be approved by us first, to meet fire
+          regulations. Put them on the list with a note of what they are made of and
+          we will confirm.
+        </div>
+
         {data.items.length > 0 && (
           <div className="guests">
             {data.items.map((it) => <ItemRow key={it.id} item={it} onChanged={load} />)}

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { supabase, rpc } from './supabase.js'
 
-// Drinks. For a wedding: the Classic Drinks Package, bring-your-own with
-// corkage, or something agreed with us. The evening bar is its own tab
+// Drinks. For a wedding: the Classic Drinks Package or bring-your-own with
+// corkage — plus a bespoke package, but only once we have written one for
+// this event (bespoke_offered); otherwise it is not on the page at all. The evening bar is its own tab
 // (part="bar"): whether they want a pay bar, how busy they expect it to be,
 // and money behind it if they want.
 //
@@ -77,7 +78,7 @@ export default function Drinks({ part = 'package', barTab = false, onGo }) {
               change, talk to us and we can reopen it.
             </div>
           )}
-          {!locked && sm.lock_date && o.route && o.route !== 'bespoke' && (
+          {!locked && sm.lock_date && o.route && (
             <p className="muted" style={{ fontSize: 13, marginTop: 12 }}>
               Your order can be changed here until <strong>{fmtDate(sm.lock_date)}</strong>, when it becomes final.
             </p>
@@ -94,12 +95,17 @@ export default function Drinks({ part = 'package', barTab = false, onGo }) {
             </>
           )}
           {o.route === 'bespoke' && (
-            <section className="card">
-              <h3>Something a little different</h3>
-              <p className="muted" style={{ fontSize: 14 }}>
-                {o.bespoke_note || 'We will talk it through with you and agree what works. Once agreed, it will be written here.'}
-              </p>
-            </section>
+            <>
+              <section className="card">
+                <h3>{o.bespoke_name || 'Your bespoke package'}</h3>
+                <p className="muted" style={{ fontSize: 14, whiteSpace: 'pre-line' }}>
+                  {o.bespoke_note || 'The package we have agreed with you.'}
+                </p>
+              </section>
+              {o.bespoke_pp !== null && o.bespoke_pp !== undefined && <NumbersLine sm={sm} />}
+              <DetailsCard data={data} locked={locked} onChanged={load} />
+              {o.bespoke_pp !== null && o.bespoke_pp !== undefined && <TotalCard sm={sm} route={o.route} />}
+            </>
           )}
         </>
       )}
@@ -121,12 +127,16 @@ function RouteChoice({ data, locked, onChanged }) {
 
   async function choose(route) {
     if (route === o.route) return
-    if (o.route && o.route !== 'bespoke' && (data.lines || []).length > 0 && confirming !== route) {
+    if (o.route && (data.lines || []).length > 0 && confirming !== route) {
       setConfirming(route); return
     }
     setBusy(true); setErr(''); setConfirming(null)
     try { await rpc('wp_set_drinks_route', { p_route: route }); await onChanged() }
-    catch (e) { setErr(e.code === 'locked' ? 'Your order is now final — talk to us to change it.' : (e.message || String(e))) }
+    catch (e) {
+      setErr(e.code === 'locked' ? 'Your order is now final — talk to us to change it.'
+        : e.code === 'not_offered' ? 'That package is not available — talk to us.'
+        : (e.message || String(e)))
+    }
     finally { setBusy(false) }
   }
 
@@ -135,9 +145,15 @@ function RouteChoice({ data, locked, onChanged }) {
       desc: 'Two reception drinks, half a bottle of house wine with the meal and a glass of Prosecco for the toast, per guest. Tea and coffee after dinner. Glassware, chilling and service included.' },
     { k: 'corkage', name: 'Bring your own (corkage)', price: money(s.corkage_pp) + ' a head',
       desc: 'You supply the drinks — up to two before the meal, half a bottle of wine with it and a glass of fizz for the toast, per guest. We chill, pour and serve. Anything more is charged by the bottle.' },
-    { k: 'bespoke', name: 'Something a little different', price: 'Talk to us',
-      desc: 'Fewer alcoholic drinks, beer instead of wine, a particular cocktail — we are happy to adapt.' },
   ]
+  // A bespoke package appears only once we have written one for this event —
+  // or if they already chose it under the old wording.
+  if (o.bespoke_offered || o.route === 'bespoke') {
+    const priced = o.bespoke_pp !== null && o.bespoke_pp !== undefined
+    options.push({ k: 'bespoke', name: o.bespoke_name || 'Your bespoke package', made: true,
+      price: priced ? money(o.bespoke_pp) + ' a head' : 'As agreed with us',
+      desc: o.bespoke_note || 'The package we have put together with you.' })
+  }
 
   return (
     <section className="card">
@@ -147,9 +163,10 @@ function RouteChoice({ data, locked, onChanged }) {
           <label key={x.k} className={'choice' + (o.route === x.k ? ' is-on' : '')}>
             <input type="radio" name="route" checked={o.route === x.k} disabled={busy || locked} onChange={() => choose(x.k)} />
             <span>
-              <span className="choice-name">{x.name}</span>
-              <span className="choice-meta">{x.price}{x.k !== 'bespoke' ? ' inc VAT · children ' + (Number(s.child_pp) > 0 ? money(s.child_pp) : 'free') + ' · infants free' : ''}</span>
-              <span className="choice-desc">{x.desc}</span>
+              <span className="choice-name">{x.name}{x.made && <span className="chip" style={{ marginLeft: 8 }}>Made for you</span>}</span>
+              <span className="choice-meta">{x.price}{x.k !== 'bespoke' ? ' inc VAT · children ' + (Number(s.child_pp) > 0 ? money(s.child_pp) : 'free') + ' · infants free'
+                : (o.bespoke_pp !== null && o.bespoke_pp !== undefined ? ' inc VAT, per adult' : '')}</span>
+              <span className="choice-desc" style={{ whiteSpace: 'pre-line' }}>{x.desc}</span>
             </span>
           </label>
         ))}
@@ -404,7 +421,8 @@ function DetailsCard({ data, locked, onChanged }) {
       )}
       <label>Notes for us <span className="opt">optional</span></label>
       <textarea rows="3" value={notes} disabled={locked} onChange={(e) => setNotes(e.target.value)}
-        placeholder={o.route === 'classic' ? 'Which wines, a favourite cocktail…' : 'When the drinks will arrive, anything we should know…'} />
+        placeholder={o.route === 'classic' ? 'Which wines, a favourite cocktail…'
+          : o.route === 'corkage' ? 'When the drinks will arrive, anything we should know…' : 'Anything we should know…'} />
       {err && <div className="alert alert-warn">{err}</div>}
       {saved && !err && <div className="alert alert-ok">Saved.</div>}
       {!locked && <div className="actions"><button className="btn-small" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></div>}
@@ -479,7 +497,6 @@ function Bar({ data, onChanged }) {
     ? s.bar_link_url + (s.bar_link_url.includes('?') ? '&' : '?') +
       'client_reference_id=event-' + data.event_id + (email ? '&prefilled_email=' + encodeURIComponent(email) : '')
     : null
-  const prices = (s.bar_prices || []).filter((p) => p && p.name)
   const added = Number(o.bar_paid_amount) > 0
   // Newer database: payments are recorded by Stripe itself (bar-checkout.js
   // and the ticket webhook), and listed here. Older: the payment link above.
@@ -496,6 +513,10 @@ function Bar({ data, onChanged }) {
   }, [returned])
 
   if (!hasPrefs) return <OldBarCard data={data} onChanged={onChanged} />
+  const pays = hasPayments ? o.bar_payments : []
+  const paid = pays.filter((p) => p.status === 'paid')
+  const pending = pays.filter((p) => p.status === 'pending')
+  const refunds = paid.filter((p) => Number(p.refunded_amount) > 0)
 
   return (
     <>
@@ -514,11 +535,9 @@ function Bar({ data, onChanged }) {
           A pay bar is where your guests buy their own drinks. If you would like to treat
           them, you can put money behind the bar as well.
         </p>
-        {prices.length > 0 && (
-          <div className="rows" style={{ marginTop: 12 }}>
-            {prices.map((p, i) => (
-              <div className="row" key={i}><span className="k">{p.name}</span><span className="v">{p.price === null || p.price === undefined || p.price === '' ? '—' : money(p.price)}</span></div>
-            ))}
+        {s.bar_menu_url && (
+          <div className="actions">
+            <a className="btn-small ghost" href={s.bar_menu_url} target="_blank" rel="noreferrer">Our bar menu and prices ↗</a>
           </div>
         )}
         {s.bar_note && <p className="hint" style={{ marginTop: 10 }}>{s.bar_note}</p>}
@@ -554,31 +573,17 @@ function Bar({ data, onChanged }) {
 
       {payBar && (
         <section className="card">
-          <h3>Money behind the bar</h3>
-          {hasPayments ? (
-            <BarPayments payments={o.bar_payments} total={o.bar_paid_amount} returned={returned} />
-          ) : added ? (
-            <div className="alert alert-ok" style={{ marginTop: 0 }}>
-              <strong>{money(o.bar_paid_amount)}</strong> added behind the bar
-              {o.bar_paid_at ? ' — received ' + fmtDate(o.bar_paid_at) : ''}. Thank you.
-            </div>
-          ) : (
-            <p className="muted" style={{ fontSize: 14 }}>Nothing added yet.</p>
+          <h3>Put money behind the bar</h3>
+          {returned === 'cancelled' && (
+            <div className="alert alert-warn" style={{ marginTop: 0 }}>The payment was cancelled — nothing was taken.</div>
           )}
-
-          <label style={{ marginTop: 14 }}>Any rules <span className="opt">optional</span></label>
-          <input value={rules} disabled={busy} onChange={(e) => setRules(e.target.value)}
-            onBlur={() => { if (rules !== (o.bar_rules || '')) save({ p_rules: rules }, 'rules') }}
-            placeholder="e.g. beer and wine only, no spirits" />
-          {savedWhat === 'rules' && <p className="hint" style={{ color: 'var(--accent)' }}>Saved.</p>}
-
           {hasPayments ? (
-            <AddMoney added={added} />
+            <AddMoney added={paid.length > 0} />
           ) : payUrl ? (
             <>
               <div className="actions">
                 <a className="btn-small" href={payUrl} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
-                  {added ? 'Add more now' : 'Add now'}
+                  {added ? 'Add more now' : 'Pay now'}
                 </a>
               </div>
               <p className="hint" style={{ marginTop: 8 }}>
@@ -591,10 +596,41 @@ function Bar({ data, onChanged }) {
               We will send you a way to pay this nearer the time.
             </p>
           )}
+
+          <label style={{ marginTop: 16 }}>Any rules <span className="opt">optional</span></label>
+          <input value={rules} disabled={busy} onChange={(e) => setRules(e.target.value)}
+            onBlur={() => { if (rules !== (o.bar_rules || '')) save({ p_rules: rules }, 'rules') }}
+            placeholder="e.g. beer and wine only, no spirits" />
+          {savedWhat === 'rules' && <p className="hint" style={{ color: 'var(--accent)' }}>Saved.</p>}
           <p className="hint" style={{ marginTop: 10 }}>
             When the tab runs out, the bar goes back to pay as you go. Anything left over is refunded
             to the card you paid with.
           </p>
+        </section>
+      )}
+
+      {(payBar || paid.length > 0 || added) && (
+        <section className="card">
+          <h3>Paid</h3>
+          {returned === 'thanks' && pending.length > 0 && (
+            <div className="alert alert-ok" style={{ marginTop: 0 }}>
+              Thank you — we're just waiting for the card payment to confirm. It will show here in a moment.
+            </div>
+          )}
+          {hasPayments ? <BarPaid paid={paid} pending={pending} returned={returned} />
+            : added ? (
+              <div className="alert alert-ok" style={{ marginTop: 0 }}>
+                <strong>{money(o.bar_paid_amount)}</strong> behind the bar
+                {o.bar_paid_at ? ' — received ' + fmtDate(o.bar_paid_at) : ''}. Thank you.
+              </div>
+            ) : <p className="muted" style={{ fontSize: 14 }}>Nothing paid yet.</p>}
+        </section>
+      )}
+
+      {hasPayments && (payBar || paid.length > 0) && (
+        <section className="card">
+          <h3>Refunded</h3>
+          <BarRefunded refunds={refunds} />
         </section>
       )}
     </>
@@ -616,43 +652,59 @@ function readReturn() {
   } catch (e) { return null }
 }
 
-function BarPayments({ payments, total, returned }) {
-  const paid = (payments || []).filter((p) => p.status === 'paid')
-  const pending = (payments || []).filter((p) => p.status === 'pending')
+function BarPaid({ paid, pending, returned }) {
+  const gross = paid.reduce((t, p) => t + Number(p.amount || 0), 0)
+  const back = paid.reduce((t, p) => t + Number(p.refunded_amount || 0), 0)
   return (
     <>
-      {returned === 'thanks' && pending.length > 0 && (
-        <div className="alert alert-ok" style={{ marginTop: 0 }}>
-          Thank you — we're just waiting for the card payment to confirm. It will show below in a moment.
-        </div>
-      )}
-      {returned === 'cancelled' && (
-        <div className="alert alert-warn" style={{ marginTop: 0 }}>The payment was cancelled — nothing was taken.</div>
-      )}
       {paid.length === 0 ? (
-        <p className="muted" style={{ fontSize: 14 }}>Nothing added yet.</p>
+        <p className="muted" style={{ fontSize: 14 }}>Nothing paid yet.</p>
       ) : (
         <div className="rows">
           {paid.map((p) => (
             <div className="row" key={p.id}>
-              <span className="k">
-                {fmtDate(p.paid_at)}{p.source === 'staff' ? ' · recorded by us' : ''}
-                {Number(p.refunded_amount) > 0 && (
-                  <span className="muted"> · {money(p.refunded_amount)} refunded{p.refunded_at ? ' on ' + fmtDate(p.refunded_at) : ''}</span>
-                )}
-              </span>
-              <span className="v">{Number(p.refunded_amount) > 0 ? money(Number(p.amount) - Number(p.refunded_amount)) : money(p.amount)}</span>
+              <span className="k">{fmtDate(p.paid_at)}{p.source === 'staff' ? ' · recorded by us' : ' · by card'}</span>
+              <span className="v">{money(p.amount)}</span>
             </div>
           ))}
-          {(paid.length > 1 || paid.some((p) => Number(p.refunded_amount) > 0)) && (
-            <div className="row"><span className="k"><strong>Behind the bar</strong></span><span className="v"><strong>{money(total)}</strong></span></div>
+          {paid.length > 1 && (
+            <div className="row"><span className="k"><strong>Paid in all</strong></span><span className="v"><strong>{money(gross)}</strong></span></div>
+          )}
+          {back > 0 && (
+            <div className="row"><span className="k"><strong>Behind the bar after refunds</strong></span><span className="v"><strong>{money(gross - back)}</strong></span></div>
           )}
         </div>
       )}
       {pending.length > 0 && returned !== 'thanks' && (
         <p className="hint">{pending.map((p) => money(p.amount)).join(', ')} started on the card page and not finished — it will disappear if it isn't completed.</p>
       )}
-      {paid.length > 0 && <p className="hint" style={{ marginTop: 8 }}>We email you a receipt each time, and again if we refund any of it.</p>}
+      {paid.length > 0 && <p className="hint" style={{ marginTop: 8 }}>We email you a receipt each time.</p>}
+    </>
+  )
+}
+
+function BarRefunded({ refunds }) {
+  if (refunds.length === 0) {
+    return <p className="muted" style={{ fontSize: 14 }}>Nothing has been refunded.</p>
+  }
+  const total = refunds.reduce((t, p) => t + Number(p.refunded_amount || 0), 0)
+  return (
+    <>
+      <div className="rows">
+        {refunds.map((p) => (
+          <div className="row" key={p.id}>
+            <span className="k">
+              {p.refunded_at ? fmtDate(p.refunded_at) : 'Refunded'}
+              <span className="muted"> · from {money(p.amount)} paid {fmtDate(p.paid_at)}</span>
+            </span>
+            <span className="v">{money(p.refunded_amount)}</span>
+          </div>
+        ))}
+        {refunds.length > 1 && (
+          <div className="row"><span className="k"><strong>Refunded in all</strong></span><span className="v"><strong>{money(total)}</strong></span></div>
+        )}
+      </div>
+      <p className="hint" style={{ marginTop: 8 }}>Refunds go back to the card that paid, and can take a few working days to arrive.</p>
     </>
   )
 }
@@ -685,12 +737,12 @@ function AddMoney({ added }) {
   }
 
   return (
-    <form onSubmit={go} style={{ marginTop: 16 }}>
+    <form onSubmit={go} style={{ marginTop: 4 }}>
       <label>{added ? 'Add more' : 'How much would you like to put behind the bar?'} <span className="opt">£</span></label>
       <div className="add-line">
         <input type="number" min="10" max="5000" step="1" inputMode="decimal" value={amount}
           onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 500" aria-label="Amount in pounds" />
-        <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Opening…' : 'Add now'}</button>
+        <button className="btn-small" type="submit" disabled={busy}>{busy ? 'Opening…' : 'Pay now'}</button>
       </div>
       <div className="actions" style={{ marginTop: 8 }}>
         {PRESETS.map((v) => (
@@ -700,7 +752,7 @@ function AddMoney({ added }) {
       {err && <div className="alert alert-warn">{err}</div>}
       <p className="hint" style={{ marginTop: 8 }}>
         Takes you to our secure card payment page for that amount, then straight back here.
-        It shows above as soon as it is paid, and we email you a receipt.
+        It shows under Paid as soon as it goes through, and we email you a receipt.
       </p>
     </form>
   )

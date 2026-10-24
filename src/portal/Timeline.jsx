@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { rpc } from './supabase.js'
+import { rpc, isMissingFunction } from './supabase.js'
 import { dayOrder } from '../shared/dayOrder.js'
 
 // Components that render inputs live at module scope — see Guests.jsx.
@@ -47,7 +47,7 @@ function lengthLabel(mins) {
   return h + (h === 1 ? ' hr' : ' hrs') + (m ? ' ' + m + ' min' : '')
 }
 
-export default function Timeline({ kind }) {
+export default function Timeline({ kind, onGo }) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -135,6 +135,7 @@ export default function Timeline({ kind }) {
           <AddBlock
             dayKey={current ? current.day_key : 'event'}
             suppliers={data.suppliers}
+            contacts={data.contacts}
             onChanged={load}
           />
         )}
@@ -146,7 +147,7 @@ export default function Timeline({ kind }) {
             {rows.map((r, i) => (
               r.kind === 'venue'
                 ? <VenueRow key={'v' + i} at={r.at} title={r.title} />
-                : <Block key={r.block.id} block={r.block} suppliers={data.suppliers} ceremony={data.ceremony_time} onChanged={load} />
+                : <Block key={r.block.id} block={r.block} suppliers={data.suppliers} contacts={data.contacts} ceremony={data.ceremony_time} onGo={onGo} onChanged={load} />
             ))}
           </div>
         )}
@@ -154,6 +155,7 @@ export default function Timeline({ kind }) {
         <AddBlock
           dayKey={current ? current.day_key : 'event'}
           suppliers={data.suppliers}
+          contacts={data.contacts}
           onChanged={load}
         />
 
@@ -223,7 +225,7 @@ function CeremonyTime({ value, blocks, onSaved }) {
   )
 }
 
-function Block({ block, suppliers, ceremony, onChanged }) {
+function Block({ block, suppliers, contacts, ceremony, onGo, onChanged }) {
   const [editing, setEditing] = useState(false)
   const [answering, setAnswering] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -243,6 +245,7 @@ function Block({ block, suppliers, ceremony, onChanged }) {
           block={block}
           dayKey={block.day_key}
           suppliers={suppliers}
+          contacts={contacts}
           ceremony={ceremony}
           onDone={() => { setEditing(false); onChanged() }}
           onCancel={() => setEditing(false)}
@@ -273,8 +276,18 @@ function Block({ block, suppliers, ceremony, onChanged }) {
         <div className="tl-meta">
           {lengthLabel(block.duration_min)}
           {block.supplier_name && <> · {block.supplier_name}</>}
+          {block.contact_name && <> · {block.contact_name}</>}
         </div>
         {block.notes && <div className="tl-notes">{block.notes}</div>}
+        {/* The first dance song lives on the Music page, with its Spotify link
+            — or a tick to say the DJ is doing it. */}
+        {/first dance/i.test(block.title) && (
+          <div className="tl-notes">
+            First dance song: {onGo
+              ? <button type="button" className="btn-quiet" onClick={() => onGo('music')}>add it on the Music page ›</button>
+              : 'tell us on the Music page.'}
+          </div>
+        )}
         {prompts.length > 0 && !answering && (
           <div className="qa">
             {prompts.map((q, i) => (
@@ -344,18 +357,34 @@ function AnswerForm({ block, prompts, answers, onDone, onCancel }) {
   )
 }
 
-function BlockForm({ block, dayKey, suppliers, ceremony, onDone, onCancel }) {
+function BlockForm({ block, dayKey, suppliers, contacts, ceremony, onDone, onCancel }) {
   const [start, setStart] = useState(block ? hhmm(block.start_time) : '')
   const [title, setTitle] = useState(block ? block.title : '')
   const [mins, setMins] = useState(block ? block.duration_min : 30)
   const [notes, setNotes] = useState(block && block.notes ? block.notes : '')
-  const [sup, setSup] = useState(block && block.supplier_id ? block.supplier_id : '')
+  // Who is doing it: one of their suppliers, or one of their own people (key
+  // contacts, on the Details page). One value, prefixed, so one dropdown.
+  const startWho = block && block.supplier_id ? 's:' + block.supplier_id
+    : block && block.contact_id ? 'c:' + block.contact_id : ''
+  const [who, setWho] = useState(startWho)
+  const people = contacts || []
   const wasFollowing = !!block && block.rel_minutes !== null && block.rel_minutes !== undefined
   const [follow, setFollow] = useState(wasFollowing)
   // Offered on the day itself, once there is a ceremony time to follow.
   const canFollow = dayKey === 'event' && !!ceremony
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+
+  const supId = who.startsWith('s:') ? who.slice(2) : null
+  const contactId = who.startsWith('c:') ? who.slice(2) : null
+
+  // Sets both, so choosing nobody (or a person instead of a supplier) clears
+  // what was there. Before the database knows the function, a supplier still
+  // saves through the line itself; only a person needs it.
+  async function setWhoFor(id) {
+    try { await rpc('wp_set_block_who', { p_id: id, p_supplier_id: supId, p_contact_id: contactId }) }
+    catch (e) { if (!(isMissingFunction(e) && !contactId)) throw e }
+  }
 
   async function submit(e) {
     e.preventDefault()
@@ -365,8 +394,9 @@ function BlockForm({ block, dayKey, suppliers, ceremony, onDone, onCancel }) {
         await rpc('wp_update_block', {
           p_id: block.id, p_start_time: start, p_title: title,
           p_duration_min: Number(mins) || 0, p_notes: notes,
-          p_supplier_id: sup || null,
+          p_supplier_id: supId,
         })
+        if (who !== startWho) await setWhoFor(block.id)
         // Moving a following line by hand fixes it at the new time (the
         // database does that). Ticking "move with the ceremony" afterwards
         // re-attaches it from wherever it now sits.
@@ -375,11 +405,12 @@ function BlockForm({ block, dayKey, suppliers, ceremony, onDone, onCancel }) {
           await rpc('wp_set_block_follows', { p_id: block.id, p_follow: follow })
         }
       } else {
-        await rpc('wp_add_block', {
+        const r = await rpc('wp_add_block', {
           p_day_key: dayKey, p_start_time: start, p_title: title,
           p_duration_min: Number(mins) || 0, p_notes: notes || null,
-          p_supplier_id: sup || null,
+          p_supplier_id: supId,
         })
+        if (contactId && r && r.id) await setWhoFor(r.id)
       }
       onDone()
     } catch (e2) {
@@ -388,6 +419,7 @@ function BlockForm({ block, dayKey, suppliers, ceremony, onDone, onCancel }) {
         : e2.code === 'no_time' ? 'What time does it start?'
         : e2.code === 'day_not_offered' ? 'Your booking does not include that day.'
         : e2.code === 'not_your_supplier' ? 'Add that supplier on the Suppliers tab first.'
+        : e2.code === 'not_your_contact' ? 'That person is no longer in your key contacts.'
         : (e2.message || String(e2))
       )
       setBusy(false)
@@ -408,14 +440,26 @@ function BlockForm({ block, dayKey, suppliers, ceremony, onDone, onCancel }) {
       </div>
       <label>What is happening</label>
       <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ceremony, speeches, cake…" autoFocus={!block} />
-      {suppliers.length > 0 && (
-        <>
-          <label style={{ marginTop: 12 }}>Who is doing it <span className="opt">optional</span></label>
-          <select value={sup} onChange={(e) => setSup(e.target.value)}>
-            <option value="">—</option>
-            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </>
+      <label style={{ marginTop: 12 }}>Who is doing it <span className="opt">optional</span></label>
+      {suppliers.length > 0 || people.length > 0 ? (
+        <select value={who} onChange={(e) => setWho(e.target.value)}>
+          <option value="">—</option>
+          {suppliers.length > 0 && (
+            <optgroup label="Your suppliers">
+              {suppliers.map((s) => <option key={s.id} value={'s:' + s.id}>{s.name}</option>)}
+            </optgroup>
+          )}
+          {people.length > 0 && (
+            <optgroup label="Your people">
+              {people.map((c) => <option key={c.id} value={'c:' + c.id}>{c.name}{c.role ? ' (' + c.role + ')' : ''}</option>)}
+            </optgroup>
+          )}
+        </select>
+      ) : (
+        <p className="hint" style={{ marginTop: 0 }}>
+          Add your suppliers on the Suppliers page, or your own people under Details → key
+          contacts, and you can pick them here.
+        </p>
       )}
       <label style={{ marginTop: 12 }}>Notes <span className="opt">optional</span></label>
       <input value={notes} onChange={(e) => setNotes(e.target.value)} />
@@ -434,7 +478,7 @@ function BlockForm({ block, dayKey, suppliers, ceremony, onDone, onCancel }) {
   )
 }
 
-function AddBlock({ dayKey, suppliers, onChanged }) {
+function AddBlock({ dayKey, suppliers, contacts, onChanged }) {
   const [open, setOpen] = useState(false)
   if (!open) {
     return (
@@ -448,6 +492,7 @@ function AddBlock({ dayKey, suppliers, onChanged }) {
       block={null}
       dayKey={dayKey}
       suppliers={suppliers}
+      contacts={contacts}
       onDone={() => { setOpen(false); onChanged() }}
       onCancel={() => setOpen(false)}
     />

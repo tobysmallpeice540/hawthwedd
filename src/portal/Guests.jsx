@@ -152,8 +152,8 @@ function NumbersPanel({ numbers, derived, onSaved }) {
     <section className="card">
       <h3>How many people</h3>
       <p className="muted" style={{ marginBottom: 16, fontSize: 14 }}>
-        Rough numbers are fine to begin with — you can change them whenever you like.
-        We only need the names much later.
+        Rough numbers are fine to begin with — you can change them later.
+        You can upload names if it helps you, but we won't need them.
       </p>
 
       <form onSubmit={save}>

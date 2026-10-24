@@ -7,7 +7,16 @@ import KeyContacts from './KeyContacts.jsx'
 // The question set comes from the database, not from here, so it can change
 // without a deploy. This renders whatever it is given.
 
-export default function VenueForm() {
+// Things this form used to ask that now have a home on another page — said
+// here so nobody goes looking for them, with a way straight there.
+const ELSEWHERE = [
+  { tab: 'timeline', what: 'Ceremony time, and when you cut the cake', where: 'Timeline' },
+  { tab: 'music',    what: 'Your first dance song', where: 'Music' },
+  { tab: 'guests',   what: 'High chairs', where: 'Guests' },
+  { tab: 'items',    what: 'Dropping things off and collecting them', where: 'Bringing' },
+]
+
+export default function VenueForm({ onGo, visible }) {
   const [data, setData] = useState(null)
   const [answers, setAnswers] = useState({})
   const [state, setState] = useState('loading')
@@ -59,7 +68,9 @@ export default function VenueForm() {
 
   // Group by section, preserving the order the database gave us.
   const sections = []
-  for (const q of data.questions) {
+  // Questions answered on another page (drop-off and collection, on Bringing)
+  // stay in the question list so their answers are kept, but are not drawn here.
+  for (const q of data.questions.filter((x) => x.in_form !== false)) {
     let s = sections.find((x) => x.name === q.section)
     if (!s) { s = { name: q.section, questions: [] }; sections.push(s) }
     s.questions.push(q)
@@ -91,6 +102,22 @@ export default function VenueForm() {
           </div>
         </section>
       ))}
+
+      {onGo && ELSEWHERE.some((x) => (visible || []).includes(x.tab)) && (
+        <section className="card">
+          <h3>Asked on other pages</h3>
+          <div className="rows">
+            {ELSEWHERE.filter((x) => (visible || []).includes(x.tab)).map((x) => (
+              <div className="row" key={x.tab}>
+                <span className="k">{x.what}</span>
+                <span className="v">
+                  <button type="button" className="btn-quiet" style={{ padding: 0 }} onClick={() => onGo(x.tab)}>{x.where} ›</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="card">
         {error && <div className="alert alert-warn">{error}</div>}

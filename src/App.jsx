@@ -2763,7 +2763,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-24b";
+const APP_BUILD = "2026-10-24c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -9294,7 +9294,7 @@ function CoupleTimelines({ bookings }) {
         const mine = (data.blocks || []).filter(function(b){ return b.day_key === d.day_key; });
         const fixed = (d.fixed || []).map(function(f){ return { at:f.time, title:f.title, venue:true }; });
         const all = mine.map(function(b){ return { at:b.start_time, title:b.title, notes:b.notes,
-                                                  supplier:b.supplier_name, locked:b.locked,
+                                                  supplier:[b.supplier_name, b.contact_name].filter(Boolean).join(" · "), locked:b.locked,
                                                   prompts:b.prompts, answers:b.answers,
                                                   follows: b.rel_minutes != null }; })
           .concat(fixed)
@@ -10169,7 +10169,7 @@ function PortalEventPanel({ eventId, booking, hideDrinks }) {
 
 const PORTAL_SECTION_LABEL = {
   guests:"Guests", food:"Food", drinks:"Drinks", bar:"Evening bar", checklist:"Checklist", timeline:"Timeline", music:"Music",
-  uploads:"Photos & films", webcast:"Webcast",
+  photos:"Photos & films (links)", uploads:"Uploads", webcast:"Webcast",
   suppliers:"Suppliers", layout:"Table plan", items:"Bringing", addons:"Extras", money:"Payments",
   details:"Details", documents:"Documents", inspiration:"Inspiration",
 };
@@ -10244,8 +10244,9 @@ function PortalEventExtras({ eventId, booking, hideDrinks }) {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 300px), 1fr))", gap:14 }}>
         <PortalEventItems items={items} onChanged={load} />
         <PortalEventRequests requests={requests} onChanged={load} />
-        <PortalEventFood food={food} />
+        <PortalEventFood food={food} eventId={eventId} />
         <PortalEventMusic items={music} />
+        <PortalEventPhotoLinks eventId={eventId} />
         <PortalEventUploads eventId={eventId} />
         <PortalEventWebcast eventId={eventId} />
         <div style={panelCss}>
@@ -10461,7 +10462,7 @@ function PortalEventRequests({ requests, onChanged }) {
   );
 }
 
-function PortalEventFood({ food }) {
+function PortalEventFood({ food, eventId }) {
   return (
     <div style={panelCss}>
       <div style={panelTitle}>Food</div>
@@ -10477,6 +10478,110 @@ function PortalEventFood({ food }) {
           <div style={{ fontSize:11, color:T.textLight }}>Last changed {portalWhen(food.updated_at)}{food.updated_by ? " by " + food.updated_by : ""}</div>
         </div>
       )}
+      <PortalEventBespokeFood eventId={eventId} />
+    </div>
+  );
+}
+
+// A menu written for this one event. Only this client sees it, alongside the
+// menus everyone is offered (Portal settings), and they tick it like any other.
+function PortalEventBespokeFood({ eventId }) {
+  const [rows, setRows] = useState(null);
+  const [draft, setDraft] = useState(null);   // { id, name, description, price }
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const isCurrent = useEventGuard(eventId);
+  async function load() {
+    const forId = eventId; setErr("");
+    try { const r = await sbRpcQuiet("wp_admin_event_food", { p_event_id: forId }); if (isCurrent(forId)) setRows(r.bespoke || []); }
+    catch (e) { if (isCurrent(forId)) { setRows(null); setErr(e && e.status === 404 ? "" : (e.message || String(e))); } }
+  }
+  useEffect(function(){ setRows(null); setDraft(null); load(); }, [eventId]);
+  async function save(d, active) {
+    setBusy(true); setErr("");
+    try {
+      const price = String(d.price == null ? "" : d.price).trim().replace(/^£/, "");
+      if (price !== "" && !(Number(price) >= 0)) throw new Error("The price should be a number, e.g. 32.50");
+      await sbRpc("wp_admin_save_event_food", { p_event_id: eventId, p_id: d.id || null, p_name: d.name,
+        p_description: d.description, p_price_pp: price === "" ? null : Number(price), p_active: active });
+      setDraft(null); await load();
+    } catch (e) { setErr(e.code === "needs_name" ? "Give the menu a name." : (e.message || String(e))); }
+    finally { setBusy(false); }
+  }
+  if (rows === null && !err) return null;
+  return (
+    <div style={{ marginTop:12, borderTop:`1px solid ${T.border}55`, paddingTop:10 }}>
+      <div style={{ fontSize:12, fontWeight:700, color:T.text }}>Bespoke menu for this event</div>
+      {err && <ErrBanner text={err} />}
+      {(rows || []).map(function(m){
+        return draft && draft.id === m.id ? null : (
+          <div key={m.id} style={{ fontSize:13, color:T.textMid, marginTop:6, display:"flex", gap:8, flexWrap:"wrap", alignItems:"baseline" }}>
+            <b style={{ color:T.text }}>{m.name}</b>
+            <span>{m.price_pp_inc_vat != null ? portalMoney(m.price_pp_inc_vat) + " a head inc VAT" : "price on request"}</span>
+            <button style={Object.assign({}, btnQuiet, { padding:"3px 9px", fontSize:11 })} disabled={busy}
+              onClick={function(){ setDraft({ id:m.id, name:m.name, description:m.description || "", price:m.price_pp_inc_vat == null ? "" : String(m.price_pp_inc_vat) }); }}>Edit</button>
+            <button style={Object.assign({}, btnQuiet, { padding:"3px 9px", fontSize:11 })} disabled={busy}
+              onClick={function(){ if (window.confirm("Take " + m.name + " off their portal?")) save(m, false); }}>Remove</button>
+            {m.description && <div style={{ flexBasis:"100%", fontSize:12, color:T.textLight }}>{m.description}</div>}
+          </div>
+        );
+      })}
+      {draft ? (
+        <div style={{ display:"grid", gap:8, marginTop:8 }}>
+          <input value={draft.name} placeholder="Name, e.g. Spring wake menu" style={inputCss}
+            onChange={function(e){ setDraft(Object.assign({}, draft, { name:e.target.value })); }} />
+          <textarea rows={3} value={draft.description} placeholder="What is in it (they see this)" style={Object.assign({}, inputCss, { fontFamily:"inherit" })}
+            onChange={function(e){ setDraft(Object.assign({}, draft, { description:e.target.value })); }} />
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+            <input value={draft.price} placeholder="£ a head inc VAT" inputMode="decimal" style={Object.assign({}, inputCss, { width:150 })}
+              onChange={function(e){ setDraft(Object.assign({}, draft, { price:e.target.value })); }} />
+            <button style={btnQuiet} disabled={busy} onClick={function(){ save(draft, true); }}>{busy ? "Saving…" : "Save"}</button>
+            <button style={btnQuiet} disabled={busy} onClick={function(){ setDraft(null); }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button style={Object.assign({}, btnQuiet, { marginTop:8, padding:"5px 11px", fontSize:12 })} disabled={busy || rows === null}
+          onClick={function(){ setDraft({ id:null, name:"", description:"", price:"" }); }}>Add a bespoke menu</button>
+      )}
+      <div style={{ fontSize:11, color:T.textLight, marginTop:6, lineHeight:1.5 }}>
+        They see it with the standard menus and can tick it. The standard menus are under Events → Portal settings.
+      </div>
+    </div>
+  );
+}
+
+// Links the client has sent for photos and films — slideshows, albums, films.
+// Nothing is stored here but the link.
+function PortalEventPhotoLinks({ eventId }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const isCurrent = useEventGuard(eventId);
+  useEffect(function(){
+    const forId = eventId; setRows(null); setErr("");
+    sbRpcQuiet("wp_admin_media_links", { p_event_id: forId })
+      .then(function(r){ if (isCurrent(forId)) setRows(r.links || []); })
+      .catch(function(e){ if (isCurrent(forId)) setErr(e && e.status === 404 ? "" : (e.message || String(e))); });
+  }, [eventId]);
+  if (rows === null) return err ? <ErrBanner text={err} /> : null;
+  return (
+    <div style={panelCss}>
+      <div style={panelTitle}>Photo &amp; film links <span style={{ fontWeight:400, color:T.textLight }}>· {rows.length}</span></div>
+      {rows.length === 0 ? <div style={quietText}>None sent.</div> : (
+        <div style={{ display:"grid", gap:6 }}>
+          {rows.map(function(m, i){
+            return (
+              <div key={i} style={{ fontSize:13 }}>
+                <span style={{ color:T.text }}>{m.description}</span>
+                {" · "}<a href={m.url} target="_blank" rel="noopener noreferrer" style={{ color:T.accent }}>open ↗</a>
+                <span style={{ color:T.textLight, fontSize:11 }}> {portalWhen(m.created_at)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ fontSize:11, color:T.textLight, marginTop:8, lineHeight:1.5 }}>
+        Open each before the day — a link that needs a sign-in, or has expired (WeTransfer), will not play.
+      </div>
     </div>
   );
 }
@@ -10493,6 +10598,7 @@ function PortalEventMusic({ items }) {
                 <span style={{ color:T.text }}>{m.description}</span>
                 {m.url
                   ? <> · <a href={m.url} target="_blank" rel="noreferrer" style={{ color:T.accent }}>Spotify ↗</a></>
+                  : m.dj_playing ? <span style={{ color:T.green }}> · their DJ is playing it</span>
                   : <span style={{ color:T.textLight }}> · no link yet</span>}
               </div>
             );
@@ -10849,6 +10955,8 @@ function PortalEventDrinks({ eventId, booking }) {
   const [rate, setRate] = useState("");
   const [childRate, setChildRate] = useState("");
   const [bespoke, setBespoke] = useState("");
+  const [bespokeName, setBespokeName] = useState("");
+  const [bespokePp, setBespokePp] = useState("");
   const [again, setAgain] = useState(false);
   const isCurrent = useEventGuard(eventId);
 
@@ -10856,7 +10964,7 @@ function PortalEventDrinks({ eventId, booking }) {
   // event. When the event changes or a load fails they go, so neither Save nor
   // the Invoice button can act on another event's figures.
   function clearDrafts() {
-    setData(null); setEvening(null); setRate(""); setChildRate(""); setBespoke(""); setAgain(false);
+    setData(null); setEvening(null); setRate(""); setChildRate(""); setBespoke(""); setBespokeName(""); setBespokePp(""); setAgain(false);
   }
 
   async function load() {
@@ -10874,6 +10982,8 @@ function PortalEventDrinks({ eventId, booking }) {
       setRate(o.rate_pp == null ? "" : String(o.rate_pp));
       setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
       setBespoke(o.bespoke_note || "");
+      setBespokeName(o.bespoke_name || "");
+      setBespokePp(o.bespoke_pp == null ? "" : String(o.bespoke_pp));
     } catch (e) {
       if (!isCurrent(forId)) return;
       clearDrafts();
@@ -10927,7 +11037,23 @@ function PortalEventDrinks({ eventId, booking }) {
   if (!data) return <div style={quietText}>Loading…</div>;
   const o = data.order || {};
   const sm = data.summary || {};
-  const routeName = { classic:"Classic Drinks Package", corkage:"Bring your own (corkage)", bespoke:"Something different" }[o.route] || "Not chosen yet";
+  const routeName = { classic:"Classic Drinks Package", corkage:"Bring your own (corkage)", bespoke:(o.bespoke_name || "Bespoke package") }[o.route] || "Not chosen yet";
+  // A bespoke package exists only once it is written here; until then the
+  // client sees Classic and bring-your-own and nothing else.
+  async function saveBespoke(clear) {
+    const pp = String(bespokePp).trim().replace(/^£/, "");
+    if (!clear && pp !== "" && !(Number(pp) >= 0)) { setErr("The bespoke price should be a number, e.g. 32.50"); return; }
+    if (clear && o.route === "bespoke" && !window.confirm("They have chosen this package. Removing it clears their choice. Remove it?")) return;
+    setBusy(true); setErr(""); setNote("");
+    try {
+      await sbRpc("wp_admin_set_drinks_bespoke", { p_event_id: eventId,
+        p_name: clear ? "" : bespokeName, p_note: clear ? "" : bespoke, p_pp: clear || pp === "" ? null : Number(pp) });
+      setNote(clear ? "Bespoke package removed." : "Bespoke package saved — they can now choose it.");
+      await load();
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }
+  const hasBespoke = "bespoke_name" in o || !data.order;
   const unpricedLines = (data.lines || []).filter(function(l){ return l.unit_price == null; });
 
   return (
@@ -10988,7 +11114,29 @@ function PortalEventDrinks({ eventId, booking }) {
         }}>{o.unlocked ? "Lock again" : "Unlock for them"}</button>
       </div>
 
-      {o.route === "bespoke" && (
+      {hasBespoke ? (
+        <div style={{ marginTop:12, borderTop:`1px solid ${T.border}55`, paddingTop:10 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:T.text }}>
+            Bespoke package for this event{" "}
+            <span style={{ fontWeight:400, color:T.textLight }}>
+              · {o.bespoke_name || o.bespoke_note ? (o.route === "bespoke" ? "offered, and chosen" : "offered to them") : "none — they see Classic and bring your own only"}
+            </span>
+          </div>
+          <div style={{ display:"grid", gap:8, marginTop:8 }}>
+            <input value={bespokeName} onChange={function(e){ setBespokeName(e.target.value); }} placeholder="Name, e.g. Beer and fizz package" style={inputCss} />
+            <textarea rows={3} value={bespoke} onChange={function(e){ setBespoke(e.target.value); }} placeholder="What is in it (they see this)" style={Object.assign({}, inputCss, { fontFamily:"inherit" })} />
+            <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+              <input value={bespokePp} onChange={function(e){ setBespokePp(e.target.value); }} placeholder="£ per adult inc VAT" inputMode="decimal" style={Object.assign({}, inputCss, { width:170 })} />
+              <button disabled={busy} style={btnQuiet} onClick={function(){ saveBespoke(false); }}>Save bespoke package</button>
+              {(o.bespoke_name || o.bespoke_note) && <button disabled={busy} style={btnQuiet} onClick={function(){ saveBespoke(true); }}>Remove</button>}
+            </div>
+          </div>
+          <div style={{ fontSize:11, color:T.textLight, marginTop:6, lineHeight:1.5 }}>
+            With a price, it goes on the drinks invoice per adult (children at the child rate above), like the
+            other packages. Without one, nothing is added to the drinks invoice — invoice the agreed figure yourself.
+          </div>
+        </div>
+      ) : o.route === "bespoke" && (
         <div style={{ display:"flex", gap:8, marginTop:10 }}>
           <input value={bespoke} onChange={function(e){ setBespoke(e.target.value); }} placeholder="What was agreed (they see this)" style={inputCss} />
           <button disabled={busy} style={btnQuiet} onClick={function(){ setDrinks({ p_bespoke_note: bespoke }, "Saved."); }}>Save</button>
@@ -11394,7 +11542,7 @@ function EventVendorsPanel({ eventId, booking }) {
          : (tl.days || []).map(function(d){
           const blocks = (tl.blocks || []).filter(function(b){ return b.day_key === d.day_key; });
           const fixed = (d.fixed || []).filter(function(f){ return f && f.time; });
-          const rows = blocks.map(function(b){ return { at:b.start_time, title:b.title, who:b.supplier_name, notes:b.notes, venue:false, mins:b.duration_min }; })
+          const rows = blocks.map(function(b){ return { at:b.start_time, title:b.title, who:[b.supplier_name, b.contact_name].filter(Boolean).join(" · "), notes:b.notes, venue:false, mins:b.duration_min }; })
             .concat(fixed.map(function(f){ return { at:f.time, title:f.title, venue:true }; }))
             .sort(function(a, b){ return dayOrder(a.at) - dayOrder(b.at); });
           if (!rows.length) return null;
@@ -11491,7 +11639,7 @@ function functionSheetHtml(ev, d, staff, printedAt) {
         const prompts = String(b.prompts || "").split("\n").map(function(q) { return q.trim(); }).filter(Boolean);
         const said = Array.isArray(b.answers) ? b.answers : [];
         const qa = prompts.map(function(q, i) { return said[i] ? e(q) + " " + e(said[i]) : ""; }).filter(Boolean).join("<br>");
-        return { at: b.start_time, html: e(b.title) + (b.supplier_name ? " — " + e(b.supplier_name) : "") +
+        return { at: b.start_time, html: e(b.title) + (b.supplier_name ? " — " + e(b.supplier_name) : "") + (b.contact_name ? " — " + e(b.contact_name) : "") +
           (b.duration_min ? ' <span class="muted">' + e(b.duration_min) + " min</span>" : "") +
           (b.notes ? '<div class="muted">' + e(b.notes) + "</div>" : "") + (qa ? '<div class="qa">' + qa + "</div>" : "") };
       }).concat(fixed.map(function(f) { return { at: f.time, html: '<span class="muted">' + e(f.title) + "</span>" }; }))
@@ -11511,7 +11659,7 @@ function functionSheetHtml(ev, d, staff, printedAt) {
     const o = dr.order || {};
     const sm = dr.summary || {};
     const ROUTE = { classic: "Classic drinks package", corkage: "Bring your own (corkage)", bespoke: "Bespoke" };
-    drinks += row("Route", o.route ? (ROUTE[o.route] || o.route) : "Not chosen yet");
+    drinks += row("Route", o.route ? (o.route === "bespoke" && o.bespoke_name ? "Bespoke: " + o.bespoke_name : (ROUTE[o.route] || o.route)) : "Not chosen yet");
     drinks += (sm.invoice_lines || []).map(function(l) { return "<tr><th></th><td>" + e(l.desc) + "</td></tr>"; }).join("");
     drinks += row("Soft drinks", o.soft_choice) + row("Their notes", o.notes) + row("Bespoke", o.bespoke_note);
     if (o.pay_bar) drinks += row("Pay bar", "Yes" + (o.bar_usage ? " — expect " + (BAR_USAGE_LABEL[o.bar_usage] || o.bar_usage) + " use" : ""));
@@ -11840,17 +11988,14 @@ function PortalDrinksSettings() {
           </div>
         </div>
         <div style={{ marginTop:12 }}>
-          <Field label="Example bar prices (one per line: name | price inc VAT)" width={560}>
-            <textarea rows={4} style={Object.assign({}, inputCss, { fontFamily:"inherit" })}
-              value={(s.bar_prices || []).map(function(p){ return p.name + (p.price != null && p.price !== "" ? " | " + p.price : ""); }).join("\n")}
-              onChange={function(e){
-                setField("bar_prices", e.target.value.split("\n").map(function(line){
-                  const bits = line.split("|"); const name = bits[0].trim(); const price = bits[1] ? bits[1].trim().replace(/^£/, "") : "";
-                  return name ? { name: name, price: price === "" || isNaN(Number(price)) ? null : Number(price) } : null;
-                }).filter(Boolean));
-              }} />
+          <Field label="Bar menu link — the PDF couples open from their Evening bar page (https://…)" width={560}>
+            <input value={s.bar_menu_url || ""} onChange={function(e){ setField("bar_menu_url", e.target.value); }} placeholder="https://… your 2026 bar menu PDF" style={inputCss} />
           </Field>
-          <Field label="Note under the prices" width={560}>
+          <div style={{ fontSize:11, color:T.textLight, marginTop:4, maxWidth:620, lineHeight:1.5 }}>
+            Anywhere anyone can open it without signing in — your website, or a Google Drive file shared as
+            "Anyone with the link". Blank hides the button.
+          </div>
+          <Field label="Note under the menu link (optional)" width={560}>
             <input value={s.bar_note || ""} onChange={function(e){ setField("bar_note", e.target.value); }} style={inputCss} />
           </Field>
         </div>

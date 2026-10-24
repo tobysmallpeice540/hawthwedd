@@ -114,7 +114,7 @@ export default function Uploads() {
   if (state === 'error') {
     return (
       <section className="card">
-        <h2>We couldn't load your photos and films</h2>
+        <h2>We couldn't load your uploads</h2>
         <div className="alert alert-warn" style={{ fontSize: 12 }}>{error}</div>
         <button className="btn" onClick={load}>Try again</button>
       </section>
@@ -124,7 +124,7 @@ export default function Uploads() {
   return (
     <>
       <section className="card">
-        <h3>Send us photos and films</h3>
+        <h3>Upload photos and films</h3>
         <p className="muted" style={{ fontSize: 14 }}>
           Pictures for the slideshow, or a film to play on the screen. Photos as JPEG, PNG or
           HEIC (straight from a phone is fine); films as MP4 or MOV, up to {data.max_mb} MB each.

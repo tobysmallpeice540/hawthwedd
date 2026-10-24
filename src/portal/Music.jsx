@@ -45,7 +45,8 @@ export default function Music() {
       </p>
       <p className="muted" style={{ fontSize: 14, marginTop: 8 }}>
         You don't need to give us playlists for anything your DJ or band will be
-        playing — just the music you will need when they are not here.
+        playing — just the music you will need when they are not here. If they are
+        doing the first dance, tick that on its line instead of adding a link.
       </p>
       <div className="alert alert-warn" style={{ fontSize: 13 }}>
         Links must be <strong>Spotify</strong>. We can't play Apple Music, Amazon Music,
@@ -66,6 +67,7 @@ export default function Music() {
 }
 
 function MusicRow({ item, onChanged }) {
+  const [dj, setDj] = useState(!!item.dj_playing)
   const [editing, setEditing] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -77,6 +79,15 @@ function MusicRow({ item, onChanged }) {
     catch (e) { setErr(e.message || String(e)); setBusy(false); setConfirming(false) }
   }
 
+  // Their DJ or band may be playing it — the first dance especially — in which
+  // case there is no link to give us.
+  async function setDjPlaying(v) {
+    setDj(v); setErr('')
+    try { await rpc('wp_set_music_dj', { p_id: item.id, p_on: v }); await onChanged() }
+    catch (e) { setDj(!v); setErr(e.message || String(e)) }
+  }
+  const djLabel = /first dance/i.test(item.description) ? 'Our DJ is doing the first dance' : 'Our DJ or band is playing this'
+
   if (editing) {
     return <MusicForm item={item} onDone={() => { setEditing(false); onChanged() }} onCancel={() => setEditing(false)} />
   }
@@ -87,7 +98,14 @@ function MusicRow({ item, onChanged }) {
         <span className="guest-name">{item.description}</span>
         {item.url
           ? <a className="chip chip-go link-chip" href={item.url} target="_blank" rel="noreferrer">Spotify ↗</a>
+          : dj ? <span className="chip chip-go">DJ playing it</span>
           : <span className="chip">No link yet</span>}
+        {'dj_playing' in item && (
+          <label className="check guest-note" style={{ margin: '4px 0 0' }}>
+            <input type="checkbox" checked={dj} onChange={(e) => setDjPlaying(e.target.checked)} />
+            {djLabel}
+          </label>
+        )}
         {err && <div className="guest-note err">{err}</div>}
       </div>
       <div className="guest-actions">
@@ -98,7 +116,7 @@ function MusicRow({ item, onChanged }) {
           </>
         ) : (
           <>
-            <button className="btn-small ghost" onClick={() => setEditing(true)}>{item.url ? 'Edit' : 'Add link'}</button>
+            <button className="btn-small ghost" onClick={() => setEditing(true)}>{item.url || dj ? 'Edit' : 'Add link'}</button>
             <button className="btn-small ghost" onClick={() => setConfirming(true)}>Remove</button>
           </>
         )}

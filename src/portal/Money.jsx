@@ -102,15 +102,11 @@ export default function Money() {
           particular. If you have just paid, it may still show as outstanding for a
           little while, and there is nothing to worry about.
         </p>
-        <p className="muted" style={{ fontSize: 14, marginTop: 10 }}>
-          Opening an invoice always shows its current state, even when the summary
-          above has not caught up.
-          {data.checked_at && <> These figures were last checked on <strong>{fmtDate(data.checked_at)}</strong>.</>}
-        </p>
-        <p className="muted" style={{ fontSize: 14, marginTop: 10 }}>
-          If something looks wrong, tell us rather than paying it — we would far
-          rather sort it out first.
-        </p>
+        {data.checked_at && (
+          <p className="muted" style={{ fontSize: 14, marginTop: 10 }}>
+            These figures were last checked on <strong>{fmtDate(data.checked_at)}</strong>.
+          </p>
+        )}
       </section>
     </>
   )

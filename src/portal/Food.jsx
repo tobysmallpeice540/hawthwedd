@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
 
-// Food, where Hawthbush caters — wakes and parties. A package priced per head,
-// the numbers, and anything the kitchen needs to know. Drinks are a pay bar,
-// so there is nothing to choose there.
+// Food, where Hawthbush caters — wakes and parties. The menus we offer
+// everyone (set in Portal settings), priced per head, plus any menu we have
+// written for this event alone — that one is theirs and nobody else sees it.
+// Then the numbers, and anything the kitchen needs to know.
 //
 // Components that render inputs live at module scope — see Guests.jsx.
 
@@ -17,7 +18,7 @@ function incVat(v) {
 }
 const hhmm = (t) => (t ? String(t).slice(0, 5) : '')
 
-export default function Food() {
+export default function Food({ onGo }) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -41,10 +42,10 @@ export default function Food() {
 
   // Not keyed on the saved data: remounting after a save would throw away the
   // "Saved" message, and the form already holds what was saved.
-  return <FoodForm data={data} onSaved={load} />
+  return <FoodForm data={data} onSaved={load} onGo={onGo} />
 }
 
-function FoodForm({ data, onSaved }) {
+function FoodForm({ data, onSaved, onGo }) {
   const c = data.choice || {}
   const [pkg, setPkg] = useState(c.package_id || '')
   const [numbers, setNumbers] = useState(c.numbers ?? data.guest_numbers ?? '')
@@ -108,7 +109,7 @@ function FoodForm({ data, onSaved }) {
               <label key={p.id} className={'choice' + (pkg === p.id ? ' is-on' : '')}>
                 <input type="radio" name="pkg" checked={pkg === p.id} onChange={() => setPkg(p.id)} />
                 <span>
-                  <span className="choice-name">{p.name}</span>
+                  <span className="choice-name">{p.name}{p.bespoke && <span className="chip" style={{ marginLeft: 8 }}>Made for you</span>}</span>
                   <span className="choice-meta">
                     {p.price_on_request ? 'Price on request' : money(incVat(p.price_pp_inc_vat, p.vat_rate)) + ' a head inc VAT'}
                   </span>
@@ -119,9 +120,10 @@ function FoodForm({ data, onSaved }) {
           </div>
         )}
         <p className="muted" style={{ fontSize: 13, marginTop: 14 }}>
-          Tea and coffee come with every package. The bar is a pay bar — your guests buy
-          their own drinks. If you would like to put money behind it, see the Drinks tab.
+          Tea and coffee come with every menu. The bar is a pay bar — your guests buy
+          their own drinks. If you would like to put money behind it, see the evening bar page.
         </p>
+        {onGo && <div className="actions"><button type="button" className="btn-small ghost" onClick={() => onGo('bar')}>The evening bar</button></div>}
       </section>
 
       <section className="card">

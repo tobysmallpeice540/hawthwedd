@@ -15,6 +15,7 @@ import Food from './Food.jsx'
 import Music from './Music.jsx'
 import Drinks from './Drinks.jsx'
 import Uploads from './Uploads.jsx'
+import Photos from './Photos.jsx'
 import Webcast from './Webcast.jsx'
 import ReadyBar, { READY_LABEL } from './ReadyBar.jsx'
 import Icon from './Icon.jsx'
@@ -31,7 +32,8 @@ const TABS = {
   checklist:   { label: 'Checklist' },
   timeline:    { label: 'Timeline' },
   music:       { label: 'Music' },
-  uploads:     { label: 'Photos & films' },
+  photos:      { label: 'Photos & films' },
+  uploads:     { label: 'Uploads' },
   webcast:     { label: 'Webcast' },
   suppliers:   { label: 'Suppliers' },
   layout:      { label: 'Table plan' },
@@ -237,6 +239,8 @@ export default function Portal({ session }) {
   const current = visible.includes(tab) ? tab : 'overview'
   const sections = home ? (home.sections || []) : null
 
+  function go(k) { setTab(k); window.scrollTo(0, 0) }
+
   function setSections(list) { setHome((h) => (h ? { ...h, sections: list } : h)) }
 
   // The "we're done with this" bar, under every tab that has one — only when
@@ -267,18 +271,19 @@ export default function Portal({ session }) {
 
       <div className="shell">
         <SideMenu label={words.yours} visible={visible} current={current} sections={sections}
-          onGo={(k) => { setTab(k); window.scrollTo(0, 0) }} />
+          onGo={go} />
 
         <main className="wrap">
           {current === 'overview'    && <Overview event={event} home={home} words={words} visible={visible}
-                                                  onGo={setTab} onHome={loadHome} />}
+                                                  onGo={go} onHome={loadHome} />}
           {current === 'guests'      && <Guests accommodation={event.accommodation} eventName={event.couple} eventDate={fmtDate(event.date)} />}
-          {current === 'food'        && <Food />}
-          {current === 'drinks'      && <Drinks part="package" barTab={visible.includes('bar')} onGo={setTab} />}
+          {current === 'food'        && <Food onGo={visible.includes('bar') ? go : null} />}
+          {current === 'drinks'      && <Drinks part="package" barTab={visible.includes('bar')} onGo={go} />}
           {current === 'bar'         && <Drinks part="bar" />}
           {current === 'checklist'   && <Checklist />}
-          {current === 'timeline'    && <Timeline kind={kind} />}
+          {current === 'timeline'    && <Timeline kind={kind} onGo={visible.includes('music') ? go : null} />}
           {current === 'music'       && <Music />}
+          {current === 'photos'      && <Photos />}
           {current === 'uploads'     && <Uploads />}
           {current === 'webcast'     && <Webcast />}
           {current === 'suppliers'   && <Suppliers />}
@@ -286,7 +291,7 @@ export default function Portal({ session }) {
           {current === 'items'       && <Items />}
           {current === 'addons'      && <Addons />}
           {current === 'money'       && <Money />}
-          {current === 'details'     && <VenueForm />}
+          {current === 'details'     && <VenueForm onGo={go} visible={visible} />}
           {current === 'documents'   && <Contract />}
           {current === 'inspiration' && <Pinterest />}
           {ready}
@@ -305,9 +310,10 @@ function SideMenu({ label, visible, current, sections, onGo }) {
   return (
     <nav className={'side' + (open ? ' is-open' : '')} aria-label={label}>
       <button type="button" className="side-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {/* "Menu" first, so it reads as the way in to everything else. */}
+        <span className="side-toggle-more">{open ? 'Close ×' : 'Menu ›'}</span>
         <Icon name={current} size={16} />
         <span className="side-toggle-label">{TABS[current].label}</span>
-        <span className="side-toggle-more">{open ? 'Close' : 'Menu'}</span>
       </button>
       <div className="side-list">
         {visible.map((k) => (

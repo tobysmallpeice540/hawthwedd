@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import { supabase } from './supabase.js'
 import SignIn from './SignIn.jsx'
 import Portal from './Portal.jsx'
+// The logo's lettering, served from this site — the same face the staff app uses.
+import '@fontsource/barlow-condensed/500.css'
 import './portal.css'
 
 // ── Coming in from a sign-in link ───────────────────────────────────────────

@@ -33,7 +33,8 @@ body {
 }
 .brand-row { display: flex; align-items: center; gap: 12px; }
 .brand-logo { width: 42px; height: auto; display: block; flex: 0 0 auto; }
-.brand { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 600; letter-spacing: .5px; }
+/* The logo's lettering: a tall, narrow sans in capitals, not a serif. */
+.brand { font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif; font-size: 24px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; line-height: 1; }
 .brand-sub { font-size: 11px; color: var(--muted); letter-spacing: 1.4px; text-transform: uppercase; margin-top: 2px; }
 .who { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 12px; }
 
@@ -78,7 +79,10 @@ body {
   }
   .side-toggle .icon { color: var(--accent); }
   .side-toggle-label { flex: 1 1 auto; font-weight: 500; }
-  .side-toggle-more { font-size: 12px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+  .side-toggle-more {
+    flex: 0 0 auto; font-size: 12px; font-weight: 500; color: var(--ink); letter-spacing: .06em; text-transform: uppercase;
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; margin-right: 2px;
+  }
   .side-list { display: none; border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
   .side.is-open .side-list { display: flex; }
   .tab { padding: 11px 12px; font-size: 15px; }
@@ -181,6 +185,7 @@ input:focus, select:focus, textarea:focus {
 .guest-note { flex-basis: 100%; font-size: 12px; color: var(--muted); line-height: 1.45; }
 .guest-note.err { color: var(--warn); }
 .chip {
+  white-space: nowrap; flex: 0 0 auto;
   font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
   background: var(--sand); color: var(--muted); border-radius: 999px; padding: 3px 9px;
 }
@@ -299,6 +304,9 @@ a.btn-small { text-decoration: none; display: inline-block; }
 .tl-notes.err { color: var(--warn); }
 
 @media (max-width: 520px) {
+  /* A row's actions drop under its text on a phone instead of squeezing it. */
+  .guest { flex-wrap: wrap; }
+  .guest-main { flex: 1 1 100%; }
   .tl-row { flex-wrap: wrap; }
   .tl-time { flex-basis: 100%; flex-direction: row; align-items: baseline; gap: 8px; }
   .guest-actions { flex-basis: 100%; }

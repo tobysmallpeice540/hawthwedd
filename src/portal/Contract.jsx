@@ -82,12 +82,6 @@ export default function Contract() {
         </div>
       </section>
 
-      <section className="card">
-        <p className="muted" style={{ fontSize: 13 }}>
-          Anything look wrong? Tell us rather than working around it — it is much
-          easier to fix now than in the last fortnight.
-        </p>
-      </section>
     </>
   )
 }
