@@ -8349,7 +8349,18 @@ function TemplateBlocks({ eventType, days, blocks, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  useEffect(function(){ setRows(blocks); setDirty(false); }, [eventType, blocks]);
+  // The parent reloads every template whenever any of its panels saves, which
+  // hands this a new blocks array. Re-syncing on that wiped unsaved timings, so
+  // only take the new rows when nothing here is unsaved — or when a different
+  // event type has been picked, which is a different template altogether.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const typeRef = useRef(eventType);
+  useEffect(function(){
+    const typeChanged = typeRef.current !== eventType;
+    typeRef.current = eventType;
+    if (typeChanged || !dirtyRef.current) { setRows(blocks); setDirty(false); }
+  }, [eventType, blocks]);
 
   const offered = days.filter(function(d){ return d.offered; });
 
@@ -8487,7 +8498,11 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  useEffect(function(){ setRows(initial); setDirty(false); }, [initial]);
+  // As in TemplateBlocks: another panel's save reloads the parent, which must
+  // not throw away checklist edits that have not been saved yet.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(function(){ if (!dirtyRef.current) { setRows(initial); setDirty(false); } }, [initial]);
 
   function edit(i, patch) {
     setRows(function(r){ const n = r.slice(); n[i] = Object.assign({}, n[i], patch); return n; });
@@ -8964,10 +8979,14 @@ function CoupleTimelines({ bookings }) {
     .sort(function(a,b){ return String(b.date||"").localeCompare(String(a.date||"")); });
 
   useEffect(function(){
-    if (!eventId) { setData(null); return; }
+    if (!eventId) { setData(null); setErr(""); return; }
+    // A slow answer for the event chosen before must not land under this one.
+    let off = false;
     setErr(""); setData(null);
     sbRpc("wp_admin_event_timeline", { p_event_id: Number(eventId) })
-      .then(setData).catch(function(e){ setErr(e.message || String(e)); });
+      .then(function(r){ if (!off) setData(r); })
+      .catch(function(e){ if (!off) setErr(e.message || String(e)); });
+    return function(){ off = true; };
   }, [eventId]);
 
   return (
