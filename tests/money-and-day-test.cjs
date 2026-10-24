@@ -196,6 +196,34 @@ console.log("cashflow: Airbnb paid on the last day of the let");
   eq("not reported as overdue", f.overdue.lets, 0);
 }
 
+console.log("cashflow: wedding accommodation, when decided");
+{
+  const ev = { id: 900, couple: "Ann & Bo", eventType: "Wedding", status: "Confirmed", date: "2027-06-05", venueFee: "12000", deposit: "1000" };
+  const held = Object.assign({}, ev, { id: 901, couple: "Held", status: "Holding", date: "2027-07-03" });
+  const old = { id: 902, couple: "Old", eventType: "Wedding", status: "Confirmed", date: "2026-11-30", venueFee: "5000" };
+  const lets = [
+    { id: "w1", linkedEventId: 900, status: "confirmed", bookingType: "Wedding", stays: [
+      { propertyId: "hamlet", propertyName: "The Hamlet", checkIn: "2027-06-04", checkOut: "2027-06-06", nights: 2, value: 2900 },
+      { propertyId: "amly", propertyName: "Amly Barn", checkIn: "2027-06-04", checkOut: "2027-06-06", nights: 2, value: 1050, maybe: true },
+      { propertyId: "glamping", propertyName: "Glamping", checkIn: "2027-06-04", checkOut: "2027-06-06", nights: 2, value: 0 }],
+      schedule: [{ label: "Deposit", amount: 999, paid: false, dueDate: "2027-01-01" }] },
+    { id: "w2", linkedEventId: 901, status: "confirmed", stays: [{ propertyId: "hamlet", checkIn: "2027-07-02", checkOut: "2027-07-04", nights: 2, value: 2000 }] },
+    { id: "w3", linkedEventId: 902, status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-11-29", checkOut: "2026-12-01", value: 780 }],
+      schedule: [{ label: "Balance", amount: 780, paid: false, dueDate: "2026-11-01" }] }
+  ];
+  const f = ctx.cashflowForecast([ev, held, old], lets, null, "2026-10-24", []);
+  const m = (k) => f.months.find((r) => r.month === k) || { conf: 0, hold: 0, lets: 0, items: [] };
+  // second invoice 1 Dec 2026: venue 6000 - deposit 500 = 5500, Hamlet half 1450; Amly (provisional) and glamping (unpriced) left out
+  eq("December: venue part to Events, decided rooms to Lettings", [m("2026-12").conf, m("2026-12").lets], [5500, 1450]);
+  eq("May (final, 28 days before): the same split", [m("2027-05").conf, m("2027-05").lets], [5500, 1450]);
+  ok("labelled as wedding accommodation", m("2026-12").items.some((i) => /Wedding accommodation/.test(i.what) && i.amount === 1450));
+  ok("its own placeholder schedule is not counted as well", !f.months.some((r) => r.items.some((i) => i.amount === 999)));
+  // held: venue 6000 - 500 deposit + Hamlet half 1000, all of it Holding
+  eq("a held event's rooms stay in Holding", m("2026-12").hold, 6500);
+  ok("held event: nothing in Lettings for it", !f.months.some((r) => r.items.some((i) => i.who === "Held" && i.kind === "Lettings")));
+  eq("a hand-invoiced season's rooms come from their own schedule", m("2026-11").lets, 780);
+}
+
 console.log("gone-quiet flag (app side, mirrors automations.js)");
 {
   const A = require("../netlify/functions/automations.js")._test;

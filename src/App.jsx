@@ -15784,13 +15784,27 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, prop
   const rows = {}; months.forEach(function(m) { rows[m] = { month:m, conf:0, hold:0, lets:0, items:[] }; });
   const overdue = { lets:0, items:[] };
   const lastM = months[months.length - 1];
+  // Wedding accommodation is billed on the event's own invoices (half on the
+  // second, half on the final), so it is counted at those dates — but in the
+  // Lettings column, and only where it has been decided: a stay ticked
+  // "Provisional — not confirmed", or with no price, is left out until it is.
+  const decided = (accomFallback || accomBookings || []).map(function(b) {
+    if (!b || !b.linkedEventId) return b;
+    if (b.stays && b.stays.length) {
+      return Object.assign({}, b, { stays: b.stays.map(function(st) { return st && st.maybe ? Object.assign({}, st, { value: 0 }) : st; }) });
+    }
+    return b.maybe ? Object.assign({}, b, { value: 0 }) : b;
+  });
+  const onEventInvoices = {};   // event ids whose accommodation the stages carry
   (bookings || []).forEach(function(ev) {
     if (!ev || ev.status === "Cancelled" || !isValidEventDate(ev.date)) return;
     // Seasons invoiced by hand are not on the app's schedule, so their
-    // computed stages would be a guess at money that may already be in.
+    // computed stages would be a guess at money that may already be in. Their
+    // wedding accommodation falls through to its own payment schedule below.
     if (!isInvoiceableYear(ev)) return;
+    onEventInvoices[String(ev.id)] = true;
     const holding = ev.status === "Holding";
-    computeEventInvoiceStages(ev, accomFallback || accomBookings).forEach(function(st) {
+    computeEventInvoiceStages(ev, decided).forEach(function(st) {
       if (!(st.total > 0)) return;
       let when = st.invoiceDate;
       if (st.stage === 1) { if (!holding) return; when = today; }
@@ -15798,13 +15812,27 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, prop
       const m = when.slice(0, 7);
       if (m < startM || m > lastM) return;
       const r = rows[m];
-      if (holding) r.hold += st.total; else r.conf += st.total;
-      r.items.push({ kind: holding ? "Holding event" : "Event", who: ev.couple || "(no name)", what: st.label, when: when, amount: st.total });
+      let accom = round2(st.lines.reduce(function(a, l) { return l.account === XERO_ACCOUNT_ACCOM ? a + l.amount : a; }, 0));
+      let venue = round2(st.total - accom);
+      // A deposit bigger than the venue half nets off against the rooms on the
+      // same invoice; the two parts must still add up to the invoice.
+      if (venue < 0) { accom = round2(accom + venue); venue = 0; }
+      const who = ev.couple || "(no name)";
+      if (holding) {
+        // Nothing about a held date is decided, its rooms included.
+        r.hold += st.total;
+        r.items.push({ kind: "Holding event", who: who, what: st.label, when: when, amount: st.total });
+        return;
+      }
+      if (venue > 0) { r.conf += venue; r.items.push({ kind: "Event", who: who, what: st.label, when: when, amount: venue }); }
+      if (accom > 0) { r.lets += accom; r.items.push({ kind: "Lettings", who: who, what: "Wedding accommodation — " + st.label, when: when, amount: accom }); }
     });
   });
   const unpriced = [];
   (accomBookings || []).forEach(function(b) {
-    if (!b || b.status === "cancelled" || b.linkedEventId) return;
+    if (!b || b.status === "cancelled") return;
+    // Billed through its event's invoices, so counted above.
+    if (b.linkedEventId && onEventInvoices[String(b.linkedEventId)]) return;
     if (b.bookingType === "Blocked") return;
     // Airbnb pays us itself, after the guest has stayed: the money is taken
     // as arriving on the last day of the let. Its payment schedule is
@@ -15849,7 +15877,7 @@ function CashflowReport({ bookings, accomBookings, accomProperties }) {
     <div>
       <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12.5, color:T.infoText, lineHeight:1.6 }}>
         What is expected in, inc VAT. Events follow the invoice schedule (deposit at booking, 1 December, final 28 days before);
-        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule; Airbnb bookings are counted on the last day of the let, at the figure recorded or, where there is none, the estimate from our own calendar rate plus {AIRBNB_UPLIFT_PCT}%.
+        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule; wedding accommodation is counted with its event's second and final invoices, once a stay is priced and not ticked provisional; Airbnb bookings are counted on the last day of the let, at the figure recorded or, where there is none, the estimate from our own calendar rate plus {AIRBNB_UPLIFT_PCT}%.
       </div>
       {f.unpriced.length > 0 && (
         <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:13, color:"#92400e" }}>
