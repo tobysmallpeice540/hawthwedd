@@ -10,6 +10,7 @@ import "@fontsource/barlow-condensed/700.css";
 import { dayOrder } from "./shared/dayOrder.js";
 import { snapToNeighbours, boxesOverlap, tableFootprint } from "./shared/tableSnap.js";
 import { roleFirst, fullName, downloadGuestsCsv, printGuests, ACCOM_LABEL as GUEST_ACCOM_LABEL } from "./portal/guestSort.js";
+import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
 // Pure viewport-width detection (no device/user-agent sniffing) — recalculates
@@ -562,6 +563,47 @@ function PageHeader({ title, sub, actions, back, onBack }) {
       {actions && <div className="hb-actions">{actions}</div>}
     </div>
   );
+}
+
+// Catches a render error in one page so it shows a small panel instead of a
+// white screen, and the sidebar (or top menu) stays usable to go elsewhere.
+// Rendered keyed by the page, so moving to another page starts it fresh.
+// Nothing is saved from here: Reload is a plain reload, and whatever the page
+// had already autosaved is what comes back.
+class PageErrorBoundary extends ReactComponent {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error: error }; }
+  componentDidCatch(error, info) {
+    console.error("Page crashed:", this.props.page || "", error, info && info.componentStack);
+  }
+  render() {
+    const error = this.state.error;
+    if (!error) return this.props.children;
+    const self = this;
+    const message = (error && (error.message || String(error))) || "Unknown error";
+    return (
+      <div role="alert" style={{ background:T.redBg, border:`1px solid ${T.border}`, borderLeft:`4px solid ${T.red}`, borderRadius:10,
+        padding:"18px 20px", margin:"8px 0 20px", maxWidth:720 }}>
+        <div style={{ fontSize:15, fontWeight:700, color:T.red, marginBottom:6 }}>Something went wrong on this page — reload</div>
+        <div style={{ fontSize:13, color:T.textMid, lineHeight:1.6, marginBottom:12 }}>
+          Anything already saved is safe. The rest of the app still works — use the menu to go elsewhere,
+          or reload to try this page again.
+        </div>
+        <pre style={{ fontSize:12, color:T.text, background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:7,
+          padding:"8px 10px", margin:"0 0 14px", whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace" }}>{message}</pre>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          <button type="button" onClick={function(){ window.location.reload(); }}
+            style={{ background:T.red, color:"#fff", border:"none", padding:"9px 20px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            Reload
+          </button>
+          <button type="button" onClick={function(){ self.setState({ error: null }); }}
+            style={{ background:"none", color:T.textMid, border:`1px solid ${T.border}`, padding:"9px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13 }}>
+            Try again without reloading
+          </button>
+        </div>
+      </div>
+    );
+  }
 }
 
 // One style of tab strip for every tab row that stays on the page — tabs
@@ -7577,9 +7619,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
         </header>
         <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-mini"} style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
           {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
+          <PageErrorBoundary key={cleanerOnly ? "cleaner" : "bar-" + barSection} page={cleanerOnly ? "cleaner" : barSection}>
           {cleanerOnly && <CleanerView/>}
           {barOnly && barSection === "bar"  && <BarView/>}
           {barOnly && barSection === "door" && <BoxDoorScreen/>}
+          </PageErrorBoundary>
         </div>
       </div>
     );
@@ -7613,6 +7657,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
 
   const pageArea = (
       <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-content"} style={UI_CLASSIC ? { maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" } : undefined}>
+        {/* One boundary round whichever page is showing, keyed by it (and by
+            the event, on the event form) so a crash on one page clears when
+            you move to another. pageArea is used by both layouts. */}
+        <PageErrorBoundary key={view === "form" ? "form-" + formKey : view} page={view}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
@@ -7672,6 +7720,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
         {view==="activity"   && <ActivityView/>}
         {view==="emails"     && <EmailsView/>}
+        </PageErrorBoundary>
       </div>
   );
 
