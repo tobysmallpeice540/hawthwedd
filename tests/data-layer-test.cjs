@@ -83,11 +83,12 @@ const code = [
   liftArrow("sbGetStrict"),
   lift("mergeById"),
   lift("mergeByKey"),
+  lift("mergeFormFields"),
   "const SAVE_CHAIN = {};",
   lift("queueSave"),
   lift("saveObjectMerged"),
   lift("saveArrayMerged"),
-  "return { mergeById, mergeByKey, saveArrayMerged, saveObjectMerged, sbSet, sbGetStrict, noteStaleBuild, SEED_FALLBACK, READ_FAILED };",
+  "return { mergeFormFields, mergeById, mergeByKey, saveArrayMerged, saveObjectMerged, sbSet, sbGetStrict, noteStaleBuild, SEED_FALLBACK, READ_FAILED };",
 ].join("\n");
 const F = new Function("SUPABASE_URL", "sbAuthHeaders", "window", "CustomEvent", "fetch", "console", code)(
   env.SUPABASE_URL, env.sbAuthHeaders, env.window, env.CustomEvent, env.fetch, { error: function() {}, warn: function() {}, log: console.log });
@@ -140,6 +141,19 @@ const r = function(id, v) { return { id: id, v: v }; };
      { a: 10, c: 3, d: 4 }, "map: edit, delete, add here; outside key c kept");
   eq(F.mergeByKey({ a: 1, b: 99 }, { a: 1, b: 2 }, { a: 5, b: 2 }),
      { a: 5, b: 99 }, "map: untouched key keeps the server's value");
+
+  // ── mergeFormFields (the event form) ─────────────────────────────────────
+  const srvRec = { id: 7, couple: "A & B", notes: "old", schedule: [{ paid: true }], contract: { status: "signed" } };
+  const opened = { id: 7, couple: "A & B", notes: "old", schedule: [{ paid: false }], contract: { status: "sent" } };
+  eq(F.mergeFormFields(srvRec, opened, Object.assign({}, opened, { notes: "new" })),
+     { id: 7, couple: "A & B", notes: "new", schedule: [{ paid: true }], contract: { status: "signed" } },
+     "form save writes only what the form changed; webhook and contract changes kept");
+  eq(F.mergeFormFields({ id: 7, a: 1, b: 2 }, { id: 7, a: 1, b: 2 }, { id: 7, a: 1 }),
+     { id: 7, a: 1 }, "a field the form removed is removed");
+  eq(F.mergeFormFields({ id: 7, a: 1 }, { id: 7, a: 1 }, { id: "7", a: 1, c: 3 }),
+     { id: 7, a: 1, c: 3 }, "a field the form added is added; the server's id kept");
+  ok(SRC.indexOf("await saveBookingRecord(editId, fd, null, formBasesRef.current[fk]);") > -1, "autosave passes the form's base");
+  ok(SRC.indexOf("await saveBookingRecord(editId, saved, clashGuard, formBasesRef.current[fk]);") > -1, "Save passes the form's base");
 
   // ── saveArrayMerged against the fake table ───────────────────────────────
   db.k = [r(1, "a"), r(2, "b"), r(3, "web")];

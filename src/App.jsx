@@ -257,6 +257,23 @@ function mergeById(server, before, after) {
   added.forEach(function(k) { if (!have[k]) out.push(a[k]); });
   return out;
 }
+// One record edited in a form: the fields the form changed since `base` (what
+// it opened with, or last saved) are written over the server's copy; every
+// other field keeps the server's value. Top-level fields only, so an edit to
+// one payment in a schedule still writes the whole schedule.
+function mergeFormFields(server, base, data) {
+  const out = Object.assign({}, server);
+  const keys = {};
+  Object.keys(data || {}).forEach(function(k) { keys[k] = true; });
+  Object.keys(base || {}).forEach(function(k) { keys[k] = true; });
+  Object.keys(keys).forEach(function(k) {
+    if (JSON.stringify(data[k]) === JSON.stringify(base[k])) return;
+    if (k in data) out[k] = data[k]; else delete out[k];
+  });
+  out.id = server.id;
+  return out;
+}
+
 // The same idea for a plain object of key → value (the till's product map).
 function mergeByKey(server, before, after) {
   const out = Object.assign({}, server && typeof server === "object" && !Array.isArray(server) ? server : {});
@@ -7132,13 +7149,19 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // just before the write. Throwing from it aborts the save without writing
   // anything — which is how the clash check gets to see events created on
   // another device since this tab loaded, rather than only this tab's copy.
-  const saveBookingRecord = useCallback((id, data, guard) => {
+  // formBase: what the form was showing when it opened (or last saved). When
+  // given, only the fields that differ from it are written over the server's
+  // copy; every other field keeps whatever the server now holds. Without it
+  // the record is replaced whole, as before.
+  const saveBookingRecord = useCallback((id, data, guard, formBase) => {
     return mutateBookings(function(base) {
       if (guard) guard(base);
       let found = false;
       let next = base.map(function(b) {
-        if (String(b.id) === String(id)) { found = true; return Object.assign({}, data, { id: b.id }); }
-        return b;
+        if (String(b.id) !== String(id)) return b;
+        found = true;
+        if (!formBase) return Object.assign({}, data, { id: b.id });
+        return mergeFormFields(b, formBase, data);
       });
       if (!found) next = next.concat([Object.assign({}, data, { id: id })]);
       return next.sort(function(a, b) { return (a.date || "") > (b.date || "") ? 1 : -1; });
@@ -7426,12 +7449,24 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const newEventRef = useRef(null);
   const formKeyRef = useRef(formKey);
   formKeyRef.current = formKey;
-  const handleNew    = ()=>{ setFormKey(function(k){ return k+1; }); setFormData(emptyBooking()); setEditId(null); setView("form"); };
+  // What each form was opened with (by form key), updated as it saves. A save
+  // writes only the fields the form has changed since then, so a field set
+  // elsewhere while the form was open — a payment the webhook marked paid, a
+  // contract status, a portal number — is not put back by the next autosave.
+  const formSeqRef = useRef(0);
+  const formBasesRef = useRef({});
+  const openForm = function(rec) {
+    const k = ++formSeqRef.current;
+    formBasesRef.current = { [k]: rec, [k - 1]: formBasesRef.current[k - 1] };   // the one before may still be flushing
+    setFormKey(k);
+    return k;
+  };
+  const handleNew    = ()=>{ openForm(null); setFormData(emptyBooking()); setEditId(null); setView("form"); };
   // Ids arrive as numbers from the list and as strings from links and other
   // screens, so compare as strings; and an event that is not there (deleted on
   // another device, or a stale link) says so instead of opening an empty form
   // that would autosave as a new record.
-  const handleEdit   = id=>{ const b=bookings.find(x=>String(x.id)===String(id)); if (!b) { alert("That event could not be found — it may have been deleted."); return; } setFormKey(function(k){ return k+1; }); id = b.id; setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
+  const handleEdit   = id=>{ const b=bookings.find(x=>String(x.id)===String(id)); if (!b) { alert("That event could not be found — it may have been deleted."); return; } id = b.id; const rec = {...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }; openForm(rec); setFormData(rec); setEditId(id); setView("form"); };
   const handleDelete = id => {
     const b = bookings.find(x=>x.id===id);
     askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
@@ -7491,7 +7526,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
     let id = editId;
     try {
       if (editId != null) {
-        await saveBookingRecord(editId, {...formData, id: editId, createdAt: formData.createdAt || new Date().toISOString()}, clashGuard);
+        const fk = formKeyRef.current;
+        const saved = {...formData, id: editId, createdAt: formData.createdAt || new Date().toISOString()};
+        await saveBookingRecord(editId, saved, clashGuard, formBasesRef.current[fk]);
+        if (formBasesRef.current[fk]) formBasesRef.current[fk] = saved;
       } else {
         const res = await createBookingRecord({...formData}, null, clashGuard);
         id = res.record.id;
@@ -7581,7 +7619,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
     newBooking.fromEnquiryId = enq.id;
 
     const open = function(rec) {
-      setFormKey(function(k){ return k+1; });   // a new form, so no earlier create is mistaken for this one
+      openForm(rec);   // a new form, so no earlier create is mistaken for this one
       setFormData(rec);
       setEditId(rec.id);
       setView("form");
@@ -7821,7 +7859,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
             if(staleBuild) { const e=new Error("stale-build"); e.code="stale-build"; throw e; }
             if(!fd.couple) { const e=new Error("no-name"); e.code="no-name"; throw e; }
             if(editId) {
-              await saveBookingRecord(editId, fd);
+              const fk = formKey;
+              await saveBookingRecord(editId, fd, null, formBasesRef.current[fk]);
+              if (formBasesRef.current[fk]) formBasesRef.current[fk] = fd;
             } else {
               // First autosave of a brand-new booking mints the record.
               //
@@ -7850,11 +7890,13 @@ export default function App({ role = "admin", onSignOut } = {}) {
                   .catch(function(e){ if (newEventRef.current === entry) newEventRef.current = null; throw e; });
                 newEventRef.current = entry;
                 const newId = await entry.promise;
+                formBasesRef.current[myKey] = {...fd, id:newId};
                 if (stillHere()) { setEditId(newId); setFormData(f=>({...f, id:newId})); }
               } else {
                 const newId = await mine.promise;
                 if (stillHere()) { setEditId(newId); setFormData(f=>({...f, id:newId})); }
-                await saveBookingRecord(newId, {...fd, id:newId});
+                await saveBookingRecord(newId, {...fd, id:newId}, null, formBasesRef.current[myKey]);
+                if (formBasesRef.current[myKey]) formBasesRef.current[myKey] = {...fd, id:newId};
               }
             }
           }}

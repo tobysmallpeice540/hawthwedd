@@ -118,7 +118,7 @@ console.log("\n— the shipped code follows those rules —");
      /const id = nextBookingId\(base\)/.test(fn));
 
   ok("saveBookingRecord accepts a guard and runs it first",
-     /saveBookingRecord = useCallback\(\(id, data, guard\)/.test(SRC));
+     /saveBookingRecord = useCallback\(\(id, data, guard(, formBase)?\) => \{\s*return mutateBookings\(function\(base\) \{\s*(\/\/[^\n]*\n\s*)*if \(guard\) guard\(base\);/.test(SRC));
   ok("the enquiry conversion stamps fromEnquiryId",
      /newBooking\.fromEnquiryId = enq\.id/.test(SRC));
   ok("the enquiry conversion dedupes on it",
