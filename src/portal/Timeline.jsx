@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { rpc, isMissingFunction } from './supabase.js'
 import { dayOrder } from '../shared/dayOrder.js'
+import WhenInput from './WhenInput.jsx'
 
 // Components that render inputs live at module scope — see Guests.jsx.
 
@@ -210,7 +211,7 @@ function CeremonyTime({ value, blocks, onSaved }) {
       <div>
         <label htmlFor="cer-time">Ceremony time</label>
         <div className="ceremony-row">
-          <input id="cer-time" type="time" value={t} onChange={(e) => setT(e.target.value)} />
+          <WhenInput id="cer-time" type="time" value={t} onChange={(e) => setT(e.target.value)} />
           <button className="btn-small" type="submit" disabled={busy || t === hhmm(value)}>{busy ? 'Saving…' : 'Set'}</button>
         </div>
       </div>
@@ -431,7 +432,7 @@ function BlockForm({ block, dayKey, suppliers, contacts, ceremony, onDone, onCan
       <div className="namegrid">
         <div>
           <label>Starts</label>
-          <input type="time" value={start} onChange={(e) => setStart(e.target.value)} required />
+          <WhenInput type="time" value={start} onChange={(e) => setStart(e.target.value)} required />
         </div>
         <div>
           <label>How long <span className="opt">minutes</span></label>

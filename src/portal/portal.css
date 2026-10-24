@@ -149,6 +149,23 @@ input[type="number"], input[type="text"], input:not([type]), select, textarea {
   border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink);
 }
 textarea { resize: vertical; line-height: 1.5; }
+
+/* Date and time boxes, the same size as every other box. iOS otherwise draws
+   them as its own small control, and an empty one as a blank sliver. */
+input[type="date"], input[type="time"] {
+  -webkit-appearance: none; appearance: none; display: block;
+  width: 100%; min-height: 46px; padding: 11px 12px; font-family: 'Jost', sans-serif; font-size: 16px;
+  border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); text-align: left;
+}
+input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value { text-align: left; }
+.when { position: relative; display: block; }
+.when-ph {
+  position: absolute; left: 13px; top: 50%; transform: translateY(-50%);
+  color: #b3aba1; font-size: 16px; letter-spacing: .02em; pointer-events: none;
+}
+/* The browser's own empty pattern (dd/mm/yyyy, --:--) is hidden under ours. */
+.when.is-empty input:not(:focus) { color: transparent; }
+.when.is-empty input:focus + .when-ph { display: none; }
 input:focus, select:focus, textarea:focus {
   outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent;
 }
@@ -511,3 +528,4 @@ input.qty { width: 84px; padding: 7px 9px; font-size: 15px; }
 /* Photos & films */
 input.caption { flex-basis: 100%; margin-top: 6px; padding: 7px 10px; font-size: 14px; }
 .filebtn.is-busy { opacity: .6; cursor: default; }
+.ceremony-row .when { flex: 0 1 150px; min-width: 0; }

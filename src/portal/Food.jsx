@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
+import WhenInput from './WhenInput.jsx'
 
 // Food, where Hawthbush caters — wakes and parties. The menus we offer
 // everyone (set in Portal settings), priced per head, plus any menu we have
@@ -138,7 +139,7 @@ function FoodForm({ data, onSaved, onGo }) {
           </div>
           <div>
             <label>Roughly when to serve <span className="opt">optional</span></label>
-            <input type="time" value={serve} onChange={(e) => setServe(e.target.value)} />
+            <WhenInput type="time" value={serve} onChange={(e) => setServe(e.target.value)} />
           </div>
         </div>
         <label>Dietary needs and allergies <span className="opt">optional</span></label>

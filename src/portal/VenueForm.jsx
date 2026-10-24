@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
 import KeyContacts from './KeyContacts.jsx'
+import WhenInput from './WhenInput.jsx'
 
 // Components that render inputs live at module scope — see Guests.jsx.
 //
@@ -164,13 +165,13 @@ function Question({ q, value, onChange }) {
         </div>
       )}
       {q.kind === 'date' && (
-        <input id={id} type="date" value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />
+        <WhenInput id={id} type="date" value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />
       )}
       {q.kind === 'longtext' && (
         <textarea id={id} rows={3} value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />
       )}
       {q.kind === 'time' && (
-        <input id={id} type="time" value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />
+        <WhenInput id={id} type="time" value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />
       )}
       {q.kind === 'number' && (
         <input id={id} type="number" min="0" inputMode="numeric" value={value} onChange={(e) => onChange(q.qkey, e.target.value)} />

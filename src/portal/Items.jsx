@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { rpc, isMissingFunction } from './supabase.js'
+import WhenInput from './WhenInput.jsx'
 
 // The things a client is bringing to the venue — signs, favours, the cake
 // knife. Staff tick each one off as it arrives and again as it goes home, so
@@ -235,19 +236,19 @@ function DropOffSlot() {
       <div className="namegrid" style={{ marginTop: 12 }}>
         <div>
           <label htmlFor="drop-d">Dropping off</label>
-          <input id="drop-d" type="date" value={vals.dropoff_date} onChange={(e) => set('dropoff_date', e.target.value)} />
+          <WhenInput id="drop-d" type="date" value={vals.dropoff_date} onChange={(e) => set('dropoff_date', e.target.value)} />
         </div>
         <div>
           <label htmlFor="drop-t">Roughly what time</label>
-          <input id="drop-t" type="time" value={vals.dropoff_time} onChange={(e) => set('dropoff_time', e.target.value)} />
+          <WhenInput id="drop-t" type="time" value={vals.dropoff_time} onChange={(e) => set('dropoff_time', e.target.value)} />
         </div>
         <div>
           <label htmlFor="coll-d">Collecting</label>
-          <input id="coll-d" type="date" value={vals.collect_date} onChange={(e) => set('collect_date', e.target.value)} />
+          <WhenInput id="coll-d" type="date" value={vals.collect_date} onChange={(e) => set('collect_date', e.target.value)} />
         </div>
         <div>
           <label htmlFor="coll-t">Roughly what time</label>
-          <input id="coll-t" type="time" value={vals.collect_time} onChange={(e) => set('collect_time', e.target.value)} />
+          <WhenInput id="coll-t" type="time" value={vals.collect_time} onChange={(e) => set('collect_time', e.target.value)} />
         </div>
       </div>
       {err && <div className="alert alert-warn">{err}</div>}

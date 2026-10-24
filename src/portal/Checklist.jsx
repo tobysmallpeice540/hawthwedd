@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { rpc } from './supabase.js'
+import WhenInput from './WhenInput.jsx'
 
 // Components that render inputs live at module scope — see Guests.jsx.
 
@@ -186,7 +187,7 @@ function TaskFields({ title, setTitle, due, setDue }) {
       <label>What needs doing</label>
       <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="Book a cake tasting" />
       <label style={{ marginTop: 12 }}>By when <span className="opt">optional</span></label>
-      <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+      <WhenInput type="date" value={due} onChange={(e) => setDue(e.target.value)} />
     </>
   )
 }
