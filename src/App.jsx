@@ -7285,7 +7285,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // different event, or the next new event would be glued to the last one's id.
   const newEventRef = useRef(null);
   const handleNew    = ()=>{ newEventRef.current = null; setFormKey(function(k){ return k+1; }); setFormData(emptyBooking()); setEditId(null); setView("form"); };
-  const handleEdit   = id=>{ newEventRef.current = null; setFormKey(function(k){ return k+1; }); const b=bookings.find(x=>x.id===id); setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
+  // Ids arrive as numbers from the list and as strings from links and other
+  // screens, so compare as strings; and an event that is not there (deleted on
+  // another device, or a stale link) says so instead of opening an empty form
+  // that would autosave as a new record.
+  const handleEdit   = id=>{ const b=bookings.find(x=>String(x.id)===String(id)); if (!b) { alert("That event could not be found — it may have been deleted."); return; } newEventRef.current = null; setFormKey(function(k){ return k+1; }); id = b.id; setFormData({...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }); setEditId(id); setView("form"); };
   const handleDelete = id => {
     const b = bookings.find(x=>x.id===id);
     askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
