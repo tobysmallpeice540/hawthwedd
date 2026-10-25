@@ -93,7 +93,7 @@ exports.handler = async (event) => {
   const setRes = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
     method: "POST",
     headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify({ key: STORAGE_KEY, value: [...existing, request] }),
+    body: JSON.stringify({ key: STORAGE_KEY, value: [...existing, request], updated_at: new Date().toISOString() }),
   });
 
   if (!setRes.ok) {

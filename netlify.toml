@@ -82,6 +82,14 @@
 [functions."portal-nudges-cron"]
   schedule = "0 8-11 * * 1"
 
+# Airbnb emails into the lettings bookings (airbnb-mail): guest names, payouts,
+# star ratings, messages and cancellations, read from Toby's Gmail. Hourly at
+# 25 past — clear of the iCal sync on the hour, which writes the same bookings
+# array — so a cancellation in Airbnb's 24-hour window shows within the hour.
+# Does nothing until Gmail is connected in Settings → Airbnb email.
+[functions."airbnb-mail-cron"]
+  schedule = "25 * * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"

@@ -104,7 +104,7 @@ async function sbSet(key, value) {
       "Content-Type": "application/json",
       "Prefer": "resolution=merge-duplicates",
     },
-    body: JSON.stringify({ key: key, value: value }),
+    body: JSON.stringify({ key: key, value: value, updated_at: new Date().toISOString() }),
   });
   if (!res.ok) throw new Error("sbSet failed: " + await res.text());
 }
@@ -313,7 +313,7 @@ exports.handler = async (event) => {
       "Content-Type": "application/json",
       "Prefer": "resolution=merge-duplicates",
     },
-    body: JSON.stringify({ key: STORAGE_KEY, value: updated }),
+    body: JSON.stringify({ key: STORAGE_KEY, value: updated, updated_at: new Date().toISOString() }),
   });
 
   if (!setRes.ok) {

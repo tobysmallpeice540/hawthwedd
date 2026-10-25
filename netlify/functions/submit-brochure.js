@@ -124,7 +124,7 @@ async function sbSet(key, value) {
       "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY,
       "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"
     },
-    body: JSON.stringify({ key: key, value: value }),
+    body: JSON.stringify({ key: key, value: value, updated_at: new Date().toISOString() }),
   });
   if (!res.ok) throw new Error("sbSet " + key + " failed: " + await res.text());
 }

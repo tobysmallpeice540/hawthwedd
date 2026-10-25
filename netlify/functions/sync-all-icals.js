@@ -3,6 +3,15 @@
 // Fetches Airbnb iCal for every property that has an airbnbImportUrl set,
 // and imports any new blocks into hbf_accom_v1.
 //
+// It also notices a booking that has LEFT the feed. A guest who cancels on
+// Airbnb (often inside the 24-hour window) vanishes from Airbnb's calendar,
+// but the booking imported here stays — and our own calendar, exported back
+// to Airbnb, keeps the dates blocked on both. A coming Airbnb booking whose
+// UID is missing from a feed that was read properly is marked
+// airbnbMissingSince; the app asks staff whether to free the dates. Nothing
+// is ever deleted or cancelled here, and the mark is cleared if the booking
+// comes back.
+//
 // Schedule is declared in netlify.toml:
 //   [[functions]]
 //   name = "sync-all-icals"
@@ -40,7 +49,9 @@ async function sbSet(key, value) {
       "Content-Type": "application/json",
       "Prefer": "resolution=merge-duplicates"
     },
-    body: JSON.stringify({ key: key, value: value })
+    // updated_at moves with every write, as the app's own saves do, so a
+    // writer that checks it (airbnb-mail) can tell this one happened.
+    body: JSON.stringify({ key: key, value: value, updated_at: new Date().toISOString() })
   });
   if (!res.ok) throw new Error("sbSet failed: " + await res.text());
 }
@@ -116,6 +127,9 @@ async function syncProperty(prop, bookings, now) {
   });
   if (!icalRes.ok) throw new Error("HTTP " + icalRes.status + " fetching iCal for " + prop.name);
   var icalText = await icalRes.text();
+  // An error page served with a 200 must not read as "every booking gone".
+  // A cut-off download must not either: the whole calendar, start to end.
+  var looksLikeCalendar = /BEGIN:VCALENDAR/.test(icalText) && /END:VCALENDAR\s*$/.test(icalText);
 
   var feedEvents = parseIcal(icalText);
 
@@ -154,7 +168,8 @@ async function syncProperty(prop, bookings, now) {
     });
   }
 
-  return { newBlocks: newBlocks, total: feedEvents.length, imported: newBlocks.length, skipped: feedEvents.length - newBlocks.length };
+  return { newBlocks: newBlocks, total: feedEvents.length, imported: newBlocks.length, skipped: feedEvents.length - newBlocks.length,
+           feedUids: looksLikeCalendar ? feedEvents.map(function(fe) { return fe.uid; }) : null };
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -175,6 +190,7 @@ exports.handler = async function() {
     var bookings = await sbGet(ACCOM_KEY) || [];
     var allNewBlocks = [];
     var results = [];
+    var feeds = {};   // property id → UIDs in its feed, for the ones read properly
 
     for (var i = 0; i < syncable.length; i++) {
       var prop = syncable[i];
@@ -183,6 +199,7 @@ exports.handler = async function() {
         if (result.newBlocks && result.newBlocks.length) {
           allNewBlocks = allNewBlocks.concat(result.newBlocks);
         }
+        if (result.feedUids) feeds[prop.id] = result.feedUids;
         results.push({ id: prop.id, property: prop.name, imported: result.imported, total: result.total });
         console.log("[sync-all-icals] " + prop.name + ": " + result.imported + " new / " + result.total + " total");
       } catch (propErr) {
@@ -196,14 +213,15 @@ exports.handler = async function() {
     // append only the imports that are still missing (by airbnbUid). Nothing
     // else in the fresh copy is touched, so an edit or a deletion made in the
     // app meanwhile survives.
-    var totalImported = 0;
-    if (allNewBlocks.length) {
+    var totalImported = 0, flaggedNow = 0, cleared = 0;
+    if (allNewBlocks.length || Object.keys(feeds).length) {
       var merged = mergeNewImports(await sbGet(ACCOM_KEY) || [], allNewBlocks);
-      if (merged.added) {
-        await sbSet(ACCOM_KEY, merged.list);
-        console.log("[sync-all-icals] Saved " + merged.added + " new blocks total.");
+      var flagged = flagMissingFromFeed(merged.list, feeds, now);
+      if (merged.added || flagged.changed) {
+        await sbSet(ACCOM_KEY, flagged.list);
+        console.log("[sync-all-icals] Saved " + merged.added + " new blocks; " + flagged.flagged + " newly missing from Airbnb; " + flagged.cleared + " back.");
       }
-      totalImported = merged.added;
+      totalImported = merged.added; flaggedNow = flagged.flagged; cleared = flagged.cleared;
     }
 
     // Stamp lastSyncedAt on the properties that actually synced, onto a fresh
@@ -217,7 +235,7 @@ exports.handler = async function() {
     console.log("[sync-all-icals] Done. Total imported: " + totalImported);
     return {
       statusCode: 200,
-      body: JSON.stringify({ results: results, totalImported: totalImported })
+      body: JSON.stringify({ results: results, totalImported: totalImported, missingFromAirbnb: flaggedNow, backOnAirbnb: cleared })
     };
 
   } catch (err) {
@@ -254,4 +272,40 @@ function stampSynced(fresh, ids, now) {
   return { list: list, changed: changed };
 }
 
-exports._internals = { mergeNewImports, stampSynced, parseIcal };
+// Mark coming Airbnb bookings that have left their property's feed, and unmark
+// any that are back. `feeds` holds only properties whose feed was read
+// properly. A feed with no reservations at all while we hold coming ones for
+// it is treated as suspect, and nothing is marked from it. Returns
+// { list, changed, flagged, cleared }; the list is a new array, only the
+// touched bookings are new objects.
+function flagMissingFromFeed(list, feeds, now) {
+  var today = String(now).slice(0, 10);
+  var flagged = 0, cleared = 0;
+  var coming = function(b) {
+    var st = (b && b.stays && b.stays[0]) || {};
+    // Only stays that have not started: a guest already here is not
+    // cancelling, and whether Airbnb's feed keeps a stay in progress is not
+    // something to bet the prompt on.
+    return b && b.source === "airbnb" && b.airbnbUid && b.status !== "cancelled" && b.bookingType !== "Blocked"
+      && (st.checkIn || b.checkIn || "") > today ? (st.propertyId || b.propertyId) : null;
+  };
+  var suspect = {};
+  Object.keys(feeds || {}).forEach(function(pid) {
+    var have = (list || []).some(function(b) { return coming(b) === pid; });
+    if (have && !(feeds[pid] || []).length) suspect[pid] = true;
+  });
+  var out = (list || []).map(function(b) {
+    var pid = coming(b);
+    if (!pid || !feeds[pid] || suspect[pid]) return b;
+    var inFeed = feeds[pid].indexOf(b.airbnbUid) !== -1;
+    if (!inFeed && !b.airbnbMissingSince) { flagged++; return Object.assign({}, b, { airbnbMissingSince: now }); }
+    if (inFeed && b.airbnbMissingSince) {
+      cleared++;
+      var c = Object.assign({}, b); delete c.airbnbMissingSince; return c;
+    }
+    return b;
+  });
+  return { list: out, changed: flagged + cleared > 0, flagged: flagged, cleared: cleared };
+}
+
+exports._internals = { mergeNewImports, stampSynced, parseIcal, flagMissingFromFeed };

@@ -102,7 +102,7 @@ async function sbSet(key, value) {
   const res = await fetch(SUPABASE_URL + "/rest/v1/app_data", {
     method: "POST",
     headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
-    body: JSON.stringify({ key: key, value: value }),
+    body: JSON.stringify({ key: key, value: value, updated_at: new Date().toISOString() }),
   });
   if (!res.ok) throw new Error("sbSet failed: " + await res.text());
 }

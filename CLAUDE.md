@@ -440,6 +440,45 @@ own header.
   use one of these, never `setView(section)`. Pinned by
   `tests/record-links-e2e.cjs`.
 
+### Airbnb emails (25 Oct 2026, migration q)
+
+- **`netlify/functions/airbnb-mail/`** reads the Airbnb emails in Toby's personal
+  Gmail (`gmail.readonly`, connected once in Lettings → Settings → Airbnb Sync)
+  and puts them on Airbnb lettings bookings. `parse.js` is pure (parser +
+  `planBookingPatches`), pinned by `tests/airbnb-mail-test.cjs`; the worker is
+  pinned by `tests/airbnb-mail-worker-test.cjs`, the screens by
+  `tests/airbnb-booking-e2e.cjs`. Hourly via `airbnb-mail-cron.js` at :25 (the
+  iCal sync writes the same array on the hour).
+- **Host side only.** Toby's own trips reach the same inbox: an email counts only
+  with a link into `airbnb.*/hosting/`, a HOST review template, or a cancellation
+  naming one of our listings (`Listing #<room>`, rooms read off each property's
+  iCal import link) or a `_TO_HOST` template. Money only from the `YOU EARN`
+  line under `HOST PAYOUT`, or a payout email's per-reservation line.
+- **The booking's value becomes Airbnb's payout after fees** (Toby's choice) —
+  the sent payout once paid, `YOU EARN` until then. A field is written only where
+  it holds an estimate / placeholder / 0, or still holds what the sync put there
+  (`airbnb.appliedValue`, `appliedName`, `appliedCount`); a typed figure is left
+  and the panel shows Airbnb's beside it. Lettings turnover is therefore net of
+  Airbnb's host fee.
+- **What the sync and the iCal sync record is theirs:** the lettings form's save
+  keeps `airbnb` and `airbnbMissingSince` from the fresh server copy. The worker
+  writes `hbf_accom_v1` only if `app_data.updated_at` is unchanged since its read
+  (PATCH with `updated_at=eq.`), re-planning on a clash; every writer of that key
+  must move `updated_at` (the app's `sbSet` and `sync-all-icals` do).
+- **Cancellations are never acted on.** `airbnb.cancelledAt` (from the email) and
+  `airbnbMissingSince` (sync-all-icals: a booking not yet started that has left a
+  complete feed) raise a prompt — Mark cancelled / Delete / It's not cancelled.
+- The refresh token is AES-GCM sealed with a key derived from `HBF_ADMIN_TOKEN`
+  in `airbnb_mail_state` (service role only). Rotating `HBF_ADMIN_TOKEN` means
+  connecting Gmail again. Env: `GOOGLE_CLIENT_SECRET` (same OAuth client as the
+  app's Gmail button); redirect URI
+  `https://hawthbushfarm.netlify.app/.netlify/functions/airbnb-mail`.
+- The first read walks back to 1 Jan 2025 one Gmail page per run
+  (`backfill_page`); only bookings ending in 2026 or later are changed.
+  Enquiry threads with no booking are purged after 30 quiet days, only once the
+  first read is done. Messages sent from the Airbnb app are never emailed, so
+  only emailed replies and the co-host's appear.
+
 ## Working in this folder from a Claude session
 
 The repo is reached through a mount that does not allow deletion, and two

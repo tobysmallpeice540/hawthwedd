@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25k";
+const APP_BUILD = "2026-10-25l";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3518,11 +3518,320 @@ function airbnbReservationUrl(notes) {
   return null;
 }
 
+// The reservation on Airbnb: the link in the notes (from the iCal import), or
+// one built from the confirmation code the Airbnb emails gave us.
+function airbnbBookingLink(b) {
+  const fromNotes = airbnbReservationUrl(b && b.notes);
+  if (fromNotes) return fromNotes;
+  const code = b && b.airbnb && b.airbnb.code;
+  return /^HM[A-Z0-9]{8}$/.test(String(code || "")) ? "https://www.airbnb.co.uk/hosting/reservations/details/" + code : null;
+}
+
 // How a direct (not Airbnb) lettings booking reached us, in words.
 const ACCOM_DIRECT_HOW = {
   direct: "booked online on our website", website: "booked online on our website",
   manual: "entered here", contract: "from the wedding contract", wedding: "wedding-linked",
 };
+
+// ─── AIRBNB EMAILS ON A BOOKING ───────────────────────────────────────────────
+// netlify/functions/airbnb-mail reads the Airbnb emails in Toby's Gmail and
+// writes onto each Airbnb booking: `airbnb` = { code, threadId, guestName,
+// guests, payoutExpected, payoutPaid, stars, cancelledAt, alteredAt, … } plus
+// the guest's name, the payout as the value and the guest count where those
+// were placeholders. sync-all-icals marks `airbnbMissingSince` on a coming
+// booking that has left Airbnb's calendar. Neither ever cancels or deletes —
+// these ask staff to.
+
+// Should this booking ask "cancelled on Airbnb — free the dates?" Returns
+// { kind: "cancelled" | "missing", at } or null.
+function airbnbCancelPrompt(b) {
+  if (!b || b.source !== "airbnb" || b.status === "cancelled" || b.bookingType === "Blocked") return null;
+  const a = b.airbnb || {};
+  if (a.cancelledAt && !a.cancelDismissedAt) return { kind: "cancelled", at: a.cancelledAt };
+  if (b.airbnbMissingSince && !(a.missingDismissedAt && a.missingDismissedAt >= b.airbnbMissingSince)) {
+    return { kind: "missing", at: b.airbnbMissingSince };
+  }
+  return null;
+}
+
+function accomPrimaryStay(b) { return (b && b.stays && b.stays[0]) || b || {}; }
+
+function AirbnbStars({ n }) {
+  const k = Math.max(0, Math.min(5, Math.round(Number(n) || 0)));
+  if (!k) return null;
+  return (
+    <span title={k + " star" + (k === 1 ? "" : "s") + " on Airbnb"} style={{ color:T.brass, letterSpacing:1, whiteSpace:"nowrap" }}>
+      {"★".repeat(k)}<span style={{ color:T.border }}>{"★".repeat(5 - k)}</span>
+    </span>
+  );
+}
+
+function AirbnbAttentionChip({ b }) {
+  const p = airbnbCancelPrompt(b);
+  if (!p) return null;
+  return (
+    <span title={p.kind === "cancelled" ? "Airbnb says this booking was cancelled" : "This booking is no longer in Airbnb's calendar"}
+      style={{ marginLeft:6, fontSize:10, fontWeight:700, color:T.red, background:T.redBg, padding:"1px 6px", borderRadius:8, whiteSpace:"nowrap" }}>
+      {p.kind === "cancelled" ? "Cancelled on Airbnb?" : "Gone from Airbnb?"}
+    </span>
+  );
+}
+
+// The Airbnb facts on the booking form, and the cancellation prompt.
+function AirbnbBookingPanel({ form, onMarkCancelled, onDismiss, onDelete, onUseFigure }) {
+  const [busy, setBusy] = useState(null);
+  const [armed, setArmed] = useState(null);
+  const a = form.airbnb || {};
+  const prompt = airbnbCancelPrompt(form);
+  const fmtWhen = function(iso) { return iso ? fmtDate(String(iso).slice(0, 10)) : ""; };
+  const shown = a.payoutPaid > 0 ? a.payoutPaid : a.payoutExpected;
+  const single = !form.stays || form.stays.length <= 1;
+  const differs = shown != null && single && Math.abs((Number(form.value) || 0) - shown) > 0.005;
+  if (!prompt && !a.code && !a.stars) return null;
+
+  async function act(kind, fn) {
+    if (armed !== kind) { setArmed(kind); return; }
+    setBusy(kind); setArmed(null);
+    try { await fn(); } catch (e) { alert(e.message || String(e)); }
+    setBusy(null);
+  }
+  const btn = { ...smallBtn, padding:"6px 11px" };
+  return (
+    <div style={{ marginBottom:16 }}>
+      {prompt && (
+        <div style={{ background:T.redBg, border:`1.5px solid ${T.red}`, borderRadius:9, padding:"12px 14px", marginBottom:10 }}>
+          <div style={{ fontSize:14, fontWeight:700, color:T.red, marginBottom:4 }}>
+            {prompt.kind === "cancelled"
+              ? "Cancelled on Airbnb" + (prompt.at ? " on " + fmtWhen(prompt.at) : "")
+              : "No longer in Airbnb's calendar" + (prompt.at ? " (since " + fmtWhen(prompt.at) + ")" : "")}
+          </div>
+          <div style={{ fontSize:12.5, color:T.text, lineHeight:1.55, marginBottom:10 }}>
+            {prompt.kind === "cancelled"
+              ? "Airbnb emailed to say the guest cancelled. This booking still blocks the dates here — and on Airbnb, which reads our calendar — until it is marked cancelled or deleted."
+              : "Airbnb's calendar no longer has this booking, which usually means it was cancelled. Check on Airbnb before freeing the dates."}
+          </div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+            <button type="button" disabled={!!busy} onClick={function(){ act("cancel", onMarkCancelled); }}
+              onBlur={function(){ if (armed === "cancel") setArmed(null); }}
+              style={{ ...btn, background: armed === "cancel" ? T.red : "#fff", color: armed === "cancel" ? "#fff" : T.red, borderColor:T.red }}>
+              {busy === "cancel" ? "Saving…" : armed === "cancel" ? "Mark cancelled — sure?" : "Mark cancelled (frees the dates)"}
+            </button>
+            {onDelete && (
+              <button type="button" disabled={!!busy} onClick={onDelete} style={{ ...btn, color:T.red }}>Delete booking</button>
+            )}
+            <button type="button" disabled={!!busy} onClick={function(){ act("dismiss", onDismiss); }}
+              onBlur={function(){ if (armed === "dismiss") setArmed(null); }}
+              style={{ ...btn, color:T.textMid }}>
+              {busy === "dismiss" ? "Saving…" : armed === "dismiss" ? "Keep it — sure?" : "It's not cancelled"}
+            </button>
+          </div>
+        </div>
+      )}
+      {(a.code || a.stars) && (
+        <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 18px", alignItems:"baseline", fontSize:12.5, color:T.textMid,
+          background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, padding:"9px 12px" }}>
+          {shown != null && (
+            <span>
+              <strong style={{ color:T.text }}>{String(fmtMoney(shown))}</strong>{" "}
+              {a.payoutPaid > 0 ? "paid out by Airbnb" : "payout due from Airbnb"} <span style={{ color:T.textLight }}>(after Airbnb's fees)</span>
+              {differs && (
+                <span style={{ color:T.amber }}>
+                  {" "}· the price below is {String(fmtMoney(form.value))}{" "}
+                  {onUseFigure && (
+                    <button type="button" onClick={function(){ onUseFigure(shown); }}
+                      style={{ background:"none", border:"none", padding:0, color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:700, cursor:"pointer", textDecoration:"underline" }}>
+                      use Airbnb's
+                    </button>
+                  )}
+                </span>
+              )}
+            </span>
+          )}
+          {a.guests && <span>{a.guests}</span>}
+          {a.guestName && a.guestName !== form.guestName && <span>On Airbnb as <strong style={{ color:T.text }}>{a.guestName}</strong></span>}
+          {a.stars > 0 && <span><AirbnbStars n={a.stars}/> review</span>}
+          {a.alteredAt && <span style={{ color:T.amber }}>changed on Airbnb {fmtWhen(a.alteredAt)}{a.payoutPaid > 0 ? "" : " — payout updates with the next Airbnb email"}</span>}
+          {a.code && <span style={{ color:T.textLight, marginLeft:"auto" }}>{a.code}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AIRBNB_KIND_LABEL = { enquiry: "Enquiry", request: "Request to book", reservation: "Booking" };
+
+// The messages with the guest, like a phone chat: the guest on the left, us
+// (Toby, by email, or the co-host) on the right. Read from the database only
+// by admins; anyone else sees nothing.
+function AirbnbConversation({ code, threadId }) {
+  const [data, setData] = useState(null);
+  const [state, setState] = useState("loading");
+  useEffect(function() {
+    let live = true;
+    if (!code && !threadId) { setState("none"); return; }
+    setState("loading");
+    sbRpcQuiet("airbnb_admin_conversation", { p_code: code || null, p_thread: threadId || null })
+      .then(function(d) { if (live) { setData(d); setState("ready"); } })
+      .catch(function(e) { if (live) setState(e && e.code === "not_admin" ? "hidden" : (e && e.status === 404 ? "absent" : "error")); });
+    return function() { live = false; };
+  }, [code, threadId]);
+
+  if (state === "none" || state === "hidden" || state === "absent") return null;
+  const msgs = (data && data.messages) || [];
+  let lastKind = null, lastDay = null;
+  return (
+    <div style={{ marginBottom:18, paddingBottom:16, borderBottom:`1px solid ${T.border}` }}>
+      <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:8, flexWrap:"wrap" }}>
+        <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Airbnb messages</h3>
+        <span style={{ fontSize:11, color:T.textLight }}>
+          from the Airbnb emails · messages sent from the Airbnb app are not emailed, so only replies sent by email and the co-host's show here
+        </span>
+      </div>
+      {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
+      {state === "error" && <div style={{ fontSize:12, color:T.red }}>Could not load the messages.</div>}
+      {state === "ready" && !msgs.length && <div style={{ fontSize:12, color:T.textLight }}>No messages found for this booking yet.</div>}
+      {state === "ready" && msgs.length > 0 && (
+        <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:520, overflowY:"auto", padding:"4px 2px" }}>
+          {msgs.map(function(m, i) {
+            const ours = m.direction === "host";
+            const day = m.at ? String(m.at).slice(0, 10) : null;
+            const kindHead = m.kind !== lastKind ? (AIRBNB_KIND_LABEL[m.kind] || null) : null;
+            const dayHead = day && day !== lastDay ? fmtDate(day) : null;
+            lastKind = m.kind; lastDay = day;
+            return (
+              <Fragment key={i}>
+                {(kindHead || dayHead) && (
+                  <div style={{ textAlign:"center", fontSize:10.5, fontWeight:700, color:T.textLight, letterSpacing:.4, textTransform:"uppercase", margin:"6px 0 2px" }}>
+                    {[kindHead, dayHead].filter(Boolean).join(" · ")}
+                  </div>
+                )}
+                <div style={{ display:"flex", flexDirection:"column", alignItems: ours ? "flex-end" : "flex-start" }}>
+                  <div style={{ maxWidth:"78%", background: ours ? T.accentLight : "#fff", border:`1px solid ${ours ? T.accent + "40" : T.border}`,
+                    borderRadius: ours ? "14px 14px 4px 14px" : "14px 14px 14px 4px", padding:"8px 12px", fontSize:13, lineHeight:1.5,
+                    color:T.text, whiteSpace:"pre-wrap", wordBreak:"break-word" }}>
+                    {m.body}
+                  </div>
+                  <div style={{ fontSize:10.5, color:T.textLight, margin:"2px 6px 0" }}>
+                    {m.author}{m.role && !/^(booker|guest)$/i.test(m.role) ? " (" + m.role.toLowerCase() + ")" : ""}
+                    {m.at ? " · " + new Date(m.at).toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" }) : ""}
+                  </div>
+                </div>
+              </Fragment>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Settings for the Gmail connection (Lettings → Settings). Admin only — the
+// function and the database both check.
+async function airbnbMailCall(action) {
+  const res = await fetch("/.netlify/functions/airbnb-mail", {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
+    body: JSON.stringify({ action: action })
+  });
+  const data = await res.json().catch(function() { return {}; });
+  if (!res.ok) throw new Error(data.error || ("The Airbnb email function failed (" + res.status + ")"));
+  return data;
+}
+
+function AirbnbMailSettings() {
+  const [st, setSt] = useState(null);
+  const [state, setState] = useState("loading");
+  const [busy, setBusy] = useState(null);
+  const [note, setNote] = useState(null);
+  const [armed, setArmed] = useState(null);
+
+  async function load() {
+    try { setSt(await sbRpcQuiet("airbnb_admin_status")); setState("ready"); }
+    catch (e) { setState(e && e.code === "not_admin" ? "hidden" : (e && e.status === 404 ? "absent" : "error")); }
+  }
+  useEffect(function() { load(); }, []);
+  if (state === "hidden") return null;
+
+  async function connect() {
+    setBusy("connect"); setNote(null);
+    try { const d = await airbnbMailCall("start"); window.location.assign(d.url); }
+    catch (e) { setNote({ kind:"error", text:e.message }); setBusy(null); }
+  }
+  async function syncNow() {
+    setBusy("sync"); setNote(null);
+    let read = 0, updated = 0;
+    try {
+      for (let i = 0; i < 40; i++) {
+        const d = await airbnbMailCall("sync");
+        if (d.ok === false) throw new Error(d.error || "The sync failed");
+        read += d.read || 0; updated += d.bookingsUpdated || 0;
+        setNote({ kind:"ok", text:"Read " + read + " email" + (read === 1 ? "" : "s") + (d.more ? " — " + d.left + " still to read…" : ".") + (updated ? " " + updated + " booking" + (updated === 1 ? "" : "s") + " updated." : "") });
+        if (!d.more) break;
+      }
+    } catch (e) { setNote({ kind:"error", text:e.message }); }
+    setBusy(null); load();
+  }
+  async function second(kind, fn) {
+    if (armed !== kind) { setArmed(kind); return; }
+    setArmed(null); setBusy(kind); setNote(null);
+    try { await fn(); } catch (e) { setNote({ kind:"error", text:e.message }); }
+    setBusy(null); load();
+  }
+  const when = function(iso) { return iso ? new Date(iso).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "never"; };
+  const r = (st && st.last_result) || {};
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 18px", marginBottom:18 }}>
+      <h3 style={{ margin:"0 0 4px", color:T.midBlue, fontWeight:700, fontSize:15 }}>Airbnb email</h3>
+      <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
+        Reads the Airbnb emails in the host's Gmail every hour (read only) and puts them on the Airbnb bookings: the guest's
+        full name, the payout after Airbnb's fees, the guests, the star rating, the messages, and a warning when a guest
+        cancels. Airbnb emails about trips where we are the guest are ignored. Enquiries that never become a booking are
+        not kept.
+      </div>
+      {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
+      {state === "absent" && <div style={{ fontSize:12.5, color:T.amber }}>The database part is not installed yet (migration 2026-10-25q).</div>}
+      {state === "error" && <div style={{ fontSize:12.5, color:T.red }}>Could not read the connection's status.</div>}
+      {state === "ready" && st && (
+        <div style={{ fontSize:12.5, color:T.text, lineHeight:1.7, marginBottom:10 }}>
+          {st.connected ? (
+            <>
+              <div>Connected to <strong>{st.account || "Gmail"}</strong>{st.connected_by ? " by " + st.connected_by : ""}{st.connected_at ? " on " + when(st.connected_at) : ""}.</div>
+              <div style={{ color:T.textMid }}>
+                Last read {when(st.last_sync_at)}
+                {r.read != null ? " · " + r.read + " email" + (r.read === 1 ? "" : "s") + " read" : ""}
+                {r.left ? " · " + r.left + " still to read" : ""}
+                {" · "}{st.reservations} Airbnb booking{st.reservations === 1 ? "" : "s"}, {st.messages} message{st.messages === 1 ? "" : "s"} on file
+                {!st.backfill_done ? " · still reading back to January 2025" : ""}
+              </div>
+            </>
+          ) : <div style={{ color:T.textMid }}>Not connected.</div>}
+          {st.last_error && <div style={{ color:T.red, marginTop:4 }}>{st.last_error}</div>}
+        </div>
+      )}
+      {state === "ready" && st && (
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+          <button type="button" disabled={!!busy} onClick={connect} style={{ ...smallBtn, background:T.accent, color:"#fff", borderColor:T.accent }}>
+            {busy === "connect" ? "Opening Google…" : st.connected ? "Connect again" : "Connect Gmail"}
+          </button>
+          {st.connected && <button type="button" disabled={!!busy} onClick={syncNow} style={smallBtn}>{busy === "sync" ? "Reading…" : "Sync now"}</button>}
+          {st.connected && (
+            <button type="button" disabled={!!busy} onBlur={function(){ if (armed === "reread") setArmed(null); }}
+              onClick={function(){ second("reread", function(){ return airbnbMailCall("reread"); }); }} style={{ ...smallBtn, color:T.textMid }}>
+              {armed === "reread" ? "Read every email again?" : "Read everything again"}
+            </button>
+          )}
+          {st.connected && (
+            <button type="button" disabled={!!busy} onBlur={function(){ if (armed === "disconnect") setArmed(null); }}
+              onClick={function(){ second("disconnect", function(){ return airbnbMailCall("disconnect"); }); }} style={{ ...smallBtn, color:T.red, marginLeft:"auto" }}>
+              {armed === "disconnect" ? "Disconnect — sure?" : "Disconnect"}
+            </button>
+          )}
+        </div>
+      )}
+      {note && <div style={{ marginTop:9, fontSize:12, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
+    </div>
+  );
+}
 
 // Source label for a lettings booking: Manual / Website / Airbnb / Blocked
 function accomSourceLabel(b) {
@@ -3612,6 +3921,7 @@ function AccomListRow({ b, primary, properties, gridTemplate, onOpen }) {
       <div style={{ padding:"11px 12px", fontWeight:600 }}>
         {accomGuestLabel(b)}
         {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
+        <AirbnbAttentionChip b={b}/>
       </div>
       {properties.map(p=>(
         <div key={p.id} style={{ padding:"8px 4px", textAlign:"center" }}>
@@ -3653,7 +3963,7 @@ function AccomListCard({ b, primary, properties, onOpen }) {
       style={{ background:"#fff", borderRadius:10, border:`1px solid ${T.border}`, boxShadow:T.shadowCard, padding:"12px 14px", cursor:"pointer" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10, marginBottom:6 }}>
         <div style={{ minWidth:0 }}>
-          <div style={{ fontWeight:700, color:T.text, fontSize:15, wordBreak:"break-word" }}>{accomGuestLabel(b)}</div>
+          <div style={{ fontWeight:700, color:T.text, fontSize:15, wordBreak:"break-word" }}>{accomGuestLabel(b)}<AirbnbAttentionChip b={b}/></div>
           <div style={{ fontSize:12.5, color:T.accent, fontWeight:600, marginTop:2 }}>
             {fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}
           </div>
@@ -3826,7 +4136,7 @@ function StayTimeField({ booking, stay, prop, which, onChange }) {
   );
 }
 
-function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent }) {
+function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent, onMarkAirbnbCancelled, onDismissAirbnbPrompt }) {
   const isMobile = useIsMobile();
   var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
   var selPropIds = formStays.map(function(s){ return s.propertyId; });
@@ -3983,8 +4293,8 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           {form.source !== "airbnb" && ACCOM_DIRECT_HOW[form.source] && (
             <span style={{ color:T.textLight }}>· {ACCOM_DIRECT_HOW[form.source]}</span>
           )}
-          {form.source === "airbnb" && (airbnbReservationUrl(form.notes) ? (
-            <a href={airbnbReservationUrl(form.notes)} target="_blank" rel="noopener noreferrer"
+          {form.source === "airbnb" && (airbnbBookingLink(form) ? (
+            <a href={airbnbBookingLink(form)} target="_blank" rel="noopener noreferrer"
               style={{ ...smallBtn, textDecoration:"none", display:"inline-flex", alignItems:"center", gap:5 }}>
               Open on Airbnb ↗
             </a>
@@ -3992,6 +4302,12 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             <span style={{ color:T.textLight }}>· no Airbnb reservation link in the notes</span>
           ))}
         </div>
+      )}
+
+      {form.source === "airbnb" && form.id && (
+        <AirbnbBookingPanel form={form} onDelete={onDelete}
+          onMarkCancelled={onMarkAirbnbCancelled} onDismiss={onDismissAirbnbPrompt}
+          onUseFigure={function(v){ if (formStays.length === 1) updStay(0, "value", v); }}/>
       )}
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
@@ -4290,6 +4606,10 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
       )}
 
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"16px 18px", marginBottom:18 }}>
+        {form.source === "airbnb" && form.id && (
+          <AirbnbConversation threadId={(form.airbnb && form.airbnb.threadId) || null}
+            code={(form.airbnb && form.airbnb.code) || (String(form.notes || "").match(/reservations\/details\/(HM[A-Z0-9]{8})/) || [])[1] || null}/>
+        )}
         <ManualEmailSenders booking={form} onBuildSchedule={form.linkedEventId ? null : regenSchedule}/>
         <EmailHistoryPanel bookingId={form.id} title="Emails Sent" emptyLabel="No emails sent for this booking yet."/>
       </div>
@@ -5723,6 +6043,7 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
       <TabStrip tabs={tabs} value={setupTab} onChange={setSetupTab}/>
       {setupTab === "pricing" && <PropertyEditor properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "codes"   && <DiscountCodesEditor codes={discountCodes} setCodes={setDiscountCodes} onSave={onSaveDiscountCodes}/>}
+      {setupTab === "ical"    && <AirbnbMailSettings/>}
       {setupTab === "ical"    && <ICalSettings properties={properties} setProperties={setProperties} onSave={onSaveProperties}/>}
       {setupTab === "emails"  && <EmailTemplatesEditor templates={emailTemplates} setTemplates={setEmailTemplates} onSave={onSaveEmailTemplates}/>}
       {setupTab === "terms"   && <TermsEditor/>}
@@ -6688,6 +7009,38 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
     return next;
   };
 
+  // The Airbnb prompt on a booking changes only that booking, on a fresh read,
+  // and the same change is shown on the open form without touching anything
+  // else typed there.
+  const patchAccom = async (id, fn) => {
+    let updated = null;
+    await mutateAccom(function(base) {
+      return base.map(function(b) {
+        if (String(b.id) !== String(id)) return b;
+        updated = fn(b); return updated;
+      });
+    });
+    if (!updated) throw new Error("That booking is no longer there — it may have been deleted on another screen.");
+    return updated;
+  };
+  const markAirbnbCancelled = async () => {
+    const fn = function(b) { return Object.assign({}, b, { status: "cancelled" }); };
+    await patchAccom(editId, fn);
+    setForm(function(f) { return f ? fn(f) : f; });
+    setFlash("Marked cancelled — the dates are free"); setTimeout(function(){ setFlash(""); }, 2500);
+  };
+  const dismissAirbnbPrompt = async () => {
+    const now = new Date().toISOString();
+    const fn = function(b) {
+      const a = Object.assign({}, b.airbnb || {});
+      if (a.cancelledAt) a.cancelDismissedAt = now;
+      if (b.airbnbMissingSince) a.missingDismissedAt = now;
+      return Object.assign({}, b, { airbnb: a });
+    };
+    await patchAccom(editId, fn);
+    setForm(function(f) { return f ? fn(f) : f; });
+  };
+
   // Only the properties changed on this screen since it loaded are written,
   // into a fresh read (the iCal sync stamps lastSyncedAt server-side).
   const saveProperties = async () => {
@@ -6818,10 +7171,17 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
         // An edit whose record has vanished (deleted on another device) is put
         // back rather than silently discarded — losing someone's typing to a
         // race is worse than resurrecting a row they can delete again.
+        // What the Airbnb emails and the iCal sync recorded on the booking is
+        // theirs, written server-side while this form may have been open: it
+        // is kept from the fresh copy, never put back from the form.
         var seen = false;
         var next = base.map(function(b) {
           if (String(b.id) !== String(editId)) return b;
-          seen = true; return rec;
+          seen = true;
+          var out = Object.assign({}, rec);
+          if (b.airbnb !== undefined) out.airbnb = b.airbnb; else delete out.airbnb;
+          if (b.airbnbMissingSince !== undefined) out.airbnbMissingSince = b.airbnbMissingSince; else delete out.airbnbMissingSince;
+          return out;
         });
         return seen ? next : next.concat([rec]);
       });
@@ -6993,6 +7353,30 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
 
       {tab!=="form" && !inSidebar && <TabStrip tabs={LETTINGS_TABS} value={tab} onChange={setTab}/>}
 
+      {loaded && tab!=="form" && (function() {
+        const due = bookings.filter(function(b){ return airbnbCancelPrompt(b); })
+          .sort(function(a, b){ return String(accomPrimaryStay(a).checkIn || "").localeCompare(String(accomPrimaryStay(b).checkIn || "")); });
+        if (!due.length) return null;
+        return (
+          <div style={{ background:T.redBg, border:`1.5px solid ${T.red}`, borderRadius:9, padding:"10px 14px", marginBottom:14,
+            display:"flex", alignItems:"center", gap:"6px 10px", flexWrap:"wrap", fontSize:13 }}>
+            <strong style={{ color:T.red }}>
+              {due.length === 1 ? "An Airbnb booking looks cancelled" : due.length + " Airbnb bookings look cancelled"}
+            </strong>
+            <span style={{ color:T.textMid }}>— the dates are still blocked here and on Airbnb:</span>
+            {due.slice(0, 6).map(function(b) {
+              const st = accomPrimaryStay(b);
+              return (
+                <button key={b.id} type="button" onClick={function(){ openEdit(b); }}
+                  style={{ ...smallBtn, padding:"3px 9px", fontSize:12, color:T.red, borderColor:T.red }}>
+                  {accomGuestLabel(b)} · {fmtDate(st.checkIn)}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {!loaded && <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>}
 
       {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} onOpenEvent={onOpenEvent} onViewEventsCalendar={setAppView && setAppReportType ? function(){ setAppReportType("calendar"); setAppView("reports"); } : null} />}
@@ -7009,7 +7393,8 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       {tab==="form" && form && (
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
-          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} onOpenEvent={onOpenEvent} />
+          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} onOpenEvent={onOpenEvent}
+            onMarkAirbnbCancelled={markAirbnbCancelled} onDismissAirbnbPrompt={dismissAirbnbPrompt} />
         </div>
       )}
     </div>
