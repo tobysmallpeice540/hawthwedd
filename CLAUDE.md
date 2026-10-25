@@ -428,6 +428,12 @@ own header.
   Unticking gives it back to the couple if nobody else chose it, otherwise
   sets `active = false` (kept by those who chose it, offered to nobody new).
   Admin only (`wp_is_admin`). Test: `supabase/2026-10-25o-supplier-approval-test.sql`.
+- The venue's own directory rows have Edit (upsert for name/contact,
+  `wp_admin_review_supplier` for the line, note and insurance so they can be
+  cleared), Suppress (kept, never offered) and Delete
+  (`wp_admin_delete_supplier`, migration p): refused while any wedding has
+  chosen them or a timeline names them, because the foreign keys would
+  otherwise cascade them off couples' pages or blank the timeline line.
 - **Rows open their record.** Deep links: `goToEvent`, `goToEnquiry`,
   `goToAccomBooking`, `goToBoxEvent` (box office editor), `goToViewingRequest`
   (Viewings, card scrolled to and picked out). A new list of records should

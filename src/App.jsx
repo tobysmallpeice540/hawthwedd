@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25j";
+const APP_BUILD = "2026-10-25k";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -12774,7 +12774,17 @@ function PortalSupplierDirectory({ bookings }) {
   // (promoted_from_event_id). Rows promoted before the 25 Oct migration have
   // neither, and sit with the venue's own.
   const fromCouple = function(x) { return x.owner_event_id != null || x.promoted_from_event_id != null; };
-  const directory = (list || []).filter(function(x){ return x.owner_event_id == null && x.active !== false && !x.suppressed_at; });
+  // What couples can choose from: no owner, switched on, not suppressed.
+  const isOffered = function(x) { return x.owner_event_id == null && x.active !== false && !x.suppressed_at; };
+  const directory = (list || []).filter(isOffered);
+  // The directory as staff see it: everything the venue holds, hidden ones
+  // last and greyed. A couple's supplier withdrawn from sharing lives in the
+  // couples' list above, not here.
+  const venueRows = (list || []).filter(function(x) {
+    return x.owner_event_id == null && !(x.promoted_from_event_id != null && x.active === false);
+  }).slice().sort(function(a, b) {
+    return (isOffered(a) ? 0 : 1) - (isOffered(b) ? 0 : 1) || String(a.category).localeCompare(String(b.category)) || String(a.name).localeCompare(String(b.name));
+  });
   const couples = (list || []).filter(fromCouple).slice().sort(function(a, b) {
     // Waiting for a decision first, offered ones at the very top.
     const rank = function(x) { return x.suppressed_at ? 3 : x.owner_event_id == null ? 2 : x.share_offered_at ? 0 : 1; };
@@ -12782,7 +12792,6 @@ function PortalSupplierDirectory({ bookings }) {
   });
   const waiting = couples.filter(function(x){ return x.owner_event_id != null && !x.suppressed_at; });
   const shownCouples = showAll ? couples : couples.filter(function(x){ return !x.suppressed_at; });
-  const venueOwn = (list || []).filter(function(x){ return !fromCouple(x) && x.owner_event_id == null; });
 
   return (
     <div>
@@ -12830,17 +12839,14 @@ function PortalSupplierDirectory({ bookings }) {
           </div>
           <div style={{ fontSize:12, color:T.textLight, marginBottom:10 }}>What every couple can choose from.</div>
           {adding && <PortalSupplierForm onDone={function(){ setAdding(false); load(); }} />}
-          {directory.length === 0
+          {venueRows.length === 0
             ? <div style={{ fontSize:13, color:T.textLight }}>Nothing yet — couples will see an empty list until you add some.</div>
-            : <div style={{ display:"grid", gap:8 }}>{directory.map(function(x){
+            : <div style={{ display:"grid", gap:8 }}>{venueRows.map(function(x){
                 const from = x.promoted_from_event_id != null ? coupleOf[String(x.promoted_from_event_id)] : null;
-                return <PortalSupplierRow key={x.id} s={x} fromLabel={x.promoted_from_event_id != null ? ("from " + ((from && from.couple) || "a couple")) : null}/>;
+                return <PortalDirectorySupplierRow key={x.id} s={x} onChanged={load} onError={setErr}
+                  onSuppress={function(on){ suppress(x.id, on); }}
+                  fromLabel={x.promoted_from_event_id != null ? ("from " + ((from && from.couple) || "a couple")) : null}/>;
               })}</div>}
-          {venueOwn.some(function(x){ return x.active === false; }) && (
-            <div style={{ fontSize:11.5, color:T.textLight, marginTop:8 }}>
-              {venueOwn.filter(function(x){ return x.active === false; }).length} switched off and not shown.
-            </div>
-          )}
         </>
       )}
     </div>
@@ -12959,58 +12965,94 @@ function PortalCoupleSupplierRow({ s, couple, eventId, onChanged, onError, onSup
   );
 }
 
-function PortalSupplierRow({ s, onPromote, onSuppress, fromLabel }) {
-  const bits = [s.contact_name, s.phone, s.email].filter(Boolean);
+// One supplier in the venue's directory: edit, hide (suppress) or delete.
+// Delete is for a supplier nobody has used; one a wedding has chosen, or a
+// timeline names, is suppressed instead so nothing disappears from a couple's
+// page (see 2026-10-25p-supplier-delete.sql).
+function PortalDirectorySupplierRow({ s, fromLabel, onChanged, onError, onSuppress }) {
+  const [editing, setEditing] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [busy, setBusy] = useState(false);
   const off = !!s.suppressed_at;
+  const switchedOff = s.active === false;
+  const hidden = off || switchedOff;
+  const used = Number(s.used_by || 0);
+  const bits = [s.contact_name, s.phone, s.email, s.website].filter(Boolean);
+
+  async function del() {
+    setBusy(true); onError("");
+    try {
+      await sbRpcQuiet("wp_admin_delete_supplier", { p_id: s.id });
+      await onChanged();
+    } catch (e) {
+      onError(e && e.status === 404 ? "Deleting needs the database change 2026-10-25p-supplier-delete.sql, which has not been applied yet."
+        : e.code === "in_use" ? s.name + " has been chosen by a wedding or is on a timeline, so they can't be deleted. Tick Suppress to stop offering them."
+        : (e.message || String(e)));
+      setBusy(false); setConfirmDel(false);
+    }
+  }
+
+  if (editing) {
+    return <PortalSupplierForm initial={s} onCancel={function(){ setEditing(false); }}
+      onDone={function(){ setEditing(false); onChanged(); }}/>;
+  }
+
+  const btn = { background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, padding:"5px 12px", borderRadius:6,
+    cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, whiteSpace:"nowrap" };
   return (
-    <div style={{ background: off ? "#f9fafb" : "#fff", border:`1px solid ${T.border}`, borderRadius:9,
-      padding:"11px 14px", opacity: off ? 0.72 : 1,
-      display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
-      <div style={{ minWidth:0 }}>
+    <div data-dir-supplier={s.id} style={{ background: hidden ? "#f9fafb" : "#fff", border:`1px solid ${T.border}`, borderRadius:9,
+      padding:"11px 14px", opacity: hidden ? 0.72 : 1, display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+      <div style={{ minWidth:0, flex:"1 1 260px" }}>
         <div style={{ fontSize:13, fontWeight:600, color:T.text }}>
           {s.name}
           <span style={{ fontWeight:400, color:T.textLight }}> · {supplierCategoryLabel(s.category)}</span>
           {fromLabel && <span style={{ fontWeight:400, color:T.textLight }}> · {fromLabel}</span>}
-          <span style={{ fontWeight:400, color:T.textLight }}>
-            {" · used by "}{s.used_by || 0}{" "}{(s.used_by === 1 ? "wedding" : "weddings")}
-          </span>
-          {s.share_offered_at && !off && (
-            <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.green,
-              background:T.greenBg, borderRadius:5, padding:"1px 6px" }}>OFFERED</span>
-          )}
-          {off && (
-            <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.textLight,
-              background:"#f1f5f9", borderRadius:5, padding:"1px 6px" }}>SUPPRESSED</span>
-          )}
+          <span style={{ fontWeight:400, color:T.textLight }}>{" · used by " + used + " " + (used === 1 ? "wedding" : "weddings")}</span>
+          {off && <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.textLight, background:"#f1f5f9", borderRadius:5, padding:"1px 6px" }}>HIDDEN FROM COUPLES</span>}
+          {!off && switchedOff && <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.textLight, background:"#f1f5f9", borderRadius:5, padding:"1px 6px" }}>SWITCHED OFF</span>}
         </div>
+        {s.blurb && <div style={{ fontSize:12, color:T.textMid, marginTop:2 }}>{s.blurb}</div>}
         {bits.length > 0 && <div style={{ fontSize:11, color:T.textLight, marginTop:2, wordBreak:"break-all" }}>{bits.join(" · ")}</div>}
         <div style={{ fontSize:11, marginTop:3, color: s.pli_held ? "#166534" : "#92400e" }}>
-          {s.pli_held ? ("Insurance held" + (s.pli_expires ? " until " + s.pli_expires : "")) : "No insurance certificate on file"}
+          {s.pli_held ? ("Insurance held" + (s.pli_expires ? " until " + fmtDate(s.pli_expires) : "")) : "No insurance certificate on file"}
         </div>
       </div>
-      <div style={{ display:"flex", gap:10, alignItems:"center", alignSelf:"flex-start", flexWrap:"wrap" }}>
-        {onSuppress && (
-          <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid,
-            whiteSpace:"nowrap", cursor:"pointer" }}
-            title="Never suggest them to anyone else. The couple who added them keeps them and is told nothing.">
-            <input type="checkbox" checked={off} onChange={function(e){ onSuppress(e.target.checked); }} />
-            Suppress
-          </label>
-        )}
-        {onPromote && !off && (
-          <button onClick={onPromote}
-            style={{ background:"#4a5d4e", color:"#fff", border:"none", padding:"7px 14px",
-              borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>
-            Add to directory
-          </button>
+      <div style={{ display:"flex", gap:8, alignItems:"center", alignSelf:"flex-start", flexWrap:"wrap" }}>
+        <label title="Keep them on file but stop offering them to couples. Weddings that already chose them keep them."
+          style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid, whiteSpace:"nowrap", cursor:"pointer" }}>
+          <input type="checkbox" checked={off} disabled={busy} onChange={function(e){ onSuppress(e.target.checked); }} />
+          Suppress
+        </label>
+        <button type="button" style={btn} disabled={busy} onClick={function(){ setEditing(true); }}>Edit</button>
+        {confirmDel ? (
+          <>
+            <button type="button" disabled={busy} onClick={del}
+              style={Object.assign({}, btn, { background:T.redBg, color:T.red, borderColor:"#fca5a5" })}>{busy ? "Deleting…" : "Delete for good"}</button>
+            <button type="button" style={btn} disabled={busy} onClick={function(){ setConfirmDel(false); }}>Keep</button>
+          </>
+        ) : (
+          <button type="button" style={Object.assign({}, btn, { color:T.red })} disabled={busy}
+            title={used > 0 ? "Chosen by " + used + " wedding" + (used === 1 ? "" : "s") + " - suppress them instead" : "Delete this supplier"}
+            onClick={function(){
+              if (used > 0) { onError(s.name + " has been chosen by " + used + " wedding" + (used === 1 ? "" : "s") + ", so they can't be deleted. Tick Suppress to stop offering them."); return; }
+              setConfirmDel(true);
+            }}>Delete</button>
         )}
       </div>
     </div>
   );
 }
 
-function PortalSupplierForm({ onDone }) {
-  const [v, setV] = useState(BLANK_DIR_SUPPLIER);
+// Add a supplier to the directory, or (with `initial`) edit one already there.
+// Name and contact go through wp_admin_upsert_supplier; the line couples see,
+// the venue's note and insurance through wp_admin_review_supplier, which can
+// clear a field (the upsert's coalesce cannot).
+function PortalSupplierForm({ onDone, initial, onCancel }) {
+  const [v, setV] = useState(initial ? {
+    name: initial.name || "", category: initial.category || "other", contact_name: initial.contact_name || "",
+    email: initial.email || "", phone: initial.phone || "", website: initial.website || "", blurb: initial.blurb || "",
+    internal_note: initial.internal_note || "", pli_held: !!initial.pli_held, pli_expires: initial.pli_expires || ""
+  } : BLANK_DIR_SUPPLIER);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   function set(k, val) { setV(function(p){ const n = Object.assign({}, p); n[k] = val; return n; }); }
@@ -13019,11 +13061,23 @@ function PortalSupplierForm({ onDone }) {
     e.preventDefault();
     setBusy(true); setErr("");
     try {
-      await sbRpc("wp_admin_upsert_supplier", {
-        p_id: null, p_name: v.name, p_category: v.category,
-        p_contact_name: v.contact_name || null, p_email: v.email || null,
-        p_phone: v.phone || null, p_website: v.website || null, p_blurb: v.blurb || null
-      });
+      if (initial) {
+        // Empty strings, not nulls, so a field can be emptied.
+        await sbRpc("wp_admin_upsert_supplier", {
+          p_id: initial.id, p_name: v.name, p_category: v.category,
+          p_contact_name: v.contact_name, p_email: v.email, p_phone: v.phone, p_website: v.website
+        });
+        await sbRpc("wp_admin_review_supplier", {
+          p_id: initial.id, p_blurb: v.blurb, p_internal_note: v.internal_note,
+          p_pli_held: !!v.pli_held, p_pli_expires: v.pli_held && v.pli_expires ? v.pli_expires : null
+        });
+      } else {
+        await sbRpc("wp_admin_upsert_supplier", {
+          p_id: null, p_name: v.name, p_category: v.category,
+          p_contact_name: v.contact_name || null, p_email: v.email || null,
+          p_phone: v.phone || null, p_website: v.website || null, p_blurb: v.blurb || null
+        });
+      }
       onDone();
     } catch (e2) { setErr(e2.message || String(e2)); setBusy(false); }
   }
@@ -13037,8 +13091,7 @@ function PortalSupplierForm({ onDone }) {
           <input required value={v.name} onChange={function(e){ set("name", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
         <label style={{ fontSize:11, color:T.textLight }}>Category
           <select value={v.category} onChange={function(e){ set("category", e.target.value); }} style={Object.assign({ marginTop:4 }, F)}>
-            {["catering","photography","video","flowers","music","cake","hair_makeup","celebrant","transport","hire","stationery","other"].map(function(c){
-              return <option key={c} value={c}>{c.replace("_"," ")}</option>; })}
+            {SUPPLIER_CATEGORIES.map(function(c){ return <option key={c[0]} value={c[0]}>{c[1]}</option>; })}
           </select></label>
         <label style={{ fontSize:11, color:T.textLight }}>Contact
           <input value={v.contact_name} onChange={function(e){ set("contact_name", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
@@ -13052,10 +13105,30 @@ function PortalSupplierForm({ onDone }) {
       <label style={{ fontSize:11, color:T.textLight }}>A line couples will see
         <input value={v.blurb} onChange={function(e){ set("blurb", e.target.value); }}
           placeholder="Worked here many times, knows the Grain Store well" style={Object.assign({ marginTop:4 }, F)} /></label>
+      {initial && (
+        <>
+          <label style={{ fontSize:11, color:T.textLight }}>Our note (never shown to couples)
+            <input value={v.internal_note} onChange={function(e){ set("internal_note", e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
+          <div style={{ display:"flex", gap:14, alignItems:"center", flexWrap:"wrap" }}>
+            <label style={{ fontSize:13, color:T.text, display:"flex", alignItems:"center", gap:6, cursor:"pointer" }}>
+              <input type="checkbox" checked={!!v.pli_held} onChange={function(e){ set("pli_held", e.target.checked); }}/> Insurance certificate held
+            </label>
+            {v.pli_held && (
+              <label style={{ fontSize:11, color:T.textLight, display:"flex", alignItems:"center", gap:6 }}>until
+                <input type="date" value={v.pli_expires} onChange={function(e){ set("pli_expires", e.target.value); }} style={Object.assign({}, F, { width:170 })}/></label>
+            )}
+          </div>
+        </>
+      )}
       {err && <div style={{ fontSize:12, color:"#dc2626" }}>{err}</div>}
-      <div><button type="submit" disabled={busy}
-        style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,
-          cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>{busy ? "Saving…" : "Save"}</button></div>
+      <div style={{ display:"flex", gap:8 }}>
+        <button type="submit" disabled={busy}
+          style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 20px", borderRadius:8,
+            cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>{busy ? "Saving…" : "Save"}</button>
+        {onCancel && <button type="button" onClick={onCancel} disabled={busy}
+          style={{ background:"#fff", color:T.textMid, border:`1px solid ${T.border}`, padding:"9px 16px", borderRadius:8,
+            cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>Cancel</button>}
+      </div>
     </form>
   );
 }
