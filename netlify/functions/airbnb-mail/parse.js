@@ -356,7 +356,10 @@ function parseAirbnbEmail(msg, opts) {
       });
     }
     if (!items.length) return ignore("payout with no reservation lines");
-    return { kind: "payout", items: items, at: at };
+    // Airbnb's own payout reference: the same payout read twice (two mailboxes,
+    // a forwarded copy) is stored once.
+    const pid = (text.match(/Payout ID\s*\n\s*([A-Z0-9][A-Z0-9-]{5,40})\s*\n/) || [])[1] || null;
+    return { kind: "payout", payoutId: pid, items: items, at: at };
   }
 
   // Everything below is about one of our stays, so it must be the host side.
@@ -367,7 +370,9 @@ function parseAirbnbEmail(msg, opts) {
   const listingNo = (text.match(/Listing #(\d{4,14})/) || [])[1] || null;
   const cancelSubject = /^Cancell?ed: Reservation HM|^Reservation HM[A-Z0-9]{8} .*Cancell?ed/i.test(subject);
   const hostSide = HOST_LINK_RE.test(text)
-    || (/airbnb\.[a-z.]{2,12}\/progress\/reviews\//i.test(text) && /HOST/.test(template))
+    // (a forwarded copy may have lost the template header; the review then
+    // still has to match one of our stays by listing and dates to count)
+    || (/airbnb\.[a-z.]{2,12}\/progress\/reviews\//i.test(text) && (!template || /HOST/.test(template)))
     || (cancelSubject && (/_TO_HOST$/.test(template) || (listingNo && ourRooms.indexOf(listingNo) !== -1)));
   if (!hostSide) {
     return ignore("no link into hosting — a trip of our own, or not about a stay");

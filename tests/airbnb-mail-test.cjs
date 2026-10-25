@@ -112,6 +112,12 @@ r = parse({
 ok(r.kind === "payout" && r.items.length === 1 && r.items[0].code === "HMAAAA1111" && r.items[0].amount === 2385.83
    && r.items[0].checkIn === "2026-10-16" && r.items[0].checkOut === "2026-10-18", "P1 payout line, ours only", r);
 ok(!JSON.stringify(r).includes("0000"), "P2 the bank account is not kept");
+r = parse({ date: "2026-10-17T13:05:32Z", from: "Airbnb <automated@airbnb.com>", subject: "We sent a payout of £10.00 GBP", template: "",
+  text: "Payout ID\n\nM-AB12CD34EF\n\nWe share this unique identifier with your bank.\n\nDetails\n\nAda Lovelace £10.00 GBP\n\nHome • 16/10/2026 - 18/10/2026\n\nThe Hamlet (11112222)\n\nHMAAAA1111\n" });
+ok(r.payoutId === "M-AB12CD34EF", "P3 Airbnb's payout ID is kept, to store a payout once", r);
+r = parse({ date: "2026-10-21T11:23:04Z", from: "Airbnb <automated@airbnb.com>", subject: "Mary has left a 5-star review!", template: "",
+  text: "x\n" + L + "/progress/reviews/details/1799?c=.x\nFEEDBACK FROM THEIR STAY\n\n The Hamlet\n 16–18 Oct 2026\n" });
+ok(r.kind === "review" && r.stars === 5, "V3 a forwarded review with no template header still counts", r);
 
 // ── Messages ────────────────────────────────────────────────────────────────
 const digest = {

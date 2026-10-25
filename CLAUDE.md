@@ -478,6 +478,12 @@ own header.
   Enquiry threads with no booking are purged after 30 quiet days, only once the
   first read is done. Messages sent from the Airbnb app are never emailed, so
   only emailed replies and the co-host's appear.
+- **One mailbox to another (migration r).** Airbnb emails are forwarded from
+  Toby's Gmail to hawthbushfarm@gmail.com; the history was read from his, the
+  future from the farm's. The same email can be read from both, so a payout is
+  unique by Airbnb's payout ID + code (`payout_id`), and a message is skipped when
+  the same author said the same words on the same thread within two days. A
+  forwarded copy may lose the `X-Template` header: nothing may depend on it alone.
 
 ## Working in this folder from a Claude session
 

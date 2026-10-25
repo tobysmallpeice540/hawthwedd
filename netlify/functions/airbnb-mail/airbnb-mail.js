@@ -234,7 +234,7 @@ function toIngest(results) {
       out.alterations.push({ code: r.code, at: r.at });
     } else if (r.kind === "payout") {
       r.items.forEach((it) => {
-        out.payouts.push({ gmail_id: id, code: it.code, amount: it.amount, sent_on: String(r.at || "").slice(0, 10) || null });
+        out.payouts.push({ gmail_id: id, code: it.code, amount: it.amount, sent_on: String(r.at || "").slice(0, 10) || null, payout_id: r.payoutId || null });
         out.reservations.push({ code: it.code, room_id: it.roomId, listing: it.listing, guest_name: it.guestName,
           check_in: it.checkIn, check_out: it.checkOut, at: r.at });
       });
