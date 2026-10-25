@@ -89,5 +89,52 @@ eq('no space after the dot is not a list', r.rows[0].first_name, '1.Olivia')
 r = parseGuests('first name,last name\n1. Ada,Lovelace')
 eq('numbering does not confuse a header row', r.rows[0].first_name, 'Ada')
 
+// ── exports from the RSVP sites (25 Oct) ────────────────────────────────────
+//
+// Couples keep their RSVPs on Bridebook, Hitched, Joy, Zola, Getting Married…
+// and bring the list in again as replies arrive. The headings below are the
+// shapes those exports take; the merge (wp_merge_guests) relies on rsvp being
+// null whenever the list does not say.
+
+import { normaliseRsvp } from '../src/portal/parseGuests.js'
+
+r = parseGuests('﻿First Name,Last Name,RSVP Status,Dietary Requirements,Meal Choice\n' +
+  'Ada,Lovelace,Attending,Vegan,Beef\nTom,Thumb,Declined,,\nGrace,Hopper,No response,"Nut allergy, severe",Fish')
+eq('BOM header recognised', r.usedHeader, true)
+eq('rsvp attending', r.rows[0].rsvp, 'yes')
+eq('rsvp declined', r.rows[1].rsvp, 'no')
+eq('rsvp no response is null', r.rows[2].rsvp, null)
+eq('dietary and meal into notes', r.rows[0].access_needs, 'Vegan · Meal: Beef')
+eq('quoted comma in notes', r.rows[2].access_needs, 'Nut allergy, severe · Meal: Fish')
+eq('nothing to note is null', r.rows[1].access_needs, null)
+eq('columns reported', r.columns, { rsvp: true, notes: true, meals: true, age: false, role: false })
+
+r = parseGuests('Full Name,Wedding Day RSVP,Allergies,Starter,Main\n"Lovelace, Ada",Yes,,Soup,Lamb')
+eq('rsvp column found by "rsvp" in the heading', r.rows[0].rsvp, 'yes')
+eq('two course columns keep their headings', r.rows[0].access_needs, 'Starter: Soup · Main: Lamb')
+eq('full name surname-first', [r.rows[0].first_name, r.rows[0].last_name], ['Ada', 'Lovelace'])
+
+r = parseGuests('Guest list for Sam & Alex\n\nFirst name;Surname;Child;Role\nAmy;Pond;yes;Flower girl\nRory;Williams;;Best man')
+eq('heading found below a title line', r.usedHeader, true)
+eq('semicolon file', r.rows.length, 2)
+eq('child flag column', [r.rows[0].age_band, r.rows[1].age_band], ['child', 'adult'])
+eq('age given flagged', r.rows[0].age_given, true)
+eq('role read', r.rows[1].role, 'Best man')
+
+r = parseGuests('First Name,Last Name,Notes\nAda,Lovelace,"Wheelchair user,\nneeds step-free route"\nGrace,Hopper,')
+eq('a note running over a line break stays one guest', r.rows.length, 2)
+eq('the broken note joined', r.rows[0].access_needs, 'Wheelchair user, needs step-free route')
+
+r = parseGuests('First Name,Last Name,RSVP\nSam,Jones,Yes\nGuest of,Sam Jones,\n+1,,\nPlus one,,')
+eq('placeholder plus-ones skipped', r.rows.length, 1)
+eq('and counted as skipped', r.skipped, 3)
+
+r = parseGuests('First Name,Last Name\nAda,Lovelace')
+eq('no rsvp column → rsvp null', r.rows[0].rsvp, null)
+eq('no age column → age not given', r.rows[0].age_given, false)
+
+eq('rsvp words', ['Accepted', 'Regrets', 'Maybe', 'awaiting reply', 'Not attending', 'joyfully accepts', 'N', '', 'Invited'].map(normaliseRsvp),
+   ['yes', 'no', 'maybe', null, 'no', 'yes', 'no', null, null])
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

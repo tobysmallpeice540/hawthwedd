@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { rpc } from './supabase.js'
+import { useEffect, useRef, useState } from 'react'
+import { rpc, isMissingFunction } from './supabase.js'
 import { parseGuests } from './parseGuests.js'
 import { ACCOM_LABEL, accomOptions, sortGuests, downloadGuestsCsv, printGuests } from './guestSort.js'
 
@@ -560,8 +560,32 @@ function ImportGuests({ list, onDone, onCancel }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // What the database says the import would do — null until asked, 'old'
+  // when the merge function is not there yet (older database: add only).
+  const [preview, setPreview] = useState(null)
 
   const parsed = parseGuests(text)
+  const rowsKey = JSON.stringify(parsed.rows)
+  const lastKey = useRef('')
+
+  // Ask for a preview whenever the parsed rows change, a moment after typing stops.
+  useEffect(() => {
+    if (!parsed.rows.length) { setPreview(null); return }
+    if (lastKey.current === rowsKey) return
+    setPreview((cur) => (cur === 'old' ? cur : null))   // never show counts for a list that has changed
+    const t = setTimeout(async () => {
+      lastKey.current = rowsKey
+      try {
+        const r = await rpc('wp_merge_guests', { p_list: list, p_rows: parsed.rows, p_apply: false })
+        if (r && r.ok === false) { setErr(r.error || 'Could not read that list.'); setPreview(null); return }
+        setErr(''); setPreview(r)
+      } catch (e) {
+        if (isMissingFunction(e)) setPreview('old')
+        else { setErr(e.message || String(e)); setPreview(null) }
+      }
+    }, 400)
+    return () => clearTimeout(t)
+  }, [rowsKey, list])
 
   async function readFile(e) {
     const f = e.target.files && e.target.files[0]
@@ -573,19 +597,32 @@ function ImportGuests({ list, onDone, onCancel }) {
     if (!parsed.rows.length) return
     setBusy(true); setErr('')
     try {
-      await rpc('wp_import_guests', { p_list: list, p_rows: parsed.rows })
+      if (preview === 'old') {
+        await rpc('wp_import_guests', { p_list: list, p_rows: parsed.rows })
+      } else {
+        const r = await rpc('wp_merge_guests', { p_list: list, p_rows: parsed.rows, p_apply: true })
+        if (r && r.ok === false) throw new Error(r.error || 'The list was not saved.')
+      }
       onDone()
     } catch (e2) {
       setErr(e2.message || String(e2)); setBusy(false)
     }
   }
 
+  const p = preview && preview !== 'old' ? preview : null
+  const nothingToDo = p && p.new === 0 && p.updated === 0
+  const cols = parsed.columns
+  const found = cols ? [cols.rsvp && 'replies', cols.notes && 'dietary needs and notes', cols.meals && 'meal choices',
+    cols.age && 'adults and children', cols.role && 'roles'].filter(Boolean) : []
+
   return (
     <div className="editor">
-      <label>Paste your list</label>
+      <label>Paste your list, or bring it in from your RSVP site</label>
       <p className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
         One person per line, or paste a whole column straight out of a spreadsheet.
-        A CSV with headings works too — we'll pick up first name, last name, side and age.
+        If you collect replies on Bridebook, Hitched, Joy, Zola or similar, export the guest list
+        as a CSV and choose it here — <strong>as often as you like</strong>. People already on your list are
+        updated, not added twice; nobody is removed.
       </p>
       <textarea
         rows={7}
@@ -601,30 +638,60 @@ function ImportGuests({ list, onDone, onCancel }) {
         </label>
       </div>
 
-      {text.trim() !== '' && (
-        parsed.rows.length > 0 ? (
-          <div className="alert alert-ok">
-            Found <strong>{parsed.rows.length}</strong>{' '}
-            {parsed.rows.length === 1 ? 'person' : 'people'}
-            {parsed.usedHeader && ' (using your column headings)'}.
-            {' '}First few: {parsed.rows.slice(0, 3).map((r) => [r.first_name, r.last_name].filter(Boolean).join(' ')).join(', ')}
-            {parsed.rows.length > 3 && '…'}
+      {text.trim() !== '' && parsed.rows.length === 0 && (
+        <div className="alert alert-warn">We couldn't find any names in that. Try one person per line.</div>
+      )}
+
+      {parsed.rows.length > 0 && (
+        <div className="alert alert-ok">
+          Found <strong>{parsed.rows.length}</strong> {parsed.rows.length === 1 ? 'person' : 'people'}
+          {parsed.usedHeader && ' (using your column headings)'}.
+          {found.length > 0 && <> We'll also bring in {found.join(', ').replace(/, ([^,]*)$/, ' and $1')}.</>}
+          {parsed.skipped > 0 && <> {parsed.skipped} {parsed.skipped === 1 ? 'line was' : 'lines were'} left out (blank, or a "plus one" without a name).</>}
+          {preview === 'old' && <> First few: {parsed.rows.slice(0, 3).map((r) => [r.first_name, r.last_name].filter(Boolean).join(' ')).join(', ')}{parsed.rows.length > 3 && '…'}</>}
+        </div>
+      )}
+
+      {p && (
+        <div className="merge-preview">
+          <div className="merge-counts">
+            <span><strong>{p.new}</strong> new</span>
+            <span><strong>{p.updated}</strong> updated</span>
+            <span><strong>{p.unchanged}</strong> already up to date</span>
+            {p.declined > 0 && <span><strong>{p.declined}</strong> not coming — not added</span>}
+            {p.missing > 0 && <span><strong>{p.missing}</strong> on your list but not in this one</span>}
           </div>
-        ) : (
-          <div className="alert alert-warn">
-            We couldn't find any names in that. Try one person per line.
-          </div>
-        )
+          <MergeNames title="New" names={p.new_names} total={p.new} />
+          <MergeNames title="Updated" names={p.updated_lines} total={p.updated} />
+          <MergeNames title="Not coming, so not added" names={p.declined_names} total={p.declined} />
+          <MergeNames title="On your list but not in this one — left as they are" names={p.missing_names} total={p.missing} />
+          <p className="hint">Notes are added to, never replaced. Anyone already on a table stays there.</p>
+        </div>
       )}
 
       {err && <div className="alert alert-warn">{err}</div>}
 
       <div className="actions">
-        <button className="btn-small" onClick={submit} disabled={busy || !parsed.rows.length}>
-          {busy ? 'Adding…' : parsed.rows.length ? `Add ${parsed.rows.length}` : 'Add'}
+        <button className="btn-small" onClick={submit} disabled={busy || !parsed.rows.length || (!preview) || nothingToDo}>
+          {busy ? 'Saving…'
+            : preview === 'old' ? `Add ${parsed.rows.length}`
+            : nothingToDo ? 'Nothing to change'
+            : p ? `Add ${p.new} · update ${p.updated}`
+            : parsed.rows.length ? 'Checking…' : 'Add'}
         </button>
         <button className="btn-small ghost" onClick={onCancel}>Cancel</button>
       </div>
     </div>
+  )
+}
+
+function MergeNames({ title, names, total }) {
+  if (!names || !names.length) return null
+  return (
+    <details className="merge-names">
+      <summary>{title} ({total})</summary>
+      <ul>{names.map((n, i) => <li key={i}>{n}</li>)}</ul>
+      {total > names.length && <p className="hint">…and {total - names.length} more.</p>}
+    </details>
   )
 }

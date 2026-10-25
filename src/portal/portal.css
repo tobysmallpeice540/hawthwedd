@@ -529,3 +529,10 @@ input.qty { width: 84px; padding: 7px 9px; font-size: 15px; }
 input.caption { flex-basis: 100%; margin-top: 6px; padding: 7px 10px; font-size: 14px; }
 .filebtn.is-busy { opacity: .6; cursor: default; }
 .ceremony-row .when { flex: 0 1 150px; min-width: 0; }
+
+/* guest import preview (wp_merge_guests) */
+.merge-preview { margin-top: 14px; border: 1px solid var(--line, #e7e2da); border-radius: 10px; padding: 12px 14px; background: #fff; }
+.merge-counts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; }
+.merge-names { margin-top: 8px; font-size: 13px; }
+.merge-names summary { cursor: pointer; color: var(--muted); }
+.merge-names ul { margin: 6px 0 0 18px; padding: 0; line-height: 1.6; }
