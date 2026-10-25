@@ -536,3 +536,7 @@ input.caption { flex-basis: 100%; margin-top: 6px; padding: 7px 10px; font-size:
 .merge-names { margin-top: 8px; font-size: 13px; }
 .merge-names summary { cursor: pointer; color: var(--muted); }
 .merge-names ul { margin: 6px 0 0 18px; padding: 0; line-height: 1.6; }
+
+/* sign-in with a code (the installed app on an iPhone) */
+.code-box { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.code-form label { margin-top: 8px; }

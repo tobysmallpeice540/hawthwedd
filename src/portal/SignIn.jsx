@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { supabase } from './supabase.js'
 
 // Magic link, not a password. Couples plan a wedding over eighteen months on
 // three devices; nobody wants to run password resets for them, and a password
@@ -15,10 +16,59 @@ import { useState } from 'react'
 // stranger's address no longer creates an account. It answers identically
 // either way, so this form cannot be used to find out who is on the system —
 // which is why there is no "we don't have that address" state below.
+//
+// THE CODE. Every link email also carries a short code (portal-auth.js). On an
+// iPhone a link in an email opens in Safari, never in the planner installed on
+// the home screen, so the couple types the code here instead. It is the same
+// one-use sign-in as the link — using either spends both.
+
+// Module scope: it renders inputs.
+function CodeForm({ email, setEmail, askEmail }) {
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function verify(e) {
+    e.preventDefault()
+    const address = email.trim().toLowerCase()
+    const token = code.replace(/\s+/g, '')
+    if (!address || !/^\d{6,10}$/.test(token)) { setErr('Type the code from the email — it is all numbers.'); return }
+    setBusy(true); setErr('')
+    // 'email' is the current name for an emailed code; 'magiclink' the older
+    // one, which a code minted with a magic link may still need.
+    let res = await supabase.auth.verifyOtp({ email: address, token, type: 'email' })
+    if (res.error) res = await supabase.auth.verifyOtp({ email: address, token, type: 'magiclink' })
+    if (res.error) {
+      setBusy(false)
+      setErr('That code did not work. Codes are good for one use and expire after a while — ask for a new email if you need one.')
+      return
+    }
+    // Signed in: the page switches to the planner by itself.
+  }
+
+  return (
+    <form onSubmit={verify} className="code-form">
+      {askEmail && (
+        <>
+          <label htmlFor="code-email">Email address</label>
+          <input id="code-email" type="email" required autoComplete="email" value={email}
+            onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+        </>
+      )}
+      <label htmlFor="code">Code from the email</label>
+      <input id="code" inputMode="numeric" autoComplete="one-time-code" maxLength={12}
+        value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" style={{ letterSpacing: 4 }} />
+      <button className="btn" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in with the code'}</button>
+      {err && <div className="alert alert-warn">{err}</div>}
+    </form>
+  )
+}
+
 export default function SignIn({ notice }) {
   const [email, setEmail] = useState('')
   const [state, setState] = useState('idle')   // idle | sending | sent | error
   const [message, setMessage] = useState('')
+  const [withCode, setWithCode] = useState(false)
 
   async function send(e) {
     e.preventDefault()
@@ -74,6 +124,13 @@ export default function SignIn({ notice }) {
                 still the live link and no second email will follow. Have a look for it
                 before asking again.
               </p>
+              <div className="code-box">
+                <p className="muted" style={{ fontSize: 13.5 }}>
+                  <strong>Using the planner app on your phone?</strong> The link will open in your
+                  browser instead, so type the code from the same email here.
+                </p>
+                <CodeForm email={email} setEmail={setEmail} askEmail={false} />
+              </div>
               <button
                 className="btn-quiet"
                 style={{ marginTop: 18 }}
@@ -112,6 +169,17 @@ export default function SignIn({ notice }) {
 
               {state === 'error' && (
                 <div className="alert alert-warn">{message}</div>
+              )}
+
+              {withCode ? (
+                <div className="code-box">
+                  <p className="muted" style={{ fontSize: 13.5 }}>Type the address and the code from your most recent email from us.</p>
+                  <CodeForm email={email} setEmail={setEmail} askEmail={true} />
+                </div>
+              ) : (
+                <button className="btn-quiet" style={{ marginTop: 16 }} onClick={() => setWithCode(true)}>
+                  I have a code from an email
+                </button>
               )}
             </>
           )}

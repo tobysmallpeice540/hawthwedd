@@ -143,9 +143,11 @@ own header.
   installed phone keep running an old build, which is exactly what the
   stale-build guard exists to stop. If push notifications are ever wanted, add
   a worker with no fetch handler — never one that caches the app shell.
-- On iPhone, links in emails open in Safari, not in the installed app, so a
-  portal magic link signs the couple in to Safari only. A typed one-time code
-  on the sign-in screen would fix it; not built yet.
+- On iPhone, links in emails open in Safari, not in the installed app, so every
+  sign-in and invite email also carries the one-use code (`email_otp` from
+  `generate_link`); the portal's sign-in page takes it ("Sign in with the
+  code", `verifyOtp` type `email`, falling back to `magiclink`). Using either
+  spends both. Like the link, the code is a credential: never logged.
 
 ### Client portal (23 Oct 2026)
 
@@ -378,6 +380,34 @@ own header.
   the event — `wp_fixed_due`). Interim payment is 15 January.
 - The evening bar links to a menu (`wp_drinks_settings.bar_menu_url`); the example price
   list is emptied.
+
+### Guest import, reminders, the board (25 Oct 2026, migrations m and n)
+
+- **Re-importing a guest list never doubles it.** `wp_merge_guests(list, rows,
+  apply)` matches by name across both lists (duplicates paired in order),
+  updates the reply when the file gives one, ADDS to notes (never replaces or
+  repeats), fills side/role only where empty, adds new names unless they are
+  not coming, and reports people missing from the file without removing them.
+  `apply = false` is the preview. `parseGuests.js` reads the RSVP sites'
+  RSVP / dietary / meal / child / role columns; `rsvp` is null whenever the
+  file does not say, and null never overwrites. The portal falls back to the
+  old add-only `wp_import_guests` while m is missing.
+- **Weekly deadline reminder** (`portal-nudges.js`, Mondays 08:00 UTC, OFF until
+  ticked on the "nudge" portal email template). What goes in it is
+  `wp_nudge_plan(today)`; one email per event per week, marked in
+  `wp_nudges_sent` BEFORE sending (`wp_nudge_mark` refuses a taken week;
+  `wp_nudge_unmark` frees it after a failed send — no DELETE). Links to
+  `/portal`, never a sign-in link. Sombre event types are left out.
+- **Who's behind** (Events → Portal settings, first tab): `wp_admin_portal_progress()`
+  (admin only); the red/amber rules are `portalProgressFlags` in App.jsx, pinned
+  by `tests/portal-progress-test.cjs`.
+- **`wp_visible_sections` delegates to `wp_visible_sections_typed(event, type)`**
+  — one rule, but a caller handling many events looks the type up once (the
+  board went from 5s to 0.5s). Change visibility in the typed function.
+- **Portal UI tests run the BUILT app with Supabase faked**:
+  `tests/portal-harness.cjs` (`openPortal`, `openStaff`, `goTab`). Build to
+  `$HOME/dist-check` first. RPCs with no handler answer PGRST202, exactly what
+  a page meets when it ships before its migration.
 
 ## Working in this folder from a Claude session
 

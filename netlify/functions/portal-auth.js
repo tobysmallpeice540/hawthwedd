@@ -145,7 +145,12 @@ async function mintLink(email) {
   var props = (r.body && r.body.properties) || r.body || {};
   var token = props.hashed_token || "";
   if (!token) throw new Error("Supabase returned no sign-in token");
-  return PORTAL_URL + "#t=" + encodeURIComponent(token);
+  // The same one-use sign-in as a short code, for the installed app on an
+  // iPhone: a link in an email opens in Safari, never in the app, so the couple
+  // types the code on the app's own sign-in page instead. Using either spends
+  // both. Like the link, it is a credential and is never logged.
+  var code = /^\d{6,10}$/.test(String(props.email_otp || "")) ? String(props.email_otp) : "";
+  return { link: PORTAL_URL + "#t=" + encodeURIComponent(token), code: code };
 }
 
 // ── Email ───────────────────────────────────────────────────────────────────
@@ -163,7 +168,7 @@ function escapeHtml(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function buildEmailHtml(bodyText, buttonUrl, buttonLabel) {
+function buildEmailHtml(bodyText, buttonUrl, buttonLabel, code) {
   var inner = String(bodyText || "").split(/\n\s*\n/).map(function (p) {
     return '<p style="margin:0 0 14px;font-size:15px;line-height:1.65;color:' + BRAND.text + '">' +
       escapeHtml(p).replace(/\n/g, "<br>") + "</p>";
@@ -175,6 +180,12 @@ function buildEmailHtml(bodyText, buttonUrl, buttonLabel) {
       '<a href="' + buttonUrl + '" style="display:inline-block;padding:13px 30px;font-family:Helvetica,Arial,sans-serif;' +
       'font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px">' +
       escapeHtml(buttonLabel || "Open your planner") + "</a></td></tr></table>";
+  }
+  if (code) {
+    inner += '<p style="margin:18px 0 6px;font-size:13px;line-height:1.6;color:' + BRAND.muted + '">' +
+      "Using the planner app on your phone? Type this code on its sign-in page instead:</p>" +
+      '<p style="margin:0 0 4px;font-family:Menlo,Consolas,monospace;font-size:26px;letter-spacing:6px;font-weight:bold;color:' + BRAND.text + '">' +
+      escapeHtml(code) + "</p>";
   }
 
   return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
@@ -198,13 +209,13 @@ function buildEmailHtml(bodyText, buttonUrl, buttonLabel) {
     "</td></tr></table></td></tr></table></body></html>";
 }
 
-async function sendEmail(to, subject, bodyText, link, label) {
+async function sendEmail(to, subject, bodyText, link, label, code) {
   if (!RESEND_KEY) return { ok: false, error: "RESEND_API_KEY not set" };
   var res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({ from: FROM_HEADER, to: to, subject: subject,
-                           html: buildEmailHtml(bodyText, link, label) })
+                           html: buildEmailHtml(bodyText, link, label, code) })
   });
   if (!res.ok) return { ok: false, error: "Resend failed: " + (await res.text()).slice(0, 300) };
   return { ok: true };
@@ -282,7 +293,7 @@ exports.handler = async function (event) {
 
     try {
       await ensureUser(email);
-      var inviteLink = await mintLink(email);
+      var invite = await mintLink(email);
       var inviteStd =
         "We have opened your wedding planner at Hawthbush Farm.\n\n" +
         "It is where you can tell us your numbers, work up your timings, choose " +
@@ -296,7 +307,7 @@ exports.handler = async function (event) {
                                                   body: inviteStd.split(PORTAL_URL).join("{portalUrl}"), button: "Open your planner" });
       var inviteBody = fillPortal(invT.body);
 
-      var sent = await sendEmail(email, fillPortal(invT.subject), inviteBody, inviteLink, invT.button);
+      var sent = await sendEmail(email, fillPortal(invT.subject), inviteBody, invite.link, invT.button, invite.code);
       if (!sent.ok) return bad(sent.error, 502);
 
       await logEmail(fillPortal(invT.subject), email, "portal-invite", allowed.event_id, inviteBody);
@@ -319,7 +330,7 @@ exports.handler = async function (event) {
 
     try {
       await ensureUser(email);
-      var link = await mintLink(email);
+      var signin = await mintLink(email);
       var signinStd =
         "Here is your link into the Hawthbush Farm wedding planner.\n\n" +
         "It signs you in on whatever device you open it on, and it is good for one " +
@@ -330,7 +341,7 @@ exports.handler = async function (event) {
                                                   body: signinStd.split(PORTAL_URL).join("{portalUrl}"), button: "Sign in" });
       var signinBody = fillPortal(sinT.body);
 
-      var r2 = await sendEmail(email, fillPortal(sinT.subject), signinBody, link, sinT.button);
+      var r2 = await sendEmail(email, fillPortal(sinT.subject), signinBody, signin.link, sinT.button, signin.code);
       if (!r2.ok) console.warn("sign-in email failed: " + r2.error);
       else await logEmail(fillPortal(sinT.subject), email, "portal-signin", may.event_id, signinBody);
     } catch (e) {
