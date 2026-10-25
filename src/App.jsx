@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25h";
+const APP_BUILD = "2026-10-25i";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8209,7 +8209,7 @@ function PortalAdminScreen({ bookings, onBack, onOpenEvent }) {
       {tab === "progress"  && <PortalProgress onOpenEvent={onOpenEvent} />}
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
       {tab === "times"     && <PortalAccessTimes onOpenEvent={onOpenEvent} />}
-      {tab === "suppliers" && <PortalSupplierDirectory />}
+      {tab === "suppliers" && <PortalSupplierDirectory bookings={bookings} />}
       {tab === "room"      && <><PortalRoomEditor /><PortalLayouts /></>}
       {tab === "templates" && <PortalTemplates bookings={bookings} />}
       {tab === "sections"  && <PortalSectionDefaults />}
@@ -12685,10 +12685,28 @@ function shiftClock(hhmm, mins) {
 
 const BLANK_DIR_SUPPLIER = { name:"", category:"catering", contact_name:"", email:"", phone:"", website:"", blurb:"" };
 
-function PortalSupplierDirectory() {
+// The categories as the database labels them (wp_supplier_categories).
+const SUPPLIER_CATEGORIES = [
+  ["catering","Catering"], ["photography","Photography"], ["video","Video"], ["flowers","Flowers"],
+  ["music","Music and DJs"], ["cake","Cake"], ["hair_makeup","Hair and make-up"], ["celebrant","Celebrant"],
+  ["transport","Transport"], ["hire","Furniture and hire"], ["stationery","Stationery"], ["other","Something else"],
+];
+function supplierCategoryLabel(slug) {
+  const hit = SUPPLIER_CATEGORIES.find(function(c){ return c[0] === slug; });
+  return hit ? hit[1] : (slug || "");
+}
+
+// Events → Portal settings → Suppliers.
+//
+// A supplier a couple adds is theirs alone: no other couple sees it until it
+// is ticked "Approved for sharing" here (wp_admin_approve_supplier). Before
+// ticking, the category can be corrected and the line other couples will read
+// written (wp_admin_review_supplier). See 2026-10-25o-supplier-approval.sql.
+function PortalSupplierDirectory({ bookings }) {
   const [list, setList] = useState(null);
   const [err, setErr] = useState("");
   const [adding, setAdding] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
   async function load() {
     setErr("");
@@ -12696,11 +12714,6 @@ function PortalSupplierDirectory() {
     catch (e) { setErr(e.message || String(e)); }
   }
   useEffect(function(){ load(); }, []);
-
-  async function promote(id) {
-    try { await sbRpc("wp_admin_promote_supplier", { p_id: id }); await load(); }
-    catch (e) { setErr(e.message || String(e)); }
-  }
 
   // Suppressing is not deleting. The couple who added them keeps them and is
   // told nothing — this is a judgement about the farm's own recommendations,
@@ -12710,49 +12723,79 @@ function PortalSupplierDirectory() {
     catch (e) { setErr(e.message || String(e)); }
   }
 
-  const directory = (list || []).filter(function(s){ return !s.owner_event_id; });
-  const clientAdded = (list || []).filter(function(s){ return s.owner_event_id; });
+  const coupleOf = {};
+  (bookings || []).forEach(function(b) { if (b && b.id != null) coupleOf[String(b.id)] = b; });
+
+  // From a couple: still theirs (owner set), or approved and in the list
+  // (promoted_from_event_id). Rows promoted before the 25 Oct migration have
+  // neither, and sit with the venue's own.
+  const fromCouple = function(x) { return x.owner_event_id != null || x.promoted_from_event_id != null; };
+  const directory = (list || []).filter(function(x){ return x.owner_event_id == null && x.active !== false && !x.suppressed_at; });
+  const couples = (list || []).filter(fromCouple).slice().sort(function(a, b) {
+    // Waiting for a decision first, offered ones at the very top.
+    const rank = function(x) { return x.suppressed_at ? 3 : x.owner_event_id == null ? 2 : x.share_offered_at ? 0 : 1; };
+    return rank(a) - rank(b) || String(a.name).localeCompare(String(b.name));
+  });
+  const waiting = couples.filter(function(x){ return x.owner_event_id != null && !x.suppressed_at; });
+  const shownCouples = showAll ? couples : couples.filter(function(x){ return !x.suppressed_at; });
+  const venueOwn = (list || []).filter(function(x){ return !fromCouple(x) && x.owner_event_id == null; });
 
   return (
     <div>
-      <p style={{ fontSize:13, color:T.textMid, marginBottom:16, maxWidth:660, lineHeight:1.6 }}>
-        The people you would happily recommend. Couples can pick from this list or add
-        their own — and anyone they add appears below, where you can promote them into
-        the directory if they were good.
+      <p style={{ fontSize:13, color:T.textMid, marginBottom:16, maxWidth:680, lineHeight:1.6 }}>
+        The people you would happily recommend. Couples pick from the directory or add their own.
+        A supplier a couple adds stays private to that wedding until you tick <strong>Approved for sharing</strong> below.
       </p>
 
       {err && <div style={{ background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", borderRadius:8, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{err}</div>}
 
-      <button onClick={function(){ setAdding(!adding); }}
-        style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 18px", borderRadius:8,
-          cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, marginBottom:14 }}>
-        {adding ? "Cancel" : "Add a supplier"}
-      </button>
-
-      {adding && <PortalSupplierForm onDone={function(){ setAdding(false); load(); }} />}
-
       {list === null ? <div style={{ fontSize:13, color:T.textLight }}>Loading…</div> : (
         <>
-          <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"16px 0 8px" }}>
-            In the directory ({directory.length})
+          <div style={{ display:"flex", alignItems:"baseline", gap:12, flexWrap:"wrap", margin:"6px 0 8px" }}>
+            <div style={{ fontSize:14, fontWeight:700, color:T.text }}>
+              Couples’ suppliers ({couples.length})
+              {waiting.length > 0 && <span style={{ marginLeft:8, fontSize:12, fontWeight:700, color:T.amber, background:T.amberBg, borderRadius:6, padding:"1px 8px" }}>{waiting.length} not shared</span>}
+            </div>
+            {couples.some(function(x){ return x.suppressed_at; }) && (
+              <label style={{ fontSize:12, color:T.textMid, display:"flex", gap:5, alignItems:"center", cursor:"pointer" }}>
+                <input type="checkbox" checked={showAll} onChange={function(e){ setShowAll(e.target.checked); }}/> Show suppressed
+              </label>
+            )}
           </div>
+          <div style={{ fontSize:12, color:T.textLight, marginBottom:10, maxWidth:680, lineHeight:1.6 }}>
+            Check the category and add a line for other couples, then tick. Unticking takes them back out of the
+            directory; any wedding that has already chosen them keeps them.
+          </div>
+          {shownCouples.length === 0
+            ? <div style={{ fontSize:13, color:T.textLight, marginBottom:18 }}>No couple has added a supplier of their own yet.</div>
+            : <div style={{ display:"grid", gap:8, marginBottom:22 }}>
+                {shownCouples.map(function(x) {
+                  const evId = x.owner_event_id != null ? x.owner_event_id : x.promoted_from_event_id;
+                  return <PortalCoupleSupplierRow key={x.id} s={x} couple={coupleOf[String(evId)] || null} eventId={evId}
+                    onChanged={load} onError={setErr} onSuppress={function(on){ suppress(x.id, on); }}/>;
+                })}
+              </div>}
+
+          <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", margin:"8px 0 8px" }}>
+            <div style={{ fontSize:14, fontWeight:700, color:T.text }}>In the directory ({directory.length})</div>
+            <button onClick={function(){ setAdding(!adding); }}
+              style={{ background:T.midBlue, color:"#fff", border:"none", padding:"7px 14px", borderRadius:7,
+                cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:700 }}>
+              {adding ? "Cancel" : "Add a supplier"}
+            </button>
+          </div>
+          <div style={{ fontSize:12, color:T.textLight, marginBottom:10 }}>What every couple can choose from.</div>
+          {adding && <PortalSupplierForm onDone={function(){ setAdding(false); load(); }} />}
           {directory.length === 0
             ? <div style={{ fontSize:13, color:T.textLight }}>Nothing yet — couples will see an empty list until you add some.</div>
-            : <div style={{ display:"grid", gap:8 }}>{directory.map(function(s){ return <PortalSupplierRow key={s.id} s={s} />; })}</div>}
-
-          {clientAdded.length > 0 && (
-            <>
-              <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"22px 0 8px" }}>
-                Added by couples ({clientAdded.length})
-              </div>
-              <div style={{ display:"grid", gap:8 }}>
-                {clientAdded.map(function(s){
-                  return <PortalSupplierRow key={s.id} s={s}
-                    onPromote={function(){ promote(s.id); }}
-                    onSuppress={function(on){ suppress(s.id, on); }} />;
-                })}
-              </div>
-            </>
+            : <div style={{ display:"grid", gap:8 }}>{directory.map(function(x){
+                const from = x.promoted_from_event_id != null ? coupleOf[String(x.promoted_from_event_id)] : null;
+                return <PortalSupplierRow key={x.id} s={x} fromLabel={x.promoted_from_event_id != null ? ("from " + ((from && from.couple) || "a couple")) : null}/>;
+              })}</div>}
+          {venueOwn.some(function(x){ return x.active === false; }) && (
+            <div style={{ fontSize:11.5, color:T.textLight, marginTop:8 }}>
+              {venueOwn.filter(function(x){ return x.active === false; }).length} switched off and not shown.
+            </div>
           )}
         </>
       )}
@@ -12760,7 +12803,119 @@ function PortalSupplierDirectory() {
   );
 }
 
-function PortalSupplierRow({ s, onPromote, onSuppress }) {
+// One couple's supplier, for review: category and the line other couples
+// read are editable here; name and contact are the couple's and are not.
+function PortalCoupleSupplierRow({ s, couple, eventId, onChanged, onError, onSuppress }) {
+  const [cat, setCat]     = useState(s.category || "other");
+  const [blurb, setBlurb] = useState(s.blurb || "");
+  const [note, setNote]   = useState(s.internal_note || "");
+  const [busy, setBusy]   = useState(false);
+  const [msg, setMsg]     = useState("");
+  // The tick shows where it is going while the save is under way.
+  const [pend, setPend]   = useState(null);
+  // A fresh load after a save brings new values; take them unless mid-edit.
+  const sig = [s.category, s.blurb, s.internal_note].join("\u0001");
+  const lastSig = useRef(sig);
+  useEffect(function() {
+    if (lastSig.current === sig) return;
+    lastSig.current = sig;
+    setCat(s.category || "other"); setBlurb(s.blurb || ""); setNote(s.internal_note || "");
+  }, [sig]);
+
+  const approved = s.owner_event_id == null && s.active !== false;
+  const withdrawn = s.owner_event_id == null && s.active === false;
+  const off = !!s.suppressed_at;
+  const dirty = cat !== (s.category || "other") || blurb !== (s.blurb || "") || note !== (s.internal_note || "");
+  const bits = [s.contact_name, s.phone, s.email, s.website].filter(Boolean);
+
+  function missing(e) { return e && e.status === 404; }
+  async function save() {
+    setBusy(true); setMsg(""); onError("");
+    try {
+      await sbRpcQuiet("wp_admin_review_supplier", { p_id: s.id, p_category: cat, p_blurb: blurb, p_internal_note: note });
+      await onChanged();
+      setMsg("Saved");
+    } catch (e) {
+      onError(missing(e) ? "Reviewing needs the database change 2026-10-25o-supplier-approval.sql, which has not been applied yet." : (e.message || String(e)));
+    }
+    setBusy(false);
+  }
+  async function approve(on) {
+    setBusy(true); setMsg(""); onError(""); setPend(on);
+    try {
+      // Unsaved category or wording goes in first, so what is approved is what is on screen.
+      if (on && dirty) await sbRpcQuiet("wp_admin_review_supplier", { p_id: s.id, p_category: cat, p_blurb: blurb, p_internal_note: note });
+      const r = await sbRpcQuiet("wp_admin_approve_supplier", { p_id: s.id, p_approve: on });
+      await onChanged();
+      if (!on && r && r.mode === "withdrawn") setMsg("Taken out of the directory. " + r.kept_by + " other wedding" + (r.kept_by === 1 ? " that chose them keeps" : "s that chose them keep") + " them.");
+      else setMsg(on ? "Shared with other couples" : "Back to private");
+    } catch (e) {
+      onError(missing(e) ? "Approving needs the database change 2026-10-25o-supplier-approval.sql, which has not been applied yet."
+        : e.code === "suppressed" ? "Un-suppress them first." : (e.message || String(e)));
+    }
+    setPend(null);
+    setBusy(false);
+  }
+
+  const F = { padding:"7px 9px", borderRadius:6, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:13, width:"100%", boxSizing:"border-box", background:"#fff" };
+  return (
+    <div data-supplier={s.id} style={{ background: off ? "#f9fafb" : "#fff", border:`1px solid ${approved ? T.green : T.border}`, borderRadius:9,
+      padding:"12px 14px", opacity: off ? 0.72 : 1 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"flex-start" }}>
+        <div style={{ minWidth:0, flex:"1 1 260px" }}>
+          <div style={{ fontSize:13.5, fontWeight:700, color:T.text }}>
+            {s.name}
+            {s.share_offered_at && !approved && !off && (
+              <span title="The couple said they are happy for you to suggest them" style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, borderRadius:5, padding:"1px 6px" }}>OFFERED BY COUPLE</span>
+            )}
+            {approved && <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:"#fff", background:T.green, borderRadius:5, padding:"1px 6px" }}>SHARED</span>}
+            {withdrawn && <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.textMid, background:"#f1f5f9", borderRadius:5, padding:"1px 6px" }}>WITHDRAWN</span>}
+            {off && <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:T.textLight, background:"#f1f5f9", borderRadius:5, padding:"1px 6px" }}>SUPPRESSED</span>}
+          </div>
+          <div style={{ fontSize:12, color:T.textMid, marginTop:2 }}>
+            Added by {couple ? (couple.couple || "(no name)") + (couple.date ? " · " + fmtDate(couple.date) : "") : ("event " + eventId)}
+            {" · used by "}{s.used_by || 0}{" "}{s.used_by === 1 ? "wedding" : "weddings"}
+          </div>
+          {bits.length > 0 && <div style={{ fontSize:11, color:T.textLight, marginTop:2, wordBreak:"break-all" }}>{bits.join(" · ")}</div>}
+        </div>
+        <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+          <label title="Never suggest them to anyone else. The couple who added them keeps them and is told nothing."
+            style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:T.textMid, whiteSpace:"nowrap", cursor:"pointer" }}>
+            <input type="checkbox" checked={off} disabled={busy} onChange={function(e){ onSuppress(e.target.checked); }} />
+            Suppress
+          </label>
+          <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, whiteSpace:"nowrap",
+            color: off ? T.textLight : approved ? T.green : T.text, cursor: off ? "default" : "pointer" }}>
+            <input type="checkbox" checked={pend != null ? pend : approved} disabled={busy || off} onChange={function(e){ approve(e.target.checked); }} />
+            Approved for sharing
+          </label>
+        </div>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 180px) minmax(0, 1fr)", gap:10, marginTop:10 }}>
+        <label style={{ fontSize:11, color:T.textLight }}>Category
+          <select value={cat} disabled={busy} onChange={function(e){ setCat(e.target.value); }} style={Object.assign({ marginTop:4 }, F)}>
+            {SUPPLIER_CATEGORIES.map(function(c){ return <option key={c[0]} value={c[0]}>{c[1]}</option>; })}
+          </select></label>
+        <label style={{ fontSize:11, color:T.textLight }}>A line other couples will see
+          <input value={blurb} disabled={busy} maxLength={300} onChange={function(e){ setBlurb(e.target.value); }}
+            placeholder="Relaxed, documentary style — shot two weddings here" style={Object.assign({ marginTop:4 }, F)} /></label>
+      </div>
+      <label style={{ display:"block", fontSize:11, color:T.textLight, marginTop:8 }}>Our note (never shown to couples)
+        <input value={note} disabled={busy} onChange={function(e){ setNote(e.target.value); }} style={Object.assign({ marginTop:4 }, F)} /></label>
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:8, minHeight:28 }}>
+        {dirty && (
+          <button onClick={save} disabled={busy}
+            style={{ background:T.midBlue, color:"#fff", border:"none", padding:"6px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        )}
+        {msg && <span style={{ fontSize:12, color:T.green }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function PortalSupplierRow({ s, onPromote, onSuppress, fromLabel }) {
   const bits = [s.contact_name, s.phone, s.email].filter(Boolean);
   const off = !!s.suppressed_at;
   return (
@@ -12770,7 +12925,8 @@ function PortalSupplierRow({ s, onPromote, onSuppress }) {
       <div style={{ minWidth:0 }}>
         <div style={{ fontSize:13, fontWeight:600, color:T.text }}>
           {s.name}
-          <span style={{ fontWeight:400, color:T.textLight }}> · {s.category}</span>
+          <span style={{ fontWeight:400, color:T.textLight }}> · {supplierCategoryLabel(s.category)}</span>
+          {fromLabel && <span style={{ fontWeight:400, color:T.textLight }}> · {fromLabel}</span>}
           <span style={{ fontWeight:400, color:T.textLight }}>
             {" · used by "}{s.used_by || 0}{" "}{(s.used_by === 1 ? "wedding" : "weddings")}
           </span>

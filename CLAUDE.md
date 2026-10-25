@@ -6,8 +6,9 @@ Almost all UI lives in one file: `src/App.jsx` — ~19,000 lines, 1.2MB.
 ## Working agreements
 
 - **Commit straight onto `main`.** No feature branches unless asked.
-- Sessions have not been able to push — the git proxy refuses a credential for
-  this repo. Commit locally; Toby pushes from GitHub Desktop.
+- Sessions could not push until 25 Oct 2026; attaching the repo with push
+  access now works, and a push to `main` deploys. Toby's local copy is in
+  GitHub Desktop at `~/Documents/GitHub/hawthwedd` — he pulls after a push.
 - Toby wants work reviewed critically before it ships. Flag anything worth fixing.
 - Estimates are **developer-hours**, not calendar time.
 
@@ -414,6 +415,24 @@ own header.
   `tests/portal-harness.cjs` (`openPortal`, `openStaff`, `goTab`). Build to
   `$HOME/dist-check` first. RPCs with no handler answer PGRST202, exactly what
   a page meets when it ships before its migration.
+
+### Suppliers and links (25 Oct 2026, migration o)
+
+- **A couple's supplier is private until approved.** `owner_event_id` set =
+  that wedding's alone; `wp_get_suppliers` shows other couples only rows with
+  no owner. Events → Portal settings → Supplier directory lists every couple's
+  supplier; staff correct the category and write the blurb there
+  (`wp_admin_review_supplier` — never name or contact, those are the
+  couple's), then tick **Approved for sharing** (`wp_admin_approve_supplier`),
+  which moves the row into the directory and keeps `promoted_from_event_id`.
+  Unticking gives it back to the couple if nobody else chose it, otherwise
+  sets `active = false` (kept by those who chose it, offered to nobody new).
+  Admin only (`wp_is_admin`). Test: `supabase/2026-10-25o-supplier-approval-test.sql`.
+- **Rows open their record.** Deep links: `goToEvent`, `goToEnquiry`,
+  `goToAccomBooking`, `goToBoxEvent` (box office editor), `goToViewingRequest`
+  (Viewings, card scrolled to and picked out). A new list of records should
+  use one of these, never `setView(section)`. Pinned by
+  `tests/record-links-e2e.cjs`.
 
 ## Working in this folder from a Claude session
 
