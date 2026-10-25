@@ -1,54 +1,11 @@
 import { useEffect, useState } from 'react'
 import { rpc, isMissingFunction } from './supabase.js'
-import { dayOrder } from '../shared/dayOrder.js'
 import WhenInput from './WhenInput.jsx'
+import { hhmm, endsAt, mergeDay, lengthLabel, timelinePrintHtml } from './timelineShared.js'
 
 // Components that render inputs live at module scope — see Guests.jsx.
 
-const hhmm = (t) => (t ? String(t).slice(0, 5) : '')
-
-function endsAt(start, mins) {
-  if (!start || !mins) return null
-  const [h, m] = String(start).split(':').map(Number)
-  const total = h * 60 + m + mins
-  return String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0')
-}
-
-// The venue's own times — music ends, bar closes, carriages, site closed — are
-// part of the day, not a separate list to cross-reference. They are woven in at
-// their own times so a couple planning speeches at 23:30 can SEE the bar closing
-// at 23:45 on the line below, rather than being told it somewhere else.
-//
-// They come back computed, never stored, so they cannot go stale when an access
-// time changes — and they are not editable here, which the row says quietly
-// rather than with a button that refuses.
-//
-// Two things at the same time is fine. A band setting up while the cake arrives
-// is an ordinary afternoon, so equal start times simply sit next to each other
-// in the order they were added.
-function mergeDay(blocks, fixed) {
-  const rows = blocks.map((b) => ({ kind: 'block', at: b.start_time, block: b }))
-  for (const f of fixed || []) {
-    if (f && f.time) rows.push({ kind: 'venue', at: f.time, title: f.title })
-  }
-  return rows.sort((a, b) => {
-    // Not a text compare: midnight and half past belong at the END of the
-    // wedding day, not the start of it. See dayOrder().
-    const t = dayOrder(a.at) - dayOrder(b.at)
-    if (t !== 0) return t
-    // A venue line at the same minute reads better after the couple's own.
-    return (a.kind === 'venue' ? 1 : 0) - (b.kind === 'venue' ? 1 : 0)
-  })
-}
-
-function lengthLabel(mins) {
-  if (!mins) return null
-  if (mins < 60) return mins + ' min'
-  const h = Math.floor(mins / 60), m = mins % 60
-  return h + (h === 1 ? ' hr' : ' hrs') + (m ? ' ' + m + ' min' : '')
-}
-
-export default function Timeline({ kind, onGo }) {
+export default function Timeline({ kind, onGo, eventName, eventDate }) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -115,6 +72,7 @@ export default function Timeline({ kind, onGo }) {
             happens on {current.label.toLowerCase()}.
           </p>
         )}
+        {data.blocks.length > 0 && <PrintForSuppliers timeline={data} eventName={eventName} eventDate={eventDate} />}
       </section>
 
       <section className="card">
@@ -512,3 +470,41 @@ function AddBlock({ dayKey, suppliers, contacts, onChanged }) {
   )
 }
 
+
+// One printable sheet of the whole timeline, with the people to ring and the
+// suppliers' details, for the couple to hand round. The key contacts and the
+// suppliers' contact details are read when it is asked for; if either cannot
+// be read the sheet still prints, without that part, and says so.
+function PrintForSuppliers({ timeline, eventName, eventDate }) {
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+
+  async function go() {
+    // Opened at once, inside the click, or a phone's pop-up blocker stops it.
+    const w = window.open('', '_blank')
+    if (!w) { setNote('Your browser blocked the print window. Allow pop-ups for this site and try again.'); return }
+    w.document.write('<p style="font-family:Georgia,serif;padding:24px">Getting your timeline ready…</p>')
+    setBusy(true); setNote('')
+    const missing = []
+    let contacts = [], suppliers = [], categories = []
+    try { contacts = (await rpc('wp_get_key_contacts')).contacts || [] }
+    catch (e) { if (!isMissingFunction(e)) missing.push('the people to ring') }
+    try { const s = await rpc('wp_get_suppliers'); suppliers = s.chosen || []; categories = s.categories || [] }
+    catch (e) { missing.push("your suppliers' details") }
+    w.document.open()
+    w.document.write(timelinePrintHtml({ eventName, eventDate, timeline, contacts, suppliers, categories }))
+    w.document.close()
+    setBusy(false)
+    if (missing.length) setNote('Printed without ' + missing.join(' or ') + ' — we could not read them just now.')
+  }
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <button type="button" className="btn-small ghost" onClick={go} disabled={busy}>
+        {busy ? 'Getting it ready…' : 'Print for your suppliers'}
+      </button>
+      <p className="hint">Every day of your booking in order, with the people to ring on the day and your suppliers' details.</p>
+      {note && <div className="alert alert-warn">{note}</div>}
+    </div>
+  )
+}

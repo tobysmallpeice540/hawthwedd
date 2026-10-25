@@ -281,7 +281,7 @@ export default function Portal({ session }) {
           {current === 'drinks'      && <Drinks part="package" barTab={visible.includes('bar')} onGo={go} />}
           {current === 'bar'         && <Drinks part="bar" />}
           {current === 'checklist'   && <Checklist />}
-          {current === 'timeline'    && <Timeline kind={kind} onGo={visible.includes('music') ? go : null} />}
+          {current === 'timeline'    && <Timeline kind={kind} onGo={visible.includes('music') ? go : null} eventName={event.couple} eventDate={fmtDate(event.date)} />}
           {current === 'music'       && <Music />}
           {current === 'photos'      && <Photos />}
           {current === 'uploads'     && <Uploads />}
