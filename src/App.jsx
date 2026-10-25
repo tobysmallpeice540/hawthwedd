@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25n";
+const APP_BUILD = "2026-10-25o";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -17620,8 +17620,6 @@ function SummaryReport({ bookings, onOpenEvent }) {
     monthByType[m][t] = (monthByType[m][t] || 0) + 1;
   });
   const maxMonth = Math.max(1, ...Object.values(monthCounts));
-  const prevYear = allYears[allYears.indexOf(year)-1];
-  const nextYear = allYears[allYears.indexOf(year)+1];
 
   const printText = [
     `Annual Summary — ${year}`,
@@ -17651,18 +17649,17 @@ function SummaryReport({ bookings, onOpenEvent }) {
 
   return (
     <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
-        <button onClick={()=>window.print()} style={{ background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>🖨 Print / Save as PDF</button>
-      </div>
-      {/* Year navigator */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:16, marginBottom:24 }}>
-        <button onClick={()=>setYear(prevYear)} disabled={!prevYear} style={{ background:prevYear?"#fff":"#f5f5f5", border:`1px solid ${T.border}`, color:prevYear?T.midBlue:T.textLight, width:36, height:36, borderRadius:8, cursor:prevYear?"pointer":"default", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>‹</button>
-        <div style={{ display:"flex", gap:8 }}>
-          {allYears.map(y=>(
-            <button key={y} onClick={()=>setYear(y)} style={{ background:y===year?T.midBlue:"#fff", color:y===year?"#fff":T.textMid, border:`1.5px solid ${y===year?T.midBlue:T.border}`, padding:"6px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:y===year?700:400 }}>{y}</button>
-          ))}
-        </div>
-        <button onClick={()=>setYear(nextYear)} disabled={!nextYear} style={{ background:nextYear?"#fff":"#f5f5f5", border:`1px solid ${T.border}`, color:nextYear?T.midBlue:T.textLight, width:36, height:36, borderRadius:8, cursor:nextYear?"pointer":"default", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>›</button>
+      {/* Year nav — the same control as the calendars: arrows either side of
+          the year (any year, not only years with events in), and a button back
+          to this year. Print sits at the far end of the same row. */}
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:18, flexWrap:"nowrap" }}>
+        <button onClick={()=>setYear(String(parseInt(year, 10) - 1))} style={navBtn} aria-label="Previous year">&#8249;</button>
+        <div style={{ fontSize:20, fontWeight:800, color:T.text, minWidth:70, textAlign:"center" }}>{year}</div>
+        <button onClick={()=>setYear(String(parseInt(year, 10) + 1))} style={navBtn} aria-label="Next year">&#8250;</button>
+        {year !== currentYear && (
+          <button onClick={()=>setYear(currentYear)} style={{ ...navBtn, width:"auto", padding:"0 14px", fontSize:13, fontWeight:600, whiteSpace:"nowrap" }}>This year</button>
+        )}
+        <button onClick={()=>window.print()} style={{ marginLeft:"auto", background:T.midBlueBg, border:`1px solid ${T.border}`, color:T.midBlue, padding:"7px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, whiteSpace:"nowrap" }}>Print / Save as PDF</button>
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:28 }}>
