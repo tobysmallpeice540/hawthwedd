@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25g";
+const APP_BUILD = "2026-10-25h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2856,9 +2856,74 @@ const EMAIL_TOKENS = [
 ];
 
 // ── Month timeline: one lane per property ────────────────────────────────────
-function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen, onViewEventsCalendar }) {
+// One entry per booking on a day of the year calendar. A booking across two
+// properties appears once per property in the day's list; it is one thing to open.
+function uniqueDayBookings(entries) {
+  const seen = {};
+  const out = [];
+  (entries || []).forEach(function(e) {
+    const k = String(e.booking.id);
+    if (seen[k]) { seen[k].props.push(e.prop); return; }
+    seen[k] = { booking: e.booking, props: [e.prop] };
+    out.push(seen[k]);
+  });
+  return out;
+}
+
+// What a click on a busy day of the lettings year calendar shows: everything
+// on that day, each one opening its own page. A day with only one thing on it
+// opens that thing directly and never gets here.
+function CalendarDayPicker({ pick, onClose, onOpenBooking, onOpenEvent }) {
+  if (!pick) return null;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 800;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  const left = Math.max(8, Math.min(pick.x - 130, vw - 300));
+  const top  = Math.max(8, Math.min(pick.y, vh - 300));
+  const dispDate = new Date(pick.ds + "T00:00:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" });
+  const row = { display:"flex", alignItems:"center", gap:8, width:"100%", textAlign:"left", background:"none", border:"none",
+    padding:"8px 14px", cursor:"pointer", fontFamily:"inherit", fontSize:13, color:T.text };
+  return (
+    <>
+      <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:9998 }}/>
+      <div role="dialog" aria-label={"What is on " + dispDate}
+        style={{ position:"fixed", left:left, top:top, zIndex:9999, background:"#fff", border:`1px solid ${T.border}`, borderRadius:9,
+          boxShadow:"0 8px 28px rgba(0,0,0,.18)", padding:"6px 0", minWidth:240, maxWidth:300, maxHeight:280, overflowY:"auto" }}>
+        <div style={{ padding:"4px 14px 8px", fontSize:12, fontWeight:700, color:T.textMid, borderBottom:`1px solid ${T.border}`, marginBottom:4 }}>{dispDate}</div>
+        {pick.events.map(function(ev) {
+          return (
+            <button key={"e" + ev.id} type="button" style={row} onClick={function(){ onClose(); onOpenEvent(ev.id); }}>
+              <span style={{ width:9, height:9, borderRadius:2, background:"#ef4444", flexShrink:0 }}/>
+              <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                <strong>{ev.couple || "(no name)"}</strong>
+                <span style={{ color:T.textLight }}>{" \u00b7 " + (ev.eventType || "Event")}</span>
+              </span>
+            </button>
+          );
+        })}
+        {pick.bookings.map(function(e) {
+          const b = e.booking;
+          const label = b.bookingType === "Blocked" ? "Not available" : (b.guestName || (b.source === "airbnb" ? "Airbnb" : "Booking"));
+          return (
+            <button key={"b" + b.id} type="button" style={row} onClick={function(){ onClose(); onOpenBooking(b); }}>
+              <span style={{ width:9, height:9, borderRadius:"50%", background:(e.props[0] && e.props[0].colour) || T.accent, flexShrink:0 }}/>
+              <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                <strong>{label}</strong>
+                <span style={{ color:T.textLight }}>{" \u00b7 " + e.props.map(function(p){ return p.name; }).join(" + ")}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+// readOnly: the housekeeping login's calendar. Hover still explains a day, but
+// nothing opens — that login must not reach an editable booking or event.
+function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen, onViewEventsCalendar, onOpenEvent, readOnly }) {
   const [mode, setMode] = useState("year");
   const [tooltip, setTooltip] = useState(null);
+  const [dayPick, setDayPick] = useState(null);
   // Year-calendar filter: "all", "events", or a property id.
   const [calFilter, setCalFilter] = useState("all");
 
@@ -3066,8 +3131,23 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
                         : "transparent";
                       const dayEntries = showAccom ? (bookingMap[ds] || []).filter(function(e){ return keepProp(e.prop); }) : [];
                       const dateEvts = showEvents ? (eventByDate[ds] || []) : [];
+                      // A click opens what is on the day: the thing itself when
+                      // there is one, a short list to choose from when there
+                      // are several. It used to do nothing at all.
+                      const openDay = readOnly ? undefined : function(e) {
+                        const bk = uniqueDayBookings(dayEntries);
+                        const ev = onOpenEvent ? dateEvts : [];
+                        if (!bk.length && !ev.length) return;
+                        setTooltip(null);
+                        if (bk.length + ev.length === 1) {
+                          if (bk.length) onOpen(bk[0].booking); else onOpenEvent(ev[0].id);
+                          return;
+                        }
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setDayPick({ ds:ds, bookings:bk, events:ev, x:rect.left, y:rect.bottom + 4 });
+                      };
                       return (
-                        <div key={day}
+                        <div key={day} onClick={openDay} data-day={ds}
                           style={{ textAlign:"center", padding:"3px 0 5px", borderRadius:3, background:bg,
                             outline: isToday ? `1.5px solid ${T.accent}` : "none",
                             cursor: (dayEntries.length||dateEvts.length) ? "pointer" : "default", position:"relative", overflow:"hidden" }}
@@ -3170,6 +3250,9 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
           );
         })()}
 
+        <CalendarDayPicker pick={dayPick} onClose={function(){ setDayPick(null); }}
+          onOpenBooking={onOpen} onOpenEvent={onOpenEvent || function(){}}/>
+
         {/* Legend */}
         <div style={{ display:"flex", gap:18, flexWrap:"wrap", alignItems:"center", padding:"10px 14px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, fontSize:12, color:T.textMid }}>
           <span style={{ fontWeight:700, color:T.text, fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>Key:</span>
@@ -3219,7 +3302,7 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
             Today
           </span>
           <span style={{ display:"flex", alignItems:"center", gap:5, color:T.textLight, fontStyle:"italic" }}>
-            Hover a date to see booking details
+            {readOnly ? "Hover a date to see booking details" : "Hover a date to see what is on it, click to open it"}
           </span>
         </div>
       </div>
@@ -3249,10 +3332,19 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
     return entries;
   };
 
+  // Events touching this month, for the events lane.
+  const monthEvents = (events || []).filter(function(ev) {
+    if (!ev || !isValidEventDate(ev.date)) return false;
+    const last = (ev.endDate && ev.endDate > ev.date) ? ev.endDate : ev.date;
+    return new Date(ev.date + "T00:00:00") < monthEnd && new Date(last + "T00:00:00") >= monthStart;
+  });
+
   const barGeom = (checkIn, checkOut) => {
     const ci = new Date(checkIn+"T00:00:00"), co = new Date(checkOut+"T00:00:00");
     const startDay = ci < monthStart ? 0 : (ci.getDate() - 1);
-    const endDay   = co > monthEnd   ? nDays : (co.getDate() - 1);
+    // >= : a stay leaving on the 1st of next month runs to this month's end.
+    // With > it fell through to getDate()-1 = 0 and drew as a one-night stub.
+    const endDay   = co >= monthEnd  ? nDays : (co.getDate() - 1);
     const span = Math.max(1, endDay - startDay);
     return { left: startDay * dayW, width: span * dayW - 3 };
   };
@@ -3283,6 +3375,33 @@ function AccomCalendar({ properties, bookings, events, cursor, setCursor, onOpen
               );
             })}
           </div>
+          {/* Farm events, in their own lane at the top. The year view marks
+              them; the month view used to leave them out, so the place you
+              go to look at a date was the one place they could not be opened. */}
+          {monthEvents.length > 0 && (
+            <div style={{ display:"flex", borderBottom:`1px solid ${T.border}`, background:"#fff" }}>
+              <div style={{ width:130, flexShrink:0, padding:"12px 10px", fontSize:13, fontWeight:700, color:T.text,
+                display:"flex", alignItems:"center", gap:7, borderRight:`1px solid ${T.border}` }}>
+                <span style={{ width:11, height:11, borderRadius:3, background:"#ef4444", flexShrink:0 }}/>Events
+              </div>
+              <div style={{ position:"relative", height:44, flex:1 }}>
+                {monthEvents.map(function(ev) {
+                  const g = barGeom(ev.date, addDaysIso((ev.endDate && ev.endDate > ev.date) ? ev.endDate : ev.date, 1));
+                  const canOpen = !readOnly && !!onOpenEvent;
+                  return (
+                    <div key={"ev-" + ev.id} onClick={canOpen ? function(){ onOpenEvent(ev.id); } : undefined}
+                      title={(ev.eventType || "Event") + (ev.couple ? " - " + ev.couple : "") + " - " + fmtDate(ev.date)}
+                      style={{ position:"absolute", left:g.left+2, top:8, width:g.width, height:28, borderRadius:6,
+                        background:"#fef2f2", border:"1.5px solid #ef4444", color:"#b91c1c", fontSize:11, fontWeight:600,
+                        padding:"0 6px", display:"flex", alignItems:"center", overflow:"hidden", whiteSpace:"nowrap",
+                        cursor: canOpen ? "pointer" : "default", opacity: /cancel/i.test(ev.status || "") ? 0.5 : 1 }}>
+                      {ev.couple || ev.eventType || "Event"}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {properties.map(p => {
             const lane = laneFor(p.id);
             const checkInDays = new Set(
@@ -6417,7 +6536,7 @@ function CleanerView() {
           editable form for someone who shouldn't be changing bookings. */}
       {tab === "calendar" && (
         <AccomCalendar properties={properties} bookings={accom} events={events}
-          cursor={cursor} setCursor={setCursor} onOpen={function(){}} onViewEventsCalendar={null}/>
+          cursor={cursor} setCursor={setCursor} onOpen={function(){}} onViewEventsCalendar={null} readOnly/>
       )}
       {tab === "list" && (
         <AccomList properties={properties} bookings={accom}
@@ -6832,7 +6951,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
 
       {!loaded && <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>}
 
-      {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} onViewEventsCalendar={setAppView && setAppReportType ? function(){ setAppReportType("calendar"); setAppView("reports"); } : null} />}
+      {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} onOpenEvent={onOpenEvent} onViewEventsCalendar={setAppView && setAppReportType ? function(){ setAppReportType("calendar"); setAppView("reports"); } : null} />}
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
       {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
       {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} mutateAccom={mutateAccom} bookings={bookings} />}
@@ -6998,6 +7117,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [staffForm, setStaffForm]     = useState(null);
   const [focusEnquiryId, setFocusEnquiryId] = useState(null);
   const [focusAccomBookingId, setFocusAccomBookingId] = useState(null);
+  // The same deep link for the box office (a ticketed event) and for a viewing
+  // request, so a row on the home page opens the thing itself, not its list.
+  const [focusBoxEventId, setFocusBoxEventId] = useState(null);
+  const [focusViewingReqId, setFocusViewingReqId] = useState(null);
   const [accomBookings, setAccomBookings]     = useState([]);
   const [accomProperties, setAccomProperties] = useState([]);
   const [invoiceRecords, setInvoiceRecords]   = useState([]);
@@ -7045,6 +7168,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const goToEnquiry = (id) => { setFocusEnquiryId(id); setView("enquiries"); };
   // Navigate straight to a specific lettings booking (used from the Bookings accommodation column)
   const goToAccomBooking = (id) => { setFocusAccomBookingId(id); setView("lettings"); };
+  // A ticketed event's page in the box office, and a viewing request's card.
+  const goToBoxEvent = (id) => { if (id == null) { setView("boxoffice"); return; } setFocusBoxEventId(id); setView("boxoffice"); };
+  const goToViewingRequest = (id) => { setFocusViewingReqId(id == null ? null : id); setView("viewings"); };
 
   // Start a new accommodation booking for an event: every property, the night
   // before and the night of the event, pre-linked so it's billed via the event.
@@ -7936,7 +8062,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
             the event, on the event form) so a crash on one page clears when
             you move to another. pageArea is used by both layouts. */}
         <PageErrorBoundary key={view === "form" ? "form-" + formKey : view} page={view}>
-        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
+        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}
+          enquiries={enquiries} onOpenEnquiry={goToEnquiry} onOpenBoxEvent={goToBoxEvent} onOpenViewingRequest={goToViewingRequest}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
@@ -7993,16 +8120,17 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onPurgeOrphan={removeStaffFromRotas} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
         {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)} onOpenEvent={goToEvent}/>}
-        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)} bookings={bookings} onEnquiriesChanged={setEnquiries}/>}
+        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)} bookings={bookings} onOpenEvent={goToEvent} onEnquiriesChanged={setEnquiries}/>}
         {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
           enquiries={enquiries} setEnquiries={setEnquiries}
           saveEnquiries={saveEnquiriesMerged}
           patchBooking={patchBooking}
-          onSelectEnquiry={goToEnquiry}/>}
-        {view==="boxoffice"  && <BoxOfficeView bookings={bookings}/>}
-        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties}/>}
+          onSelectEnquiry={goToEnquiry}
+          focusRequestId={focusViewingReqId} clearFocusRequest={()=>setFocusViewingReqId(null)}/>}
+        {view==="boxoffice"  && <BoxOfficeView bookings={bookings} focusEventId={focusBoxEventId} clearFocusEvent={()=>setFocusBoxEventId(null)}/>}
+        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties} onOpenAccom={goToAccomBooking}/>}
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
         {view==="activity"   && <ActivityView/>}
         {view==="emails"     && <EmailsView/>}
@@ -8080,7 +8208,7 @@ function PortalAdminScreen({ bookings, onBack, onOpenEvent }) {
 
       {tab === "progress"  && <PortalProgress onOpenEvent={onOpenEvent} />}
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
-      {tab === "times"     && <PortalAccessTimes />}
+      {tab === "times"     && <PortalAccessTimes onOpenEvent={onOpenEvent} />}
       {tab === "suppliers" && <PortalSupplierDirectory />}
       {tab === "room"      && <><PortalRoomEditor /><PortalLayouts /></>}
       {tab === "templates" && <PortalTemplates bookings={bookings} />}
@@ -8088,7 +8216,7 @@ function PortalAdminScreen({ bookings, onBack, onOpenEvent }) {
       {tab === "drinks"    && <PortalDrinksSettings />}
       {tab === "extras"    && (
         <div style={{ display:"grid", gap:14 }}>
-          <PortalOpenRequests bookings={bookings} />
+          <PortalOpenRequests bookings={bookings} onOpenEvent={onOpenEvent} />
           <PortalPricedList kind="addons" />
           <PortalPricedList kind="food" />
           <PortalItemTypes />
@@ -10862,7 +10990,7 @@ function PortalSectionDefaults() {
 }
 
 // ── open add-on requests across every event ─────────────────────────────────
-function PortalOpenRequests({ bookings }) {
+function PortalOpenRequests({ bookings, onOpenEvent }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
   async function load() {
@@ -10883,7 +11011,8 @@ function PortalOpenRequests({ bookings }) {
           {rows.map(function(r){
             return (
               <div key={r.id}>
-                <div style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>{names[r.event_id] || ("Event " + r.event_id)}</div>
+                <div onClick={onOpenEvent ? function(){ onOpenEvent(r.event_id); } : undefined} title={onOpenEvent ? "Open this event" : undefined}
+                  style={{ fontSize:12, color: onOpenEvent ? T.accent : T.textMid, fontWeight:600, cursor: onOpenEvent ? "pointer" : "default" }}>{names[r.event_id] || ("Event " + r.event_id)}</div>
                 <PortalRequestRow r={r} onChanged={load} />
               </div>
             );
@@ -12431,7 +12560,7 @@ function PortalMusicDefaults() {
 
 // ─── access times: the contract's words, what we read, and what you confirm ──
 
-function PortalAccessTimes() {
+function PortalAccessTimes({ onOpenEvent }) {
   const [queue, setQueue] = useState(null);
   const [err, setErr] = useState("");
 
@@ -12458,7 +12587,7 @@ function PortalAccessTimes() {
        : (
         <div style={{ display:"grid", gap:12 }}>
           {queue.map(function(ev){
-            return <PortalAccessRow key={ev.event_id} ev={ev} onSaved={load} />;
+            return <PortalAccessRow key={ev.event_id} ev={ev} onSaved={load} onOpenEvent={onOpenEvent} />;
           })}
         </div>
       )}
@@ -12466,7 +12595,7 @@ function PortalAccessTimes() {
   );
 }
 
-function PortalAccessRow({ ev, onSaved }) {
+function PortalAccessRow({ ev, onSaved, onOpenEvent }) {
   const proposed = ev.proposed || {};
   const [from, setFrom] = useState(proposed.ok ? String(proposed.from).slice(0,5) : "");
   const [to, setTo]     = useState(proposed.ok ? String(proposed.to).slice(0,5) : "");
@@ -12493,7 +12622,8 @@ function PortalAccessRow({ ev, onSaved }) {
     <div style={{ background:"#fff", border:`1px solid ${ev.confirmed ? T.border : "#fde68a"}`, borderRadius:10, padding:16 }}>
       <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:10 }}>
         <div>
-          <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{ev.couple || "Event"}</div>
+          <div onClick={onOpenEvent ? function(){ onOpenEvent(ev.event_id); } : undefined} title={onOpenEvent ? "Open this event" : undefined}
+            style={{ fontSize:14, fontWeight:700, color: onOpenEvent ? T.accent : T.text, cursor: onOpenEvent ? "pointer" : "default" }}>{ev.couple || "Event"}</div>
           <div style={{ fontSize:12, color:T.textLight, marginTop:2 }}>{ev.date} · {ev.event_type}</div>
         </div>
         <span style={{ alignSelf:"flex-start", fontSize:11, fontWeight:700, padding:"3px 10px", borderRadius:999,
@@ -16614,11 +16744,11 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, prop
       if (holding) {
         // Nothing about a held date is decided, its rooms included.
         r.hold += st.total;
-        r.items.push({ kind: "Holding event", who: who, what: st.label, when: when, amount: st.total });
+        r.items.push({ kind: "Holding event", who: who, what: st.label, when: when, amount: st.total, eventId: ev.id });
         return;
       }
-      if (venue > 0) { r.conf += venue; r.items.push({ kind: "Event", who: who, what: st.label, when: when, amount: venue }); }
-      if (accom > 0) { r.lets += accom; r.items.push({ kind: "Lettings", who: who, what: "Wedding accommodation — " + st.label, when: when, amount: accom }); }
+      if (venue > 0) { r.conf += venue; r.items.push({ kind: "Event", who: who, what: st.label, when: when, amount: venue, eventId: ev.id }); }
+      if (accom > 0) { r.lets += accom; r.items.push({ kind: "Lettings", who: who, what: "Wedding accommodation — " + st.label, when: when, amount: accom, eventId: ev.id }); }
     });
   });
   const unpriced = [];
@@ -16642,14 +16772,14 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, prop
       const m = out.slice(0, 7);
       if (!rows[m]) return;
       rows[m].lets += v.value;
-      rows[m].items.push({ kind: "Lettings", who: b.guestName || "(no name)", what: "Airbnb payout" + (v.estimated ? " (estimated)" : ""), when: out, amount: round2(v.value) });
+      rows[m].items.push({ kind: "Lettings", who: b.guestName || "(no name)", what: "Airbnb payout" + (v.estimated ? " (estimated)" : ""), when: out, amount: round2(v.value), accomId: b.id });
       return;
     }
     (b.schedule || []).forEach(function(line) {
       if (!line || line.paid) return;
       const owed = round2((Number(line.amount) || 0) - (Number(line.paidAmount) || 0));
       if (!(owed > 0) || !isValidEventDate(line.dueDate)) return;
-      const item = { kind:"Lettings", who: b.guestName || "(no name)", what: line.label || "Payment", when: line.dueDate, amount: owed };
+      const item = { kind:"Lettings", who: b.guestName || "(no name)", what: line.label || "Payment", when: line.dueDate, amount: owed, accomId: b.id };
       if (line.dueDate < today) { overdue.lets += owed; overdue.items.push(item); return; }
       const m = line.dueDate.slice(0, 7);
       if (!rows[m]) return;
@@ -16658,7 +16788,13 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, prop
   });
   return { months: months.map(function(m) { return rows[m]; }), overdue: overdue, unpriced: unpriced };
 }
-function CashflowReport({ bookings, accomBookings, accomProperties }) {
+// A cashflow line names the event or let it came from; this opens it.
+function cashflowOpener(it, onOpenEvent, onOpenAccom) {
+  if (it && it.eventId != null && onOpenEvent) return function() { onOpenEvent(it.eventId); };
+  if (it && it.accomId != null && onOpenAccom) return function() { onOpenAccom(it.accomId); };
+  return null;
+}
+function CashflowReport({ bookings, accomBookings, accomProperties, onOpenEvent, onOpenAccom }) {
   const [open, setOpen] = useState(null);
   const f = cashflowForecast(bookings, accomBookings, null, null, accomProperties);
   const totals = f.months.reduce(function(a, r) { return { conf:a.conf + r.conf, hold:a.hold + r.hold, lets:a.lets + r.lets }; }, { conf:0, hold:0, lets:0 });
@@ -16712,7 +16848,11 @@ function CashflowReport({ bookings, accomBookings, accomProperties }) {
                       return <div key={i} style={{ display:"flex", gap:12, fontSize:12.5, padding:"4px 0", borderTop: i ? `1px solid ${T.border}` : "none" }}>
                         <span style={{ width:80, color:T.textLight }}>{fmtDate(it.when)}</span>
                         <span style={{ width:110, color:T.textMid }}>{it.kind}</span>
-                        <span style={{ flex:1 }}>{it.who} — {it.what}</span>
+                        <span style={{ flex:1 }}>
+                          {cashflowOpener(it, onOpenEvent, onOpenAccom)
+                            ? <span onClick={cashflowOpener(it, onOpenEvent, onOpenAccom)} title="Open it" style={{ cursor:"pointer", color:T.accent }}>{it.who}</span>
+                            : it.who} — {it.what}
+                        </span>
                         <strong style={{ fontVariantNumeric:"tabular-nums" }}>{fmtMoney(it.amount)}</strong>
                       </div>;
                     })}
@@ -16732,7 +16872,7 @@ function CashflowReport({ bookings, accomBookings, accomProperties }) {
   );
 }
 
-function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry, accomBookings, accomProperties }) {
+function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry, accomBookings, accomProperties, onOpenAccom }) {
   const types = REPORT_TYPES;
   const inSidebar = useContext(SidebarNavContext);
   // If an old/removed report type is still selected, fall back to summary
@@ -16745,13 +16885,13 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
         <TabStrip tabs={types.map(function(t){ return [t.id, t.label]; })} value={activeType}
           onChange={function(id){ if(id==="accommodation"){ openAccomReport(setView); } else { setReportType(id); } }}/>
       )}
-      {activeType==="summary"   && <SummaryReport bookings={bookings}/>}
+      {activeType==="summary"   && <SummaryReport bookings={bookings} onOpenEvent={onEditBooking}/>}
       {activeType==="calendar"  && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
-      {activeType==="staffing"  && <StaffingRota bookings={bookings} staff={staff}/>}
-      {activeType==="hours"     && <HoursReport bookings={bookings} staff={staff}/>}
+      {activeType==="staffing"  && <StaffingRota bookings={bookings} staff={staff} onOpenEvent={onEditBooking}/>}
+      {activeType==="hours"     && <HoursReport bookings={bookings} staff={staff} onOpenEvent={onEditBooking}/>}
       {activeType==="timeline"  && <StaffTimelineReport bookings={bookings} staff={staff}/>}
       {activeType==="funnel"    && <SalesFunnelReport enquiries={enquiries||[]} bookings={bookings}/>}
-      {activeType==="cashflow"  && <CashflowReport bookings={bookings} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]}/>}
+      {activeType==="cashflow"  && <CashflowReport bookings={bookings} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onOpenEvent={onEditBooking} onOpenAccom={onOpenAccom}/>}
     </div>
   );
 }
@@ -16766,7 +16906,7 @@ function StatCard({ label, value, sub }) {
   );
 }
 
-function SummaryReport({ bookings }) {
+function SummaryReport({ bookings, onOpenEvent }) {
   const allYears = [...new Set(bookings.filter(b=>b.date).map(b=>b.date.slice(0,4)))].sort();
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(allYears.includes(currentYear) ? currentYear : (allYears[allYears.length-1]||currentYear));
@@ -16961,7 +17101,9 @@ function SummaryReport({ bookings }) {
           <div style={{ fontSize:12, color:"#92400e", lineHeight:1.8 }}>
             {corkageMissing.slice(0,10).map(b=>(
               <div key={b.id}>
-                {fmtDate(b.date)} — {b.couple||"(no name)"}
+                {fmtDate(b.date)} — {onOpenEvent
+                  ? <span onClick={function(){ onOpenEvent(b.id); }} title="Open this event" style={{ cursor:"pointer", textDecoration:"underline" }}>{b.couple||"(no name)"}</span>
+                  : (b.couple||"(no name)")}
                 {String(b.corkage||"").trim() ? <span style={{ color:"#b45309" }}> · note: “{String(b.corkage).trim().slice(0,60)}”</span> : null}
               </div>
             ))}
@@ -17279,7 +17421,7 @@ function CalendarReport({ bookings, enquiries, setView, onEditBooking, onSelectE
   );
 }
 
-function StaffingRota({ bookings, staff }) {
+function StaffingRota({ bookings, staff, onOpenEvent }) {
   const [printMode, setPrintMode] = useState(false);
   const today=new Date().toISOString().slice(0,10);
   const rows=bookings.filter(b=>b.couple&&b.date&&b.date>=today).sort((a,b)=>a.date>b.date?1:-1);
@@ -17317,7 +17459,8 @@ function StaffingRota({ bookings, staff }) {
             {rows.map((b,i)=>(
               <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
                 <td style={{ padding:"10px 12px", fontSize:12, color:T.accent, whiteSpace:"nowrap", fontWeight:600 }}>{new Date(b.date+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</td>
-                <td style={{ padding:"10px 12px", fontSize:13, fontWeight:500, maxWidth:130 }}>{b.couple.split("&")[0].trim()}</td>
+                <td onClick={onOpenEvent ? function(){ onOpenEvent(b.id); } : undefined} title={onOpenEvent ? "Open " + (b.couple || "this event") : undefined}
+                  style={{ padding:"10px 12px", fontSize:13, fontWeight:500, maxWidth:130, cursor: onOpenEvent ? "pointer" : "default", color: onOpenEvent ? T.accent : undefined }}>{b.couple.split("&")[0].trim()}</td>
                 {["setup","dayManager","barSupervisor","dayStaff","bar","dayHandy","eveHandy"].map(field=>(
                   <td key={field} style={{ padding:"10px 12px" }}>
                     {(b[field]||[]).length===0?<span style={{ color:T.textLight,fontSize:11 }}>—</span>:(b[field]||[]).map(id=><StaffChip key={id} initials={id} staff={staff}/>)}
@@ -17415,7 +17558,7 @@ function buildHoursReportText(opts) {
   return L.join("\n");
 }
 
-function HoursReport({ bookings, staff }) {
+function HoursReport({ bookings, staff, onOpenEvent }) {
   const today = new Date().toISOString().slice(0,10);
   const threeMonthsAgo = new Date(Date.now() - 90*24*60*60*1000).toISOString().slice(0,10);
 
@@ -17753,7 +17896,8 @@ function HoursReport({ bookings, staff }) {
                             return (
                               <tr key={b.id} style={{ borderTop:i>0?`1px solid ${T.border}`:"none" }}>
                                 <td style={{ padding:"8px 16px", fontSize:12, color:T.accent, fontWeight:500 }}>{fmtDate(b.date)}</td>
-                                <td style={{ padding:"8px 16px", fontSize:13 }}>{b.couple}</td>
+                                <td onClick={onOpenEvent ? function(){ onOpenEvent(b.id); } : undefined} title={onOpenEvent ? "Open this event" : undefined}
+                                  style={{ padding:"8px 16px", fontSize:13, cursor: onOpenEvent ? "pointer" : "default", color: onOpenEvent ? T.accent : undefined }}>{b.couple}</td>
                                 <td style={{ padding:"8px 16px", fontSize:13, fontWeight:700, color:T.midBlue }}>{hrs}h</td>
                                 <td style={{ padding:"8px 16px", fontSize:13, color:T.green, fontWeight:500 }}>{ep?`£${ep}`:"—"}</td>
                               </tr>
@@ -18015,7 +18159,7 @@ function NewLettings({ bookings, properties, onOpen, events, onOpenEvent }) {
 // being asked to is the more dangerous mistake.
 const UNPAID_GRACE_MINUTES = 30;   // may still be at the card screen
 
-function UnpaidOnlineBookings({ bookings, onDelete }) {
+function UnpaidOnlineBookings({ bookings, onDelete, onOpen }) {
   const [busy, setBusy] = useState(null);
 
   const now = Date.now();
@@ -18051,7 +18195,8 @@ function UnpaidOnlineBookings({ bookings, onDelete }) {
             gap:12, alignItems:"flex-start", flexWrap:"wrap" }}>
             <div style={{ flex:1, minWidth:240 }}>
               <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
-                {b.guestName || "No name given"}
+                <span onClick={onOpen ? function(){ onOpen(b.id); } : undefined} title={onOpen ? "Open this booking" : undefined}
+                  style={onOpen ? { cursor:"pointer", color:T.accent } : undefined}>{b.guestName || "No name given"}</span>
                 <span style={{ fontWeight:400, color:T.textLight }}> · {b.id}</span>
                 {b.guestCount ? <span style={{ fontWeight:400, color:T.textLight }}> · {b.guestCount} guest{Number(b.guestCount) === 1 ? "" : "s"}</span> : null}
               </div>
@@ -18087,7 +18232,31 @@ function UnpaidOnlineBookings({ bookings, onDelete }) {
   );
 }
 
-function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent }) {
+// The enquiry a brochure request belongs to. The website's form adds the
+// request's id to the enquiry it files it under (a known address keeps the
+// enquiry it has), so that is checked first; the address is the fallback for
+// a request whose enquiry write failed or predates the id being kept.
+function enquiryForBrochure(enquiries, r) {
+  const list = enquiries || [];
+  if (!r) return null;
+  const byId = list.find(function(e) { return e && (e.brochureRequests || []).some(function(id) { return String(id) === String(r.id); }); });
+  if (byId) return byId;
+  const em = String(r.email || "").trim().toLowerCase();
+  if (!em) return null;
+  return list.find(function(e) { return e && String(e.email || "").trim().toLowerCase() === em; }) || null;
+}
+
+function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent, enquiries, onOpenEnquiry, onOpenBoxEvent, onOpenViewingRequest }) {
+  // Each row opens its own record; the section list is the fallback only when
+  // the handler is missing (an older caller) or the record cannot be found.
+  const openEvent = function(id) { if (onOpenEvent) onOpenEvent(id); else setView("list"); };
+  const openLet   = function(id) { if (onOpenAccom) onOpenAccom(id); else setView("lettings"); };
+  const openBox   = function(id) { if (onOpenBoxEvent) onOpenBoxEvent(id); else setView("boxoffice"); };
+  const openViewingReq = function(id) { if (onOpenViewingRequest) onOpenViewingRequest(id); else setView("viewings"); };
+  const openBrochure = function(r) {
+    const enq = enquiryForBrochure(enquiries, r);
+    if (enq && onOpenEnquiry) onOpenEnquiry(enq.id); else setView("enquiries");
+  };
   const [accomBookings, setAccomBookings] = useState([]);
   const [emailLog, setEmailLog]           = useState([]);
   const [viewEmail, setViewEmail]         = useState(null);
@@ -18300,7 +18469,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
 
       {/* Booked online but not yet paid — these need chasing, so they stay
           near the top with the other things waiting on someone. */}
-      <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom}/>
+      <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom} onOpen={openLet}/>
 
       {/* Overdue money used to be said twice: a red banner here, and a panel in
           the grid below repeating the accommodation half of it. It is now one
@@ -18314,7 +18483,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
           {loaded && upcomingEvents.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No events this week.</div>}
           {upcomingEvents.map(b=>(
-            <div key={b.id} onClick={()=>setView("list")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
+            <div key={b.id} onClick={()=>openEvent(b.id)} title={"Open " + (b.couple || "this event")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
               <span style={{ fontSize:11, fontWeight:700, color:T.accent, background:T.accentLight, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(b.date)}</span>
               <span style={{ fontSize:13, fontWeight:600, color:T.text }}>{b.couple}</span>
               {b.eventType && <span style={{ fontSize:10, color:T.textLight }}>{b.eventType}</span>}
@@ -18330,7 +18499,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {currentlyStaying.map(b=>{
             const stay = (b.stays||[]).filter(s=>s.checkIn&&s.checkOut&&s.checkIn<today&&s.checkOut>=today).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
             return (
-              <div key={"staying-"+b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
+              <div key={"staying-"+b.id} onClick={()=>openLet(b.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span title={stay ? "Checked in "+fmtDay(stay.checkIn)+" · leaves "+fmtDay(stay.checkOut) : "Currently staying"}
                   style={{ fontSize:11, fontWeight:700, color:T.midBlue, background:T.midBlueBg, padding:"2px 8px", borderRadius:6, flexShrink:0, whiteSpace:"nowrap" }}>In house</span>
                 <div style={{ flex:1, minWidth:0 }}>
@@ -18343,7 +18512,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {upcomingCheckIns.map(b=>{
             const nextStay = (b.stays||[]).filter(s=>s.checkIn&&s.checkIn>=today&&s.checkIn<=in7).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
             return (
-              <div key={b.id} onClick={()=>setView("lettings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
+              <div key={b.id} onClick={()=>openLet(b.id)} title={"Open " + (b.guestName || "this booking")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(nextStay&&nextStay.checkIn)}</span>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"}</div>
@@ -18359,7 +18528,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {secHead("Viewing Requests", pendingViewings.length, pendingViewings.length?T.amber:null)}
           {pendingViewings.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No unresponded requests.</div>}
           {pendingViewings.slice(0,6).map((r,i)=>(
-            <div key={r.id||i} onClick={()=>setView("viewings")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
+            <div key={r.id||i} onClick={()=>openViewingReq(r.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
               <span style={{ fontSize:11, fontWeight:700, color:T.amber, background:T.amberBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>Pending</span>
               <div style={{ flex:1 }}>
                 <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{r.name||"(no name)"}</div>
@@ -18381,7 +18550,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {recentBrochure.map(function(r, i) {
             const when = r.submittedAt ? new Date(r.submittedAt) : null;
             return (
-              <div key={r.id||i} onClick={()=>setView("enquiries")}
+              <div key={r.id||i} onClick={()=>openBrochure(r)} title={"Open " + (r.name || r.email || "this enquiry")}
                 style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span title={r.emailSent === false ? "The brochure email did not go out — see Recent Automated Emails" : "Brochure emailed"}
                   style={{ fontSize:11, fontWeight:700, flexShrink:0, padding:"2px 8px", borderRadius:6,
@@ -18464,7 +18633,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
               </div>
               {overdueAccom.slice(0,8).map(function(r,i) {
                 return (
-                  <div key={r.b.id + "-" + r.s.label + "-" + i} onClick={()=>setView("lettings")}
+                  <div key={r.b.id + "-" + r.s.label + "-" + i} onClick={()=>openLet(r.b.id)}
                     style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
                     <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>{r.b.guestName || "(no name)"}</span>
                     <span style={{ fontSize:11, color:T.textLight }}>{r.s.label}</span>
@@ -18490,7 +18659,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
               </div>
               {overdueBox.slice(0,8).map(function(r) {
                 return (
-                  <div key={r.o.id} onClick={()=>setView("boxoffice")}
+                  <div key={r.o.id} onClick={()=>openBox(r.o.event_id)}
                     style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
                     <span style={{ fontSize:13, fontWeight:600, color:T.text, flex:1, minWidth:140 }}>
                       {[r.o.first_name, r.o.last_name].filter(Boolean).join(" ") || r.o.email || "(no name)"}
@@ -18523,7 +18692,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
       {/* Ticket sales and new bookings sit below the viewing requests. Both
           are worth reading when there is a minute; neither is somebody waiting
           on a reply, which is what the panels above are. */}
-      <BoxOfficeDashboardCard setView={setView}/>
+      <BoxOfficeDashboardCard setView={setView} onOpenEvent={openBox}/>
       <NewLettings bookings={accomBookings} properties={accomProperties} onOpen={onOpenAccom}
         events={bookings} onOpenEvent={onOpenEvent}/>
 
@@ -22327,7 +22496,17 @@ function BlockCalendar({ blocks, requests, bookings, from, to, onPick }) {
   );
 }
 
-function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, patchBooking, mode="requests", confirmedSlot=null }) {
+function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookings, enquiries, saveEnquiries, patchBooking, mode="requests", confirmedSlot=null, highlightId=null, onHighlightDone=null }) {
+  // Scroll to the request a link asked for and pick it out for a few seconds.
+  // Waits for it to be in the list — requests refresh on arrival.
+  const hlFound = !!highlightId && (requests || []).some(function(r) { return String(r.id) === String(highlightId); });
+  useEffect(function() {
+    if (!hlFound) return;
+    const el = typeof document !== "undefined" ? document.getElementById("vr-" + highlightId) : null;
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior:"smooth", block:"center" });
+    const t = setTimeout(function() { if (onHighlightDone) onHighlightDone(); }, 4000);
+    return function() { clearTimeout(t); };
+  }, [hlFound, highlightId]);
   const [acting, setActing]         = useState(null);
   const [blockDate,   setBlockDate]   = useState("");
   const [blockDateTo, setBlockDateTo] = useState("");
@@ -22544,8 +22723,9 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   // A single request card (used in the Pending and Declined sections)
   const renderReqCard = (req) => {
     const niceDate = fmtDate(req.date);
+    const picked = highlightId != null && String(req.id) === String(highlightId);
     return (
-      <div key={req.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", boxShadow:`0 2px 6px rgba(${T.shadowRgb},.06)` }}>
+      <div key={req.id} id={"vr-" + req.id} style={{ background:"#fff", border: picked ? `2px solid ${T.accent}` : `1px solid ${T.border}`, borderRadius:10, padding: picked ? "15px 19px" : "16px 20px", boxShadow: picked ? `0 0 0 4px ${T.accentLight}` : `0 2px 6px rgba(${T.shadowRgb},.06)`, transition:"box-shadow .3s, border-color .3s" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap" }}>
@@ -22924,9 +23104,19 @@ function ViewingRequestsInbox({ requests, setRequests, blocks, setBlocks, bookin
   );
 }
 
-function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, patchBooking }) {
+function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBooking, onSelectEnquiry, viewingRequests, setViewingRequests, viewingBlocks, setViewingBlocks, enquiries, setEnquiries, saveEnquiries, patchBooking, focusRequestId, clearFocusRequest }) {
   const [filter,    setFilter]    = useState("upcoming");
   const [viewTab,   setViewTab]   = useNavTab("viewings");
+  // A request opened from the home page: shown on the Viewings tab, scrolled
+  // to and picked out. Held here (not in the app) so it survives the inbox
+  // re-rendering while the requests refresh.
+  const [highlightReqId, setHighlightReqId] = useState(null);
+  useEffect(function() {
+    if (focusRequestId == null) return;
+    setViewTab("viewings");
+    setHighlightReqId(focusRequestId);
+    if (clearFocusRequest) clearFocusRequest();
+  }, [focusRequestId]);
   const inSidebar = useContext(SidebarNavContext);
   const [refreshing, setRefreshing] = useState(false);
   const [editKey, setEditKey]     = useState(null); // `${sourceType}:${sourceId}:${vIndex}` currently being edited
@@ -23054,6 +23244,7 @@ function ViewingsView({ bookings, setBookings, setView, setReportType, onEditBoo
 
       {viewTab==="viewings" && (
         <ViewingRequestsInbox mode="requests"
+          highlightId={highlightReqId} onHighlightDone={()=>setHighlightReqId(null)}
           requests={viewingRequests||[]} setRequests={setViewingRequests}
           blocks={viewingBlocks||[]} setBlocks={setViewingBlocks}
           bookings={bookings} enquiries={enquiries} saveEnquiries={saveEnquiries} patchBooking={patchBooking}
@@ -24068,7 +24259,7 @@ function EnquiryViewingsCell({ enq }) {
   );
 }
 
-function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFocus, bookings, onEnquiriesChanged }) {
+function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFocus, bookings, onEnquiriesChanged, onOpenEvent }) {
   const [enquiries, setEnquiries] = useState([]);
   const [loaded, setLoaded]       = useState(false);
   const [selected, setSelected]   = useState(null); // id of open enquiry
@@ -24302,6 +24493,7 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         setConfirmDlg={setConfirmDlg}
         gmailToken={gmailToken}
         onConvertToBooking={onConvertToBooking}
+        onOpenEvent={onOpenEvent}
         bookings={bookings || []}
         enquiries={enquiries}
         onSavePencils={savePencils}
@@ -24495,8 +24687,13 @@ function FRow({ label, children }) {
   );
 }
 
-function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking, bookings, enquiries, onSavePencils, autoMarks }) {
+function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, setConfirmDlg, gmailToken, onConvertToBooking, onOpenEvent, bookings, enquiries, onSavePencils, autoMarks }) {
   const [form, setForm]         = useState({...enq});
+  // The event this enquiry was converted into — the same match the convert
+  // step uses to refuse a second copy (fromEnquiryId), so the two agree.
+  const linkedEvent = enq && enq.id != null
+    ? (bookings || []).find(function(b) { return b && String(b.fromEnquiryId) === String(enq.id); }) || null
+    : null;
   const [newContact, setNewContact] = useState({ date: new Date().toISOString().slice(0,10), method:"phone", note:"" });
   const [addingContact, setAddingContact] = useState(false);
   const [editingContactIdx, setEditingContactIdx] = useState(null);
@@ -24569,7 +24766,16 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
         <TempBadge temp={form.temperature}/>
         <OutcomeBadge outcome={form.outcome}/>
         {dirty && <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save Changes</button>}
-        {onConvertToBooking && <button onClick={handleConvertClick} style={{ background:T.green, color:"#fff", border:"none", padding:"9px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Convert to Booking</button>}
+        {/* Once converted, the event is one press away. Converting again
+            already opens it rather than making a second, but a button that
+            says Convert is not where anyone looks for "take me to it". */}
+        {onOpenEvent && linkedEvent && (
+          <button onClick={function(){ onOpenEvent(linkedEvent.id); }} title={"Open the event" + (linkedEvent.date ? " on " + fmtDate(linkedEvent.date) : "")}
+            style={{ background:"#fff", color:T.green, border:`1.5px solid ${T.green}`, padding:"8px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            Open event{linkedEvent.date ? " · " + fmtDate(linkedEvent.date) : ""}
+          </button>
+        )}
+        {onConvertToBooking && !(onOpenEvent && linkedEvent) && <button onClick={handleConvertClick} style={{ background:T.green, color:"#fff", border:"none", padding:"9px 18px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>Convert to Booking</button>}
         <button onClick={onDelete} style={{ background:T.redBg, border:"none", color:T.red, padding:"9px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Delete</button>
         </>}/>
 
@@ -25077,10 +25283,18 @@ function BoxStat({ label, value, sub, tone }) {
 // from before, so nobody mid-session is thrown out by this change.
 
 // ── The tab itself ───────────────────────────────────────────────────────────
-function BoxOfficeView({ bookings }) {
+function BoxOfficeView({ bookings, focusEventId, clearFocusEvent }) {
   // A sidebar click does what the Events/Orders/Door/Settings tabs did.
   const [tab, setTab] = useNavTab("boxoffice", function(id) { if (id !== "events") setOpenEventId(null); });
-  const [openEventId, setOpenEventId] = useState(null);
+  // Arriving from a link elsewhere (the home page) opens that event straight
+  // away — taken at mount so the list never flashes up first.
+  const [openEventId, setOpenEventId] = useState(focusEventId != null ? focusEventId : null);
+  useEffect(function() {
+    if (focusEventId == null) return;
+    setOpenEventId(focusEventId);
+    setTab("events");
+    if (clearFocusEvent) clearFocusEvent();
+  }, [focusEventId]);
   const inSidebar = useContext(SidebarNavContext);
 
   const tabs = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
@@ -27635,7 +27849,7 @@ function BoxTemplatesEditor({ templates, setTemplates }) {
 // Silent when there's nothing on sale, and silent on a device that hasn't been
 // given the box office key — the home page shouldn't nag about a key somebody
 // may not have.
-function BoxOfficeDashboardCard({ setView }) {
+function BoxOfficeDashboardCard({ setView, onOpenEvent }) {
   const [events, setEvents] = useState(null);
   const [owing, setOwing]   = useState(0);
 
@@ -27681,7 +27895,7 @@ function BoxOfficeDashboardCard({ setView }) {
       {events.map(function(e) {
         const pct = e.stat_capacity ? Math.round((e.stat_sold / e.stat_capacity) * 100) : 0;
         return (
-          <div key={e.id} onClick={()=>setView("boxoffice")}
+          <div key={e.id} onClick={()=>{ if (onOpenEvent) onOpenEvent(e.id); else setView("boxoffice"); }}
             style={{ display:"flex", gap:12, alignItems:"center", padding:"9px 0", borderTop:`1px solid ${T.border}`, cursor:"pointer", flexWrap:"wrap" }}>
             <div style={{ flex:"1 1 160px", minWidth:0 }}>
               <div style={{ fontSize:13.5, fontWeight:700, color:T.text }}>{e.name}</div>
