@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25c";
+const APP_BUILD = "2026-10-25d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7938,7 +7938,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         <PageErrorBoundary key={view === "form" ? "form-" + formKey : view} page={view}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
-        {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} />}
+        {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
         {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
           onAutoSave={async(fd)=>{
@@ -8058,6 +8058,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
 // dies mid-word.
 
 const PORTAL_TABS = [
+  { id: "progress", label: "Who's behind" },
   { id: "logins",   label: "By event" },
   { id: "times",    label: "Access times" },
   { id: "suppliers",label: "Supplier directory" },
@@ -8069,14 +8070,15 @@ const PORTAL_TABS = [
   { id: "venue",    label: "Cover & documents" },
 ];
 
-function PortalAdminScreen({ bookings, onBack }) {
-  const [tab, setTab] = useState("logins");
+function PortalAdminScreen({ bookings, onBack, onOpenEvent }) {
+  const [tab, setTab] = useState("progress");
   return (
     <div style={{ padding: UI_CLASSIC ? "28px 4px 0" : 0 }}>
       <PageHeader title="Client portal settings" back="Events" onBack={onBack}
-        sub="What every event starts with — sections, drinks and corkage, extras and food, templates, the room and the supplier directory. Each event's own logins, drinks and bar are on the event."/>
+        sub="Who is behind across every coming event, and what every event starts with — sections, drinks and corkage, extras and food, templates, the room and the supplier directory. Each event's own logins, drinks and bar are on the event."/>
       <TabStrip tabs={PORTAL_TABS.map(function(t){ return [t.id, t.label]; })} value={tab} onChange={setTab}/>
 
+      {tab === "progress"  && <PortalProgress onOpenEvent={onOpenEvent} />}
       {tab === "logins"    && <PortalLogins bookings={bookings} />}
       {tab === "times"     && <PortalAccessTimes />}
       {tab === "suppliers" && <PortalSupplierDirectory />}
@@ -8093,6 +8095,161 @@ function PortalAdminScreen({ bookings, onBack }) {
         </div>
       )}
       {tab === "venue"     && <PortalVenueSettings />}
+    </div>
+  );
+}
+
+// ─── who's behind ────────────────────────────────────────────────────────────
+//
+// One row per coming event (wp_admin_portal_progress, admin only): how far each
+// couple has got in the portal, worked out from the portal's own tables, so the
+// office does not have to open every event to find who needs a call.
+//
+// The red/amber rules are in portalProgressFlags, pure and pinned by
+// tests/portal-progress-test.cjs. Only pages the event actually shows count —
+// a party with no table plan is never "behind on its table plan".
+
+const PROGRESS_READY_LABEL = {
+  guests: "Guest list", food: "Food", drinks: "Drinks", bar: "Evening bar", timeline: "Timeline", music: "Music",
+  photos: "Photos & films", uploads: "Uploads", suppliers: "Suppliers", layout: "Table plan", items: "Bringing", details: "Details",
+};
+
+function progressDaysBetween(a, b) {
+  return Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+}
+
+// { level: "red" | "amber" | "ok", reasons: [..] } for one board row.
+function portalProgressFlags(ev, today) {
+  const red = [], amber = [];
+  const vis = ev.visible || [];
+  const days = progressDaysBetween(today, ev.date);
+  if (!ev.logins) {
+    if (days <= 180) red.push("No portal login");
+    else if (days <= 365) amber.push("No portal login");
+  } else if (!ev.last_seen) {
+    (days <= 120 ? red : amber).push("Never signed in");
+  }
+  if (ev.checklist_overdue > 0) red.push(ev.checklist_overdue + " overdue on the checklist");
+  if (ev.next_payment && ev.next_payment.due && ev.next_payment.due < today) red.push(ev.next_payment.label + " overdue");
+  if (days <= 56 && vis.indexOf("guests") !== -1 && !(ev.numbers && ev.numbers.adults != null)) red.push("No numbers");
+  if (days <= 56 && vis.indexOf("timeline") !== -1 && !ev.timeline_lines) red.push("No timeline");
+  if (days <= 28 && vis.indexOf("layout") !== -1 && ev.guests_seated > 0 && ev.guests_at_tables < ev.guests_seated) {
+    amber.push((ev.guests_seated - ev.guests_at_tables) + " not at a table");
+  }
+  if (days <= 42 && vis.indexOf("drinks") !== -1 && !ev.drinks_locked && !ev.drinks_route) amber.push("No drinks choice");
+  if ((ev.reopened || []).length) amber.push("Handed back: " + ev.reopened.map(function(k){ return PROGRESS_READY_LABEL[k] || k; }).join(", "));
+  if (ev.checklist_soon > 0) amber.push(ev.checklist_soon + " due in the next three weeks");
+  return { level: red.length ? "red" : amber.length ? "amber" : "ok", reasons: red.concat(amber), days: days };
+}
+
+function PortalProgress({ onOpenEvent }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [only, setOnly] = useState("behind");
+  async function load() {
+    setErr("");
+    try { setData(await sbRpcQuiet("wp_admin_portal_progress")); }
+    catch (e) {
+      setErr(e.status === 404 ? "This needs the 25 Oct database update (2026-10-25n-nudges-progress.sql)." :
+             e.code === "not_admin" ? "Only an admin can see this." : (e.message || String(e)));
+    }
+  }
+  useEffect(function(){ load(); }, []);
+
+  if (err) return <div style={{ ...quietText, color:T.red, padding:"14px 0" }}>{err}</div>;
+  if (!data) return <div style={quietText}>Loading…</div>;
+
+  const today = data.today;
+  const rows = (data.events || []).map(function(ev) { return { ev: ev, f: portalProgressFlags(ev, today) }; });
+  const shown = rows.filter(function(r) {
+    if (only === "behind") return r.f.level !== "ok";
+    if (only === "logins") return r.ev.logins > 0;
+    return true;
+  });
+  const counts = { red: rows.filter(function(r){ return r.f.level === "red"; }).length, amber: rows.filter(function(r){ return r.f.level === "amber"; }).length };
+  const dot = function(level) {
+    return <span style={{ display:"inline-block", width:9, height:9, borderRadius:"50%", flexShrink:0,
+      background: level === "red" ? T.red : level === "amber" ? T.amber : T.green }} aria-label={level}/>;
+  };
+  const th = { textAlign:"left", fontSize:11, fontWeight:700, color:T.textLight, textTransform:"uppercase", letterSpacing:.5, padding:"8px 10px", borderBottom:`1px solid ${T.border}`, whiteSpace:"nowrap" };
+  const td = { fontSize:12.5, color:T.textMid, padding:"9px 10px", borderBottom:`1px solid ${T.border}`, verticalAlign:"top" };
+  const dash = <span style={{ color:T.textLight }}>—</span>;
+
+  return (
+    <div>
+      <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", margin:"4px 0 12px" }}>
+        <TabStrip tabs={[["behind","Behind (" + (counts.red + counts.amber) + ")"],["logins","With a login"],["all","All coming (" + rows.length + ")"]]} value={only} onChange={setOnly}/>
+        <span style={{ fontSize:12, color:T.textMid, display:"inline-flex", gap:12, alignItems:"center" }}>
+          <span style={{ display:"inline-flex", gap:5, alignItems:"center" }}>{dot("red")} {counts.red} need chasing</span>
+          <span style={{ display:"inline-flex", gap:5, alignItems:"center" }}>{dot("amber")} {counts.amber} worth a look</span>
+        </span>
+        <button type="button" onClick={function(){ setData(null); load(); }} style={btnQuiet}>Refresh</button>
+      </div>
+      {shown.length === 0 ? (
+        <div style={{ ...quietText, padding:"14px 0" }}>{only === "behind" ? "Nobody is behind. " : ""}Nothing to show.</div>
+      ) : (
+        <div style={{ overflowX:"auto", background:"#fff", border:`1px solid ${T.border}`, borderRadius:10 }}>
+          <table style={{ borderCollapse:"collapse", width:"100%", minWidth:980 }}>
+            <thead><tr>
+              <th style={th}>Event</th><th style={th}>Portal</th><th style={th}>Numbers</th><th style={th}>Guests</th>
+              <th style={th}>Timeline</th><th style={th}>Drinks</th><th style={th}>Checklist</th><th style={th}>Marked done</th>
+              <th style={th}>Next payment</th><th style={th}>Reminder</th>
+            </tr></thead>
+            <tbody>
+              {shown.map(function(r) {
+                const ev = r.ev, vis = ev.visible || [];
+                const readyable = vis.filter(function(k){ return PROGRESS_READY_LABEL[k]; });
+                const ready = (ev.ready || []).filter(function(k){ return readyable.indexOf(k) !== -1; });
+                const n = ev.numbers;
+                return (
+                  <tr key={ev.event_id} data-event={ev.event_id}>
+                    <td style={{ ...td, minWidth:190 }}>
+                      <div style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
+                        <span style={{ marginTop:4 }}>{dot(r.f.level)}</span>
+                        <div>
+                          {onOpenEvent
+                            ? <button type="button" onClick={function(){ onOpenEvent(ev.event_id); }} style={{ background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, color:T.text, textAlign:"left" }}>{ev.couple || "Event " + ev.event_id}</button>
+                            : <b style={{ color:T.text, fontSize:13 }}>{ev.couple || "Event " + ev.event_id}</b>}
+                          <div style={{ fontSize:11.5, color:T.textLight }}>{fmtDate(ev.date)} · {r.f.days === 0 ? "today" : "in " + r.f.days + " days"} · {ev.event_type}</div>
+                          {r.f.reasons.length > 0 && <div style={{ fontSize:11.5, color: r.f.level === "red" ? T.red : T.amber, marginTop:3 }}>{r.f.reasons.join(" · ")}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td style={td}>
+                      {!ev.logins ? <span style={{ color:T.textLight }}>No login</span>
+                        : ev.last_seen ? <>Seen {fmtDate(String(ev.last_seen).slice(0,10))}{ev.last_change ? <div style={{ fontSize:11, color:T.textLight }}>last change {fmtDate(String(ev.last_change).slice(0,10))}</div> : null}</>
+                        : <>Never signed in{ev.invited ? <div style={{ fontSize:11, color:T.textLight }}>invited {fmtDate(String(ev.invited).slice(0,10))}</div> : null}</>}
+                    </td>
+                    <td style={td}>{vis.indexOf("guests") === -1 ? dash : n && n.adults != null
+                      ? <>{(n.adults || 0) + (n.children || 0) + (n.babies || 0)} seated{n.evening ? <div style={{ fontSize:11, color:T.textLight }}>+{n.evening} evening</div> : null}</> : dash}</td>
+                    <td style={td}>{vis.indexOf("guests") === -1 ? dash : (ev.guests_seated + ev.guests_evening) === 0 ? dash
+                      : <>{ev.guests_seated + ev.guests_evening} named{vis.indexOf("layout") !== -1 && ev.guests_seated > 0 ? <div style={{ fontSize:11, color:T.textLight }}>{ev.guests_at_tables} of {ev.guests_seated} at tables</div> : null}</>}</td>
+                    <td style={td}>{vis.indexOf("timeline") === -1 || !ev.timeline_lines ? dash : ev.timeline_lines + (ev.timeline_lines === 1 ? " line" : " lines")}</td>
+                    <td style={td}>{vis.indexOf("drinks") === -1 ? dash : ev.drinks_locked ? "Locked" : ev.drinks_route ? String(ev.drinks_route).replace(/^./, function(c){ return c.toUpperCase(); }) : dash}</td>
+                    <td style={td}>{!ev.checklist_total ? <span style={{ color:T.textLight }}>Not opened</span> : <>
+                      {ev.checklist_done}/{ev.checklist_total} done
+                      {ev.checklist_overdue > 0 && <div style={{ fontSize:11, color:T.red }}>{ev.checklist_overdue} overdue</div>}
+                      {ev.checklist_soon > 0 && <div style={{ fontSize:11, color:T.amber }}>{ev.checklist_soon} due soon</div>}
+                    </>}</td>
+                    <td style={td} title={readyable.map(function(k){ return (ready.indexOf(k) !== -1 ? "✓ " : "· ") + PROGRESS_READY_LABEL[k]; }).join("\n")}>
+                      {readyable.length ? ready.length + " of " + readyable.length : dash}
+                      {ready.length > 0 && <div style={{ fontSize:11, color:T.textLight }}>{ready.map(function(k){ return PROGRESS_READY_LABEL[k]; }).join(", ")}</div>}
+                    </td>
+                    <td style={td}>{ev.next_payment ? <>{portalMoney(ev.next_payment.amount)}<div style={{ fontSize:11, color: ev.next_payment.due < today ? T.red : T.textLight }}>{ev.next_payment.label}, {fmtDate(ev.next_payment.due)}</div></> : dash}</td>
+                    <td style={td}>{ev.last_reminder ? fmtDate(String(ev.last_reminder).slice(0,10)) : dash}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ fontSize:11.5, color:T.textLight, marginTop:10, lineHeight:1.6 }}>
+        Red: no login within six months, never signed in within four, anything overdue on the checklist or the statement,
+        or no numbers or timeline in the last eight weeks. Amber: worth a look — guests not at a table in the last four
+        weeks, no drinks choice in the last six, a page you handed back, or something due in the next three weeks.
+        Only pages the event shows count. Hover "Marked done" for the list.
+      </div>
     </div>
   );
 }

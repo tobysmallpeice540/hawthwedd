@@ -107,6 +107,57 @@ async function openPortal({ distDir, rpc = {}, auth = {}, signedIn = true, viewp
   }
 }
 
+// The STAFF app, signed in as an admin, with Supabase faked the same way.
+// Table reads (GET /rest/v1/<table>) answer from `tables[name]` or [];
+// app_data reads answer from `appData[key]` (missing keys are absent rows).
+async function openStaff({ distDir, rpc = {}, appData = {}, viewport, path: urlPath = '/' }) {
+  const server = await serve(distDir)
+  const origin = 'http://127.0.0.1:' + server.address().port
+  const exe = fs.readdirSync('/opt/pw-browsers').filter((d) => d.startsWith('chromium-')).map((d) => '/opt/pw-browsers/' + d + '/chrome-linux/chrome').find((f) => fs.existsSync(f))
+  const browser = await chromium.launch(exe ? { executablePath: exe } : {})
+  const context = await browser.newContext({ viewport: viewport || { width: 1400, height: 900 } })
+  const page = await context.newPage()
+  const calls = [], errors = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  const user = { id: '00000000-0000-4000-8000-00000000beef', email: 'office@test.invalid', aud: 'authenticated', role: 'authenticated' }
+  const exp = Math.floor(Date.now() / 1000) + 3600 * 24
+  const jwt = b64url({ alg: 'HS256', typ: 'JWT' }) + '.' + b64url({ sub: user.id, email: user.email, exp, role: 'authenticated', aud: 'authenticated' }) + '.sig'
+  await page.addInitScript(([s]) => { localStorage.setItem('sb-rkqbyisfmvwulsyxzwjz-auth-token', s) },
+    [JSON.stringify({ access_token: jwt, refresh_token: 'r', token_type: 'bearer', expires_in: 86400, expires_at: exp, user })])
+  const allRpc = Object.assign({ my_profile: () => ({ id: user.id, role: 'admin', active: true, name: 'Office' }) }, rpc)
+  await page.route(HOST + '/**', async (route) => {
+    const req = route.request()
+    const url = new URL(req.url())
+    const m = url.pathname.match(/\/rest\/v1\/rpc\/(\w+)$/)
+    if (m) {
+      let args = {}
+      try { args = JSON.parse(req.postData() || '{}') } catch (e) { /* none */ }
+      calls.push({ fn: m[1], args })
+      const h = allRpc[m[1]]
+      if (!h) return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ code: 'PGRST202', message: 'Could not find the function ' + m[1] }) })
+      const body = await h(args)
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body === undefined ? null : body) })
+    }
+    if (url.pathname.startsWith('/auth/v1/')) {
+      if (url.pathname.endsWith('/user')) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(user) })
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    }
+    const t = url.pathname.match(/\/rest\/v1\/(\w+)$/)
+    if (t && req.method() === 'GET') {
+      if (t[1] === 'app_data') {
+        const k = (url.searchParams.get('key') || '').replace(/^eq\./, '')
+        const rows = k && appData[k] !== undefined ? [{ key: k, value: appData[k] }] : []
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(rows) })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    }
+    if (t) { calls.push({ fn: 'write:' + t[1], args: req.postData() }); return route.fulfill({ status: 201, contentType: 'application/json', body: '[]' }) }
+    return route.fulfill({ status: 404, body: '' })
+  })
+  await page.goto(origin + urlPath)
+  return { page, calls, errors, origin, context, close: async () => { await browser.close(); server.close() } }
+}
+
 // What every portal page needs to get past "One moment…".
 function baseRpc(over) {
   return Object.assign({
@@ -125,4 +176,4 @@ async function goTab(page, label) {
   await page.locator('.side-list .tab', { hasText: label }).first().click()
 }
 
-module.exports = { openPortal, baseRpc, goTab }
+module.exports = { openPortal, openStaff, baseRpc, goTab }
