@@ -37,6 +37,11 @@ create or replace function pg_temp.patch_fn(p_sig regprocedure, p_find text, p_r
 returns void language plpgsql as $$
 declare d text := pg_get_functiondef(p_sig); n integer;
 begin
+  -- Pasted into the Supabase SQL editor, this file can arrive with Windows line
+  -- endings while the live functions have plain ones, so a search text that
+  -- spans two lines would never match. Compare and write without the \r.
+  p_find := replace(p_find, chr(13), '');
+  p_repl := replace(p_repl, chr(13), '');
   if position(p_repl in d) > 0 then
     raise notice 'patch of % already applied — skipped', p_sig;
     return;
