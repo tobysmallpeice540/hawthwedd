@@ -70,8 +70,11 @@ export default function VenueForm({ onGo, visible }) {
   // Group by section, preserving the order the database gave us.
   const sections = []
   // Questions answered on another page (drop-off and collection, on Bringing)
-  // stay in the question list so their answers are kept, but are not drawn here.
-  for (const q of data.questions.filter((x) => x.in_form !== false)) {
+  // stay in the question list so their answers are kept, but are not drawn
+  // here -- unless this event has no Bringing page (wakes, as standard), in
+  // which case this is the only place to answer them.
+  const elsewhere = (visible || []).includes('items')
+  for (const q of data.questions.filter((x) => x.in_form !== false || !elsewhere)) {
     let s = sections.find((x) => x.name === q.section)
     if (!s) { s = { name: q.section, questions: [] }; sections.push(s) }
     s.questions.push(q)

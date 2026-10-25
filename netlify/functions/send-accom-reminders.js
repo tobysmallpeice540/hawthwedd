@@ -107,6 +107,19 @@ function buildStayDetailsText(booking) {
   }).join("\n");
 }
 
+// Arrival and departure across every stay — the earliest check-in and the
+// latest check-out. The flat booking.checkIn is only a fallback: bookings
+// made before 24 Oct, and some made in the app, have only their stays, and
+// in a basket the flat field is the first stay added, not the earliest.
+function arrivalOf(booking) {
+  var ins = (booking.stays || []).map(function(s) { return s && s.checkIn; }).filter(Boolean).sort();
+  return ins.length ? ins[0] : (booking.checkIn || null);
+}
+function departureOf(booking) {
+  var outs = (booking.stays || []).map(function(s) { return s && s.checkOut; }).filter(Boolean).sort();
+  return outs.length ? outs[outs.length - 1] : (booking.checkOut || null);
+}
+
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -122,8 +135,8 @@ function buildTokens(booking, property, extra) {
     bookingRef:     String(booking.id || "").toUpperCase(),
     propertyName:   propNames,
     stayDetails:    buildStayDetailsText(booking),
-    checkIn:        fmtDateNice(booking.checkIn),
-    checkOut:       fmtDateNice(booking.checkOut),
+    checkIn:        fmtDateNice(arrivalOf(booking)),
+    checkOut:       fmtDateNice(departureOf(booking)),
     nights:         booking.nights || "",
     checkInTime:    checkInTime  || "",
     checkOutTime:   checkOutTime || "",
@@ -297,7 +310,7 @@ async function createPaymentLink(booking, entry, label) {
     line_items: [{
       price_data: {
         currency: "gbp",
-        product_data: { name: label + " — " + propNames, description: fmtDateNice(booking.checkIn) + " to " + fmtDateNice(booking.checkOut) },
+        product_data: { name: label + " — " + propNames, description: fmtDateNice(arrivalOf(booking)) + " to " + fmtDateNice(departureOf(booking)) },
         unit_amount: amountPence,
       },
       quantity: 1,
@@ -499,9 +512,9 @@ exports.handler = async function() {
         }
 
         // ── Arrival info (general or wedding), two reminder points ────────────
-        // The flat checkIn field, as before: the email's {{checkIn}} token reads
-        // it too. Online bookings now carry it (create-accom-checkout.js).
-        var checkIn = booking.checkIn;
+        // The earliest stay's check-in (arrivalOf). Reading only the flat
+        // field left three confirmed 2027 bookings with no arrival email.
+        var checkIn = arrivalOf(booking);
         if (checkIn) {
           var arrivalId = booking.bookingType === "Wedding" ? "arrival_event" : "arrival_general";
           var arrTmpl = getTmpl(templates, arrivalId);
@@ -534,4 +547,4 @@ exports.handler = async function() {
   }
 };
 
-exports._internals = { claimFlag, settleFlag };
+exports._internals = { claimFlag, settleFlag, arrivalOf, departureOf };

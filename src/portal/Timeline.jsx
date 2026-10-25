@@ -282,11 +282,9 @@ function Block({ block, suppliers, contacts, ceremony, onGo, onChanged }) {
         {block.notes && <div className="tl-notes">{block.notes}</div>}
         {/* The first dance song lives on the Music page, with its Spotify link
             — or a tick to say the DJ is doing it. */}
-        {/first dance/i.test(block.title) && (
+        {/first dance/i.test(block.title) && onGo && (
           <div className="tl-notes">
-            First dance song: {onGo
-              ? <button type="button" className="btn-quiet" onClick={() => onGo('music')}>add it on the Music page ›</button>
-              : 'tell us on the Music page.'}
+            First dance song: <button type="button" className="btn-quiet" onClick={() => onGo('music')}>add it on the Music page ›</button>
           </div>
         )}
         {prompts.length > 0 && !answering && (
@@ -411,7 +409,17 @@ function BlockForm({ block, dayKey, suppliers, contacts, ceremony, onDone, onCan
           p_duration_min: Number(mins) || 0, p_notes: notes || null,
           p_supplier_id: supId,
         })
-        if (contactId && r && r.id) await setWhoFor(r.id)
+        // The line exists from here on. If naming the person then fails (they
+        // were taken off Details meanwhile), close the form anyway and say so --
+        // leaving it open invites a second Add, and a second copy of the line.
+        if (contactId && r && r.id) {
+          try { await setWhoFor(r.id) }
+          catch (e3) {
+            onDone('Added, but without ' + ((people.find((c) => c.id === contactId) || {}).name || 'that person') +
+              ' — ' + (e3.code === 'not_your_contact' ? 'they are no longer in your key contacts.' : (e3.message || String(e3))))
+            return
+          }
+        }
       }
       onDone()
     } catch (e2) {
@@ -481,11 +489,15 @@ function BlockForm({ block, dayKey, suppliers, contacts, ceremony, onDone, onCan
 
 function AddBlock({ dayKey, suppliers, contacts, onChanged }) {
   const [open, setOpen] = useState(false)
+  const [note, setNote] = useState('')
   if (!open) {
     return (
-      <div className="actions">
-        <button className="btn-small" onClick={() => setOpen(true)}>Add something</button>
-      </div>
+      <>
+        {note && <div className="alert alert-warn">{note}</div>}
+        <div className="actions">
+          <button className="btn-small" onClick={() => { setNote(''); setOpen(true) }}>Add something</button>
+        </div>
+      </>
     )
   }
   return (
@@ -494,7 +506,7 @@ function AddBlock({ dayKey, suppliers, contacts, onChanged }) {
       dayKey={dayKey}
       suppliers={suppliers}
       contacts={contacts}
-      onDone={() => { setOpen(false); onChanged() }}
+      onDone={(msg) => { setOpen(false); setNote(typeof msg === 'string' ? msg : ''); onChanged() }}
       onCancel={() => setOpen(false)}
     />
   )

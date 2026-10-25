@@ -2763,7 +2763,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-24f";
+const APP_BUILD = "2026-10-25a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -10990,8 +10990,12 @@ function PortalEventDrinks({ eventId, booking }) {
     setData(null); setEvening(null); setRate(""); setChildRate(""); setBespoke(""); setBespokeName(""); setBespokePp(""); setAgain(false);
   }
 
-  async function load() {
+  // The text boxes (rates, bespoke package) are filled from the server only
+  // when the event opens or after their own Save -- not after Unlock, pricing a
+  // line or a bar payment, which would wipe what someone is halfway through typing.
+  async function load(seed) {
     const forId = eventId;
+    const fill = seed || {};
     setErr("");
     try {
       const r = await sbRpc("wp_admin_drinks", { p_event_id: forId });
@@ -11002,22 +11006,29 @@ function PortalEventDrinks({ eventId, booking }) {
         .then(function(n){ if (isCurrent(forId)) setEvening(n && n.told_us ? n.evening_total : null); })
         .catch(function(){ if (isCurrent(forId)) setEvening(null); });
       const o = r.order || {};
-      setRate(o.rate_pp == null ? "" : String(o.rate_pp));
-      setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
-      setBespoke(o.bespoke_note || "");
-      setBespokeName(o.bespoke_name || "");
-      setBespokePp(o.bespoke_pp == null ? "" : String(o.bespoke_pp));
+      if (fill.rates) {
+        setRate(o.rate_pp == null ? "" : String(o.rate_pp));
+        setChildRate(o.child_rate_pp == null ? "" : String(o.child_rate_pp));
+      }
+      if (fill.bespoke) {
+        setBespoke(o.bespoke_note || "");
+        setBespokeName(o.bespoke_name || "");
+        setBespokePp(o.bespoke_pp == null ? "" : String(o.bespoke_pp));
+      }
     } catch (e) {
       if (!isCurrent(forId)) return;
       clearDrafts();
       setErr(e.message || String(e));
     }
   }
-  useEffect(function(){ clearDrafts(); load(); }, [eventId]);
+  useEffect(function(){ clearDrafts(); load({ rates:true, bespoke:true }); }, [eventId]);
 
   async function setDrinks(args, msg) {
     setBusy(true); setErr(""); setNote("");
-    try { await sbRpc("wp_admin_set_drinks", Object.assign({ p_event_id: eventId }, args)); setNote(msg || "Saved."); await load(); }
+    try {
+      await sbRpc("wp_admin_set_drinks", Object.assign({ p_event_id: eventId }, args)); setNote(msg || "Saved.");
+      await load({ rates: "p_rate_pp" in args || "p_child_rate_pp" in args, bespoke: "p_bespoke_note" in args });
+    }
     catch (e) { setErr(e.message || String(e)); }
     finally { setBusy(false); }
   }
@@ -11066,13 +11077,16 @@ function PortalEventDrinks({ eventId, booking }) {
   async function saveBespoke(clear) {
     const pp = String(bespokePp).trim().replace(/^£/, "");
     if (!clear && pp !== "" && !(Number(pp) >= 0)) { setErr("The bespoke price should be a number, e.g. 32.50"); return; }
+    // Blank name and description is how the database takes a package away, so
+    // a blank Save must not do it without the Remove button's question.
+    if (!clear && !bespokeName.trim() && !bespoke.trim()) { setErr("Give the bespoke package a name or a description first, or use Remove."); return; }
     if (clear && o.route === "bespoke" && !window.confirm("They have chosen this package. Removing it clears their choice. Remove it?")) return;
     setBusy(true); setErr(""); setNote("");
     try {
       await sbRpc("wp_admin_set_drinks_bespoke", { p_event_id: eventId,
         p_name: clear ? "" : bespokeName, p_note: clear ? "" : bespoke, p_pp: clear || pp === "" ? null : Number(pp) });
       setNote(clear ? "Bespoke package removed." : "Bespoke package saved — they can now choose it.");
-      await load();
+      await load({ bespoke:true });
     } catch (e) { setErr(e.message || String(e)); }
     finally { setBusy(false); }
   }
@@ -11123,15 +11137,21 @@ function PortalEventDrinks({ eventId, booking }) {
       </div>
 
       <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", marginTop:12 }}>
-        <Field label="This wedding's rate, £ a head inc VAT" width={190}>
-          <input type="number" step="0.01" value={rate} onChange={function(e){ setRate(e.target.value); }} style={inputCss} />
-        </Field>
+        {o.route !== "bespoke" && (
+          <Field label="This wedding's rate, £ a head inc VAT" width={190}>
+            <input type="number" step="0.01" value={rate} onChange={function(e){ setRate(e.target.value); }} style={inputCss} />
+          </Field>
+        )}
         <Field label="Child rate inc VAT" width={120}>
           <input type="number" step="0.01" value={childRate} onChange={function(e){ setChildRate(e.target.value); }} style={inputCss} />
         </Field>
         <button disabled={busy} style={btnQuiet} onClick={function(){
-          setDrinks({ p_rate_pp: rate === "" ? null : Number(rate), p_child_rate_pp: childRate === "" ? null : Number(childRate) }, "Rates saved for this wedding.");
-        }}>Save rates</button>
+          // On a bespoke package the adult price is the package's own, below.
+          setDrinks(o.route === "bespoke"
+            ? { p_child_rate_pp: childRate === "" ? null : Number(childRate) }
+            : { p_rate_pp: rate === "" ? null : Number(rate), p_child_rate_pp: childRate === "" ? null : Number(childRate) },
+            o.route === "bespoke" ? "Child rate saved for this wedding." : "Rates saved for this wedding.");
+        }}>{o.route === "bespoke" ? "Save child rate" : "Save rates"}</button>
         <button disabled={busy} style={btnQuiet} onClick={function(){
           setDrinks({ p_unlocked: !o.unlocked }, o.unlocked ? "Locked again." : "Unlocked — they can change it until you lock it again.");
         }}>{o.unlocked ? "Lock again" : "Unlock for them"}</button>
@@ -11156,7 +11176,7 @@ function PortalEventDrinks({ eventId, booking }) {
           </div>
           <div style={{ fontSize:11, color:T.textLight, marginTop:6, lineHeight:1.5 }}>
             With a price, it goes on the drinks invoice per adult (children at the child rate above), like the
-            other packages. Without one, nothing is added to the drinks invoice — invoice the agreed figure yourself.
+            other packages. Without one, the invoice button stays off — invoice the agreed figure yourself.
           </div>
         </div>
       ) : o.route === "bespoke" && (
@@ -11194,7 +11214,7 @@ function PortalEventDrinks({ eventId, booking }) {
         )}
       </div>
 
-      {(o.route === "classic" || o.route === "corkage") && (
+      {(o.route === "classic" || o.route === "corkage" || o.route === "bespoke") && (
         <div style={{ marginTop:12, borderTop:`1px solid ${T.border}55`, paddingTop:10 }}>
           {o.invoiced_at && (
             <div style={{ fontSize:12, color:T.green, marginBottom:6 }}>
@@ -11209,6 +11229,7 @@ function PortalEventDrinks({ eventId, booking }) {
           </button>
           <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
             {!sm.locked ? "Available once the order locks on " + (sm.lock_date ? fmtDate(sm.lock_date) : "—") + "."
+              : o.route === "bespoke" && o.bespoke_pp == null ? "Give the bespoke package a price per adult first, or invoice what was agreed yourself."
               : sm.unpriced > 0 ? "Price " + unpricedLines.length + " line" + (unpricedLines.length === 1 ? "" : "s") + " first."
               : "Inc-VAT lines to account " + (data.xero_account || XERO_ACCOUNT_EVENTS) + ". You check and send it from Xero."}
           </div>
@@ -11949,7 +11970,11 @@ function PortalDrinksSettings() {
   async function saveSettings() {
     setBusy(true); setErr("");
     try { await sbRpc("wp_admin_save_drinks_settings", { p: s }); setNote("Settings saved."); await load(); }
-    catch (e) { setErr(e.code === "link_not_https" ? "The payment link must start https://" : (e.message || String(e))); }
+    catch (e) {
+      setErr(e.code === "link_not_https" ? "The payment link must start https://"
+        : e.code === "menu_not_https" ? "The bar menu link must start https:// — copy it from the address bar with the PDF open."
+        : (e.message || String(e)));
+    }
     finally { setBusy(false); }
   }
   async function saveList() {

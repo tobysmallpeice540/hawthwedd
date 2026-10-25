@@ -103,6 +103,17 @@ function escapeHtml(s) {
     .replace(/\n/g, "<br>");
 }
 
+// Arrival and departure across every stay (earliest in, latest out); the flat
+// fields are only a fallback — many bookings carry only their stays.
+function arrivalOf(booking) {
+  var ins = (booking.stays || []).map(function(s) { return s && s.checkIn; }).filter(Boolean).sort();
+  return ins.length ? ins[0] : (booking.checkIn || null);
+}
+function departureOf(booking) {
+  var outs = (booking.stays || []).map(function(s) { return s && s.checkOut; }).filter(Boolean).sort();
+  return outs.length ? outs[outs.length - 1] : (booking.checkOut || null);
+}
+
 // One line per stay: "PropertyName: 2 October 2026 – 5 October 2026 (3 nights)"
 // — so a multi-property booking lists every property with its own dates,
 // not just the primary/first stay.
@@ -128,8 +139,8 @@ function buildTokens(booking, property, extra) {
     bookingRef:     String(booking.id || "").toUpperCase(),
     propertyName:   propNames,
     stayDetails:    buildStayDetailsText(booking),
-    checkIn:        fmtDateNice(booking.checkIn),
-    checkOut:       fmtDateNice(booking.checkOut),
+    checkIn:        fmtDateNice(arrivalOf(booking)),
+    checkOut:       fmtDateNice(departureOf(booking)),
     nights:         booking.nights || "",
     totalAmount:    Number(booking.value || 0).toFixed(2),
     depositAmount:  depositEntry ? Number(depositEntry.amount || 0).toFixed(2) : "",
