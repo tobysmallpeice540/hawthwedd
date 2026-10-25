@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25b";
+const APP_BUILD = "2026-10-25c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -23529,7 +23529,76 @@ const DEFAULT_PORTAL_EMAILS = [
     subject:"We've refunded {refund} of your bar money", button:"",
     body:"We have refunded {refund} of the money behind the bar to the card it came from, on {date}. Refunds usually reach the card within 5 to 10 working days.\n\nThat leaves {total} behind the bar for {event} ({eventDate}).\n\nYou can see this on the Evening bar page of your planner at any time.",
     fields:["{refund}","{total}","{date}","{event}","{eventDate}"] },
+  // Sent by netlify/functions/portal-nudges.js on Monday mornings, only while
+  // "on" is ticked here. The list itself is worked out by wp_nudge_plan.
+  { id:"nudge", name:"Deadline reminder (weekly)", when:"Mondays, when something is due in the next three weeks or overdue",
+    subject:"Coming up for your day at Hawthbush Farm", button:"Open your planner", on:false,
+    body:"Hello {firstName},\n\nA quick note of what is coming up for {event} on {eventDate}.\n\n{list}\n\nYou can do all of these in your planner — the button below takes you there. Anything you have already done, tick off or mark as done and it will not come up again.\n\nIf you have a question about any of it, just reply to this email.",
+    fields:["{firstName}","{event}","{eventDate}","{list}","{portalUrl}"] },
 ];
+
+// The deadline reminder's switch and preview. Module scope: it renders inputs.
+function nextMondayIso() {
+  const d = new Date(new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" }) + "T12:00:00Z");
+  const add = (8 - d.getUTCDay()) % 7 || 7;
+  d.setUTCDate(d.getUTCDate() + add);
+  return d.toISOString().slice(0, 10);
+}
+function NudgeControls({ on, onChange }) {
+  const [preview, setPreview] = useState(null);
+  const [open, setOpen] = useState(null);
+  async function look() {
+    setPreview({ busy: true }); setOpen(null);
+    try {
+      const day = nextMondayIso();
+      const res = await fetch("/.netlify/functions/portal-nudges", {
+        method: "POST", headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
+        body: JSON.stringify({ dryRun: true, today: day })
+      });
+      const data = await res.json().catch(function() { return {}; });
+      if (!res.ok) throw new Error(data.error || ("status " + res.status));
+      setPreview({ due: data.due || [], day: day });
+    } catch (e) { setPreview({ error: e.message || String(e) }); }
+  }
+  return (
+    <div style={{ background:T.tint, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", marginTop:12 }}>
+      <label style={{ display:"flex", gap:8, alignItems:"center", fontSize:13, fontWeight:700, color:T.text, cursor:"pointer" }}>
+        <input type="checkbox" checked={on} onChange={function(e){ onChange(e.target.checked); }}/>
+        Send this every Monday morning
+      </label>
+      <div style={{ fontSize:12, color:T.textMid, lineHeight:1.6, marginTop:6 }}>
+        To everyone with a portal login on a coming event, once a week, only when something is due in the next three
+        weeks or overdue (up to six weeks back): checklist items not ticked, payments still to come on their statement,
+        the drinks order closing, and — in the last eight weeks — pages not yet marked done. Only pages the couple can
+        see count. Wakes, funerals and memorials are left out. Save after changing the tick.
+      </div>
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:8, flexWrap:"wrap" }}>
+        <button type="button" onClick={look} disabled={preview && preview.busy} style={btnQuiet}>
+          {preview && preview.busy ? "Looking…" : "Who would get one next Monday?"}
+        </button>
+        {preview && preview.error && <span style={{ fontSize:12, color:T.red }}>Could not check: {preview.error}</span>}
+        {preview && preview.due && <span style={{ fontSize:12, color:T.textMid }}>
+          {preview.due.length === 0 ? "Nobody — nothing is due." : preview.due.length + (preview.due.length === 1 ? " couple" : " couples") + " on " + fmtDate(preview.day) + " (as saved):"}
+        </span>}
+      </div>
+      {preview && preview.due && preview.due.length > 0 && (
+        <div style={{ display:"grid", gap:4, marginTop:8 }}>
+          {preview.due.map(function(d, i) {
+            return (
+              <div key={d.event_id} style={{ fontSize:12, color:T.textMid }}>
+                <button type="button" onClick={function(){ setOpen(open === i ? null : i); }}
+                  style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:T.midBlue, fontFamily:"inherit", fontSize:12, textAlign:"left" }}>
+                  {open === i ? "▾" : "▸"} <b>{d.who}</b> — {d.items} {d.items === 1 ? "thing" : "things"} · {(d.to || []).join(", ")}
+                </button>
+                {open === i && <pre style={{ whiteSpace:"pre-wrap", fontFamily:"inherit", fontSize:12, background:"#fff", border:`1px solid ${T.border}`, borderRadius:6, padding:"8px 10px", margin:"6px 0 4px" }}>{d.subject + "\n\n" + d.text}</pre>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PortalEmailTemplatesPanel() {
   const [list, setList] = useState(null);
@@ -23543,7 +23612,8 @@ function PortalEmailTemplatesPanel() {
       // Merge onto the defaults so a template added in a later build appears.
       const merged = DEFAULT_PORTAL_EMAILS.map(function(d) {
         const s0 = (saved || []).find(function(x) { return x && x.id === d.id; });
-        return s0 ? Object.assign({}, d, { subject: s0.subject, body: s0.body, button: s0.button }) : d;
+        return s0 ? Object.assign({}, d, { subject: s0.subject, body: s0.body, button: s0.button },
+                                  d.id === "nudge" ? { on: s0.on === true } : {}) : d;
       });
       if (!off) setList(merged);
     })();
@@ -23552,10 +23622,20 @@ function PortalEmailTemplatesPanel() {
   if (!list) return <div style={quietText}>Loading…</div>;
   const t = list[sel];
   function upd(k, v) { setList(list.map(function(x, i) { return i === sel ? Object.assign({}, x, { [k]: v }) : x; })); }
-  function reset() { const d = DEFAULT_PORTAL_EMAILS.find(function(x){ return x.id === t.id; }); setList(list.map(function(x, i) { return i === sel ? Object.assign({}, d) : x; })); }
+  // Back to the standard wording keeps the on/off switch where it is.
+  function reset() { const d = DEFAULT_PORTAL_EMAILS.find(function(x){ return x.id === t.id; }); setList(list.map(function(x, i) { return i === sel ? Object.assign({}, d, x.id === "nudge" ? { on: x.on } : {}) : x; })); }
   async function save() {
     try {
-      await sbSet(PORTAL_EMAILS_STORAGE, list.map(function(x) { return { id:x.id, subject:x.subject, body:x.body, button:x.button }; }));
+      // Re-read first and keep anything this screen does not know about (a
+      // template added by a newer build in another tab), then write.
+      const cur = await sbGetStrict(PORTAL_EMAILS_STORAGE);
+      const mine = list.map(function(x) {
+        const o = { id:x.id, subject:x.subject, body:x.body, button:x.button };
+        if (x.id === "nudge") o.on = x.on === true;
+        return o;
+      });
+      const others = (Array.isArray(cur) ? cur : []).filter(function(x) { return x && !mine.some(function(m) { return m.id === x.id; }); });
+      await sbSet(PORTAL_EMAILS_STORAGE, mine.concat(others));
       setFlash("Saved"); setTimeout(function(){ setFlash(""); }, 1800);
     } catch (e) { setFlash("Save failed — " + (e.message || e)); }
   }
@@ -23581,6 +23661,7 @@ function PortalEmailTemplatesPanel() {
         <Field label="Message" width="100%">
           <textarea value={t.body} rows={11} onChange={function(e){ upd("body", e.target.value); }} style={Object.assign({}, inputCss, { fontFamily:"inherit", lineHeight:1.5 })}/>
         </Field>
+        {t.id === "nudge" && <NudgeControls on={t.on === true} onChange={function(v){ upd("on", v); }}/>}
         {!/^bar_/.test(t.id) && (
           <>
             <div style={{ height:10 }}/>
@@ -23591,7 +23672,8 @@ function PortalEmailTemplatesPanel() {
         )}
         <div style={{ fontSize:11.5, color:T.textLight, marginTop:10, lineHeight:1.6 }}>
           Filled in when it is sent: {t.fields.join(" · ")}.
-          {!/^bar_/.test(t.id) ? " The sign-in link itself is always added as the button — it is never written into the text." : " The office gets its own short note each time."}
+          {t.id === "nudge" ? " {list} is where the list of what is due goes; if it is missing, the list goes after the first paragraph. The button opens the planner's sign-in page — never a sign-in link, which would sit in an inbox all week."
+            : !/^bar_/.test(t.id) ? " The sign-in link itself is always added as the button — it is never written into the text." : " The office gets its own short note each time."}
           {" "}Left empty, a field falls back to the standard wording.
         </div>
         <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:14 }}>

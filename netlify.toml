@@ -73,6 +73,13 @@
 [functions."automations-cron"]
   schedule = "0 9 * * *"
 
+# The weekly deadline reminder to couples (portal-nudges.js). OFF until switched
+# on in Settings → Email templates → Client portal → Deadline reminder. 08:00
+# UTC on Mondays: 8am in winter, 9am in summer. Once per event per week, however
+# often it runs (wp_nudges_sent).
+[functions."portal-nudges-cron"]
+  schedule = "0 8 * * 1"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"
