@@ -56,7 +56,7 @@ const NAMES = ["round2", "parseMoney", "isValidEventDate", "addDaysIso", "fmtDat
                "damageDepositInfo", "eventStatementRows", "vatOfInclusive", "signedAmount", "eventVatSplit",
                "venueAnswerText", "venueFormAnswered", "fsEsc", "functionSheetHtml",
                "lastContactFrom", "automationDays", "enquiryGoneQuiet", "gmailCheckedOnDay",
-               "lettingValue", "estimateLettingValue", "cashflowForecast"];
+               "lettingValue", "estimateLettingValue", "cashflowForecast", "cashflowExVat"];
 const ctx = {};
 eval(DAY + "\n" + CONSTS.map(liftConst).join("\n") + "\n" + NAMES.map(lift).join("\n\n") + "\n" +
      NAMES.concat(CONSTS).map(n => "ctx." + n + " = " + n + ";").join("\n"));
@@ -185,7 +185,7 @@ console.log("function sheet");
   ok("non-admin is told why dietary notes are missing", html.indexOf("only shown to an admin login") !== -1);
 }
 
-console.log("cashflow: Airbnb paid on the last day of the let");
+console.log("cashflow: Airbnb paid out the day after arrival");
 {
   const lets = [
     { id: "a1", source: "airbnb", status: "confirmed", guestName: "Sam Airbnb", value: 900,
@@ -194,15 +194,44 @@ console.log("cashflow: Airbnb paid on the last day of the let");
     { id: "a2", source: "airbnb", status: "confirmed", guestName: "Gone Airbnb", value: 500, stays: [{ propertyId: "hamlet", checkIn: "2026-10-01", checkOut: "2026-10-03" }] },
     { id: "a3", source: "airbnb", status: "confirmed", guestName: "Unpriced Airbnb", value: 0, stays: [{ propertyId: "nowhere", checkIn: "2026-11-05", checkOut: "2026-11-07" }] },
     { id: "a4", source: "airbnb", status: "cancelled", guestName: "Cancelled", value: 700, stays: [{ propertyId: "hamlet", checkIn: "2026-11-05", checkOut: "2026-11-07" }] },
-    { id: "d1", source: "direct", status: "confirmed", guestName: "Direct", schedule: [{ label: "Balance", amount: 300, paid: false, dueDate: "2026-11-10" }] }
+    { id: "d1", source: "direct", status: "confirmed", guestName: "Direct", schedule: [{ label: "Balance", amount: 300, paid: false, dueDate: "2026-11-10" }] },
+    { id: "a5", source: "airbnb", status: "confirmed", guestName: "Paid Airbnb", value: 3615, airbnb: { payoutExpected: 3615, payoutPaid: 3615 },
+      stays: [{ propertyId: "hamlet", checkIn: "2026-10-24", checkOut: "2026-10-27" }] },
+    { id: "a6", source: "airbnb", status: "confirmed", guestName: "Here now", value: 400, airbnb: { payoutExpected: 400 },
+      stays: [{ propertyId: "amly", checkIn: "2026-10-22", checkOut: "2026-10-26" }] },
+    { id: "a7", source: "airbnb", status: "confirmed", guestName: "Month end", value: 600,
+      stays: [{ propertyId: "amly", checkIn: "2026-12-31", checkOut: "2027-01-02" }] }
   ];
   const f = ctx.cashflowForecast([], lets, null, "2026-10-24", []);
   const month = (m) => f.months.find((r) => r.month === m);
-  eq("counted in the month the let ends, not by its schedule", [month("2026-11").lets, month("2026-12").lets], [300, 900]);
-  ok("labelled as an Airbnb payout", month("2026-12").items.some((i) => i.what === "Airbnb payout" && i.when === "2026-12-01"));
+  eq("counted the day after arrival, not by its schedule", [month("2026-11").lets, month("2026-12").lets], [1200, 0]);
+  ok("labelled as an Airbnb payout", month("2026-11").items.some((i) => i.what === "Airbnb payout" && i.when === "2026-11-28"));
+  ok("a payout the emails show as sent is taken as received", !f.months.some((r) => r.items.some((i) => i.who === "Paid Airbnb")));
+  ok("arrived, not yet paid out: due now", month("2026-10").items.some((i) => i.who === "Here now" && i.when === "2026-10-24" && i.amount === 400));
+  ok("arriving 31 Dec pays out in January", month("2027-01").items.some((i) => i.who === "Month end" && i.when === "2027-01-01"));
   eq("a let already over is taken as received", f.months.reduce((a, r) => a + r.items.filter((i) => i.who === "Gone Airbnb").length, 0), 0);
   eq("one with no figure and no rate is reported, not counted", f.unpriced.map((u) => u.who), ["Unpriced Airbnb"]);
   eq("not reported as overdue", f.overdue.lets, 0);
+}
+
+console.log("cashflow: net of VAT for the report");
+{
+  const ev = { id: 910, couple: "Net", eventType: "Wedding", status: "Confirmed", date: "2027-06-05", venueFee: "12000", deposit: "1000" };
+  const held = Object.assign({}, ev, { id: 911, couple: "Held", status: "Holding", date: "2027-07-03" });
+  const lets = [
+    { id: "n1", source: "direct", status: "confirmed", guestName: "Direct", schedule: [
+      { label: "Balance", amount: 300, paid: false, dueDate: "2026-11-10" },
+      { label: "Deposit", amount: 120, paid: false, dueDate: "2026-10-01" }] }
+  ];
+  const inc = ctx.cashflowForecast([ev, held], lets, null, "2026-10-24", []);
+  const f = ctx.cashflowExVat(inc);
+  const m = (k) => f.months.find((r) => r.month === k);
+  eq("events and lettings lose a sixth", [m("2026-12").conf, m("2026-11").lets], [4583.33, 250]);
+  eq("holding too (deposit now plus the second invoice)", [m("2026-10").hold, m("2026-12").hold], [833.33, 4583.33]);
+  eq("overdue too", f.overdue.lets, 100);
+  ok("every month adds up to the lines it lists", f.months.every((r) =>
+    Math.abs(r.conf + r.hold + r.lets - r.items.reduce((a, i) => a + i.amount, 0)) < 0.005));
+  ok("the inc-VAT forecast is left as it was", inc.months.find((r) => r.month === "2026-12").conf === 5500);
 }
 
 console.log("cashflow: wedding accommodation, when decided");

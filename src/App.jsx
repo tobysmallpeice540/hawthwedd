@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25o";
+const APP_BUILD = "2026-10-25p";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -13632,7 +13632,7 @@ const BAR_TABS = [
 const REPORT_TYPES = [
   {id:"summary",label:"Annual Summary"},{id:"accommodation",label:"Accommodation"},
   {id:"staffing",label:"Rota Overview"},{id:"timeline",label:"Event Rota"},
-  {id:"funnel",label:"Sales Funnel"},{id:"cashflow",label:"Cashflow Forecast"},
+  {id:"funnel",label:"Sales Funnel"},{id:"cashflow",label:"Forecast"},
   {id:"hours",label:"Hours Worked"},   // Toby: always at the bottom
 ];
 const HIDDEN_REPORT_TYPES = ["calendar"];
@@ -17366,6 +17366,12 @@ function SalesFunnelReport({ enquiries, bookings }) {
 //     date. Bookings billed through a linked event are skipped — they are on
 //     the event's invoices already — and unpaid lines already past due are
 //     shown as overdue rather than dropped.
+//   · Airbnb: the booking's value, which the Airbnb email sync sets to
+//     Airbnb's payout after its fees. Airbnb pays out the day after arrival,
+//     so that is the date; once the emails show the payout sent it is left
+//     out as received.
+// Figures here are inc VAT, as everything is held; the report takes the VAT
+// off for display (cashflowExVat).
 function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, properties) {
   const today = todayIso || new Date().toISOString().slice(0, 10);
   const startM = today.slice(0, 7);
@@ -17425,22 +17431,29 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, prop
     // Billed through its event's invoices, so counted above.
     if (b.linkedEventId && onEventInvoices[String(b.linkedEventId)]) return;
     if (b.bookingType === "Blocked") return;
-    // Airbnb pays us itself, after the guest has stayed: the money is taken
-    // as arriving on the last day of the let. Its payment schedule is
+    // Airbnb pays us itself, the day after the guest arrives (the email sync
+    // shows the payout sent a day after check-in). Its payment schedule is
     // ignored — on an imported booking it is a placeholder, often ticked
-    // "paid" before anything has arrived. The figure is the one recorded on
-    // the booking, or failing that the calendar-based estimate the lettings
-    // reports use (lettingValue). A stay already over is taken as received.
+    // "paid" before anything has arrived. The figure is the booking's value —
+    // Airbnb's payout after fees once the email sync has reached it — or
+    // failing that the calendar-based estimate the lettings reports use
+    // (lettingValue). A payout the emails show as sent, or a stay already
+    // over, is taken as received. Arrived but not yet paid out: due now.
     if (b.source === "airbnb") {
+      if (b.airbnb && Number(b.airbnb.payoutPaid) > 0) return;
       const stays = (b.stays && b.stays.length) ? b.stays : [b];
       const out = stays.map(function(st) { return st && st.checkOut; }).filter(isValidEventDate).sort().pop();
+      const inn = stays.map(function(st) { return st && st.checkIn; }).filter(isValidEventDate).sort()[0];
       if (!out || out < today) return;
+      let when = inn ? addDaysIso(inn, 1) : out;
+      if (when > out) when = out;
+      if (when < today) when = today;
       const v = lettingValue(b, properties || []);
-      if (!(v.value > 0)) { unpriced.push({ who: b.guestName || "(no name)", when: out }); return; }
-      const m = out.slice(0, 7);
+      if (!(v.value > 0)) { unpriced.push({ who: b.guestName || "(no name)", when: when }); return; }
+      const m = when.slice(0, 7);
       if (!rows[m]) return;
       rows[m].lets += v.value;
-      rows[m].items.push({ kind: "Lettings", who: b.guestName || "(no name)", what: "Airbnb payout" + (v.estimated ? " (estimated)" : ""), when: out, amount: round2(v.value), accomId: b.id });
+      rows[m].items.push({ kind: "Lettings", who: b.guestName || "(no name)", what: "Airbnb payout" + (v.estimated ? " (estimated)" : ""), when: when, amount: round2(v.value), accomId: b.id });
       return;
     }
     (b.schedule || []).forEach(function(line) {
@@ -17456,6 +17469,24 @@ function cashflowForecast(bookings, accomBookings, accomFallback, todayIso, prop
   });
   return { months: months.map(function(m) { return rows[m]; }), overdue: overdue, unpriced: unpriced };
 }
+// The forecast with VAT taken off every figure, for the report. Each line is
+// converted on its own and the month totals rebuilt from the lines, so a
+// month always adds up to what it lists. Venue hire and accommodation are both
+// standard rated (VAT_CATEGORIES).
+function cashflowExVat(f) {
+  function rateOf(id) { const c = VAT_CATEGORIES.find(function(x) { return x.id === id; }); return c ? c.rate : 20; }
+  function net(it) {
+    const rate = it.kind === "Lettings" ? rateOf("accommodation") : rateOf("venue");
+    return Object.assign({}, it, { amount: round2(it.amount - vatOfInclusive(it.amount, rate)) });
+  }
+  function sum(items, kind) { return round2(items.reduce(function(a, it) { return it.kind === kind ? a + it.amount : a; }, 0)); }
+  const months = f.months.map(function(r) {
+    const items = r.items.map(net);
+    return Object.assign({}, r, { items: items, conf: sum(items, "Event"), hold: sum(items, "Holding event"), lets: sum(items, "Lettings") });
+  });
+  const oItems = f.overdue.items.map(net);
+  return Object.assign({}, f, { months: months, overdue: { lets: sum(oItems, "Lettings"), items: oItems } });
+}
 // A cashflow line names the event or let it came from; this opens it.
 function cashflowOpener(it, onOpenEvent, onOpenAccom) {
   if (it && it.eventId != null && onOpenEvent) return function() { onOpenEvent(it.eventId); };
@@ -17464,7 +17495,7 @@ function cashflowOpener(it, onOpenEvent, onOpenAccom) {
 }
 function CashflowReport({ bookings, accomBookings, accomProperties, onOpenEvent, onOpenAccom }) {
   const [open, setOpen] = useState(null);
-  const f = cashflowForecast(bookings, accomBookings, null, null, accomProperties);
+  const f = cashflowExVat(cashflowForecast(bookings, accomBookings, null, null, accomProperties));
   const totals = f.months.reduce(function(a, r) { return { conf:a.conf + r.conf, hold:a.hold + r.hold, lets:a.lets + r.lets }; }, { conf:0, hold:0, lets:0 });
   const max = Math.max.apply(null, [1].concat(f.months.map(function(r) { return r.conf + r.hold + r.lets; })));
   const th = { textAlign:"right", padding:"9px 12px", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, whiteSpace:"nowrap" };
@@ -17473,8 +17504,8 @@ function CashflowReport({ bookings, accomBookings, accomProperties, onOpenEvent,
   return (
     <div>
       <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12.5, color:T.infoText, lineHeight:1.6 }}>
-        What is expected in, inc VAT. Events follow the invoice schedule (deposit at booking, 1 December, final 28 days before);
-        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule; wedding accommodation is counted with its event's second and final invoices, once a stay is priced and not ticked provisional; Airbnb bookings are counted on the last day of the let, at the figure recorded or, where there is none, the estimate from our own calendar rate plus {AIRBNB_UPLIFT_PCT}%.
+        What is expected in, net of VAT: 20% VAT is taken off every figure. Events follow the invoice schedule (deposit at booking, 1 December, final 28 days before);
+        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule; wedding accommodation is counted with its event's second and final invoices, once a stay is priced and not ticked provisional. Airbnb bookings are counted at Airbnb's payout after its fees, as the Airbnb emails give it, on the day after arrival, when Airbnb pays out; once the emails show the payout sent it is left out as received. A booking the emails have not reached yet is estimated from our own calendar rate plus {AIRBNB_UPLIFT_PCT}%.
       </div>
       {f.unpriced.length > 0 && (
         <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:13, color:"#92400e" }}>
