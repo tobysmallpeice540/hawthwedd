@@ -2,10 +2,11 @@
 --
 -- A COUPLE'S SUPPLIER IS SHOWN TO OTHER COUPLES ONLY ONCE IT IS APPROVED.
 --
--- NOT YET APPLIED (25 Oct 2026). Paste the whole file into the Supabase SQL
--- editor and run it. Safe to run twice. Tested against the live bodies of the
--- two functions it patches: 2026-10-25o-supplier-approval-test.sql, all passing.
--- The staff app works before it is applied (the tick says it is needed).
+-- APPLIED TO PRODUCTION 25 October 2026 as migration supplier_approval_2026_10_25o.
+-- Checked after: column present, both patches in, anon cannot call either new
+-- function, staff can; no supplier rows changed (18 in the directory, 1 a
+-- couple's). Safe to run again. Assertions: 2026-10-25o-supplier-approval-test.sql
+-- (against the live bodies of the two patched functions, in a scratch Postgres).
 --
 -- That was already the rule underneath: a supplier a couple adds is owned by
 -- their event (owner_event_id), wp_get_suppliers lists only rows with no owner
