@@ -13,7 +13,9 @@
 --      client chose at (right for the standard menus, where a later price rise
 --      must not reach a booked couple), so a menu chosen while "price on
 --      request" stayed unpriced for good and dropped out of the VAT split.
---   3. Checklist: a fixed-date item (Interim payment, 15 January) is not seeded
+--   3. Checklist: a fixed-date item (Interim payment, 15 January) falls in the
+--      event's own year, as the statement now has it (stage 2 invoiced 1 Dec,
+--      due 15 Jan of the wedding year). It is not seeded
 --      when it fell before the booking was made (where the event records
 --      createdAt), or in the last 28 days — the final balance (28 days before)
 --      covers it then. Not "before today": a checklist is seeded when the
@@ -93,11 +95,14 @@ select pg_temp.patch_fn('public.wp_get_checklist()'::regprocedure,
   $f$      from wp_checklist_template t;
   end if;$f$,
   $r$      from wp_checklist_template t
-     -- A fixed-date item that fell before they booked, or in the last 28 days
-     -- (the final balance is due then and covers it), is left out.
+     -- A fixed-date item falls in the event's own year (Interim payment: 15
+     -- January of the wedding year, matching the statement). Left out if that
+     -- is before they booked, or in the last 28 days (the final balance is due
+     -- then and covers it).
      where t.due_md is null or v_date is null
         or (wp_fixed_due(v_date, t.due_md) >= coalesce(v_booked, '-infinity'::date)
-            and wp_fixed_due(v_date, t.due_md) < v_date - 28);
+            and wp_fixed_due(v_date, t.due_md) < v_date - 28
+            and extract(year from wp_fixed_due(v_date, t.due_md)) = extract(year from v_date));
   end if;$r$);
 
 delete from wp_checklist

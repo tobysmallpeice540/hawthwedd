@@ -94,15 +94,24 @@ console.log("statement");
 {
   const rows = ctx.eventStatementRows(ev, accom, [], TODAY);
   eq("stages 2 and 3, not 1", rows.map(r => r.label), ["Second payment", "Final balance"]);
-  eq("second is 1 Dec the year before", rows[0].due_on, "2026-12-01");
+  // Invoiced 1 Dec the year before, DUE 15 Jan of the wedding year (25 Oct 2026).
+  eq("second is due 15 Jan of the wedding year", rows[0].due_on, "2027-01-15");
+  eq("second is still invoiced 1 Dec the year before", ctx.computeEventInvoiceStages(ev, accom)[1].invoiceDate, "2026-12-01");
   eq("final is 28 days before", rows[1].due_on, "2027-05-08");
   // (12000 + 1800 + 100 - 1000) / 2 = 6450 each
   eq("amounts are the stage totals", rows.map(r => r.amount), [6450, 6450]);
   ok("lines carry only desc and amount", rows[0].lines.every(l => Object.keys(l).join() === "desc,amount"));
   const linked = ctx.eventStatementRows(ev, accom, [{ eventId: 501, stage: 2, xeroInvoiceId: "x" }], TODAY);
   eq("a linked stage is left to the invoice list", linked.map(r => r.label), ["Final balance"]);
-  const late = ctx.eventStatementRows(ev, accom, [], "2026-12-02");
-  eq("a stage whose date has passed is not promised", late.map(r => r.label), ["Final balance"]);
+  const invoicedNotDue = ctx.eventStatementRows(ev, accom, [], "2026-12-02");
+  eq("invoiced but not yet due is still to come", invoicedNotDue.map(r => r.label), ["Second payment", "Final balance"]);
+  const late = ctx.eventStatementRows(ev, accom, [], "2027-01-16");
+  eq("a stage whose due date has passed is not promised", late.map(r => r.label), ["Final balance"]);
+  // A January wedding: 15 Jan falls after the final balance, so the second
+  // payment is due with it, never after the wedding.
+  const jan = Object.assign({}, ev, { date: "2027-01-10" });
+  const js = ctx.computeEventInvoiceStages(jan, accom);
+  eq("January wedding: second due with the final balance", js[1].dueDate, js[2].invoiceDate);
   const old = ctx.eventStatementRows(Object.assign({}, ev, { date: "2026-11-20" }), [], [], TODAY);
   eq("hand-invoiced seasons publish nothing", old.length, 0);
   const dd = ctx.eventStatementRows(Object.assign({}, ev, { damageDeposit: "250" }), accom, [], TODAY);

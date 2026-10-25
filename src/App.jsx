@@ -1380,15 +1380,21 @@ function accomLineDescription(s, pct) {
 
 // Dates each stage is raised on. Stage 2 is dated 1 Dec of the year immediately
 // preceding the event; it becomes actionable from mid-November so it can be
-// prepared and sent ahead of that date.
+// prepared and sent ahead of that date. It is DUE on 15 January of the event's
+// own year (Toby, 25 Oct 2026) -- or with the final balance, if that comes
+// first (a January wedding).
 function invoiceStageDates(ev) {
   if (!isValidEventDate(ev.date)) return { 1: null, 2: null, 3: null };
   var eventYear = parseInt(ev.date.slice(0, 4), 10);
   var stage2Date = (eventYear - 1) + "-12-01";
+  var stage3Date = addDaysIso(ev.date, -28);
+  var stage2Due = eventYear + "-01-15";
+  if (stage3Date && stage3Date < stage2Due) stage2Due = stage3Date;
+  if (stage2Due < stage2Date) stage2Due = stage2Date;
   return {
     1: { invoiceDate: null, readyFrom: null },                                   // at booking
-    2: { invoiceDate: stage2Date, readyFrom: (eventYear - 1) + "-11-15" },
-    3: (function() { var d = addDaysIso(ev.date, -28); return { invoiceDate: d, readyFrom: d }; })()
+    2: { invoiceDate: stage2Date, dueDate: stage2Due, readyFrom: (eventYear - 1) + "-11-15" },
+    3: { invoiceDate: stage3Date, readyFrom: stage3Date }
   };
 }
 
@@ -1453,6 +1459,7 @@ function computeEventInvoiceStages(ev, accomBookings) {
       stage: n,
       label: INVOICE_STAGE_LABELS[n],
       invoiceDate: d.invoiceDate || null,
+      dueDate:     d.dueDate || d.invoiceDate || null,
       readyFrom:   d.readyFrom || null,
       lines: lines,
       total: round2(lines.reduce(function(a, l) { return a + l.amount; }, 0))
@@ -1504,9 +1511,11 @@ function eventStatementRows(ev, accomBookings, invoiceRecords, todayIso) {
       if (st.stage === 1) return;
       if (!(st.total > 0)) return;
       if (findPushedInvoice(invoiceRecords, ev.id, st.stage)) return;
-      if (!st.invoiceDate || st.invoiceDate < todayIso) return;
+      // Still to come until it is DUE (not merely invoiced), unless pushed.
+      const due = st.dueDate || st.invoiceDate;
+      if (!due || due < todayIso) return;
       rows.push({
-        label: STATEMENT_STAGE_LABELS[st.stage], due_on: st.invoiceDate, amount: st.total, refundable: false,
+        label: STATEMENT_STAGE_LABELS[st.stage], due_on: due, amount: st.total, refundable: false,
         lines: st.lines.map(function(l) { return { desc: l.desc, amount: l.amount }; })
       });
     });
@@ -8807,7 +8816,7 @@ function ChecklistTemplate({ rows: initial, onSaved }) {
     <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:16 }}>
       <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>The checklist</div>
       <p style={{ fontSize:12, color:T.textMid, lineHeight:1.7, margin:"0 0 14px", maxWidth:680 }}>
-        Seeded into every wedding, with each date worked backwards from the wedding day — or on a fixed day each year (the last one before the wedding).
+        Seeded into every wedding, with each date worked backwards from the wedding day — or on a fixed day in the wedding's own year (left out if that is less than 28 days before, or before they booked).
         <b> These are still the placeholder deadlines</b> — they were a guess at your real
         ones and want your eye before a couple sees them.
       </p>
@@ -13327,7 +13336,7 @@ async function pushInvoiceToXero(ev, stageObj, accomBookings) {
       contactNames: [xeroContactName(ev), xeroContactNameLegacy(ev)],
       emails: emails,
       invoiceDate: stageObj.invoiceDate || new Date().toISOString().slice(0, 10),
-      dueDate: stageObj.invoiceDate || new Date().toISOString().slice(0, 10),
+      dueDate: stageObj.dueDate || stageObj.invoiceDate || new Date().toISOString().slice(0, 10),
       reference: eventTypeLabel(ev) + " " + fmtDateLong(ev.date),
       lines: stageObj.lines
     })
