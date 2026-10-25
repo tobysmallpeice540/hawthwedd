@@ -473,8 +473,11 @@ own header.
   connecting Gmail again. Env: `GOOGLE_CLIENT_SECRET` (same OAuth client as the
   app's Gmail button); redirect URI
   `https://hawthbushfarm.netlify.app/.netlify/functions/airbnb-mail`.
-- The first read walks back to 1 Jan 2025 one Gmail page per run
+- The first read walks back to 1 Jan 2026 one Gmail page per run
   (`backfill_page`); only bookings ending in 2026 or later are changed.
+  Gmail allows ~250 units/s per mailbox (a read costs 5): three reads at a
+  time, paced. A 429 / "Quota exceeded" stops the run as `throttled` (not
+  failed, the walk not restarted); Sync now waits a minute and carries on.
   Enquiry threads with no booking are purged after 30 quiet days, only once the
   first read is done. Messages sent from the Airbnb app are never emailed, so
   only emailed replies and the co-host's appear.

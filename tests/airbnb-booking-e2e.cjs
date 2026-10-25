@@ -121,8 +121,8 @@ const CONVO = { ok: true, reservation: { code: 'HMAAAA1111' }, payouts: [], mess
   const s = await page.locator('body').innerText()
   check('S1 the connection shows', s.includes('host@example.invalid') && /27 Airbnb bookings, 140 messages/.test(s), (s.match(/Connected to[^\n]*/) || [''])[0])
   await page.getByRole('button', { name: 'Sync now' }).first().click()
-  await page.getByText('Read 5 emails.', { exact: false }).first().waitFor({ timeout: 8000 }).catch(() => {})
-  check('S2 sync now reports what it read', (await page.getByText('Read 5 emails. 1 booking updated.', { exact: false }).count()) > 0 && syncCalls[0] && syncCalls[0].action === 'sync')
+  await page.getByText('All read.', { exact: false }).first().waitFor({ timeout: 8000 }).catch(() => {})
+  check('S2 sync now reports what it read', (await page.getByText('Read 5 emails, 1 booking updated. All read.', { exact: false }).count()) > 0 && syncCalls[0] && syncCalls[0].action === 'sync')
 
   check('E1 no page errors', !h.errors.length, h.errors.join(' | '))
   await h.close()

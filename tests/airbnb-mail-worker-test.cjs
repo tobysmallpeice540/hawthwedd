@@ -128,6 +128,9 @@ global.fetch = async function(url, opts) {
   if (u.hostname === "gmail.googleapis.com") {
     const m = u.pathname.match(/\/messages\/(\w+)$/);
     if (m) {
+      if (world.quotaAfter != null && world.gets++ >= world.quotaAfter) {
+        return reply(429, { error: { code: 429, message: "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user'" } });
+      }
       const g = world.gmail[m[1]];
       return reply(200, { id: m[1], labelIds: g.labelIds, internalDate: g.internalDate, payload: {
         mimeType: "multipart/alternative", headers: Object.keys(g.headers).map((k) => ({ name: k, value: g.headers[k] })),
@@ -231,6 +234,19 @@ const body = (r) => JSON.parse(r.body);
   // Re-read after a parser fix.
   r = await call("reread", { authorization: "Bearer admin-session" });
   ok(r.statusCode === 200 && Object.keys(world.seen).length === 0 && world.state.backfill_done === false, "S9 re-read clears what was read");
+
+  // Gmail says "slow down" part way through: what was read is kept, the rest
+  // is left for the next run, nothing is counted as failed, the walk does not
+  // restart.
+  world.quotaAfter = 1; world.gets = 0;
+  r = await call("sync", { authorization: "Bearer admin-session" });
+  b = body(r);
+  ok(r.statusCode === 200 && b.ok === true && b.throttled === true && b.more === true && b.failed === 0 && b.read === 1
+     && Object.keys(world.seen).length === 1 && /slow down/.test(world.state.last_error), "Q1 a quota refusal pauses, it does not fail", b);
+  world.quotaAfter = null;
+  r = await call("sync", { authorization: "Bearer admin-session" });
+  b = body(r);
+  ok(b.throttled === false && b.read >= 1 && world.state.last_error === null, "Q2 the next run carries on and clears the note", b);
 
   // ── Google says no ────────────────────────────────────────────────────────
   world.googleRefresh = "revoked";

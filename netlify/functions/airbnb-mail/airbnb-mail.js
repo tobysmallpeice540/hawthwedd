@@ -42,13 +42,17 @@ const SITE          = "https://hawthbushfarm.netlify.app";
 const CLIENT_ID     = process.env.GOOGLE_CLIENT_ID || "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
 const REDIRECT_URI  = process.env.GMAIL_REDIRECT_URI || (SITE + "/.netlify/functions/airbnb-mail");
 const SCOPE         = "https://www.googleapis.com/auth/gmail.readonly";
-// Bookings that stay in 2026 were often made in 2025, so the first read goes
-// back to the start of 2025. Only bookings that end in 2026 or later are
-// changed (FIRST_STAY_END).
-const SCAN_FROM      = "2025/01/01";
+// The first read goes back to the start of 2026 (Toby's choice). A stay in
+// 2026 booked in 2025 still gets its full name and payout from the reminder
+// and payout emails, which come nearer the stay. Only bookings that end in
+// 2026 or later are changed (FIRST_STAY_END).
+const SCAN_FROM      = "2026/01/01";
 const FIRST_STAY_END = "2026-01-01";
 const READ_BUDGET_MS = 5000;
-const PARALLEL       = 6;
+// Gmail allows each user about 250 "units" a second, and reading one email
+// costs 5. Three at a time, with a short pause, stays well under it.
+const PARALLEL       = 3;
+const PACE_MS        = 120;
 
 function serviceKey() { return process.env.SUPABASE_SERVICE_KEY; }
 function adminToken() { return process.env.HBF_ADMIN_TOKEN; }
@@ -173,7 +177,14 @@ async function googleToken(params) {
 async function gmail(access, path) {
   const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/" + path, { headers: { Authorization: "Bearer " + access } });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error("Gmail " + path.split("?")[0] + " failed (" + res.status + "): " + ((data.error && data.error.message) || ""));
+  if (!res.ok) {
+    const msg = (data.error && data.error.message) || "";
+    const e = new Error("Gmail " + path.split("?")[0] + " failed (" + res.status + "): " + msg);
+    e.status = res.status;
+    // "Slow down", not "no": the run stops reading and the next one carries on.
+    e.quota = res.status === 429 || (res.status === 403 && /quota|rate ?limit/i.test(msg + JSON.stringify(data.error || {})));
+    throw e;
+  }
   return data;
 }
 async function listIds(access, q, max) {
@@ -342,6 +353,11 @@ async function runSync() {
 
   // And, until the first full read is done, one page (500) of the old emails
   // per run, walking back through Gmail with a saved page token.
+  const THROTTLED_MSG = "Gmail asked us to slow down for a minute; the next run carries on where this one stopped.";
+  async function throttledStop() {
+    await setState({ last_sync_at: now, last_error: THROTTLED_MSG });
+    return { ok: true, connected: true, throttled: true, more: true, read: 0, left: null, backfillDone: !!state.backfill_done };
+  }
   let page = { ids: [], next: null, failed: false };
   if (!state.backfill_done) {
     try {
@@ -349,6 +365,7 @@ async function runSync() {
         + (state.backfill_page ? "&pageToken=" + encodeURIComponent(state.backfill_page) : ""));
       page = { ids: (d.messages || []).map((m) => m.id), next: d.nextPageToken || null, failed: false };
     } catch (e) {
+      if (e.quota) return await throttledStop();
       // A page token Gmail no longer knows: start the walk again from the
       // newest. What was read already is skipped cheaply.
       console.error("[airbnb-mail] backfill page failed: " + e.message);
@@ -356,10 +373,16 @@ async function runSync() {
       await setState({ backfill_page: null });
     }
   }
-  const [recentIds, sentIds] = await Promise.all([
-    listIds(access, MAIN_Q + " after:" + recentSince, 1000),
-    listIds(access, SENT_Q + " after:" + (state.backfill_done ? recentSince : SCAN_FROM), 1000)
-  ]);
+  let recentIds, sentIds;
+  try {
+    [recentIds, sentIds] = await Promise.all([
+      listIds(access, MAIN_Q + " after:" + recentSince, 1000),
+      listIds(access, SENT_Q + " after:" + (state.backfill_done ? recentSince : SCAN_FROM), 1000)
+    ]);
+  } catch (e) {
+    if (e.quota) return await throttledStop();
+    throw e;
+  }
   const all = [];
   const add = (id) => { if (all.indexOf(id) === -1) all.push(id); };
   recentIds.forEach(add); sentIds.forEach(add); page.ids.forEach(add);
@@ -376,18 +399,20 @@ async function runSync() {
   const deadline = started + READ_BUDGET_MS;
   const results = [];
   const done = {};
-  let next = 0, failed = 0;
+  let next = 0, failed = 0, throttled = false;
   async function worker() {
-    while (next < unread.length && Date.now() < deadline) {
+    while (!throttled && next < unread.length && Date.now() < deadline) {
       const id = unread[next++];
       try {
         const m = await fetchMessage(access, id);
         results.push({ id: id, r: P.parseAirbnbEmail(m, { ourRooms: ourRooms }) });
         done[id] = true;
       } catch (e) {
+        if (e.quota) { throttled = true; break; }
         failed++;
         console.error("[airbnb-mail] could not read " + id + ": " + e.message);
       }
+      await new Promise((r) => setTimeout(r, PACE_MS));
     }
   }
   await Promise.all(Array.from({ length: PARALLEL }, worker));
@@ -413,9 +438,9 @@ async function runSync() {
   results.forEach(({ r }) => { kinds[r.kind] = (kinds[r.kind] || 0) + 1; });
   const more = left > 0 || (!backfillDone && !page.failed);
   const result = { read: results.length, left: left, failed: failed, kinds: kinds, stored: stored,
-    bookingsUpdated: applied.bookingsUpdated, purged: purged, ms: Date.now() - started };
-  await setState(Object.assign(statePatch, { last_sync_at: now, last_ok_at: failed ? state.last_ok_at : now,
-    last_error: failed ? failed + " email(s) could not be read; they will be tried again" : null, last_result: result }));
+    bookingsUpdated: applied.bookingsUpdated, purged: purged, throttled: throttled, ms: Date.now() - started };
+  await setState(Object.assign(statePatch, { last_sync_at: now, last_ok_at: (failed || throttled) ? state.last_ok_at : now,
+    last_error: throttled ? THROTTLED_MSG : (failed ? failed + " email(s) could not be read; they will be tried again" : null), last_result: result }));
   console.log("[airbnb-mail] " + JSON.stringify(result));
   return Object.assign({ ok: true, connected: true, more: more, backfillDone: backfillDone }, result);
 }

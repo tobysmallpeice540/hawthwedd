@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25m";
+const APP_BUILD = "2026-10-25n";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3761,12 +3761,22 @@ function AirbnbMailSettings() {
     setBusy("sync"); setNote(null);
     let read = 0, updated = 0;
     try {
-      for (let i = 0; i < 40; i++) {
+      const pause = function(ms) { return new Promise(function(r){ setTimeout(r, ms); }); };
+      const sofar = function() { return "Read " + read + " email" + (read === 1 ? "" : "s") + (updated ? ", " + updated + " booking" + (updated === 1 ? "" : "s") + " updated" : ""); };
+      for (let i = 0; i < 60; i++) {
         const d = await airbnbMailCall("sync");
         if (d.ok === false) throw new Error(d.error || "The sync failed");
         read += d.read || 0; updated += d.bookingsUpdated || 0;
-        setNote({ kind:"ok", text:"Read " + read + " email" + (read === 1 ? "" : "s") + (d.more ? " — " + d.left + " still to read…" : ".") + (updated ? " " + updated + " booking" + (updated === 1 ? "" : "s") + " updated." : "") });
-        if (!d.more) break;
+        if (!d.more) { setNote({ kind:"ok", text: sofar() + ". All read." }); break; }
+        // Gmail limits how fast one mailbox can be read: when it says so,
+        // wait a minute and carry on rather than stopping.
+        if (d.throttled) {
+          setNote({ kind:"ok", text: sofar() + " — Gmail asked us to slow down, carrying on in a minute…" });
+          await pause(65000);
+        } else {
+          setNote({ kind:"ok", text: sofar() + (d.left ? " — " + d.left + " still to read…" : " — reading further back…") });
+          await pause(1500);
+        }
       }
     } catch (e) { setNote({ kind:"error", text:e.message }); }
     setBusy(null); load();
