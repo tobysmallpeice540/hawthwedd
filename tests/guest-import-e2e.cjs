@@ -65,6 +65,37 @@ const guests = () => ({ ok: true, numbers: {}, derived: {}, tables: [],
   check('N1 up-to-date list cannot be saved again', await h.page.getByRole('button', { name: 'Nothing to change' }).isDisabled())
   await h.close()
 
+  // ── a failed check can be retried; clearing and pasting again re-checks ──
+  let fail = true
+  h = await openPortal({ distDir: DIST, rpc: baseRpc({ wp_get_guests: guests,
+    wp_merge_guests: () => { if (fail) { fail = false; throw new Error('timeout') } return { ok: true, new: 3, updated: 0, unchanged: 0, declined: 0, missing: 0, new_names: [], updated_lines: [], declined_names: [], missing_names: [] } } }) })
+  await goTab(h.page, 'Guests')
+  await h.page.getByRole('button', { name: 'Paste or upload a list' }).first().click()
+  const ta = h.page.locator('textarea').first()
+  await ta.fill('Ada Lovelace\nGrace Hopper\nAlan Turing')
+  await h.page.getByRole('button', { name: 'Check again' }).waitFor({ timeout: 5000 })
+  check('R1 a failed check says so and offers to try again', true)
+  await h.page.getByRole('button', { name: 'Check again' }).click()
+  await h.page.getByRole('button', { name: /Add 3 · update 0/ }).waitFor({ timeout: 5000 })
+  check('R2 and then works', true)
+  await ta.fill('')
+  await ta.fill('Ada Lovelace\nGrace Hopper\nAlan Turing')
+  await h.page.getByRole('button', { name: /Add 3 · update 0/ }).waitFor({ timeout: 5000 })
+  check('R3 clearing and pasting the same list checks it again', await h.page.getByRole('button', { name: /Add 3 · update 0/ }).isEnabled())
+  await h.close()
+
+  // ── duplicates and full notes are pointed out ───────────────────────────
+  h = await openPortal({ distDir: DIST, rpc: baseRpc({ wp_get_guests: guests,
+    wp_merge_guests: () => ({ ok: true, new: 0, updated: 2, unchanged: 0, declined: 0, missing: 0, new_names: [], updated_lines: ['x', 'y'],
+      declined_names: [], missing_names: [], notes_full_names: ['Tom Thumb'], duplicate_names: ['John Smith'] }) }) })
+  await goTab(h.page, 'Guests')
+  await h.page.getByRole('button', { name: 'Paste or upload a list' }).first().click()
+  await h.page.locator('textarea').first().fill(CSV)
+  await h.page.getByText('Notes are full for Tom Thumb', { exact: false }).waitFor({ timeout: 5000 })
+  check('D1 full notes reported by name', true)
+  check('D2 duplicate names pointed out', await h.page.getByText('John Smith appears more than once', { exact: false }).count() === 1)
+  await h.close()
+
   // ── an older database: add only ─────────────────────────────────────────
   let oldImport = null
   h = await openPortal({ distDir: DIST, rpc: baseRpc({ wp_get_guests: guests, wp_import_guests: (a) => { oldImport = a; return { ok: true, added: 3 } } }) })
@@ -73,9 +104,11 @@ const guests = () => ({ ok: true, numbers: {}, derived: {}, tables: [],
   await h.page.locator('textarea').first().fill('Ada Lovelace\nGrace Hopper\nAlan Turing')
   const addBtn = h.page.getByRole('button', { name: 'Add 3' })
   await addBtn.waitFor({ timeout: 5000 })
+  const oldText = await h.page.locator('.editor').first().innerText()
   await addBtn.click()
   await h.page.waitForTimeout(400)
   check('O1 falls back to wp_import_guests', oldImport && oldImport.p_rows.length === 3 && oldImport.p_list === 'seated')
+  check('O3 the add-only wording, not the "as often as you like" promise', !/as often as you like/.test(oldText) && /Everyone in the list is added/.test(oldText), oldText.slice(0, 300))
   check('O2 no page errors', h.errors.length === 0, h.errors.join(' | '))
   await h.close()
 

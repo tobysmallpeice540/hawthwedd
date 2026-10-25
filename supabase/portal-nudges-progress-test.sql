@@ -15,7 +15,7 @@ begin
   select (x.e->>'id')::int, (x.e->>'date')::date into ev, d
     from (select jsonb_array_elements(value) e from app_data where key='hawthbush_bookings_v6') x
    where (x.e->>'id') ~ '^\d+$' and wp_event_type_label(x.e->>'eventType') = 'Wedding'
-     and coalesce(x.e->>'status','') <> 'Cancelled' and (x.e->>'date')::date > current_date + 60
+     and coalesce(x.e->>'status','') = 'Confirmed' and (x.e->>'date')::date > current_date + 60
      and exists (select 1 from wp_payment_schedule s where s.event_id = (x.e->>'id')::int)
      and not exists (select 1 from wp_access a where a.event_id = (x.e->>'id')::int)
      and not exists (select 1 from wp_checklist c where c.event_id = (x.e->>'id')::int)
@@ -79,8 +79,10 @@ begin
   if not exists (select 1 from jsonb_array_elements(e->'items') i where i->>'kind' = 'task' and i->>'label' ~* '(payment|balance)')
   then passes:=passes+1; else fails:=fails||('N3 duplicate payment line: '||labels); end if;
 
-  -- N4 nothing far in the future, nothing long overdue
+  -- N4 nothing far in the future, nothing long overdue, and never a payment
+  -- before today (the statement does not record payment)
   if not exists (select 1 from jsonb_array_elements(e->'items') i where i ? 'due' and ((i->>'due')::date > today + 21 or (i->>'due')::date < today - 42))
+     and not exists (select 1 from jsonb_array_elements(e->'items') i where i->>'kind' = 'payment' and (i->>'due')::date < today)
   then passes:=passes+1; else fails:=fails||('N4 window: '||labels); end if;
 
   -- N5 a seeded checklist is read instead of the template, and ticked items drop out
@@ -127,6 +129,7 @@ begin
      and (e->>'checklist_done')::int = 1 and (e->>'checklist_total')::int >= 5
      and e->'next_payment'->>'label' is not null and e->>'last_reminder' is not null
      and not exists (select 1 from jsonb_array_elements(r->'events') x where (x->>'date')::date < current_date)
+     and not exists (select 1 from jsonb_array_elements(r->'events') x where (x->'next_payment'->>'due')::date < current_date)
   then passes:=passes+1; else fails:=fails||('P2 board '||coalesce(e::text,'missing')); end if;
 
   if array_length(fails, 1) is null then

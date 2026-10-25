@@ -109,6 +109,24 @@ function normaliseAge(v) {
   return 'adult'
 }
 
+// Only a cell that plainly says what someone is may CHANGE a guest already on
+// the list. A blank, "Guest", "8" or "Toddler" must not turn a child into an
+// adult on re-import — so anything unrecognised is null, and the merge leaves
+// the stored age alone. ("Child (2-12)" and "Adults" are recognised.)
+export function explicitAge(v) {
+  const s = String(v || '').trim().toLowerCase()
+  if (/^(adult|adults|grown[- ]?up|a)\b/.test(s)) return 'adult'
+  if (/^(child|children|kid|kids|c)\b/.test(s)) return 'child'
+  if (/^(baby|babies|infant|b)\b/.test(s)) return 'baby'
+  return null
+}
+function explicitChildFlag(v) {
+  const s = String(v || '').trim().toLowerCase()
+  if (/^(yes|y|true|1|x|✓|child)$/.test(s)) return 'child'
+  if (/^(no|n|false|0|adult)$/.test(s)) return 'adult'
+  return null
+}
+
 // One field holding a whole name. "Smith, John" is surname first; anything else
 // is treated as given names then surname.
 function splitWholeName(v) {
@@ -128,7 +146,10 @@ function matchHeader(cells) {
   const map = {}
   let hits = 0
   for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
-    let i = lower.findIndex((c) => aliases.includes(c))
+    // The alias order is a preference: with both "Type" and "Age" columns,
+    // "Age" is the age; with "Name" and "First name", "First name" wins.
+    let i = -1
+    for (const al of aliases) { const k = lower.indexOf(al); if (k !== -1 && !Object.values(map).includes(k)) { i = k; break } }
     // "Ceremony RSVP", "Day RSVP", "Wedding day - attending"…
     if (i === -1 && field === 'rsvp') i = lower.findIndex((c) => /\brsvp\b|attending/.test(c))
     if (i !== -1) { map[field] = i; hits++ }
@@ -204,10 +225,19 @@ export function parseGuests(text) {
         return (m.meals.length > 1 ? h : 'Meal') + ': ' + cells[i]
       }).filter(Boolean)
       row.access_needs = [...notes, ...meals].join(' · ').slice(0, 300) || null
+      // The same, one value per column, for the merge: it adds each value only
+      // if it is not there already, and a meal choice ("Main: Beef") replaces
+      // the one under the same heading ("Main: Lamb") rather than piling up.
+      row.notes_parts = notes.map((v) => ({ text: v.slice(0, 300) }))
+        .concat(meals.map((v) => ({ text: v.slice(0, 300), heading: v.slice(0, v.indexOf(':')) })))
       // Only what the list actually says: no RSVP column, no change to RSVPs.
       row.rsvp = m.rsvp !== undefined ? normaliseRsvp(g('rsvp')) : null
       row.role = g('role') || null
-      row.age_given = m.age_band !== undefined || m.child_flag !== undefined
+      // True only when this row's cell plainly says adult, child or baby.
+      const said = m.age_band !== undefined ? explicitAge(g('age_band'))
+        : m.child_flag !== undefined ? explicitChildFlag(g('child_flag')) : null
+      row.age_given = said !== null
+      if (said) row.age_band = said
     } else if (cells.length > 1) {
       // No header: assume first, last, then side if a third column exists.
       row = { first_name: cells[0], last_name: cells[1], side: cells[2] || null, age_band: 'adult', access_needs: null }

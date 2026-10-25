@@ -566,26 +566,34 @@ function ImportGuests({ list, onDone, onCancel }) {
 
   const parsed = parseGuests(text)
   const rowsKey = JSON.stringify(parsed.rows)
-  const lastKey = useRef('')
+  // Whether the database has the merge at all. Once it has said no, every
+  // later list goes the old add-only way without asking again.
+  const [oldDb, setOldDb] = useState(false)
+  const [retry, setRetry] = useState(0)
+  const seq = useRef(0)
 
-  // Ask for a preview whenever the parsed rows change, a moment after typing stops.
+  // Ask for a preview whenever the parsed rows change, a moment after typing
+  // stops. Each ask is numbered and only the latest may land, so counts for an
+  // earlier list can never sit beside a newer one. A failed ask can be retried.
   useEffect(() => {
-    if (!parsed.rows.length) { setPreview(null); return }
-    if (lastKey.current === rowsKey) return
-    setPreview((cur) => (cur === 'old' ? cur : null))   // never show counts for a list that has changed
+    const mine = ++seq.current
+    setPreview(oldDb ? 'old' : null)   // never show counts for a list that has changed
+    if (!parsed.rows.length || oldDb) return
     const t = setTimeout(async () => {
-      lastKey.current = rowsKey
       try {
         const r = await rpc('wp_merge_guests', { p_list: list, p_rows: parsed.rows, p_apply: false })
-        if (r && r.ok === false) { setErr(r.error || 'Could not read that list.'); setPreview(null); return }
+        if (mine !== seq.current) return
         setErr(''); setPreview(r)
       } catch (e) {
-        if (isMissingFunction(e)) setPreview('old')
-        else { setErr(e.message || String(e)); setPreview(null) }
+        if (mine !== seq.current) return
+        if (isMissingFunction(e)) { setOldDb(true); setPreview('old'); return }
+        setErr(e.code === 'too_many_rows' ? 'That is more than 1,000 rows — split the list and bring it in in parts.'
+          : 'We could not check that list just now. ' + (e.message || ''))
+        setPreview('failed')
       }
     }, 400)
     return () => clearTimeout(t)
-  }, [rowsKey, list])
+  }, [rowsKey, list, retry, oldDb])
 
   async function readFile(e) {
     const f = e.target.files && e.target.files[0]
@@ -609,7 +617,7 @@ function ImportGuests({ list, onDone, onCancel }) {
     }
   }
 
-  const p = preview && preview !== 'old' ? preview : null
+  const p = preview && typeof preview === 'object' ? preview : null
   const nothingToDo = p && p.new === 0 && p.updated === 0
   const cols = parsed.columns
   const found = cols ? [cols.rsvp && 'replies', cols.notes && 'dietary needs and notes', cols.meals && 'meal choices',
@@ -617,13 +625,21 @@ function ImportGuests({ list, onDone, onCancel }) {
 
   return (
     <div className="editor">
-      <label>Paste your list, or bring it in from your RSVP site</label>
-      <p className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
-        One person per line, or paste a whole column straight out of a spreadsheet.
-        If you collect replies on Bridebook, Hitched, Joy, Zola or similar, export the guest list
-        as a CSV and choose it here — <strong>as often as you like</strong>. People already on your list are
-        updated, not added twice; nobody is removed.
-      </p>
+      <label>{oldDb ? 'Paste your list' : 'Paste your list, or bring it in from your RSVP site'}</label>
+      {oldDb ? (
+        <p className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
+          One person per line, or paste a whole column straight out of a spreadsheet.
+          A CSV with headings works too — we'll pick up first name, last name, side and age.
+          Everyone in the list is added, so paste only people who are not on it yet.
+        </p>
+      ) : (
+        <p className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
+          One person per line, or paste a whole column straight out of a spreadsheet.
+          If you collect replies on Bridebook, Hitched, Joy, Zola or similar, export the guest list
+          as a CSV and choose it here — <strong>as often as you like</strong>. People already on your list are
+          updated, not added twice; nobody is removed.
+        </p>
+      )}
       <textarea
         rows={7}
         value={text}
@@ -646,7 +662,7 @@ function ImportGuests({ list, onDone, onCancel }) {
         <div className="alert alert-ok">
           Found <strong>{parsed.rows.length}</strong> {parsed.rows.length === 1 ? 'person' : 'people'}
           {parsed.usedHeader && ' (using your column headings)'}.
-          {found.length > 0 && <> We'll also bring in {found.join(', ').replace(/, ([^,]*)$/, ' and $1')}.</>}
+          {found.length > 0 && !oldDb && <> We'll also bring in {found.join(', ').replace(/, ([^,]*)$/, ' and $1')}.</>}
           {parsed.skipped > 0 && <> {parsed.skipped} {parsed.skipped === 1 ? 'line was' : 'lines were'} left out (blank, or a "plus one" without a name).</>}
           {preview === 'old' && <> First few: {parsed.rows.slice(0, 3).map((r) => [r.first_name, r.last_name].filter(Boolean).join(' ')).join(', ')}{parsed.rows.length > 3 && '…'}</>}
         </div>
@@ -665,16 +681,34 @@ function ImportGuests({ list, onDone, onCancel }) {
           <MergeNames title="Updated" names={p.updated_lines} total={p.updated} />
           <MergeNames title="Not coming, so not added" names={p.declined_names} total={p.declined} />
           <MergeNames title="On your list but not in this one — left as they are" names={p.missing_names} total={p.missing} />
-          <p className="hint">Notes are added to, never replaced. Anyone already on a table stays there.</p>
+          {(p.notes_full_names || []).length > 0 && (
+            <div className="alert alert-warn" style={{ fontSize: 13 }}>
+              Notes are full for {p.notes_full_names.join(', ')} — the new notes from this list were not added.
+              Tidy their notes on the list and bring it in again.
+            </div>
+          )}
+          {(p.duplicate_names || []).length > 0 && (
+            <div className="alert alert-warn" style={{ fontSize: 13 }}>
+              {p.duplicate_names.join(', ')} {p.duplicate_names.length === 1 ? 'appears' : 'appear'} more than once,
+              so they were matched in the order they are listed. Check their replies and notes after saving.
+            </div>
+          )}
+          <p className="hint">Notes are added to, never cut; a meal choice replaces the one before it. Anyone already on a table stays there.</p>
         </div>
       )}
 
-      {err && <div className="alert alert-warn">{err}</div>}
+      {err && (
+        <div className="alert alert-warn">
+          {err}
+          {preview === 'failed' && <> <button type="button" className="btn-quiet" onClick={() => { setErr(''); setRetry((n) => n + 1) }}>Check again</button></>}
+        </div>
+      )}
 
       <div className="actions">
-        <button className="btn-small" onClick={submit} disabled={busy || !parsed.rows.length || (!preview) || nothingToDo}>
+        <button className="btn-small" onClick={submit} disabled={busy || !parsed.rows.length || !preview || preview === 'failed' || nothingToDo}>
           {busy ? 'Saving…'
             : preview === 'old' ? `Add ${parsed.rows.length}`
+            : preview === 'failed' ? 'Add'
             : nothingToDo ? 'Nothing to change'
             : p ? `Add ${p.new} · update ${p.updated}`
             : parsed.rows.length ? 'Checking…' : 'Add'}

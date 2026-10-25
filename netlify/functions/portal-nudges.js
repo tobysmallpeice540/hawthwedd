@@ -9,7 +9,9 @@
 // checklist items, payments still to come, the drinks order closing, and in
 // the last eight weeks the pages not yet marked done. One email per event per
 // week, to every active portal login on it, and only when something is due:
-// a quiet week sends nothing.
+// a quiet week sends nothing. The schedule runs hourly 08:00–11:00 UTC on
+// Mondays; the first run sends, later ones pick up only what did not go (a
+// run cut short, a failed send, more than MAX_SENDS_PER_RUN).
 //
 // Never twice in a week: each (event, week) is recorded through wp_nudge_mark
 // BEFORE the email goes, and the mark refuses a week already taken. A send that
@@ -41,6 +43,10 @@ const FN_BUILD      = "2026-10-25c";
 
 // A bad week (a data import, a clock problem) must not become a mass mailing.
 const MAX_SENDS_PER_RUN = 40;
+// Netlify stops a function at 10 seconds. Stop sending well before that, log
+// what went, and leave the rest: the schedule runs again each hour until 11:00
+// UTC on Mondays, and the week's marks mean only the unsent are picked up.
+const TIME_BUDGET_MS = Number(process.env.NUDGE_TIME_BUDGET_MS) || 7000;   // the env var is for tests
 
 // Mirrors the "nudge" entry of DEFAULT_PORTAL_EMAILS in App.jsx. A field left
 // blank in Settings falls back to this wording, field by field.
@@ -49,9 +55,9 @@ const DEFAULT_NUDGE = {
   subject: "Coming up for your day at Hawthbush Farm",
   button: "Open your planner",
   body: "Hello {firstName},\n\n" +
-        "A quick note of what is coming up for {event} on {eventDate}.\n\n" +
+        "A quick note of what is coming up before your day with us on {eventDate}.\n\n" +
         "{list}\n\n" +
-        "You can do all of these in your planner — the button below takes you there. Anything you have already done, tick off or mark as done and it will not come up again.\n\n" +
+        "You can do all of these in your planner — the button below takes you there. Tick off a checklist item, or mark a page as done, and it will not come up again.\n\n" +
         "If you have a question about any of it, just reply to this email."
 };
 
@@ -303,7 +309,8 @@ exports.handler = async function (event) {
   if (!RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: emails.length });
 
   var sent = [], skipped = [], failed = [], logged = [];
-  for (var i = 0; i < emails.length && sent.length < MAX_SENDS_PER_RUN; i++) {
+  var started = Date.now();
+  for (var i = 0; i < emails.length && sent.length < MAX_SENDS_PER_RUN && Date.now() - started < TIME_BUDGET_MS; i++) {
     var m = emails[i];
     // Marked BEFORE sending. False means this event already had its email
     // this week (a second run, or a retry) — skip it.
@@ -329,7 +336,7 @@ exports.handler = async function (event) {
   await logEmails(logged);
   var held = emails.length - sent.length - skipped.length - failed.length;
   console.log("[portal-nudges] " + today + " (week of " + week + ") sent " + sent.length + ", already sent " + skipped.length +
-              ", failed " + failed.length + (held > 0 ? ", " + held + " held to the next run" : ""));
+              ", failed " + failed.length + (held > 0 ? ", " + held + " left for the next hourly run" : ""));
   return reply(failed.length ? 207 : 200, { ok: !failed.length, today: today, week: week, sent: sent, skipped: skipped, failed: failed, held: Math.max(0, held) });
 };
 

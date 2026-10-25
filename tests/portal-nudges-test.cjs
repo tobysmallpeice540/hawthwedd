@@ -44,8 +44,9 @@ check("E3 overdue first, under its own heading", m.text.indexOf("Still to do:\n�
 check("E4 payment with amount and day", m.text.indexOf("• Final balance: £5,692.50 — due Saturday 24 April") !== -1);
 check("E5 drinks closing", m.text.indexOf("• Your drinks order closes on Saturday 24 April") !== -1);
 check("E6 pages to finish, unknown keys dropped", m.text.indexOf("Still to mark as done: your timeline and your table plan") !== -1);
-check("E7 event date in the opening", m.text.indexOf("on 22 May 2027") !== -1);
-check("E8 names escaped in the HTML", m.html.indexOf("<b>Jones</b>") === -1 && m.html.indexOf("&lt;b&gt;Jones&lt;/b&gt;") !== -1);
+check("E7 event date in the opening", m.text.indexOf("before your day with us on 22 May 2027") !== -1);
+const withEvent = T.planEmails(PLAN, T.mergeTemplate([{ id: "nudge", body: "For {event}.\n\n{list}" }]))[0];
+check("E8 names escaped in the HTML", withEvent.html.indexOf("<b>Jones</b>") === -1 && withEvent.html.indexOf("&lt;b&gt;Jones&lt;/b&gt;") !== -1);
 check("E9 list rendered as a list in HTML", /<ul[^>]*>.*<li>Confirm your final numbers/.test(m.html));
 check("E10 button to the portal, no token", m.html.indexOf('href="https://hawthbushfarm.netlify.app/portal"') !== -1 && m.html.indexOf("#t=") === -1);
 check("E11 no overdue payment, no paid-recently note", m.text.indexOf("paid recently") === -1);
@@ -140,6 +141,25 @@ const clock = { httpMethod: "POST", headers: { "x-admin-token": "tok" }, body: "
   calls = fake({ templates: ON, planFails: true });
   r = await handler(clock);
   check("H13 a failed read sends nothing", r.statusCode === 500 && !calls.some((c) => c.url.includes("resend")));
+
+  // H14 a slow run stops inside its time budget, logs what went, leaves the rest
+  process.env.NUDGE_TIME_BUDGET_MS = "60";
+  const mod2 = new Module(FN, null); mod2.filename = FN; mod2.paths = Module._nodeModulePaths(path.dirname(FN));
+  mod2._compile(fs.readFileSync(FN, "utf8"), FN);
+  const three = [0, 1, 2].map((n) => Object.assign({}, PLAN[0], { event_id: 300 + n }));
+  calls = fake({ templates: ON });
+  const inner = global.fetch;
+  global.fetch = async (url, opt) => {
+    if (url.endsWith("wp_nudge_plan")) return { ok: true, status: 200, text: async () => JSON.stringify(three), json: async () => three };
+    if (url.includes("api.resend.com")) await new Promise((res) => setTimeout(res, 40));
+    return inner(url, opt);
+  };
+  r = await mod2.exports.handler(clock);
+  b = JSON.parse(r.body);
+  const logged = calls.find((c) => c.url.endsWith("/rest/v1/app_data") && c.body && c.body.key === "hbf_email_log_v1");
+  check("H14 stops inside its time budget and leaves the rest", b.sent.length >= 1 && b.sent.length < 3 && b.held === 3 - b.sent.length, r.body);
+  check("H15 and still logs what went", logged && logged.body.value.length === b.sent.length);
+  delete process.env.NUDGE_TIME_BUDGET_MS;
 
   if (fails.length) { console.log(passes + " passed, FAILED:\n  " + fails.join("\n  ")); process.exit(1); }
   console.log("ALL " + passes + " ASSERTIONS PASSED");

@@ -56,8 +56,8 @@ check("B6 never signed in, further out: amber", f.level === "amber", f);
 
 f = portalProgressFlags(base({ checklist_overdue: 2 }), TODAY);
 check("B7 overdue checklist is red", f.level === "red" && f.reasons.indexOf("2 overdue on the checklist") !== -1, f);
-f = portalProgressFlags(base({ next_payment: { label: "Second payment", due: "2026-10-01", amount: 10 } }), TODAY);
-check("B8 overdue payment is red", f.level === "red" && f.reasons.indexOf("Second payment overdue") !== -1, f);
+f = portalProgressFlags(base({ next_payment: { label: "Second payment", due: plus(5), amount: 10 } }), TODAY);
+check("B8 a payment coming up is not a reason on its own (the statement does not record payment)", f.level === "ok", f);
 
 f = portalProgressFlags(base({ date: plus(40), numbers: null, timeline_lines: 0 }), TODAY);
 check("B9 eight weeks out with no numbers and no timeline: red with both", f.level === "red" &&

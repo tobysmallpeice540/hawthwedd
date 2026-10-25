@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25f";
+const APP_BUILD = "2026-10-25g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8130,7 +8130,6 @@ function portalProgressFlags(ev, today) {
     (days <= 120 ? red : amber).push("Never signed in");
   }
   if (ev.checklist_overdue > 0) red.push(ev.checklist_overdue + " overdue on the checklist");
-  if (ev.next_payment && ev.next_payment.due && ev.next_payment.due < today) red.push(ev.next_payment.label + " overdue");
   if (days <= 56 && vis.indexOf("guests") !== -1 && !(ev.numbers && ev.numbers.adults != null)) red.push("No numbers");
   if (days <= 56 && vis.indexOf("timeline") !== -1 && !ev.timeline_lines) red.push("No timeline");
   if (days <= 28 && vis.indexOf("layout") !== -1 && ev.guests_seated > 0 && ev.guests_at_tables < ev.guests_seated) {
@@ -8245,8 +8244,8 @@ function PortalProgress({ onOpenEvent }) {
         </div>
       )}
       <div style={{ fontSize:11.5, color:T.textLight, marginTop:10, lineHeight:1.6 }}>
-        Red: no login within six months, never signed in within four, anything overdue on the checklist or the statement,
-        or no numbers or timeline in the last eight weeks. Amber: worth a look — guests not at a table in the last four
+        Red: no login within six months, never signed in within four, anything overdue on the checklist, or no numbers
+        or timeline in the last eight weeks. Amber: worth a look — guests not at a table in the last four
         weeks, no drinks choice in the last six, a page you handed back, or something due in the next three weeks.
         Only pages the event shows count. Hover "Marked done" for the list.
       </div>
@@ -23690,7 +23689,7 @@ const DEFAULT_PORTAL_EMAILS = [
   // "on" is ticked here. The list itself is worked out by wp_nudge_plan.
   { id:"nudge", name:"Deadline reminder (weekly)", when:"Mondays, when something is due in the next three weeks or overdue",
     subject:"Coming up for your day at Hawthbush Farm", button:"Open your planner", on:false,
-    body:"Hello {firstName},\n\nA quick note of what is coming up for {event} on {eventDate}.\n\n{list}\n\nYou can do all of these in your planner — the button below takes you there. Anything you have already done, tick off or mark as done and it will not come up again.\n\nIf you have a question about any of it, just reply to this email.",
+    body:"Hello {firstName},\n\nA quick note of what is coming up before your day with us on {eventDate}.\n\n{list}\n\nYou can do all of these in your planner — the button below takes you there. Tick off a checklist item, or mark a page as done, and it will not come up again.\n\nIf you have a question about any of it, just reply to this email.",
     fields:["{firstName}","{event}","{eventDate}","{list}","{portalUrl}"] },
 ];
 
@@ -23713,7 +23712,11 @@ function NudgeControls({ on, onChange }) {
         body: JSON.stringify({ dryRun: true, today: day })
       });
       const data = await res.json().catch(function() { return {}; });
-      if (!res.ok) throw new Error(data.error || ("status " + res.status));
+      if (!res.ok) {
+        if (/wp_nudge_plan 404|PGRST202|could not find the function/i.test(String(data.error || "")))
+          throw new Error("this needs the 25 Oct database update (2026-10-25n-nudges-progress.sql)");
+        throw new Error(data.error || ("status " + res.status));
+      }
       setPreview({ due: data.due || [], day: day });
     } catch (e) { setPreview({ error: e.message || String(e) }); }
   }
@@ -23724,10 +23727,10 @@ function NudgeControls({ on, onChange }) {
         Send this every Monday morning
       </label>
       <div style={{ fontSize:12, color:T.textMid, lineHeight:1.6, marginTop:6 }}>
-        To everyone with a portal login on a coming event, once a week, only when something is due in the next three
-        weeks or overdue (up to six weeks back): checklist items not ticked, payments still to come on their statement,
-        the drinks order closing, and — in the last eight weeks — pages not yet marked done. Only pages the couple can
-        see count. Wakes, funerals and memorials are left out. Save after changing the tick.
+        To everyone with a portal login on a coming confirmed event, once a week, only when something is due: checklist
+        items not ticked (overdue up to six weeks back, or due in the next three), payments due in the next three weeks
+        on their statement, the drinks order closing, and — in the last eight weeks — pages not yet marked done. Only
+        pages the couple can see count. Wakes, funerals and memorials are left out. Save after changing the tick.
       </div>
       <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:8, flexWrap:"wrap" }}>
         <button type="button" onClick={look} disabled={preview && preview.busy} style={btnQuiet}>

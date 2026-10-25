@@ -385,15 +385,21 @@ own header.
 
 - **Re-importing a guest list never doubles it.** `wp_merge_guests(list, rows,
   apply)` matches by name across both lists (duplicates paired in order),
-  updates the reply when the file gives one, ADDS to notes (never replaces or
-  repeats), fills side/role only where empty, adds new names unless they are
-  not coming, and reports people missing from the file without removing them.
-  `apply = false` is the preview. `parseGuests.js` reads the RSVP sites'
-  RSVP / dietary / meal / child / role columns; `rsvp` is null whenever the
-  file does not say, and null never overwrites. The portal falls back to the
+  updates the reply when the file gives one, adds notes VALUE BY VALUE
+  (`notes_parts`: one already there is not repeated, a meal choice replaces the
+  one under the same heading, nothing is ever cut to fit — an overflow is
+  reported), fills side/role only where empty, changes age only when the cell
+  plainly says adult/child/baby (`explicitAge`), adds new names unless they are
+  not coming, and reports people missing from the file and duplicate names
+  without removing anything. `apply = false` is the preview. `rsvp` is null
+  whenever the file does not say, and null never overwrites. The portal falls back to the
   old add-only `wp_import_guests` while m is missing.
-- **Weekly deadline reminder** (`portal-nudges.js`, Mondays 08:00 UTC, OFF until
-  ticked on the "nudge" portal email template). What goes in it is
+- **Weekly deadline reminder** (`portal-nudges.js`, hourly 08:00–11:00 UTC on
+  Mondays — later runs pick up only what did not go; a run stops sending after
+  7s — OFF until ticked on the "nudge" portal email template). Confirmed
+  bookings only. Payments are listed only when due in the next three weeks,
+  never as overdue: `wp_payment_schedule` does not record payment, so a past
+  date on it means "not republished", not "unpaid". What goes in it is
   `wp_nudge_plan(today)`; one email per event per week, marked in
   `wp_nudges_sent` BEFORE sending (`wp_nudge_mark` refuses a taken week;
   `wp_nudge_unmark` frees it after a failed send — no DELETE). Links to

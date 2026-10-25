@@ -96,6 +96,24 @@ begin
   if (r->>'new')::int = 0 and (r->>'updated')::int = 2
   then passes:=passes+1; else fails:=fails||('M7 duplicates '||r::text); end if;
 
+  -- M9 a meal choice replaces the one under the same heading; nothing repeats
+  r := wp_merge_guests('seated', '[{"first_name":"New","last_name":"Person","notes_parts":[{"text":"Vegan"},{"text":"Main: Lamb","heading":"Main"}]}]', true);
+  r := wp_merge_guests('seated', '[{"first_name":"New","last_name":"Person","notes_parts":[{"text":"vegan"},{"text":"Main: Beef","heading":"Main"}]}]', true);
+  if (select access_needs from wp_guests where event_id = ev and first_name = 'New') = 'Vegan · Main: Beef'
+     and r->'updated_lines' @> '["New Person — notes: Main: Beef"]'::jsonb
+  then passes:=passes+1; else fails:=fails||('M9 meal replace '||(select coalesce(access_needs,'null') from wp_guests where event_id = ev and first_name = 'New')||' '||r::text); end if;
+
+  -- M10 nothing is cut to fit: a value that would overflow is left out and reported
+  update wp_guests set access_needs = repeat('x', 290) where event_id = ev and first_name = 'Tom';
+  r := wp_merge_guests('seated', '[{"first_name":"Tom","last_name":"Thumb","notes_parts":[{"text":"Severe nut allergy"}]}]', true);
+  if (select access_needs from wp_guests where event_id = ev and first_name = 'Tom') = repeat('x', 290)
+     and r->'notes_full_names' @> '["Tom Thumb"]'::jsonb
+  then passes:=passes+1; else fails:=fails||('M10 overflow '||r::text); end if;
+
+  -- M11 the same name twice in a file is pointed out
+  r := wp_merge_guests('seated', '[{"first_name":"John","last_name":"Smith"},{"first_name":"John","last_name":"Smith"}]', false);
+  if r->'duplicate_names' = '["John Smith"]'::jsonb then passes:=passes+1; else fails:=fails||('M11 duplicates '||r::text); end if;
+
   -- M8 bad input refused
   if wp_merge_guests('nope', f1, false)->>'error' = 'bad_list'
      and wp_merge_guests('seated', '{}'::jsonb, false)->>'error' = 'rows_not_an_array'

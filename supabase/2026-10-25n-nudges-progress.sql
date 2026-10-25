@@ -14,16 +14,18 @@
 --        An event whose couple has never opened the checklist has no rows
 --        yet; its items are worked out from the template the same way
 --        wp_get_checklist seeds them.
---      · payments still to come from the published statement
---        (wp_payment_schedule), same window. When an event has a schedule,
---        checklist items about a payment or balance are left out — the
---        schedule says the same thing with the amount.
+--      · payments due in the next three weeks from the published statement
+--        (wp_payment_schedule). Never "overdue": the statement does not record
+--        payment, so a past date on it only means it has not been republished.
+--        When an event has a schedule, checklist items about a payment or
+--        balance are left out — the schedule says the same with the amount.
 --      · the drinks order closing, when Drinks is shown, the order is not
 --        locked and not marked done, and it closes in the next three weeks.
 --      · within eight weeks of the day, the pages not yet marked done.
 --    Only what the couple can SEE counts: checklist, payments and drinks only
---    when those pages are shown for the event. Cancelled events and sombre
---    occasions (wake, funeral, memorial, celebration of life) are left out.
+--    when those pages are shown for the event. Only Confirmed bookings (not
+--    Holding); sombre occasions (wake, funeral, memorial, celebration of
+--    life) are left out.
 --
 --    wp_nudges_sent records each (event, week) BEFORE the email goes, through
 --    wp_nudge_mark, which returns false if that week is already taken — so a
@@ -94,17 +96,20 @@ declare
 begin
   select lock_days into v_lock_days from wp_drinks_settings limit 1;
 
+  -- Confirmed bookings only (not a provisional Holding). The date is read
+  -- through pg_input_is_valid inside a CASE, so one malformed date in the
+  -- diary ("2026-02-30") is skipped rather than aborting the whole run.
   for ev in
-    select (e ->> 'id')::int as id, nullif(e ->> 'date', '')::date as d, e ->> 'couple' as couple,
-           e ->> 'client1Name' as c1, e ->> 'client2Name' as c2, e ->> 'eventType' as etype
-      from app_data x, lateral jsonb_array_elements(x.value) e
-     where x.key = 'hawthbush_bookings_v6'
-       and (e ->> 'id') ~ '^\d+$'
-       and coalesce(e ->> 'status', '') <> 'Cancelled'
-       and nullif(e ->> 'date', '') is not null
-       and (e ->> 'date') ~ '^\d{4}-\d{2}-\d{2}$'
-       and (e ->> 'date')::date >= p_today
-       and coalesce(e ->> 'eventType', '') !~* '(wake|funeral|memorial|celebration of life)'
+    select * from (
+      select (e ->> 'id')::int as id,
+             case when pg_input_is_valid(e ->> 'date', 'date') then (e ->> 'date')::date end as d,
+             e ->> 'couple' as couple, e ->> 'client1Name' as c1, e ->> 'client2Name' as c2, e ->> 'eventType' as etype
+        from app_data x, lateral jsonb_array_elements(x.value) e
+       where x.key = 'hawthbush_bookings_v6'
+         and (e ->> 'id') ~ '^\d{1,9}$'
+         and coalesce(e ->> 'status', '') = 'Confirmed'
+         and coalesce(e ->> 'eventType', '') !~* '(wake|funeral|memorial|celebration of life)'
+    ) q where q.d >= p_today
   loop
     select coalesce(jsonb_agg(distinct lower(a.email)), '[]'::jsonb) into v_emails
       from wp_access a where a.event_id = ev.id and a.revoked_at is null and a.email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$';
@@ -114,14 +119,16 @@ begin
     v_items := '[]'::jsonb;
     v_has_sched := v_visible ? 'money' and exists (select 1 from wp_payment_schedule s where s.event_id = ev.id);
 
-    -- payments still to come
+    -- payments coming up. Never "overdue": the statement only drops a stage
+    -- when it is invoiced or republished, and it never records payment, so a
+    -- past date on it means "not republished yet", not "unpaid".
     if v_visible ? 'money' then
       select v_items || coalesce(jsonb_agg(jsonb_build_object(
                'kind', 'payment', 'label', s.label, 'due', s.due_on, 'amount', s.amount,
-               'overdue', s.due_on < p_today) order by s.due_on, s.seq), '[]'::jsonb)
+               'overdue', false) order by s.due_on, s.seq), '[]'::jsonb)
         into v_items
         from wp_payment_schedule s
-       where s.event_id = ev.id and s.due_on between p_today - 42 and p_today + 21 and coalesce(s.amount, 0) > 0;
+       where s.event_id = ev.id and s.due_on between p_today and p_today + 21 and coalesce(s.amount, 0) > 0;
     end if;
 
     -- checklist: the rows, or the template if it was never opened
@@ -226,19 +233,20 @@ begin
           'checklist_total', (select count(*) from wp_checklist c where c.event_id = ev.id),
           'next_payment', (select jsonb_build_object('label', s.label, 'due', s.due_on, 'amount', s.amount)
                              from wp_payment_schedule s where s.event_id = ev.id and coalesce(s.amount, 0) > 0
+                              and s.due_on >= v_today
                             order by s.due_on, s.seq limit 1),
           'last_reminder', (select max(n.sent_at) from wp_nudges_sent n where n.event_id = ev.id and not n.failed),
           'last_change', (select max(l.at) from wp_change_log l where l.event_id = ev.id
                             and l.actor_email in (select a.email from wp_access a where a.event_id = ev.id))
         ) as row_obj
-        from (select (e ->> 'id')::int as id, (e ->> 'date')::date as d, e ->> 'couple' as couple,
-                     e ->> 'status' as status, e ->> 'eventType' as etype
-                from app_data x, lateral jsonb_array_elements(x.value) e
-               where x.key = 'hawthbush_bookings_v6'
-                 and (e ->> 'id') ~ '^\d+$'
-                 and coalesce(e ->> 'status', '') <> 'Cancelled'
-                 and (e ->> 'date') ~ '^\d{4}-\d{2}-\d{2}$'
-                 and (e ->> 'date')::date >= v_today) ev
+        from (select * from (
+                select (e ->> 'id')::int as id,
+                       case when pg_input_is_valid(e ->> 'date', 'date') then (e ->> 'date')::date end as d,
+                       e ->> 'couple' as couple, e ->> 'status' as status, e ->> 'eventType' as etype
+                  from app_data x, lateral jsonb_array_elements(x.value) e
+                 where x.key = 'hawthbush_bookings_v6'
+                   and (e ->> 'id') ~ '^\d{1,9}$'
+                   and coalesce(e ->> 'status', '') <> 'Cancelled') q0 where q0.d >= v_today) ev
       ) q), '[]'::jsonb));
 end $function$;
 

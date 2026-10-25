@@ -96,7 +96,7 @@ eq('numbering does not confuse a header row', r.rows[0].first_name, 'Ada')
 // shapes those exports take; the merge (wp_merge_guests) relies on rsvp being
 // null whenever the list does not say.
 
-import { normaliseRsvp } from '../src/portal/parseGuests.js'
+import { normaliseRsvp, explicitAge } from '../src/portal/parseGuests.js'
 
 r = parseGuests('﻿First Name,Last Name,RSVP Status,Dietary Requirements,Meal Choice\n' +
   'Ada,Lovelace,Attending,Vegan,Beef\nTom,Thumb,Declined,,\nGrace,Hopper,No response,"Nut allergy, severe",Fish')
@@ -119,6 +119,7 @@ eq('heading found below a title line', r.usedHeader, true)
 eq('semicolon file', r.rows.length, 2)
 eq('child flag column', [r.rows[0].age_band, r.rows[1].age_band], ['child', 'adult'])
 eq('age given flagged', r.rows[0].age_given, true)
+eq('a blank child cell says nothing about age', r.rows[1].age_given, false)
 eq('role read', r.rows[1].role, 'Best man')
 
 r = parseGuests('First Name,Last Name,Notes\nAda,Lovelace,"Wheelchair user,\nneeds step-free route"\nGrace,Hopper,')
@@ -135,6 +136,20 @@ eq('no age column → age not given', r.rows[0].age_given, false)
 
 eq('rsvp words', ['Accepted', 'Regrets', 'Maybe', 'awaiting reply', 'Not attending', 'joyfully accepts', 'N', '', 'Invited'].map(normaliseRsvp),
    ['yes', 'no', 'maybe', null, 'no', 'yes', 'no', null, null])
+
+// ── review fixes (25 Oct, night) ────────────────────────────────────────────
+// Only a cell that plainly classifies someone may change their age on re-import.
+r = parseGuests('First Name,Last Name,Type,Age\nAda,Lovelace,Guest,\nTom,Thumb,Guest,Child (2-12)\nBo,Peep,Guest,8')
+eq('Type "Guest" is not an age', r.rows[0].age_given, false)
+eq('"Child (2-12)" is a child', [r.rows[1].age_given, r.rows[1].age_band], [true, 'child'])
+eq('a bare number is not classified', r.rows[2].age_given, false)
+eq('explicit ages', ['Adults', 'kids', 'Infant', 'toddler', '', 'Guest'].map(explicitAge), ['adult', 'child', 'baby', null, null, null])
+
+// Notes go to the merge one value per column; meal choices carry their heading.
+r = parseGuests('First Name,Last Name,Dietary,Allergies,Starter,Main\nAda,Lovelace,Vegan,Nuts,Soup,Lamb')
+eq('notes parts', r.rows[0].notes_parts, [{ text: 'Vegan' }, { text: 'Nuts' }, { text: 'Starter: Soup', heading: 'Starter' }, { text: 'Main: Lamb', heading: 'Main' }])
+r = parseGuests('First Name,Last Name,Meal Choice\nAda,Lovelace,Beef')
+eq('a single meal column is headed "Meal"', r.rows[0].notes_parts, [{ text: 'Meal: Beef', heading: 'Meal' }])
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

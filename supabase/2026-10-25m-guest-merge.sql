@@ -11,8 +11,11 @@
 -- on the event (either list) by name — case, spacing and order of duplicates
 -- considered — and:
 --   · a match is UPDATED: the RSVP when the file gives one; notes are ADDED TO
---     (a value already in the notes is not repeated), never replaced; side and
---     role only where the guest has none; age where the file has an age column.
+--     value by value (one already there is not repeated; a meal choice replaces
+--     the one under the same heading; nothing is cut to fit — a value that would
+--     overflow is reported instead), never replaced; side and role only where
+--     the guest has none; age only where the file's cell plainly says adult,
+--     child or baby.
 --     The guest stays on whichever list and table they are on.
 --   · a new name is ADDED to p_list — unless the file says they are not
 --     coming, in which case they are counted and left out.
@@ -35,6 +38,8 @@ declare
   r jsonb;
   v_rsvp text; v_notes text; v_add text; v_side text; v_role text; v_age text;
   v_changes text[];
+  v_parts jsonb; v_part jsonb; v_t text; v_h text; v_cur text[]; v_cand text; v_added text[]; v_full boolean;
+  full_names text[] := '{}'; dup_names text[] := '{}';
   n_new integer := 0; n_upd integer := 0; n_same integer := 0; n_declined integer := 0;
   new_names text[] := '{}'; upd_lines text[] := '{}'; declined_names text[] := '{}';
   v_matched uuid[] := '{}';
@@ -69,7 +74,7 @@ begin
       -- other list (someone moved to the evening is not added again).
       select ex.*, row_number() over (partition by k order by (list = p_list) desc, sort, created_at) as kn from ex
     )
-    select i.ord, i.r, i.f, i.l, e.id as gid, e.rsvp as e_rsvp, e.access_needs as e_notes, e.side as e_side,
+    select i.ord, i.r, i.f, i.l, i.kn, e.id as gid, e.rsvp as e_rsvp, e.access_needs as e_notes, e.side as e_side,
            e.role as e_role, e.age_band as e_age
       from inp3 i left join ex2 e on e.k = i.k and e.kn = i.kn
      order by i.ord
@@ -107,13 +112,40 @@ begin
       v_changes := v_changes || ('reply: ' || case v_rsvp when 'yes' then 'coming' when 'no' then 'not coming' else 'maybe' end);
     end if;
 
-    v_notes := rec.e_notes;
-    if v_add is not null then
-      if coalesce(trim(rec.e_notes), '') = '' then v_notes := v_add;
-      elsif position(lower(v_add) in lower(rec.e_notes)) = 0 then v_notes := left(rec.e_notes || ' · ' || v_add, 300);
+    -- Notes: each value from the file is added only if it is not there
+    -- already; a meal choice replaces the one under the same heading
+    -- ("Main: Lamb" → "Main: Beef"). Nothing is ever cut to fit: a value that
+    -- would take the notes past 300 characters is left out and reported.
+    v_parts := case when jsonb_typeof(r -> 'notes_parts') = 'array' then r -> 'notes_parts'
+                    when v_add is not null then jsonb_build_array(jsonb_build_object('text', v_add))
+                    else '[]'::jsonb end;
+    v_notes := coalesce(trim(rec.e_notes), '');
+    v_added := '{}'; v_full := false;
+    for v_part in select * from jsonb_array_elements(v_parts) loop
+      v_t := left(trim(coalesce(v_part ->> 'text', '')), 300);
+      v_h := nullif(trim(coalesce(v_part ->> 'heading', '')), '');
+      continue when v_t = '';
+      v_cur := case when v_notes = '' then '{}'::text[] else string_to_array(v_notes, ' · ') end;
+      continue when exists (select 1 from unnest(v_cur) x where lower(trim(x)) = lower(v_t));
+      if v_h is not null and exists (select 1 from unnest(v_cur) x where left(lower(trim(x)), length(v_h) + 2) = lower(v_h) || ': ') then
+        v_cand := array_to_string(array(select case when left(lower(trim(x)), length(v_h) + 2) = lower(v_h) || ': ' then v_t else x end
+                                          from unnest(v_cur) with ordinality as u(x, o) order by o), ' · ');
+      else
+        v_cand := case when v_notes = '' then v_t else v_notes || ' · ' || v_t end;
       end if;
+      if length(v_cand) > 300 then v_full := true; continue; end if;
+      v_notes := v_cand; v_added := v_added || v_t;
+    end loop;
+    v_notes := nullif(v_notes, '');
+    if v_notes is distinct from nullif(trim(coalesce(rec.e_notes, '')), '') then
+      v_changes := v_changes || ('notes: ' || array_to_string(v_added, ', '));
+    else
+      v_notes := rec.e_notes;   -- untouched, exactly as it was
     end if;
-    if v_notes is distinct from rec.e_notes then v_changes := v_changes || ('notes: ' || v_add); end if;
+    if v_full and cardinality(full_names) < 25 then full_names := full_names || trim(rec.f || ' ' || rec.l); end if;
+    if rec.kn > 1 and cardinality(dup_names) < 25 and not (trim(rec.f || ' ' || rec.l) = any(dup_names)) then
+      dup_names := dup_names || trim(rec.f || ' ' || rec.l);
+    end if;
 
     v_side := coalesce(rec.e_side, left(nullif(trim(coalesce(r ->> 'side', '')), ''), 40));
     if v_side is distinct from rec.e_side then v_changes := v_changes || ('side: ' || v_side); end if;
@@ -158,7 +190,8 @@ begin
   return jsonb_build_object('ok', true, 'applied', p_apply,
     'new', n_new, 'updated', n_upd, 'unchanged', n_same, 'declined', n_declined, 'missing', v_missing_n,
     'new_names', to_jsonb(new_names), 'updated_lines', to_jsonb(upd_lines),
-    'declined_names', to_jsonb(declined_names), 'missing_names', v_missing);
+    'declined_names', to_jsonb(declined_names), 'missing_names', v_missing,
+    'notes_full_names', to_jsonb(full_names), 'duplicate_names', to_jsonb(dup_names));
 end $function$;
 
 revoke all on function public.wp_merge_guests(text, jsonb, boolean) from public, anon, authenticated;
