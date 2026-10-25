@@ -2772,7 +2772,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25i";
+const APP_BUILD = "2026-10-25j";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3502,6 +3502,28 @@ function shortPropLabel(p) {
   return n.split(" ")[0] || n;
 }
 
+// The reservation page Airbnb gives us for a booking. The iCal import puts it in
+// the notes ("Reservation URL: https://www.airbnb.com/hosting/reservations/
+// details/HM..."). Notes are free text, so only an https link on an Airbnb
+// domain is ever turned into a button.
+function airbnbReservationUrl(notes) {
+  const m = String(notes || "").match(/https:\/\/[^\s<>"']+/g) || [];
+  for (let i = 0; i < m.length; i++) {
+    const raw = m[i].replace(/[).,;]+$/, "");
+    try {
+      const u = new URL(raw);
+      if (u.protocol === "https:" && /(^|\.)airbnb\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(u.hostname)) return u.href;
+    } catch (e) { /* not a link */ }
+  }
+  return null;
+}
+
+// How a direct (not Airbnb) lettings booking reached us, in words.
+const ACCOM_DIRECT_HOW = {
+  direct: "booked online on our website", website: "booked online on our website",
+  manual: "entered here", contract: "from the wedding contract", wedding: "wedding-linked",
+};
+
 // Source label for a lettings booking: Manual / Website / Airbnb / Blocked
 function accomSourceLabel(b) {
   if (b.bookingType === "Blocked") return "Blocked";
@@ -3951,6 +3973,27 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         )}
       </div>
 
+      {/* Where the booking came from, and for Airbnb the reservation itself. */}
+      {form.bookingType !== "Blocked" && (
+        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", margin:"-4px 0 16px",
+          fontSize:13, color:T.textMid }}>
+          <span style={{ fontWeight:600, color:T.text }}>
+            {form.source === "airbnb" ? "Airbnb booking" : "Direct booking"}
+          </span>
+          {form.source !== "airbnb" && ACCOM_DIRECT_HOW[form.source] && (
+            <span style={{ color:T.textLight }}>· {ACCOM_DIRECT_HOW[form.source]}</span>
+          )}
+          {form.source === "airbnb" && (airbnbReservationUrl(form.notes) ? (
+            <a href={airbnbReservationUrl(form.notes)} target="_blank" rel="noopener noreferrer"
+              style={{ ...smallBtn, textDecoration:"none", display:"inline-flex", alignItems:"center", gap:5 }}>
+              Open on Airbnb ↗
+            </a>
+          ) : (
+            <span style={{ color:T.textLight }}>· no Airbnb reservation link in the notes</span>
+          ))}
+        </div>
+      )}
+
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
         <LInput label="Guest name" value={form.guestName} onChange={v=>upd("guestName",v)} />
         <LInput label="Email" value={form.email} onChange={v=>upd("email",v)} />
@@ -4132,6 +4175,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             <option value="manual">Manual</option>
             <option value="direct">Direct (online)</option>
             <option value="airbnb">Airbnb</option>
+            <option value="contract">From wedding contract</option>
             <option value="wedding">Wedding-linked</option>
           </select>
         </label>
