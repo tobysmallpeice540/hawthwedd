@@ -49,13 +49,14 @@ function liftConst(name) {
 
 const CONSTS = ["XERO_ACCOUNT_EVENTS", "XERO_ACCOUNT_ACCOM", "INVOICE_STAGE_LABELS", "INVOICE_FIRST_EVENT_YEAR",
                 "DAMAGE_DEPOSIT_STATES", "STATEMENT_STAGE_LABELS", "VAT_CATEGORIES", "STAFFING_FIELDS",
-                "STAFFING_LABELS", "BAR_USAGE_LABEL", "DEFAULT_AUTOMATIONS", "AIRBNB_UPLIFT_PCT"];
+                "STAFFING_LABELS", "BAR_USAGE_LABEL", "DEFAULT_AUTOMATIONS", "AIRBNB_ESTIMATE_PCT"];
 const NAMES = ["round2", "parseMoney", "isValidEventDate", "addDaysIso", "fmtDateLong", "fmtWeekdayLong", "eventTypeLabel",
                "eventAccomStays", "eventAccomExtras", "accomLineDescription", "invoiceStageDates",
                "computeEventInvoiceStages", "findPushedInvoice", "isInvoiceableYear", "fmtMoney", "hhmm",
                "damageDepositInfo", "eventStatementRows", "vatOfInclusive", "signedAmount", "eventVatSplit",
                "venueAnswerText", "venueFormAnswered", "fsEsc", "functionSheetHtml",
                "lastContactFrom", "automationDays", "enquiryGoneQuiet", "gmailCheckedOnDay",
+               "longStayDiscountAmount", "seasonForDate", "getPriceForNight", "quoteStay",
                "lettingValue", "estimateLettingValue", "cashflowForecast", "cashflowExVat"];
 const ctx = {};
 eval(DAY + "\n" + CONSTS.map(liftConst).join("\n") + "\n" + NAMES.map(lift).join("\n\n") + "\n" +
@@ -212,6 +213,15 @@ console.log("cashflow: Airbnb paid out the day after arrival");
   eq("a let already over is taken as received", f.months.reduce((a, r) => a + r.items.filter((i) => i.who === "Gone Airbnb").length, 0), 0);
   eq("one with no figure and no rate is reported, not counted", f.unpriced.map((u) => u.who), ["Unpriced Airbnb"]);
   eq("not reported as overdue", f.overdue.lets, 0);
+}
+
+console.log("Airbnb fallback estimate: 95% of our calendar rate");
+{
+  const props = [{ id: "hamlet", baseRate: 1000, seasons: [], longStayThreshold: 0 }];
+  const est = ctx.lettingValue({ source: "airbnb", value: 0, stays: [{ propertyId: "hamlet", checkIn: "2027-03-05", checkOut: "2027-03-07" }] }, props);
+  eq("two nights at 1000 come to 1900", [est.value, est.estimated], [1900, true]);
+  const real = ctx.lettingValue({ source: "airbnb", value: 2193.1, stays: [{ propertyId: "hamlet", checkIn: "2027-03-05", checkOut: "2027-03-07" }] }, props);
+  eq("a booking with Airbnb's figure keeps it", [real.value, real.estimated], [2193.1, false]);
 }
 
 console.log("cashflow: net of VAT for the report");

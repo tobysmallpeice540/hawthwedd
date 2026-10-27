@@ -2402,15 +2402,16 @@ function usesLegacyLongStay(prop) {
   return !!prop && !(Number(prop.longStayDiscountPct) > 0) && Number(prop.longStayDiscount) > 0;
 }
 
-// Airbnb list prices run above what we charge direct, because the guest is
-// paying Airbnb's fees on top and the nightly rate is set to match. This is
-// the uplift applied to our own calendar price to estimate what an imported
-// booking was worth.
-const AIRBNB_UPLIFT_PCT = 15;
+// An Airbnb booking's value is what Airbnb pays us after its host fee (the
+// email sync writes it). Where no email has reached a booking, it is estimated
+// as this share of our own calendar price for the dates. 95 because real
+// payouts on dates with seasons set came to 92-100% of our rate (Oct 2026,
+// 7 bookings), averaging 94%.
+const AIRBNB_ESTIMATE_PCT = 95;
 
 // What an Airbnb-imported booking was probably worth, priced off our own
 // calendar: every night at the rate we'd charge direct for that date —
-// seasons, long-stay discount and all — then uplifted.
+// seasons, long-stay discount and all — then AIRBNB_ESTIMATE_PCT of that.
 //
 // Returns null when it can't be priced (no property, no rate configured, no
 // usable dates) rather than guessing, so the caller can show nothing instead
@@ -2431,7 +2432,7 @@ function estimateLettingValue(b, properties) {
   });
 
   if (!priced) return null;
-  return Math.round(total * (1 + AIRBNB_UPLIFT_PCT / 100) * 100) / 100;
+  return Math.round(total * AIRBNB_ESTIMATE_PCT / 100 * 100) / 100;
 }
 
 // The figure to show for a booking, and whether it's an estimate.
@@ -2772,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-25p";
+const APP_BUILD = "2026-10-27a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3888,7 +3889,7 @@ function AccomValueCell({ b, properties }) {
   const v = lettingValue(b, properties);
   if (!(v.value > 0)) return <span>—</span>;
   return (
-    <span title={v.estimated ? "Estimated from our own calendar rate for these dates, plus " + AIRBNB_UPLIFT_PCT + "%" : ""}>
+    <span title={v.estimated ? "No Airbnb figure yet: estimated at " + AIRBNB_ESTIMATE_PCT + "% of our own calendar rate for these dates" : ""}>
       {String(fmtMoney(v.value))}
       {v.estimated && <span style={{ marginLeft:5, fontSize:10, color:T.amber, fontWeight:700 }}>(est)</span>}
     </span>
@@ -5160,9 +5161,9 @@ function AccomReport({ properties, bookings }) {
           </table>
         </div>
         <div style={{ marginTop:10, fontSize:11, color:T.textLight, lineHeight:1.6 }}>
-          * Where an Airbnb booking has no recorded value, it is priced from our own calendar for those dates —
-          seasonal rate and long-stay discount included — plus {AIRBNB_UPLIFT_PCT}%, since Airbnb rates are set above
-          our direct prices. A value entered by hand always takes precedence over the estimate.
+          * Airbnb bookings are valued at Airbnb's payout after its fees, from the Airbnb emails. Where a booking has no
+          figure, it is estimated at {AIRBNB_ESTIMATE_PCT}% of our own calendar price for those dates — seasonal rate and
+          long-stay discount included — which is roughly what Airbnb pays out. A value entered by hand always takes precedence.
         </div>
       </div>
     </div>
@@ -17505,7 +17506,7 @@ function CashflowReport({ bookings, accomBookings, accomProperties, onOpenEvent,
     <div>
       <div style={{ background:T.infoBg, border:`1px solid ${T.infoBorder}`, borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:12.5, color:T.infoText, lineHeight:1.6 }}>
         What is expected in, net of VAT: 20% VAT is taken off every figure. Events follow the invoice schedule (deposit at booking, 1 December, final 28 days before);
-        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule; wedding accommodation is counted with its event's second and final invoices, once a stay is priced and not ticked provisional. Airbnb bookings are counted at Airbnb's payout after its fees, as the Airbnb emails give it, on the day after arrival, when Airbnb pays out; once the emails show the payout sent it is left out as received. A booking the emails have not reached yet is estimated from our own calendar rate plus {AIRBNB_UPLIFT_PCT}%.
+        invoices already raised may have been paid early, and Xero is the record of what has actually arrived. Events before {INVOICE_FIRST_EVENT_YEAR} were invoiced by hand and are not included. Lettings are the unpaid lines of each booking's payment schedule; wedding accommodation is counted with its event's second and final invoices, once a stay is priced and not ticked provisional. Airbnb bookings are counted at Airbnb's payout after its fees, as the Airbnb emails give it, on the day after arrival, when Airbnb pays out; once the emails show the payout sent it is left out as received. A booking the emails have not reached yet is estimated at {AIRBNB_ESTIMATE_PCT}% of our own calendar rate.
       </div>
       {f.unpriced.length > 0 && (
         <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"10px 15px", marginBottom:16, fontSize:13, color:"#92400e" }}>
