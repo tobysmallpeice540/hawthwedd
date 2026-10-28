@@ -2776,7 +2776,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28s";
+const APP_BUILD = "2026-10-28t";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6890,7 +6890,7 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
       // An event is on from its first day to its last; the clean is due the
       // morning after.
       start: ev.date, due: addDaysIso(end, 1),
-      who: (ev.couple || "Event") + " · " + eventTypeLabel(ev), note: hkNote(setups, "event", ev.id)
+      who: (ev.couple || "Event") + " · " + eventTypeLabel(ev)
     });
   });
   // Ticketed events in the Grain Store: the same rule, cleaned the day after.
@@ -6902,10 +6902,10 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
       id: "box:" + bx.id,
       kind: "box", refId: bx.id, unitId: GRAIN_STORE_UNIT.id, unitName: GRAIN_STORE_UNIT.name,
       start: d, due: addDaysIso(e && e > d ? e : d, 1),
-      who: (bx.name || "Ticketed event") + " · Box office", note: hkNote(setups, "box", bx.id)
+      who: (bx.name || "Ticketed event") + " · Box office"
     });
   });
-  attachArrivalNotes(jobs, accom, setups);
+  attachArrivalNotes(jobs, accom, setups, events, boxEvents);
   // "No exit clean needed" on the letting or event: its clean afterwards is
   // not a job at all — never red, not on Live, Upcoming or the pay sheet.
   const kept = jobs.filter(function(j) { return !noExitClean(setups, j.id); });
@@ -6955,12 +6955,43 @@ function noExitClean(setups, jobId) {
   if (["accom", "event", "box"].indexOf(parts[0]) === -1 || !parts[1]) return false;
   return !!hkRequest(setups, "noexit", parts[0], parts[1]);
 }
+// An event's note is about getting the Grain Store ready for it, like a
+// letting's (28 Oct): "For <event>, on <day>: …".
+function hkNoteForEvent(name, day, text) {
+  return text ? "For " + name + ", on " + fmtDayShort(day) + ": " + text : "";
+}
 function hkNoteForArrival(b, stay, text) {
   return text ? "For " + accomGuestLabel(b) + ", arriving " + fmtDayShort(stay.checkIn) + ": " + text : "";
 }
 // Put each letting's note on the check-out before it at the same property,
 // unless the letting has its own extra clean (which carries the note itself).
-function attachArrivalNotes(jobs, accom, setups) {
+function attachArrivalNotes(jobs, accom, setups, events, boxEvents) {
+  // Events and box office events: the note goes on the Grain Store's clean
+  // before them (the end of the event before), unless they have their own
+  // extra clean, which carries it.
+  (setups || []).forEach(function(req) {
+    if (!req || req.kind !== "note" || (req.of !== "event" && req.of !== "box")) return;
+    if (hkRequest(setups, "setup", req.of, req.refId)) return;
+    const text = hkNote(setups, req.of, req.refId);
+    if (!text) return;
+    let name = "", day = "";
+    if (req.of === "event") {
+      const ev = (events || []).find(function(x) { return x && String(x.id) === String(req.refId); });
+      if (!ev || !isValidEventDate(ev.date) || ev.status === "Cancelled") return;
+      name = ev.couple || "Event"; day = ev.date;
+    } else {
+      const bx = (boxEvents || []).find(function(x) { return x && String(x.id) === String(req.refId); });
+      day = bx ? londonDateOf(bx.starts_at) : "";
+      if (!day) return;
+      name = bx.name || "Ticketed event";
+    }
+    const prev = jobs.filter(function(j) {
+      return j.unitId === GRAIN_STORE_UNIT.id && j.kind !== "setup" && !(j.kind === req.of && String(j.refId) === String(req.refId)) && j.due <= day;
+    }).sort(function(a, z) { return a.due < z.due ? 1 : a.due > z.due ? -1 : 0; })[0];
+    if (!prev) return;
+    const line = hkNoteForEvent(name, day, text);
+    prev.note = prev.note ? prev.note + "\n" + line : line;
+  });
   (setups || []).forEach(function(req) {
     if (!req || req.kind !== "note" || req.of !== "accom") return;
     const b = (accom || []).find(function(x) { return x && String(x.id) === String(req.refId); });
@@ -7061,7 +7092,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
         { date: ev.date, time: null }, { date: ev.date, time: null }, ev.couple || "Event", "",
         fmtDayShort(ev.date) + ((eventEndDate(ev) || ev.date) > ev.date ? " – " + fmtDayShort(eventEndDate(ev)) : ""),
-        hkNote(setups, "event", ev.id));
+        hkNoteForEvent(ev.couple || "Event", ev.date, hkNote(setups, "event", ev.id)));
     } else if (req.kind === "box") {
       const bx = (boxEvents || []).find(function(x) { return String(x.id) === String(req.refId); });
       const d = bx ? londonDateOf(bx.starts_at) : null;
@@ -7069,7 +7100,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
       const t = londonClockOf(bx.starts_at);
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
         { date: d, time: t }, { date: d, time: t ? addMinutesHHMM(t, -CHANGEOVER_GRACE_MIN) : null }, bx.name || "Ticketed event", "",
-        fmtDayShort(d) + (t ? " · " + t : ""), hkNote(setups, "box", bx.id));
+        fmtDayShort(d) + (t ? " · " + t : ""), hkNoteForEvent(bx.name || "Ticketed event", d, hkNote(setups, "box", bx.id)));
     }
   });
   return out;
@@ -7095,6 +7126,8 @@ function SetupCleanToggle({ kind, refId }) {
   }, [kind, refId]);
   if (refId == null || refId === "") return null;
   const lettings = kind === "accom";
+  // Notes to housekeepers: on lettings, and (28 Oct) on diary events.
+  const withNotes = kind === "accom" || kind === "event";
   const setupId = "setup:" + kind + ":" + refId;
   const noteId = "note:" + kind + ":" + refId;
   const has = function(id) { return !!(list && list.some(function(x) { return x && x.id === id; })); };
@@ -7146,14 +7179,14 @@ function SetupCleanToggle({ kind, refId }) {
         {tick(setupId, lettings ? "Extra clean before arrival" : "Extra clean before the event")}
         {tick(noExitId, "No exit clean needed")}
       </div>
-      {lettings && (
+      {withNotes && (
         <div style={{ marginTop:10 }}>
           <div style={{ display:"flex", alignItems:"baseline", gap:"2px 8px", flexWrap:"wrap", marginBottom:4 }}>
             <span style={{ fontSize:12, fontWeight:700, color:T.textMid }}>Notes to housekeepers</span>
-            <span style={{ fontSize:11, color:T.textLight, minWidth:0 }}>for the clean before these guests arrive</span>
+            <span style={{ fontSize:11, color:T.textLight, minWidth:0 }}>{lettings ? "for the clean before these guests arrive" : "for the clean before the event"}</span>
             {saved && <span style={{ fontSize:11, fontWeight:700, color:T.green }}>Saved</span>}
           </div>
-          <textarea rows={2} value={text} disabled={!list} placeholder="e.g. Put the cot up in bedroom 2" aria-label="Notes to housekeepers"
+          <textarea rows={2} value={text} disabled={!list} placeholder={lettings ? "e.g. Put the cot up in bedroom 2" : "e.g. Tables out for 120, chairs from the barn"} aria-label="Notes to housekeepers"
             onChange={function(e) { setDraft(e.target.value); }} onBlur={saveNote}
             style={{ width:"100%", boxSizing:"border-box", border:"1.5px solid " + T.border, borderRadius:8, padding:"8px 10px",
               fontFamily:"inherit", fontSize:13.5, color:T.text, background:"#fff", resize:"vertical", outline:"none" }}/>
@@ -7616,7 +7649,8 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       kind: "event", rank: 999,
       label: "Grain Store",
       detail: (ev.couple || "Event") + " · " + eventTypeLabel(ev) + (ev.status === "Holding" ? " (provisional)" : ""),
-      job: jobById["event:" + ev.id] || null, noExit: noExitClean(setups, "event:" + ev.id)
+      job: jobById["event:" + ev.id] || null, noExit: noExitClean(setups, "event:" + ev.id),
+      note: hkNoteForEvent(ev.couple || "Event", ev.date, hkNote(setups, "event", ev.id))
     });
   });
   (boxEvents || []).forEach(function(bx) {
@@ -7625,7 +7659,8 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       kind: "event", rank: 999, label: "Grain Store",
       time: new Date(bx.starts_at).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" }),
       detail: (bx.name || "Ticketed event") + " · Box office",
-      job: jobById["box:" + bx.id] || null, noExit: noExitClean(setups, "box:" + bx.id)
+      job: jobById["box:" + bx.id] || null, noExit: noExitClean(setups, "box:" + bx.id),
+      note: hkNoteForEvent(bx.name || "Ticketed event", d, hkNote(setups, "box", bx.id))
     });
   });
 
@@ -7762,7 +7797,9 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
                       {it.time && <span style={{ fontSize:12, fontWeight:700, color:T.accent, marginLeft:8 }}>{it.time}</span>}
                     </div>
                     <div style={{ fontSize:12, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{it.detail}</div>
-                    <HkNoteLine text={it.job ? it.job.note : it.note}/>
+                    {/* Its own note (a check-in, an event's day) and the note
+                        for whoever comes next, which rides on this clean. */}
+                    <HkNoteLine text={[it.note, it.job && it.job.note].filter(Boolean).join("\n")}/>
                   </div>
                   {it.job && <ChangeoverButton job={it.job} rec={recMap[it.job.id]} today={today} onOpen={onOpenJob}/>}
                   {!it.job && it.noExit && <NoExitCleanChip/>}
@@ -18658,7 +18695,6 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           confirmLabel="Yes, delete" onConfirm={onDelete} onCancel={function(){ setConfirmDelete(false); }}/>
       )}
       {/* The cleaners' sign-off after the event: hours, comments, lost property. */}
-      {isEdit && formData.id != null && <SetupCleanToggle kind="event" refId={formData.id}/>}
       {isEdit && formData.id != null && <ChangeoverRecordPanel kind="event" refId={formData.id}/>}
       <div style={{ display:"grid", gridTemplateColumns:"200px 1fr", gap:20 }}>
         <div>
@@ -18942,6 +18978,16 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                   }
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Housekeeping for this event (28 Oct): the extra clean before,
+              no exit clean, and notes to housekeepers — on Event Details,
+              not above every section. */}
+          {activeSection==="core" && isEdit && formData.id != null && (
+            <div style={{ marginTop:22 }}>
+              <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:8 }}>Housekeeping</div>
+              <SetupCleanToggle kind="event" refId={formData.id}/>
             </div>
           )}
 

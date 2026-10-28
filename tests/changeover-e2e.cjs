@@ -829,6 +829,45 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     } finally { await c.close() }
   } catch (e) { fails.push('past run: ' + e.message) }
 
+  // ── An event's housekeeping (28 Oct): the tick boxes and notes live on
+  // Event Details, not above every section; an event's note goes on the
+  // Grain Store's clean before it and on its own day on Live.
+  try {
+    const ev = freshApp()
+    let c = await open({ app: ev })
+    try {
+      const pg = c.page
+      await pg.getByText('Upcoming Events', { exact: false }).first().waitFor({ timeout: 15000 })
+      await pg.getByText('Smith Wedding', { exact: true }).first().click()
+      await pg.getByText('Notes to housekeepers', { exact: true }).waitFor({ timeout: 10000 })
+      check('event hk: on Event Details, with notes', (await pg.getByText('No exit clean needed', { exact: true }).count()) === 1
+        && (await pg.getByText('Extra clean before the event', { exact: true }).count()) === 1)
+      await pg.getByRole('button', { name: /^Staffing/ }).first().click()
+      await pg.waitForTimeout(300)
+      check('event hk: not on Staffing', (await pg.getByText('Notes to housekeepers', { exact: true }).count()) === 0
+        && (await pg.getByText('No exit clean needed', { exact: true }).count()) === 0)
+      await pg.getByRole('button', { name: /^Event Details/ }).first().click()
+      const ta = pg.getByLabel('Notes to housekeepers')
+      await ta.fill('Tables out for 120')
+      await pg.getByText('Housekeeping', { exact: true }).first().click()
+      await pg.waitForTimeout(800)
+      const n = (ev.hbf_setup_cleans_v1 || []).find((x) => x.id === 'note:event:801')
+      check('event hk: note saved', n && n.kind === 'note' && n.of === 'event' && n.text === 'Tables out for 120', JSON.stringify(ev.hbf_setup_cleans_v1))
+      check('event hk: no page errors (admin)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+
+    c = await open({ rpc: cleanerRpc, app: ev })
+    try {
+      const pg = c.page
+      await pg.getByText('Still to sign off').waitFor({ timeout: 15000 })
+      const overdue = await pg.getByText('Still to sign off').locator('..').innerText()
+      check('event hk: the note is on the clean before the event', /For Smith Wedding, on .*: Tables out for 120/.test(overdue), overdue)
+      const day = await pg.locator('body').innerText()
+      check('event hk: and on the event\'s day', (day.match(/For Smith Wedding, on .*: Tables out for 120/g) || []).length >= 2)
+      check('event hk: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('event hk run: ' + e.message) }
+
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and
   // without box office events.

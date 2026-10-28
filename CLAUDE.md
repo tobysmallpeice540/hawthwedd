@@ -596,8 +596,13 @@ own header.
   the top of the sign-off, which refuses to save until "I have read this" is
   ticked. The tick is stored on
   the sign-off as `noteAck: { text, at }`; a later change to the note asks
-  again. The code reads notes for events and box office too, but only the
-  letting form can write one.
+  again. **Events have notes too** (28 Oct): the event form's housekeeping
+  box (extra clean, no exit clean, notes) sits on **Event Details**, not
+  above every section. An event's note goes on its extra clean if ticked,
+  else on the Grain Store's clean before it (`attachArrivalNotes`, events
+  and box office), worded "For <event>, on <day>: …" (`hkNoteForEvent`),
+  and on the event's own row on Live — never on its own clean after. The
+  box office editor writes ticks only.
 - **Admin Home → "From housekeeping"** (28 Oct): every sign-off with comments
   or lost property, newest first, until someone presses **Read**. What was
   read is stored in its own key `hbf_changeover_seen_v1` (`{ id: <sign-off id>,
