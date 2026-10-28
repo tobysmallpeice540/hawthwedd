@@ -603,11 +603,25 @@ own header.
   and box office), worded "For <event>, on <day>: …" (`hkNoteForEvent`),
   and on the event's own row on Live — never on its own clean after. The
   box office editor writes ticks only.
+  **The sign-off pop-up shows both** (28 Oct, Toby): "Notes from previous
+  let" (the note written on the let or event this clean comes after —
+  `job.prevNote`) and "Notes for next let" (the arrival notes above —
+  `job.note`); "event" for the Grain Store (`changeoverNoteWord`). One tick
+  covers both; `noteAck.text` is `changeoverAckText(prev, next)` — just the
+  next note when there is no previous one, so older acknowledgements hold.
+- **Deleting an event retires its housekeeping** (`retireEventHousekeeping`,
+  28 Oct review): event ids are reused (highest + 1), so its `setup:` /
+  `noexit:` / `note:event:<id>` rows are removed, and its sign-offs (and the
+  office's read marks for them) move to `<id>#deleted-<date>` with
+  `eventDeleted: true` — kept for the pay sheet, out of reach of the next
+  event. Deleting from the event form now asks once (the form's dialog) and
+  leaves the form BEFORE deleting: a second "are you sure" used to open behind
+  the first, and an open form's autosave writes a deleted event back.
 - **Admin Home → "From housekeeping"** (28 Oct): every sign-off with comments
   or lost property, newest first, until someone presses **Read**. What was
   read is stored in its own key `hbf_changeover_seen_v1` (`{ id: <sign-off id>,
   comments, lostProperty, at }`) — the cleaners' records are never written
-  from the office. A sign-off whose comments or lost property change later
+  from the office (bar retiring a deleted event's, above). A sign-off whose comments or lost property change later
   comes back. Read with `sbGetStrict`; if that read fails the panel is hidden
   rather than listing everything.
 - **The House** (28 Oct): Karina also cleans Toby's own house, paid by the
@@ -633,7 +647,8 @@ own header.
   its day; Edita, Karina, total, a breakdown, and Paid + date
   (`hbf_housekeeping_pay_v1`, id = the Monday, amounts kept as paid so a later
   change shows against them). Karina's pay is House hours plus her changeover
-  pop-up hours, by Toby's choice.
+  pop-up hours, by Toby's choice. Its three reads are strict: a failed read
+  shows an error, never a short sheet that Paid could be ticked against.
 - **Housekeeper's view** (admin menu, 28 Oct): view `"housekeeping"` renders
   the housekeeping login's own shell and `CleanerView` for an admin
   (`hkPreview`), with "← Back to admin" in place of Sign out and a note that
@@ -674,6 +689,13 @@ own header.
   reads back each address not yet read back, eight at a time. Three Gmail reads
   at a time, paced; a 429 stops the run as `throttled`, nothing marked done
   that was not read. A new enquiry's earlier emails arrive this way.
+- **One bad email must never jam a run** (28 Oct review). Postgres refuses a
+  NUL anywhere in jsonb, so one row with `\u0000` failed the whole
+  `email_ingest`, every run: UTF-16 parts are decoded as UTF-16
+  (`decodeData`) and every row is `scrubDeep`ed. An email Gmail no longer has
+  (404/400) or that cannot be parsed is noted as seen (`readOrSkip`), not
+  failed — a failure is retried next run, so one that always fails held the
+  read-back up for good.
 - **Whose:** a record's addresses (events: email, email2, email3 and any in
   `invoiceEmails`; enquiries: email; lettings: email), never ours
   (`hawthbushfarm.co.uk`, `smallpeice.net`, the farm Gmail) and never a relay

@@ -9,6 +9,9 @@
 //   · Gmail saying "slow down" stops the run without losing its place;
 //   · not connected: the app's own emails are still kept;
 //   · two-year purge: daily, with the addresses to keep;
+//   · one bad email never jams the archive: a UTF-16 body (NULs, which
+//     Postgres refuses) is read properly, and an email Gmail no longer has is
+//     noted as seen rather than holding the read-back up for good;
 //   · "Save to files": admins only, only an attachment in the archive, stored
 //     in the bucket under the record's folder.
 //
@@ -78,6 +81,8 @@ function world(opts) {
     if ((m = /\/rest\/v1\/email_messages\?gmail_id=eq\.([^&]+)&select=/.exec(url))) { const r = db.messages[decodeURIComponent(m[1])]; return res(r ? [r] : []); }
     if (/\/rest\/v1\/email_archive_addresses\?select=addr/.test(url)) return res(Object.keys(db.addresses).map((a) => ({ addr: a })));
     if (/\/rest\/v1\/rpc\/email_ingest$/.test(url)) {
+      // As Postgres: a NUL anywhere in the JSON and the whole call is refused.
+      if (/\\u0000/.test(init.body)) return res({ message: "unsupported Unicode escape sequence" }, 400);
       const p = JSON.parse(init.body).p; let n = 0;
       (p.messages || []).forEach((r) => { if (!db.messages[r.gmail_id]) { db.messages[r.gmail_id] = r; n++; } });
       (p.seen || []).forEach((id) => { db.seen[id] = true; });
@@ -103,6 +108,7 @@ function world(opts) {
     if ((m = /gmail\/v1\/users\/me\/messages\/(\w+)\?format=metadata/.exec(url))) { calls.meta.push(m[1]); return res(box[m[1]]); }
     if ((m = /gmail\/v1\/users\/me\/messages\/(\w+)\?format=full/.exec(url))) {
       calls.full.push(m[1]);
+      if (o.gone && o.gone.indexOf(m[1]) !== -1) return res({ error: { message: "Requested entity was not found." } }, 404);
       if (o.throttleFull) return res({ error: { message: "Too many" } }, 429);
       return res(box[m[1]]);
     }
@@ -157,6 +163,21 @@ const asStaff = (body) => fn.handler({ httpMethod: "POST", headers: { authorizat
     ok("nothing marked done that was not read", Object.keys(t.db.addresses).length === 0 || !("amy@x.com" in t.db.addresses));
     ok("its place kept: last good run not moved on", t.db.state.last_ok_at === before);
     ok("still says there is more", r.more === true);
+  }
+
+  console.log("one bad email does not jam the archive");
+  {
+    const u = world({ gone: ["m4"] });
+    // A UTF-16 email from Amy: read as UTF-8 it is half NULs.
+    u.box.m8 = mail("m8", Date.parse("2025-04-01T10:00:00Z"), ["INBOX"], "amy@x.com", "hawthbushfarm@gmail.com", "x");
+    u.box.m8.payload.parts[0] = { partId: "0", mimeType: "text/plain", headers: [{ name: "Content-Type", value: "text/plain; charset=utf-16le" }],
+      body: { data: Buffer.from("Hello from Word", "utf16le").toString("base64").replace(/\+/g, "-").replace(/\//g, "_") } };
+    r = JSON.parse((await cron()).body);
+    ok("the run still stores", r.ok && !!u.db.messages.m1 && !!u.db.messages.m8, JSON.stringify(r));
+    ok("the UTF-16 body is read as text", u.db.messages.m8 && u.db.messages.m8.body === "Hello from Word", u.db.messages.m8 && JSON.stringify(u.db.messages.m8.body));
+    ok("the email Gmail no longer has is noted as seen", !u.db.messages.m4 && u.db.seen.m4);
+    ok("and its address still counts as read back", "guest@z.com" in u.db.addresses, JSON.stringify(u.db.addresses));
+    ok("nothing left over", r.pending === 0 && r.failed === 0 && !!u.db.state.last_ok_at, JSON.stringify(r));
   }
 
   console.log("not connected");

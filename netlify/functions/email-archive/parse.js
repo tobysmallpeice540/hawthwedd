@@ -99,7 +99,34 @@ function headerMap(part) {
 }
 function decodeData(data, charset) {
   const buf = Buffer.from(String(data || "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
-  return /iso-8859-1|windows-1252|latin-?1/i.test(charset || "") ? buf.toString("latin1") : buf.toString("utf8");
+  const cs = String(charset || "").toLowerCase();
+  // UTF-16 read as UTF-8 comes out as every other character a NUL, and
+  // Postgres refuses a NUL anywhere in JSON — one such email used to fail the
+  // whole archive run, every run (28 Oct review). Read it as what it is.
+  if (/utf-?16/.test(cs)) {
+    const be = /be$/.test(cs) || (!/le$/.test(cs) && buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff);
+    if (be) {
+      const sw = Buffer.from(buf);
+      for (let i = 0; i + 1 < sw.length; i += 2) { const t = sw[i]; sw[i] = sw[i + 1]; sw[i + 1] = t; }
+      return noNul(sw.toString("utf16le").replace(/^﻿/, ""));
+    }
+    return noNul(buf.toString("utf16le").replace(/^﻿/, ""));
+  }
+  return noNul(/iso-8859-1|windows-1252|latin-?1/i.test(cs) ? buf.toString("latin1") : buf.toString("utf8"));
+}
+// NUL characters cannot be stored (Postgres text and jsonb refuse them).
+function noNul(s) { return String(s == null ? "" : s).replace(/\u0000/g, ""); }
+// Every string inside a value, NULs taken out — the last guard before the
+// database, whatever the email held.
+function scrubDeep(v) {
+  if (typeof v === "string") return noNul(v);
+  if (Array.isArray(v)) return v.map(scrubDeep);
+  if (v && typeof v === "object") {
+    const out = {};
+    Object.keys(v).forEach(function (k) { out[k] = scrubDeep(v[k]); });
+    return out;
+  }
+  return v;
 }
 function charsetOf(part) {
   const m = /charset="?([^";\s]+)/i.exec(headerMap(part)["content-type"] || "");
@@ -218,7 +245,7 @@ function buildRow(msg) {
   const h = headerMap(msg.payload);
   const from = parseAddressList(h["from"])[0] || { name: "", addr: "" };
   const labels = msg.labelIds || [];
-  return {
+  return scrubDeep({
     gmail_id: msg.id,
     thread_id: msg.threadId || null,
     rfc_id: h["message-id"] || null,
@@ -232,7 +259,7 @@ function buildRow(msg) {
     subject: String(h["subject"] || "").slice(0, 500),
     body: bodyText(msg.payload),
     attachments: listAttachments(msg.payload)
-  };
+  });
 }
 
 // The app's own emails (hbf_email_log_v1, which keeps only the last 500),
@@ -242,6 +269,10 @@ function logRows(log, upto) {
   return (Array.isArray(log) ? log : []).filter(function (e) {
     return e && e.sentAt && e.to && (!upto || String(e.sentAt) >= String(upto));
   }).map(function (e) {
+    return scrubDeep(logRow(e));
+  }).filter(function (r) { return r.addrs.length || r.ref; });
+}
+function logRow(e) {
     const to = addrsIn(e.to);
     const text = e.body ? String(e.body) : (e.bodyHtml ? htmlToText(e.bodyHtml).replace(/\n{3,}/g, "\n\n").trim() : "");
     return {
@@ -258,7 +289,6 @@ function logRows(log, upto) {
       kind: e.template || e.type || null,
       ref: e.bookingId != null && e.bookingId !== "" ? String(e.bookingId) : null
     };
-  }).filter(function (r) { return r.addrs.length || r.ref; });
 }
 
 // A Gmail search for everything to or from a few addresses.
@@ -268,5 +298,6 @@ function addressQuery(addrs, after) {
 
 module.exports = {
   isOurs, isRelay, cleanAddr, addrsIn, parseAddressList, recordAddresses, htmlToText, stripQuoted, bodyText,
-  listAttachments, findPartById, messageAddrs, isDraft, buildRow, logRows, appLogId, addressQuery, decodeData
+  listAttachments, findPartById, messageAddrs, isDraft, buildRow, logRows, appLogId, addressQuery, decodeData,
+  noNul, scrubDeep
 };

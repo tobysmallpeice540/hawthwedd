@@ -541,6 +541,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       ]
       a.hbf_setup_cleans_v1 = [
         { id: 'note:accom:P5', kind: 'note', of: 'accom', refId: 'P5', text: 'Dog bed and bowls out please' },
+        // The leaving guests' own note: shown in their check-out's sign-off
+        // as "Notes from previous let" (28 Oct, Toby).
+        { id: 'note:accom:P4', kind: 'note', of: 'accom', refId: 'P4', text: 'Check the hot tub cover' },
         { id: 'note:accom:P2', kind: 'note', of: 'accom', refId: 'P2', text: 'Cot in bedroom 2' },
         { id: 'setup:accom:P2', kind: 'accom', refId: 'P2' },
       ]
@@ -578,16 +581,20 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.getByRole('tab', { name: 'Live', exact: true }).click()
       const row = pg.getByText('Still to sign off').locator('..').locator('div[style*="nowrap"]', { hasText: 'Leaving Guests' }).filter({ has: pg.locator('button') }).last()
       await row.getByRole('button', { name: 'To clean' }).click()
-      await pg.getByText('Note from the office').waitFor({ timeout: 5000 })
+      await pg.getByText('Notes for next let').waitFor({ timeout: 5000 })
+      const prevBox = await pg.locator('[data-hk-note="prev"]').innerText()
+      const nextBox = await pg.locator('[data-hk-note="next"]').innerText()
+      check('notes: the leaving let\'s own note, labelled', /^Notes from previous let\s+Check the hot tub cover$/.test(prevBox.trim()), prevBox)
+      check('notes: the next let\'s note, labelled', /^Notes for next let\s+For Dog Owners, arriving .*: Dog bed and bowls out please$/.test(nextBox.trim()), nextBox)
       await pg.locator('input[type=number]').nth(0).fill('2')
       await pg.getByRole('button', { name: 'Done — ready' }).click()
-      await pg.getByText(/Please tick to say you have read the note/).waitFor({ timeout: 3000 })
+      await pg.getByText(/Please tick to say you have read the notes/).waitFor({ timeout: 3000 })
       check('notes: sign-off refused until read', !(hk.hbf_changeovers_v1 || []).some((x) => x.id === 'accom:P4:amly'))
-      await pg.getByLabel('I have read this').check()
+      await pg.getByLabel('I have read these').check()
       await pg.getByRole('button', { name: 'Done — ready' }).click()
       await pg.getByText('Edita hours').waitFor({ state: 'detached', timeout: 5000 })
       const r = (hk.hbf_changeovers_v1 || []).find((x) => x.id === 'accom:P4:amly')
-      check('notes: read tick saved with the wording', r && r.noteAck && /^For Dog Owners, arriving .*: Dog bed and bowls out please$/.test(r.noteAck.text), JSON.stringify(r))
+      check('notes: read tick saved with both wordings', r && r.noteAck && /^Previous: Check the hot tub cover\nNext: For Dog Owners, arriving .*: Dog bed and bowls out please$/.test(r.noteAck.text), JSON.stringify(r))
       check('notes: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
 
@@ -884,11 +891,48 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('lone event: note on its pre-clean', /Extra clean|Before Smith Wedding/.test(overdue) && /For Smith Wedding, on .*: Tables out for 120/.test(overdue), overdue)
       const row = pg.locator('div', { hasText: 'Tables out for 120' }).filter({ has: pg.getByRole('button', { name: 'To clean' }) }).last()
       await row.getByRole('button', { name: 'To clean' }).click()
-      await pg.getByText('Note from the office').waitFor({ timeout: 5000 })
-      check('lone event: and in the pre-clean\'s sign-off', /Tables out for 120/.test(await pg.getByText('Note from the office').locator('..').innerText()))
+      await pg.getByText('Notes for next event').waitFor({ timeout: 5000 })
+      check('lone event: and in the pre-clean\'s sign-off', /Tables out for 120/.test(await pg.getByText('Notes for next event').locator('..').innerText()))
       check('lone event: no page errors', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
   } catch (e) { fails.push('lone event run: ' + e.message) }
+
+  // ── Deleting an event takes its housekeeping with it (28 Oct review) ─────
+  // Event ids are reused (highest + 1), so its ticks and note must not pass to
+  // the next event; its sign-off stays for the pay sheet under a new id, and
+  // the office's "read" mark moves with it.
+  try {
+    const del = freshApp()
+    del.hbf_setup_cleans_v1 = [
+      { id: 'setup:event:801', kind: 'event', refId: 801 },
+      { id: 'noexit:event:801', kind: 'noexit', of: 'event', refId: 801 },
+      { id: 'note:event:801', kind: 'note', of: 'event', refId: 801, text: 'Tables out' },
+      { id: 'noexit:event:802', kind: 'noexit', of: 'event', refId: 802 },
+    ]
+    del.hbf_changeovers_v1 = (del.hbf_changeovers_v1 || []).concat([
+      { id: 'event:801', kind: 'event', refId: 801, unitId: 'grainstore', unitName: 'Grain Store', who: 'Smith Wedding', doneAt: plus(-1) + 'T10:00', hours: { edita: 3 }, comments: 'Glass broken', lostProperty: '' }])
+    del.hbf_changeover_seen_v1 = [{ id: 'event:801', comments: 'Glass broken', lostProperty: '' }]
+    const c = await open({ app: del })
+    try {
+      const pg = c.page
+      await pg.getByText('Upcoming Events', { exact: false }).first().waitFor({ timeout: 15000 })
+      await pg.getByText('Smith Wedding', { exact: true }).first().click()
+      await pg.getByRole('button', { name: /Actions/ }).first().click()
+      await pg.getByText('Delete event…', { exact: true }).click()
+      await pg.getByRole('button', { name: 'Yes, delete' }).click()
+      await pg.waitForTimeout(1500)
+      check('delete: one confirmation from the form, then back to the list', (await pg.getByRole('button', { name: 'Yes, delete' }).count()) === 0
+        && (await pg.getByText('Delete this booking?').count()) === 0 && (await pg.getByText('Ref 801').count()) === 0)
+      check('delete: the event is gone', !(del.hawthbush_bookings_v6 || []).some((x) => String(x.id) === '801'))
+      const left = (del.hbf_setup_cleans_v1 || []).map((x) => x.id)
+      check('delete: its ticks and note are cleared, others kept', left.join('|') === 'noexit:event:802', left.join('|'))
+      const co = (del.hbf_changeovers_v1 || []).find((x) => /^event:801#deleted-/.test(x.id))
+      check('delete: its sign-off is kept, under an id no event can take', co && co.hours.edita === 3 && co.eventDeleted && !(del.hbf_changeovers_v1 || []).some((x) => x.id === 'event:801'), JSON.stringify(del.hbf_changeovers_v1))
+      const seen = (del.hbf_changeover_seen_v1 || [])[0]
+      check('delete: its read mark moves with it', seen && co && seen.id === co.id, JSON.stringify(del.hbf_changeover_seen_v1))
+      check('delete: no page errors', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('delete run: ' + e.message) }
 
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and

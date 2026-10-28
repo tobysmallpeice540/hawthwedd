@@ -128,7 +128,10 @@ const rows = (page) => page.locator('[data-email-row]')
     await rows(page).first().getByText('✓ In Files').waitFor({ timeout: 5000 })
     const req = s.fn.find((b) => b.action === 'attachment')
     check('B3 one attachment, under the record\'s folder', req && req.gmail_id === '18a2' && req.part === '1' && req.folder === 'enquirys/enq_1', JSON.stringify(req))
-    const saved = (s.appData.hbf_enquiries_v1.find((e) => e.id === 'enq_1') || {}).files || []
+    // "In Files" shows at once; the enquiry's save lands a moment later.
+    const savedFiles = () => (s.appData.hbf_enquiries_v1.find((e) => e.id === 'enq_1') || {}).files || []
+    for (let i = 0; i < 50 && !savedFiles().some((x) => x.name === 'floorplan.pdf'); i++) await page.waitForTimeout(100)
+    const saved = savedFiles()
     const f = saved.find((x) => x.name === 'floorplan.pdf')
     check('B4 added to Files as from the guest', f && f.source === 'email-in' && f.gmailId === '18a2' && f.gmailPart === '1' && f.path === 'enquirys/enq_1/1761650000000_floorplan.pdf', JSON.stringify(f))
     check('B5 the files already there kept', saved.length === 3, saved.map((x) => x.name).join())

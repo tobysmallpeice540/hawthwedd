@@ -2776,7 +2776,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28t";
+const APP_BUILD = "2026-10-28u";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6875,7 +6875,10 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
         id: "accom:" + b.id + ":" + s.propertyId + (n > 1 ? ":" + n : ""),
         kind: "accom", refId: b.id, unitId: s.propertyId, unitName: propName(s.propertyId),
         start: s.checkIn, due: s.checkOut,
-        who: accomGuestLabel(b)
+        who: accomGuestLabel(b),
+        // The note the office wrote for THIS let (28 Oct, Toby): shown in the
+        // sign-off as "Notes from previous let", beside the next guests'.
+        prevNote: hkNote(setups, "accom", b.id)
       });
     });
   });
@@ -6890,7 +6893,8 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
       // An event is on from its first day to its last; the clean is due the
       // morning after.
       start: ev.date, due: addDaysIso(end, 1),
-      who: (ev.couple || "Event") + " · " + eventTypeLabel(ev)
+      who: (ev.couple || "Event") + " · " + eventTypeLabel(ev),
+      prevNote: hkNote(setups, "event", ev.id)
     });
   });
   // Ticketed events in the Grain Store: the same rule, cleaned the day after.
@@ -6902,7 +6906,8 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
       id: "box:" + bx.id,
       kind: "box", refId: bx.id, unitId: GRAIN_STORE_UNIT.id, unitName: GRAIN_STORE_UNIT.name,
       start: d, due: addDaysIso(e && e > d ? e : d, 1),
-      who: (bx.name || "Ticketed event") + " · Box office"
+      who: (bx.name || "Ticketed event") + " · Box office",
+      prevNote: hkNote(setups, "box", bx.id)
     });
   });
   attachArrivalNotes(jobs, accom, setups, events, boxEvents);
@@ -7302,6 +7307,45 @@ function changeoverLocked(rec, job, today, isAdmin) {
   return !!day && day < mondayOf(today);
 }
 
+// A deleted event's housekeeping goes with it (28 Oct review). Event ids are
+// reused — a new event takes the highest id + 1 — so its extra clean, "No exit
+// clean" and notes would otherwise pass to the next event created (a new event
+// silently never cleaned after). Its sign-offs are the cleaners' and stay for
+// the pay sheet, under an id no event can take; the office's "read" marks for
+// them move with them, so they do not come back as unread.
+async function retireEventHousekeeping(eventId) {
+  const id = String(eventId);
+  const reqIds = ["setup:event:" + id, "noexit:event:" + id, "note:event:" + id];
+  const isReq = function(x) { return !!x && reqIds.indexOf(x.id) !== -1; };
+  const setups = await sbGetStrict(SETUP_CLEANS_STORAGE);
+  if (Array.isArray(setups) && setups.some(isReq)) {
+    await saveArrayMerged(SETUP_CLEANS_STORAGE, setups, setups.filter(function(x) { return !isReq(x); }));
+  }
+  const tag = "#deleted-" + new Date().toISOString().slice(0, 10);
+  const mine = function(r) { return !!r && (r.id === "event:" + id || String(r.id).indexOf("setup:event:" + id + ":") === 0); };
+  const keys = [CHANGEOVERS_STORAGE, CHANGEOVER_SEEN_STORAGE];
+  for (let i = 0; i < keys.length; i++) {
+    const list = await sbGetStrict(keys[i]);
+    if (!Array.isArray(list) || !list.some(mine)) continue;
+    await saveArrayMerged(keys[i], list, list.map(function(r) {
+      return mine(r) ? Object.assign({}, r, { id: r.id + tag, eventDeleted: true }) : r;
+    }));
+  }
+}
+
+// What "I have read this" is recorded against. With only a next-guests note
+// it is that note, as before (so earlier acknowledgements still count); with
+// a previous let's note too, both, labelled.
+function changeoverAckText(prevNote, note) {
+  if (!prevNote) return note || "";
+  return "Previous: " + prevNote + (note ? "\nNext: " + note : "");
+}
+// "let" for the cottages, "event" for the Grain Store.
+function changeoverNoteWord(job) {
+  const k = job && job.kind === "setup" ? job.setupOf : job && job.kind;
+  return k === "event" || k === "box" ? "event" : "let";
+}
+
 function ChangeoverDialog({ job, rec, onSave, onReopen, onClose, locked }) {
   const [hours, setHours] = useState(function() {
     const h = {};
@@ -7317,10 +7361,15 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose, locked }) {
   const [busy, setBusy]       = useState(false);
   const [err, setErr]         = useState("");
   const [askReopen, setAskReopen] = useState(false);
-  // A note from the office has to be ticked as read before signing off. A
-  // sign-off that read an earlier wording of the note asks again.
+  // Notes from the office have to be ticked as read before signing off. A
+  // sign-off that read an earlier wording asks again. Two kinds (28 Oct,
+  // Toby): the note written for the let or event this clean comes after
+  // ("from previous"), and the note for whoever arrives next ("for next").
   const note = job.note || "";
-  const [noteRead, setNoteRead] = useState(!!(rec && rec.noteAck && rec.noteAck.text === note));
+  const prevNote = job.prevNote || "";
+  const ackText = changeoverAckText(prevNote, note);
+  const [noteRead, setNoteRead] = useState(!!(rec && rec.noteAck && rec.noteAck.text === ackText));
+  const what = changeoverNoteWord(job);
 
   const bad = CHANGEOVER_CLEANERS.some(function(c) {
     const v = hours[c.key];
@@ -7332,7 +7381,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose, locked }) {
     if (locked) return;
     if (bad) { setErr("Hours must be a number between 0 and 24."); return; }
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(doneAt)) { setErr("Please put in the date and time it was ready."); return; }
-    if (note && !noteRead) { setErr("Please tick to say you have read the note at the top."); return; }
+    if (ackText && !noteRead) { setErr("Please tick to say you have read the notes at the top."); return; }
     setBusy(true); setErr("");
     const h = {};
     CHANGEOVER_CLEANERS.forEach(function(c) { h[c.key] = hours[c.key] === "" ? 0 : Math.round(Number(hours[c.key]) * 100) / 100; });
@@ -7343,7 +7392,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose, locked }) {
         setupOf: job.setupOf || undefined, eventStart: job.eventStart || undefined,
         who: job.who, start: job.start, due: job.due, doneAt: doneAt, hours: h,
         comments: comments.trim(), lostProperty: lost.trim(),
-        noteAck: note ? { text: note, at: rec && rec.noteAck && rec.noteAck.text === note ? rec.noteAck.at : now } : undefined,
+        noteAck: ackText ? { text: ackText, at: rec && rec.noteAck && rec.noteAck.text === ackText ? rec.noteAck.at : now } : undefined,
         recordedAt: rec && rec.recordedAt ? rec.recordedAt : now,
         updatedAt: now
       });
@@ -7380,14 +7429,24 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose, locked }) {
             style={{ background:"none", border:"none", fontSize:24, lineHeight:1, color:T.textLight, cursor:"pointer", padding:0, fontFamily:"inherit" }}>×</button>
         </div>
 
-        {note && (
+        {ackText && (
           <div style={{ background:T.redBg, border:"1.5px solid " + T.red, borderRadius:10, padding:"10px 12px", marginTop:12 }}>
-            <div style={{ fontSize:12, fontWeight:800, color:T.red, marginBottom:4 }}>Note from the office</div>
-            <div style={{ fontSize:14, color:T.text, lineHeight:1.5, whiteSpace:"pre-wrap" }}>{note}</div>
+            {prevNote && (
+              <div data-hk-note="prev">
+                <div style={{ fontSize:12, fontWeight:800, color:T.red, marginBottom:4 }}>Notes from previous {what}</div>
+                <div style={{ fontSize:14, color:T.text, lineHeight:1.5, whiteSpace:"pre-wrap" }}>{prevNote}</div>
+              </div>
+            )}
+            {note && (
+              <div data-hk-note="next" style={prevNote ? { marginTop:10, paddingTop:9, borderTop:"1px solid " + T.red } : undefined}>
+                <div style={{ fontSize:12, fontWeight:800, color:T.red, marginBottom:4 }}>Notes for next {what}</div>
+                <div style={{ fontSize:14, color:T.text, lineHeight:1.5, whiteSpace:"pre-wrap" }}>{note}</div>
+              </div>
+            )}
             <label style={{ display:"flex", alignItems:"center", gap:9, marginTop:9, cursor:"pointer", flexWrap:"nowrap" }}>
               <input type="checkbox" checked={noteRead} disabled={locked} onChange={function(e) { setNoteRead(e.target.checked); }}
                 style={{ width:20, height:20, margin:0, flexShrink:0, accentColor:T.red }}/>
-              <span style={{ fontSize:13.5, fontWeight:700, color:T.text }}>I have read this</span>
+              <span style={{ fontSize:13.5, fontWeight:700, color:T.text }}>{prevNote && note ? "I have read these" : "I have read this"}</span>
             </label>
           </div>
         )}
@@ -8426,14 +8485,19 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
   const [openWeek, setOpenWeek] = useState(null);
   const [err, setErr]       = useState("");
   const savePaid = useMergedSave(HOUSEKEEPING_PAY_STORAGE, paid, setPaid);
+  const [loadErr, setLoadErr] = useState("");
+  // Strict reads: a sheet missing the House hours or the Paid records would
+  // show less than is owed, and ticking Paid would record that lower figure
+  // (28 Oct review). A failed read says so and shows no sheet.
   useEffect(function() {
     let off = false;
-    Promise.all([sbGet(CHANGEOVERS_STORAGE), sbGet(HOUSE_HOURS_STORAGE), sbGet(HOUSEKEEPING_PAY_STORAGE)]).then(function(r) {
+    Promise.all([sbGetStrict(CHANGEOVERS_STORAGE), sbGetStrict(HOUSE_HOURS_STORAGE), sbGetStrict(HOUSEKEEPING_PAY_STORAGE)]).then(function(r) {
       if (off) return;
       setRecs(Array.isArray(r[0]) ? r[0] : []); setSheets(Array.isArray(r[1]) ? r[1] : []); setPaid(Array.isArray(r[2]) ? r[2] : []);
-    }).catch(function() { if (!off) setRecs([]); });
+    }).catch(function() { if (!off) setLoadErr("failed"); });
     return function() { off = true; };
   }, []);
+  if (loadErr) return <div style={{ background:T.redBg, color:T.red, borderRadius:8, padding:"10px 14px", fontSize:13 }}>Could not read the housekeeping hours, so the pay sheet is not shown — it could be short. Try again in a moment.</div>;
   if (!recs) return <div style={{ padding:30, color:T.textLight }}>Loading…</div>;
 
   const WEEKS = 8;
@@ -9873,18 +9937,27 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // another device, or a stale link) says so instead of opening an empty form
   // that would autosave as a new record.
   const handleEdit   = id=>{ const b=bookings.find(x=>String(x.id)===String(id)); if (!b) { alert("That event could not be found — it may have been deleted."); return; } id = b.id; const rec = {...b, setup:safeArr(b.setup), dayManager:safeArr(b.dayManager), dayStaff:safeArr(b.dayStaff), barSupervisor:safeArr(b.barSupervisor), sunday:safeArr(b.sunday), bar:safeArr(b.bar), dayHandy:safeArr(b.dayHandy), eveHandy:safeArr(b.eveHandy) }; openForm(rec); setFormData(rec); setEditId(id); setView("form"); };
-  const handleDelete = id => {
+  // confirmed: the event form has already asked ("Delete this event?"). Asking
+  // again opened a second dialog BEHIND the form's, so the delete could not be
+  // finished from the form (28 Oct).
+  const handleDelete = (id, confirmed) => {
     const b = bookings.find(x=>x.id===id);
-    askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`,
-      async () => {
+    const run = async () => {
         setConfirmDlg(null);
+        // From the form: leave it first. An autosave from a form still open
+        // on a deleted event would write the event straight back.
+        if (confirmed) { setView("list"); setEditId(null); await new Promise(function(r) { setTimeout(r, 0); }); }
         // Delete against the server's current array, not this tab's snapshot —
         // otherwise deleting one event also silently removes any events added
         // elsewhere since this tab loaded.
         await mutateBookings(function(base) {
           return base.filter(function(x) { return String(x.id) !== String(id); });
         });
-      });
+        try { await retireEventHousekeeping(id); }
+        catch (e) { alert("The event is deleted, but its housekeeping ticks and notes could not be cleared (" + ((e && e.message) || e) + "). The next new event could pick them up — please tell Toby."); }
+    };
+    if (confirmed) return run();
+    askConfirm("Delete this booking?", `"${b?.couple||"This booking"}" will be permanently removed.`, run);
   };
   // stayOpen: save and remain on the form, so several tabs can be filled in
   // without bouncing back to the list each time.
@@ -10323,7 +10396,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
+        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId, true) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits

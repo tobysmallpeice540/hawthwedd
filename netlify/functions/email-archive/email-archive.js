@@ -168,6 +168,28 @@ async function pool(items, deadline, fn) {
   return { done, failed, throttled };
 }
 
+// Gmail no longer has it (deleted between the list and the read: 404, or a
+// bad id: 400), or it cannot be made into a row: noted as seen, with a log
+// line, rather than failed. A failed email is tried again next run, and one
+// that ALWAYS fails used to hold the read-back (and the recent look-back) up
+// for good (28 Oct review).
+async function readOrSkip(id, seen, fn) {
+  try { return await fn(); }
+  catch (e) {
+    if (e.quota) throw e;
+    if (e.status === 404 || e.status === 400 || e.unreadable) {
+      console.error("[email-archive] skipped " + id + ": " + e.message);
+      seen.push(id);
+      return;
+    }
+    throw e;
+  }
+}
+function rowOf(msg) {
+  try { return P.buildRow(msg); }
+  catch (e) { const err = new Error("could not read the email: " + e.message); err.unreadable = true; throw err; }
+}
+
 function ymd(d) { return d.getUTCFullYear() + "/" + String(d.getUTCMonth() + 1).padStart(2, "0") + "/" + String(d.getUTCDate()).padStart(2, "0"); }
 
 // ── One sync ────────────────────────────────────────────────────────────────
@@ -198,12 +220,12 @@ async function runSync() {
       const recentIds = await listIds(g.access, "after:" + ymd(new Date(Date.now() - back * 86400000)) + " -from:airbnb.com -in:chats", 1500);
       const known = await knownIds(recentIds);
       const fresh = recentIds.filter((id) => !known[id]);
-      const r = await pool(fresh, deadline, async (id) => {
+      const r = await pool(fresh, deadline, (id) => readOrSkip(id, seen, async () => {
         const meta = await gmail(g.access, "messages/" + id + META);
         if (P.isDraft(meta) || !P.messageAddrs(meta).some((a) => rec.all[a])) { seen.push(id); return; }
-        const row = P.buildRow(await gmail(g.access, "messages/" + id + "?format=full"));
+        const row = rowOf(await gmail(g.access, "messages/" + id + "?format=full"));
         if (row) rows.push(row); else seen.push(id);
-      });
+      }));
       failed += r.failed; throttled = r.throttled;
       recentLeft = fresh.filter((id) => !r.done[id]).length;
       recentDone = recentLeft === 0;
@@ -219,10 +241,10 @@ async function runSync() {
           const ids = await listIds(g.access, P.addressQuery(batch, SCAN_FROM), 3000);
           const have = await knownIds(ids);
           const need = ids.filter((id) => !have[id] && !rows.some((x) => x.gmail_id === id) && seen.indexOf(id) === -1);
-          const b = await pool(need, deadline, async (id) => {
-            const row = P.buildRow(await gmail(g.access, "messages/" + id + "?format=full"));
+          const b = await pool(need, deadline, (id) => readOrSkip(id, seen, async () => {
+            const row = rowOf(await gmail(g.access, "messages/" + id + "?format=full"));
             if (row) rows.push(row); else seen.push(id);
-          });
+          }));
           failed += b.failed; throttled = throttled || b.throttled;
           if (need.every((id) => b.done[id]) && !b.failed) {
             batch.forEach((a) => addressesDone.push({ addr: a, found: ids.length }));
@@ -236,7 +258,7 @@ async function runSync() {
   }
 
   const stored = (appRows.length || rows.length || seen.length || addressesDone.length)
-    ? await rpc("email_ingest", { p: { messages: appRows.concat(rows), seen: seen, addresses_done: addressesDone } })
+    ? await rpc("email_ingest", { p: P.scrubDeep({ messages: appRows.concat(rows), seen: seen, addresses_done: addressesDone }) })
     : { messages: 0, seen: 0, addresses: 0 };
 
   // 4. Two years, then gone — once a day, never from an empty keep list.

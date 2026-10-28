@@ -106,5 +106,14 @@ console.log("the Gmail search");
 const q = P.addressQuery(["a@x.com", "b@y.com"], "2025/01/01");
 ok("from/to/cc/bcc for each, from the start of 2025", q === "{from:a@x.com to:a@x.com cc:a@x.com bcc:a@x.com from:b@y.com to:b@y.com cc:b@y.com bcc:b@y.com} after:2025/01/01 -in:chats", q);
 
+console.log("no NULs ever reach the database (28 Oct review)");
+const u16 = (s, enc) => { let b = Buffer.from(s, "utf16le"); if (enc === "be") { b = Buffer.from(b); for (let i = 0; i + 1 < b.length; i += 2) { const t = b[i]; b[i] = b[i + 1]; b[i + 1] = t; } } return b.toString("base64").replace(/\+/g, "-").replace(/\//g, "_"); };
+ok("UTF-16LE is read as text", P.decodeData(u16("Hello"), "utf-16le") === "Hello");
+ok("UTF-16BE is read as text", P.decodeData(u16("Hello", "be"), "UTF-16BE") === "Hello");
+ok("plain UTF-16 with a byte-order mark", P.decodeData(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Hi", "utf16le")]).toString("base64"), "utf-16") === "Hi");
+ok("a stray NUL in UTF-8 is dropped", P.decodeData(Buffer.from("a\u0000b").toString("base64"), "utf-8") === "ab");
+ok("every string in a row is scrubbed", JSON.stringify(P.scrubDeep({ s: "x\u0000", a: ["\u0000y"], n: 3, z: null })) === JSON.stringify({ s: "x", a: ["y"], n: 3, z: null }));
+ok("the app's own log too", !/\u0000/.test(JSON.stringify(P.logRows([{ id: "N", sentAt: "2025-01-01T00:00:00Z", to: "amy@x.com", subject: "S\u0000", body: "B\u0000" }], null))));
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
