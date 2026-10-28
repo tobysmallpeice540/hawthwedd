@@ -4,8 +4,8 @@
 // (tests/portal-harness.cjs → openStaff), box-admin faked here:
 //   · the cleaner login has Live / Upcoming / Calendar / Bookings / Hours, and
 //     an App button by Sign out with the install steps;
-//   · Upcoming: Monday weeks, each changeover's window (check-out + 2h to the
-//     next check-in − 2h), four weeks a page; an empty Sunday is next week's;
+//   · Upcoming: Monday weeks, each changeover listed with the stay or event's
+//     own dates, four weeks a page; an empty Sunday is next week's;
 //   · Live's status line: one line of short names (Hamlet, Amly, Glamping,
 //     Grain St.), red waiting, yellow in use, green ready — box office events
 //     count for the Grain Store;
@@ -33,6 +33,9 @@ const check = (n, ok, d) => { if (ok) passes++; else fails.push(n + (d ? ': ' + 
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' })
 const plus = (n) => new Date(Date.parse(today + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10)
 const monthOf = (d) => String(d).slice(0, 7)
+// The app's short date: "Mon 2 Nov 26".
+const dshort = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()] + ' ' +
+  Number(d.slice(8)) + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(d.slice(5, 7)) - 1] + ' ' + d.slice(2, 4)
 const HOST = 'https://rkqbyisfmvwulsyxzwjz.supabase.co'
 
 const PROPS = [
@@ -164,8 +167,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     check('edit saved', r2 && r2.hours.edita === 3 && r2.lostProperty === 'umbrella', JSON.stringify(r2))
     check('edit is one record, not two', w2 && w2.value.filter((r) => r.id === 'accom:A1:hamlet').length === 1 && w2.value.length === 3)
 
-    // Upcoming: the Hamlet window runs from Red Guest's check-out (10am + 2h)
-    // to Later Guest's check-in (4pm − 2h), six days later — days only.
+    // Upcoming: each changeover shows the stay's own dates, not a window.
     await page.getByRole('tab', { name: 'Upcoming', exact: true }).click()
     await page.getByText(/changeover/).first().waitFor({ timeout: 5000 })
     const wd = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()]
@@ -174,9 +176,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     const startOn = plus(-1) < monday
     if (startOn) await page.getByRole('button', { name: 'Earlier weeks' }).click()
     let up = await page.locator('body').innerText()
-    check('Upcoming: Hamlet window', up.indexOf('Hamlet') !== -1 && up.indexOf(wd(plus(-1)) + ' 12 pm – ' + wd(plus(5)) + ' 2 pm') !== -1, up.slice(0, 600))
-    check('Upcoming: who out and in', /Red Guest → Later Guest/.test(up))
-    check('Upcoming: Amly has no one booked after', /Yellow Guest\b(?! →)/.test(up) && /Amly\s*\S+ 12 pm – no one booked/.test(up))
+    check('Upcoming: Hamlet shows the stay dates', up.indexOf('Hamlet') !== -1 && up.indexOf(dshort(plus(-3)) + ' – ' + dshort(plus(-1))) !== -1, up.slice(0, 600))
+    check('Upcoming: who', /Red Guest/.test(up))
+    check('Upcoming: no cleaning window or next guest shown', !/ 12 pm – /.test(up) && !/→/.test(up) && !/no one booked/.test(up))
     check('Upcoming: four weeks', (up.match(/This week|Week of/g) || []).length === 4)
     if (startOn) await page.getByRole('button', { name: 'Back to this week' }).click()
     up = await page.locator('body').innerText()
@@ -340,9 +342,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       const nextLabel = 'Week of ' + ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(add(1) + 'T00:00:00Z').getUTCDay()] + ' ' +
         Number(add(1).slice(8)) + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(add(1).slice(5, 7)) - 1] + ' ' + add(1).slice(2, 4)
       const nextWeek = await weekText(nextLabel)
-      check('Sunday clean with no one arriving rolls to next week', /Sunday Leaver → Friday Arriver/.test(nextWeek) && !/Sunday Leaver/.test(thisWeek), thisWeek + ' || ' + nextWeek)
-      check('Sunday clean with Sunday arrivals stays this week', /Amly Leaver → Sunday Arriver/.test(thisWeek) && !/Amly Leaver/.test(nextWeek), thisWeek + ' || ' + nextWeek)
-      check('rolled window still reads Sun 12 pm – Fri 2 pm', /Sun 12 pm – Fri 2 pm/.test(nextWeek), nextWeek)
+      check('Sunday clean with no one arriving rolls to next week', /Sunday Leaver/.test(nextWeek) && !/Sunday Leaver/.test(thisWeek), thisWeek + ' || ' + nextWeek)
+      check('Sunday clean with Sunday arrivals stays this week', /Amly Leaver/.test(thisWeek) && !/Amly Leaver/.test(nextWeek), thisWeek + ' || ' + nextWeek)
+      check('rolled row shows the stay dates', nextWeek.indexOf(dshort(add(-2)) + ' – ' + dshort(sun)) !== -1, nextWeek)
     } finally { await c.close() }
   } catch (e) { fails.push('sunday run: ' + e.message) }
 
@@ -401,17 +403,17 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.getByText(/This week/).waitFor({ timeout: 5000 })
       // Back a page if the event's window opened last week.
       let up = await pg.locator('body').innerText()
-      for (let i = 0; i < 3 && !/Before Party Prep/.test(up); i++) { await pg.getByRole('button', { name: 'Earlier weeks' }).click(); up += await pg.locator('body').innerText() }
+      for (let i = 0; i < 3 && !/before Party Prep/.test(up); i++) { await pg.getByRole('button', { name: 'Earlier weeks' }).click(); up += await pg.locator('body').innerText() }
       await pg.getByRole('button', { name: 'Back to this week' }).click().catch(() => {})
       up += await pg.locator('body').innerText()
-      check('setup: Hamlet window from the last check-out', up.indexOf(wd(plus(2)) + ' 12 pm – ' + wd(plus(6)) + ' 2 pm') !== -1 && /Before Second Family arrive/.test(up), up.slice(0, 900))
-      check('setup: diary event window from a week before', /Before Party Prep arrives/.test(up))
+      check('setup: Hamlet setup shows the stay it is for', up.indexOf(dshort(plus(6)) + ' – ' + dshort(plus(8))) !== -1 && /Setup clean before Second Family/.test(up), up.slice(0, 900))
+      check('setup: diary event setup listed', /Setup clean before Party Prep/.test(up))
       await pg.getByRole('button', { name: 'Later weeks' }).click()
       up = await pg.locator('body').innerText()
       await pg.getByRole('button', { name: 'Back to this week' }).click()
       up += await pg.locator('body').innerText()
-      check('setup: Amly window with nobody before it is the week before', up.indexOf('Before Amly Arrivals arrive') !== -1)
-      check('setup: box office setup opens when the diary event frees the Grain Store', /Before Late Supper arrives/.test(up) && up.indexOf(wd(plus(6)) + ' – ' + ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(plus(12) + 'T00:00:00Z').getUTCDay()] + ' 4:30 pm') !== -1, up.slice(0, 1500))
+      check('setup: Amly setup listed', up.indexOf('Setup clean before Amly Arrivals') !== -1)
+      check('setup: box office setup shows the event date and time', /Setup clean before Late Supper/.test(up) && up.indexOf(dshort(plus(12)) + ' · ' + new Date(plus(12) + 'T18:30:00Z').toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })) !== -1, up.slice(0, 1500))
 
       await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
       await pg.getByText('Second Family').first().waitFor({ timeout: 5000 })

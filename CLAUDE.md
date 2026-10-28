@@ -521,10 +521,11 @@ own header.
   lost-property chip. Hours: `HousekeepingHours` on the Hours tab and Reports →
   Housekeeping Hours (above Hours Worked, which stays last).
 - **Upcoming** (`changeoverWindows`): four Monday-to-Sunday weeks a page, each
-  changeover listed in order with its window — check-out + 2h to the next
-  check-in − 2h (`CHANGEOVER_GRACE_MIN`, Toby's late/early allowance); Grain
-  Store from the event's end (diary: the morning after) to the next event's
-  start − 2h. A window belongs to the week it opens in — except one opening
+  changeover listed in order showing the stay or event's own dates (`occ`, the
+  same "Mon 2 Nov 26 – Wed 4 Nov 26" as Bookings) — Toby found the cleaning
+  window confusing, so it is not shown. The window (check-out + 2h to the next
+  check-in − 2h, `CHANGEOVER_GRACE_MIN`) is still worked out, to decide the
+  week. A window belongs to the week it opens in — except one opening
   on a Sunday, which is the next week's clean unless the next guests arrive
   that same Sunday (`changeoverWeekOf`).
 - **Setup cleans** (`setupCleanItems`): a "Setup clean" tick box on the letting

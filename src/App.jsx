@@ -2773,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28g";
+const APP_BUILD = "2026-10-28h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6945,7 +6945,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
   if (!setups || !setups.length) return out;
   const use = unitUsages(properties, accom, events, boxEvents);
   const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
-  const add = function(req, unitId, unitName, unitShort, begins, closes, who, suffix) {
+  const add = function(req, unitId, unitName, unitShort, begins, closes, who, suffix, occ) {
     // The last time the place was left before this begins, if within the week.
     const earliest = addDaysIso(begins.date, -SETUP_CLEAN_LEAD_DAYS);
     const prev = (use[unitId] || []).filter(function(u) {
@@ -6957,7 +6957,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
       job: { id: id, kind: "setup", setupOf: req.kind, refId: req.refId, unitId: unitId, unitName: unitName,
         start: opens.date, due: opens.date, eventStart: begins.date, who: "Setup · " + who },
       window: { id: id, unitId: unitId, unitName: unitName, unitShort: unitShort, start: opens, end: closes,
-        outWho: "Setup clean", inWho: who, setup: true, tight: false }
+        outWho: "Setup clean", inWho: who, setup: true, tight: false, occ: occ || "" }
     });
   };
   setups.forEach(function(req) {
@@ -6974,20 +6974,23 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
         add(req, s.propertyId, p ? p.name : s.propertyId, p ? shortPropLabel(p) : s.propertyId,
           { date: s.checkIn, time: t.inTime },
           { date: s.checkIn, time: addMinutesHHMM(t.inTime, -CHANGEOVER_GRACE_MIN) },
-          accomGuestLabel(b), seen[s.propertyId] > 1 ? ":" + seen[s.propertyId] : "");
+          accomGuestLabel(b), seen[s.propertyId] > 1 ? ":" + seen[s.propertyId] : "",
+          fmtDayShort(s.checkIn) + (isValidEventDate(s.checkOut) ? " – " + fmtDayShort(s.checkOut) : ""));
       });
     } else if (req.kind === "event") {
       const ev = (events || []).find(function(x) { return String(x.id) === String(req.refId); });
       if (!ev || !isValidEventDate(ev.date) || ev.status === "Cancelled") return;
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
-        { date: ev.date, time: null }, { date: ev.date, time: null }, ev.couple || "Event");
+        { date: ev.date, time: null }, { date: ev.date, time: null }, ev.couple || "Event", "",
+        fmtDayShort(ev.date) + ((eventEndDate(ev) || ev.date) > ev.date ? " – " + fmtDayShort(eventEndDate(ev)) : ""));
     } else if (req.kind === "box") {
       const bx = (boxEvents || []).find(function(x) { return String(x.id) === String(req.refId); });
       const d = bx ? londonDateOf(bx.starts_at) : null;
       if (!d) return;
       const t = londonClockOf(bx.starts_at);
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
-        { date: d, time: t }, { date: d, time: t ? addMinutesHHMM(t, -CHANGEOVER_GRACE_MIN) : null }, bx.name || "Ticketed event");
+        { date: d, time: t }, { date: d, time: t ? addMinutesHHMM(t, -CHANGEOVER_GRACE_MIN) : null }, bx.name || "Ticketed event", "",
+        fmtDayShort(d) + (t ? " · " + t : ""));
     }
   });
   return out;
@@ -7754,18 +7757,6 @@ function addMinutesHHMM(hhmm, mins) {
   const t = Math.max(0, Math.min(23 * 60 + 59, Number(m[1]) * 60 + Number(m[2]) + mins));
   return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
 }
-// "12 pm", "2:30 pm"
-function fmtClock(hhmm) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
-  if (!m) return "";
-  const h = Number(m[1]), mm = m[2];
-  const h12 = h % 12 === 0 ? 12 : h % 12;
-  return h12 + (mm === "00" ? "" : ":" + mm) + " " + (h < 12 ? "am" : "pm");
-}
-function weekdayShort(iso) {
-  if (!isValidEventDate(iso)) return "";
-  return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(iso + "T00:00:00Z").getUTCDay()];
-}
 // Which week a changeover belongs to. Normally the week its window opens in —
 // but a window opening on a Sunday is next week's clean (the place sits empty
 // and is cleaned on the Monday), unless the next guests arrive that same
@@ -7786,14 +7777,6 @@ function londonClockOf(isoInstant) {
   const d = new Date(isoInstant);
   if (isNaN(d)) return null;
   return d.toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hour12: false });
-}
-// One end of a window: the day and the time when there is one. The day alone
-// is clear for anything within six days of the window opening ("Sun 12 pm –
-// Fri 2 pm"); further off it says the date too ("Fri 13 Nov, 2 pm").
-function fmtWindowEnd(pt, openedOn) {
-  if (!pt) return "";
-  if (pt.date <= addDaysIso(openedOn, 6)) return weekdayShort(pt.date) + (pt.time ? " " + fmtClock(pt.time) : "");
-  return fmtDayShort(pt.date).slice(0, -3) + (pt.time ? ", " + fmtClock(pt.time) : "");
 }
 
 function changeoverWindows(properties, accom, events, boxEvents, setups) {
@@ -7826,6 +7809,7 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
       out.push({
         id: st.jobId, unitId: pid, unitName: p ? p.name : pid, unitShort: p ? shortPropLabel(p) : pid,
         start: start, end: end, outWho: st.who, inWho: next ? next.who : "",
+        occ: fmtDayShort(st.checkIn) + " – " + fmtDayShort(st.checkOut),
         tight: !!(end && end.date === start.date && start.time && end.time && end.time <= start.time)
       });
     });
@@ -7837,14 +7821,16 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
     const last = eventEndDate(ev) || ev.date;
     // A diary event has no times: it is cleaned from the morning after.
     gs.push({ jobId: "event:" + ev.id, from: { date: ev.date, time: null },
-      after: { date: addDaysIso(last, 1), time: null }, who: ev.couple || "Event" });
+      after: { date: addDaysIso(last, 1), time: null }, who: (ev.couple || "Event") + " · " + eventTypeLabel(ev),
+      occ: fmtDayShort(ev.date) + (last > ev.date ? " – " + fmtDayShort(last) : "") });
   });
   (boxEvents || []).forEach(function(bx) {
     const d = londonDateOf(bx && bx.starts_at);
     if (!d) return;
     const e = londonDateOf(bx.ends_at) || d;
     gs.push({ jobId: "box:" + bx.id, from: { date: d, time: londonClockOf(bx.starts_at) },
-      after: { date: e, time: bx.ends_at ? londonClockOf(bx.ends_at) : null }, who: bx.name || "Ticketed event" });
+      after: { date: e, time: bx.ends_at ? londonClockOf(bx.ends_at) : null }, who: (bx.name || "Ticketed event") + " · Box office",
+      occ: fmtDayShort(d) + (londonClockOf(bx.starts_at) ? " · " + londonClockOf(bx.starts_at) : "") });
   });
   gs.sort(function(a, z) {
     const x = a.from.date + (a.from.time || ""), y = z.from.date + (z.from.time || "");
@@ -7858,7 +7844,7 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
       id: ev.jobId, unitId: GRAIN_STORE_UNIT.id, unitName: GRAIN_STORE_UNIT.name, unitShort: GRAIN_STORE_UNIT.short,
       start: ev.after,
       end: next ? { date: next.from.date, time: next.from.time ? addMinutesHHMM(next.from.time, -CHANGEOVER_GRACE_MIN) : null } : null,
-      outWho: ev.who, inWho: next ? next.who : "", tight: false
+      outWho: ev.who, inWho: next ? next.who : "", tight: false, occ: ev.occ
     });
   });
   setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { out.push(x.window); });
@@ -7895,9 +7881,6 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, r
         </div>
         <button type="button" onClick={function(){ setFrom(addDaysIso(from, 7 * WEEKS)); }} style={navBtn} aria-label="Later weeks">›</button>
       </div>
-      <div style={{ fontSize:12, color:T.textMid, margin:"-6px 0 14px", textAlign:"center" }}>
-        Each window allows {CHANGEOVER_GRACE_MIN / 60} hours for a late check-out and an early check-in.
-      </div>
 
       {weeks.map(function(w) {
         const end = addDaysIso(w, 6);
@@ -7924,12 +7907,10 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, r
                     <div style={{ fontSize:13.5, fontWeight:700, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
                       {x.unitShort}
                       {x.setup && <span style={{ fontSize:10.5, fontWeight:800, color:T.midBlue, background:T.tint, borderRadius:6, padding:"1px 6px", marginLeft:6 }}>Setup</span>}
-                      <span style={{ fontWeight:700, color: x.tight ? T.red : T.accent, marginLeft:8 }}>
-                        {fmtWindowEnd(x.start, x.start.date)} – {x.end ? fmtWindowEnd(x.end, x.start.date) : "no one booked"}
-                      </span>
+                      <span style={{ fontWeight:700, color:T.accent, marginLeft:8 }}>{x.occ}</span>
                     </div>
                     <div style={{ fontSize:11.5, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                      {x.setup ? "Before " + x.inWho + " arrive" + (x.unitId === GRAIN_STORE_UNIT.id ? "s" : "") : x.outWho + (x.inWho ? " → " + x.inWho : "")}
+                      {x.setup ? "Setup clean before " + x.inWho : x.outWho}
                     </div>
                   </div>
                   {job && <ChangeoverButton job={job} rec={recMap[job.id]} today={today} onOpen={onOpenJob}/>}
