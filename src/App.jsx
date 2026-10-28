@@ -2775,7 +2775,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28n";
+const APP_BUILD = "2026-10-28o";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6864,7 +6864,6 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
     if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
     const seen = {};
-    const note = hkNote(setups, "accom", b.id);
     stays.forEach(function(s) {
       if (!s || !s.propertyId || !isValidEventDate(s.checkIn) || !isValidEventDate(s.checkOut)) return;
       seen[s.propertyId] = (seen[s.propertyId] || 0) + 1;
@@ -6873,7 +6872,7 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
         id: "accom:" + b.id + ":" + s.propertyId + (n > 1 ? ":" + n : ""),
         kind: "accom", refId: b.id, unitId: s.propertyId, unitName: propName(s.propertyId),
         start: s.checkIn, due: s.checkOut,
-        who: accomGuestLabel(b), note: note
+        who: accomGuestLabel(b)
       });
     });
   });
@@ -6903,6 +6902,7 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
       who: (bx.name || "Ticketed event") + " · Box office", note: hkNote(setups, "box", bx.id)
     });
   });
+  attachArrivalNotes(jobs, accom, setups);
   setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { jobs.push(x.job); });
   jobs.sort(function(a, z) { return a.due < z.due ? -1 : a.due > z.due ? 1 : 0; });
   return jobs;
@@ -6924,8 +6924,11 @@ const SETUP_CLEANS_STORAGE = "hbf_setup_cleans_v1";
 const SETUP_CLEAN_LEAD_DAYS = 7;
 // The same key also holds notes to the housekeepers (28 Oct):
 //   { id: "note:<kind>:<refId>", kind: "note", of, refId, text, at }
-// shown on that record's cleans and at the top of the sign-off, which asks
-// them to tick that they have read it. The kind is new on purpose: builds
+// A letting's note is about getting ready for THOSE guests, so it goes on the
+// clean before they arrive: their extra clean if one is ticked, otherwise the
+// previous check-out at the same property — written "For <guests>, arriving
+// <day>: …" so it is plain which booking it is for. It also shows on their
+// check-in on Live. The sign-off asks them to tick that they have read it. The kind is new on purpose: builds
 // before it ignore any request whose kind is not accom / event / box, so an
 // old tab never reads a note as a clean.
 function hkRequest(setups, type, kind, refId) {
@@ -6935,6 +6938,30 @@ function hkRequest(setups, type, kind, refId) {
 function hkNote(setups, kind, refId) {
   const n = hkRequest(setups, "note", kind, refId);
   return n && typeof n.text === "string" ? n.text.trim() : "";
+}
+function hkNoteForArrival(b, stay, text) {
+  return text ? "For " + accomGuestLabel(b) + ", arriving " + fmtDayShort(stay.checkIn) + ": " + text : "";
+}
+// Put each letting's note on the check-out before it at the same property,
+// unless the letting has its own extra clean (which carries the note itself).
+function attachArrivalNotes(jobs, accom, setups) {
+  (setups || []).forEach(function(req) {
+    if (!req || req.kind !== "note" || req.of !== "accom") return;
+    const b = (accom || []).find(function(x) { return x && String(x.id) === String(req.refId); });
+    if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
+    if (hkRequest(setups, "setup", "accom", b.id)) return;
+    const text = hkNote(setups, "accom", b.id);
+    if (!text) return;
+    ((b.stays && b.stays.length) ? b.stays : [b]).forEach(function(st) {
+      if (!st || !st.propertyId || !isValidEventDate(st.checkIn)) return;
+      const prev = jobs.filter(function(j) {
+        return j.kind === "accom" && j.unitId === st.propertyId && String(j.refId) !== String(b.id) && j.due <= st.checkIn;
+      }).sort(function(a, z) { return a.due < z.due ? 1 : a.due > z.due ? -1 : 0; })[0];
+      if (!prev) return;
+      const line = hkNoteForArrival(b, st, text);
+      prev.note = prev.note ? prev.note + "\n" + line : line;
+    });
+  });
 }
 
 // When each unit was last left before a given moment: per unit, every use as
@@ -6977,7 +7004,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
   if (!setups || !setups.length) return out;
   const use = unitUsages(properties, accom, events, boxEvents);
   const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
-  const add = function(req, unitId, unitName, unitShort, begins, closes, who, suffix, occ) {
+  const add = function(req, unitId, unitName, unitShort, begins, closes, who, suffix, occ, note) {
     // The last time the place was left before this begins, if within the week.
     const earliest = addDaysIso(begins.date, -SETUP_CLEAN_LEAD_DAYS);
     const prev = (use[unitId] || []).filter(function(u) {
@@ -6988,7 +7015,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
     out.push({
       job: { id: id, kind: "setup", setupOf: req.kind, refId: req.refId, unitId: unitId, unitName: unitName,
         start: opens.date, due: opens.date, eventStart: begins.date, who: "Extra clean · " + who,
-        note: hkNote(setups, req.kind, req.refId) },
+        note: note || "" },
       window: { id: id, unitId: unitId, unitName: unitName, unitShort: unitShort, start: opens, end: closes,
         outWho: "Extra clean", inWho: who, setup: true, tight: false, occ: occ || "" }
     });
@@ -7009,14 +7036,16 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
           { date: s.checkIn, time: t.inTime },
           { date: s.checkIn, time: addMinutesHHMM(t.inTime, -CHANGEOVER_GRACE_MIN) },
           accomGuestLabel(b), seen[s.propertyId] > 1 ? ":" + seen[s.propertyId] : "",
-          fmtDayShort(s.checkIn) + (isValidEventDate(s.checkOut) ? " – " + fmtDayShort(s.checkOut) : ""));
+          fmtDayShort(s.checkIn) + (isValidEventDate(s.checkOut) ? " – " + fmtDayShort(s.checkOut) : ""),
+          hkNoteForArrival(b, s, hkNote(setups, "accom", b.id)));
       });
     } else if (req.kind === "event") {
       const ev = (events || []).find(function(x) { return String(x.id) === String(req.refId); });
       if (!ev || !isValidEventDate(ev.date) || ev.status === "Cancelled") return;
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
         { date: ev.date, time: null }, { date: ev.date, time: null }, ev.couple || "Event", "",
-        fmtDayShort(ev.date) + ((eventEndDate(ev) || ev.date) > ev.date ? " – " + fmtDayShort(eventEndDate(ev)) : ""));
+        fmtDayShort(ev.date) + ((eventEndDate(ev) || ev.date) > ev.date ? " – " + fmtDayShort(eventEndDate(ev)) : ""),
+        hkNote(setups, "event", ev.id));
     } else if (req.kind === "box") {
       const bx = (boxEvents || []).find(function(x) { return String(x.id) === String(req.refId); });
       const d = bx ? londonDateOf(bx.starts_at) : null;
@@ -7024,7 +7053,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
       const t = londonClockOf(bx.starts_at);
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
         { date: d, time: t }, { date: d, time: t ? addMinutesHHMM(t, -CHANGEOVER_GRACE_MIN) : null }, bx.name || "Ticketed event", "",
-        fmtDayShort(d) + (t ? " · " + t : ""));
+        fmtDayShort(d) + (t ? " · " + t : ""), hkNote(setups, "box", bx.id));
     }
   });
   return out;
@@ -7095,11 +7124,12 @@ function SetupCleanToggle({ kind, refId }) {
       {tick(setupId, lettings ? "Extra clean before arrival" : "Extra clean before the event")}
       {lettings && (
         <div style={{ marginTop:10 }}>
-          <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"nowrap", marginBottom:4 }}>
+          <div style={{ display:"flex", alignItems:"baseline", gap:"2px 8px", flexWrap:"wrap", marginBottom:4 }}>
             <span style={{ fontSize:12, fontWeight:700, color:T.textMid }}>Notes to housekeepers</span>
+            <span style={{ fontSize:11, color:T.textLight, minWidth:0 }}>for the clean before these guests arrive</span>
             {saved && <span style={{ fontSize:11, fontWeight:700, color:T.green }}>Saved</span>}
           </div>
-          <textarea rows={2} value={text} disabled={!list} placeholder="Shown on this letting's clean; they tick to say they have read it"
+          <textarea rows={2} value={text} disabled={!list} placeholder="e.g. Put the cot up in bedroom 2" aria-label="Notes to housekeepers"
             onChange={function(e) { setDraft(e.target.value); }} onBlur={saveNote}
             style={{ width:"100%", boxSizing:"border-box", border:"1.5px solid " + T.border, borderRadius:8, padding:"8px 10px",
               fontFamily:"inherit", fontSize:13.5, color:T.text, background:"#fff", resize:"vertical", outline:"none" }}/>
@@ -7571,7 +7601,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       add(s.checkOut, { kind: "out", rank: propRank(s.propertyId), label: propName(s.propertyId),
         time: times.outTime || "", detail: tail, job: jobById[jobId] || null });
       add(s.checkIn,  { kind: "in",  rank: propRank(s.propertyId), label: propName(s.propertyId),
-        time: times.inTime || "", detail: tail });
+        time: times.inTime || "", detail: tail, note: hkNote(setups, "accom", b.id) });
     });
   });
 
@@ -7685,7 +7715,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
                       {it.time && <span style={{ fontSize:12, fontWeight:700, color:T.accent, marginLeft:8 }}>{it.time}</span>}
                     </div>
                     <div style={{ fontSize:12, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{it.detail}</div>
-                    {it.job && <HkNoteLine text={it.job.note}/>}
+                    <HkNoteLine text={it.job ? it.job.note : it.note}/>
                   </div>
                   {it.job && <ChangeoverButton job={it.job} rec={recMap[it.job.id]} today={today} onOpen={onOpenJob}/>}
                 </div>
@@ -26268,13 +26298,13 @@ function automationDays(v, d) { const n = Number(v); return isFinite(n) && n >= 
 
 const AUTOMATION_CARDS = [
   { id: "followup", title: "First enquiry follow-up",
-    when: function(a) { return "Sent once Gmail has confirmed " + a.days + " day" + (a.days === 1 ? "" : "s") + " with no contact since an enquiry or brochure request arrived, and no viewing is booked."; },
+    when: function(a) { return "Sent once to every open enquiry or brochure request at least " + a.days + " day" + (a.days === 1 ? "" : "s") + " old, however old, that has had no contact since it arrived (Gmail confirms it) and has no viewing booked. Switching it on catches everyone not yet emailed; the first batch goes out over a few mornings, up to 15 a run."; },
     fields: ["{firstName}", "{name}"] },
   { id: "second", title: "Second enquiry follow-up",
-    when: function(a) { return "Sent once to an open enquiry when Gmail has confirmed " + a.days + " days with no activity (the first follow-up counts as activity)."; },
+    when: function(a) { return "Sent once, only after the first, " + a.days + " days after the first went — or after their last contact, if they have been in touch since (Gmail confirms it)."; },
     fields: ["{firstName}", "{name}"] },
   { id: "third", title: "Third enquiry follow-up",
-    when: function(a) { return "Sent once, only after the second, when Gmail has confirmed " + a.days + " days with no activity since it went."; },
+    when: function(a) { return "Sent once, only after the second, " + a.days + " days after the second went — or after their last contact, if later (Gmail confirms it)."; },
     fields: ["{firstName}", "{name}"] },
 ];
 
@@ -27470,7 +27500,7 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
               <div style={{ display:"flex", gap:14, alignItems:"center", flexWrap:"wrap", marginTop:10, fontSize:12, color:T.textMid }}>
                 <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer" }}>
                   <input type="checkbox" checked={!!form.noAutoEmails} onChange={e=>update("noAutoEmails", e.target.checked)} style={{ width:15, height:15 }}/>
-                  No automatic follow-ups
+                  Suppress automatic emails
                 </label>
                 {autoMarks && autoMarks.followup && <span style={{ color:T.textLight }}>1st follow-up sent {fmtDate(String(autoMarks.followup).slice(0,10))}</span>}
                 {autoMarks && (autoMarks.second || autoMarks.quiet) && <span style={{ color:T.textLight }}>2nd follow-up sent {fmtDate(String(autoMarks.second || autoMarks.quiet).slice(0,10))}</span>}

@@ -255,11 +255,15 @@ own header.
 - **Function sheet** (`functionSheetHtml`, Actions → Function sheet) escapes
   every value with `fsEsc`; it is written into a new window.
 - **Follow-ups** (`netlify/functions/automations.js`, run at 09:00 and 09:20
-  UTC by `automations-cron.js`): three enquiry emails — **first** (N days
-  after it arrives, no contact since), **second** (N days with no activity; the
-  first counts as activity), **third** (N days after the second) — each off
-  until switched on in Settings → Email templates → Follow-ups, each once,
-  one email per address per run. The thank-you/review email is gone (28 Oct).
+  UTC by `automations-cron.js`): three enquiry emails — **first** (N+ days
+  after it arrives, no contact since, **however old** — 28 Oct, Toby: switching
+  it on catches the whole backlog, which `MAX_SENDS_PER_RUN` (15) and the
+  Gmail-check cap spread over a few mornings), **second** (only after the
+  first, N days after it went, or after their last activity if later),
+  **third** (only after the second, likewise) — a chain, no age windows any
+  more; each off until switched on in Settings → Email templates →
+  Follow-ups, each once, one email per address per run. The enquiry's
+  **"Suppress automatic emails"** tick (`noAutoEmails`) stops all three. The thank-you/review email is gone (28 Oct).
   The second and third each have **"Then mark Freezing"** after X quiet days:
   the run sets that enquiry's `temperature` to `freezing` (+ `autoFrozenAt`,
   `autoFrozenAfter`) — its ONE write to the shared enquiries array, on a
@@ -288,6 +292,13 @@ own header.
   `tests/automations-test.cjs` (rules), `tests/automations-run-test.cjs` (the
   whole run, faked at fetch), `money-and-day-test.cjs` (app and function
   defaults agree).
+- **Web addresses in emails become links with or without `https://`**
+  (`linkifyEscaped` / `LINK_RE`, copied into every function that builds an
+  email body — `_email-shell.js` is the master copy). Bare domains need a
+  known ending (.co.uk, .com, .org, .net, .uk, .org.uk, .events); email
+  addresses are never linked; trailing punctuation stays outside the link.
+  Pinned in `tests/automations-test.cjs`. Every branded email already has
+  the logo at the top (`email-logo.png`).
 - **`sbRpcQuiet`** is `sbRpc` without the red banner, for optional reads and
   for functions a migration may not have created yet. Portal pages use
   `isMissingFunction(e)` the same way.
@@ -569,10 +580,15 @@ own header.
   `{ id: "note:accom:<refId>", kind: "note", of, refId, text }` (empty text
   removes it). The kind is deliberately not accom/event/box, so builds before
   it ignore the row; `setupCleanItems` only reads ids starting `setup:`.
-  `changeoverJobs` puts `note` on the letting's check-out jobs and its extra
-  clean (`hkNote`); it shows on Live (incl. Still to sign off) and Bookings
-  cards (`HkNoteLine`) and in a red box at the top of the sign-off, which
-  refuses to save until "I have read this" is ticked. The tick is stored on
+  **A note is about the guests ARRIVING** (Toby): it goes on their extra clean
+  if one is ticked, otherwise on the previous check-out at the same property
+  (`attachArrivalNotes`, called in `changeoverJobs`) — never on the letting's
+  own check-out — worded "For <guests>, arriving <day>: …"
+  (`hkNoteForArrival`), and on their check-in row on Live. No earlier
+  booking at that property = only the check-in row. It shows on Live (incl.
+  Still to sign off) and Bookings cards (`HkNoteLine`) and in a red box at
+  the top of the sign-off, which refuses to save until "I have read this" is
+  ticked. The tick is stored on
   the sign-off as `noteAck: { text, at }`; a later change to the note asks
   again. The code reads notes for events and box office too, but only the
   letting form can write one.

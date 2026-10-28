@@ -375,10 +375,23 @@ function availabilityHtml(blocks) {
 // a template that happens to use the word "availability" is left alone.
 const AVAIL_MARKER = "\u0001HBF-AVAILABILITY\u0001";
 
-function linkify(text) {
-  return escapeHtmlBr(text).replace(/(https?:\/\/[^\s<]+)/g, function (url) {
-    return '<a href="' + url + '" style="color:' + BRAND.text + ';text-decoration:underline">' + url + '</a>';
+// Web addresses in an email become links, with or without the http(s)://
+// ("hawthbushfarm.co.uk/book-viewing", "www.example.com" — 28 Oct). An email
+// address is left alone; a full stop or bracket after an address stays text.
+var LINK_RE = /(^|[^@\w.\/-])((?:https?:\/\/|www\.)[^\s<]+|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:co\.uk|org\.uk|com|org|net|uk|events)(?:\/[^\s<]*)?)/gi;
+function linkifyEscaped(safe, short) {
+  return String(safe).replace(LINK_RE, function (m, pre, url) {
+    var tail = (/[.,;:!?)]+$/.exec(url) || [""])[0];
+    url = url.slice(0, url.length - tail.length);
+    if (!url) return m;
+    var href = /^https?:\/\//i.test(url) ? url : "https://" + url;
+    // Show something readable rather than a 200-character query string.
+    var label = short && url.length > 60 ? url.replace(/^https?:\/\//i, "").split("/")[0] + "/…" : url;
+    return pre + '<a href="' + href + '" style="color:#2d2a25;text-decoration:underline">' + label + '</a>' + tail;
   });
+}
+function linkify(text) {
+  return linkifyEscaped(escapeHtmlBr(text), false);
 }
 
 function para(text) {

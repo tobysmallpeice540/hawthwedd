@@ -513,15 +513,21 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
   } catch (e) { fails.push('setup run: ' + e.message) }
 
   // ── Notes to housekeepers, comments on the admin home ──────────────────
-  // P4 (Amly, out yesterday) has a note: on its Live card, on Bookings, and at
-  // the top of the sign-off, which refuses until ticked.
+  // A note is about the guests arriving, so it goes on the clean before them:
+  // P5 (Amly, arriving in 3 days) has a note, so it is on P4's check-out
+  // (Amly, out yesterday) as "For Dog Owners, arriving …" — on Live, Bookings
+  // and the top of the sign-off, which refuses until ticked — and on P5's
+  // check-in. P2 (Hamlet) has an extra clean, so its note goes on that, and
+  // not on Cot Family's check-out before it.
   // The admin home lists sign-offs with comments or lost property until Read.
   try {
     const notesApp = () => {
       const a = freshApp()
       a.hbf_accom_v1 = [
         { id: 'P1', guestName: 'Cot Family', status: 'confirmed', source: 'direct', stays: [stay('hamlet', plus(-1), plus(2))], schedule: [] },
-        { id: 'P4', guestName: 'Dog Owners', status: 'confirmed', source: 'direct', stays: [stay('amly', plus(-3), plus(-1))], schedule: [] },
+        { id: 'P4', guestName: 'Leaving Guests', status: 'confirmed', source: 'direct', stays: [stay('amly', plus(-3), plus(-1))], schedule: [] },
+        { id: 'P5', guestName: 'Dog Owners', status: 'confirmed', source: 'direct', stays: [stay('amly', plus(3), plus(5))], schedule: [] },
+        { id: 'P2', guestName: 'Next Hamlet', status: 'confirmed', source: 'direct', stays: [stay('hamlet', plus(4), plus(6))], schedule: [] },
       ]
       a.hawthbush_bookings_v6 = []
       a.hbf_changeovers_v1 = [
@@ -531,7 +537,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
           doneAt: plus(-6) + 'T12:00', hours: { edita: 2 }, comments: '', lostProperty: '' },
       ]
       a.hbf_setup_cleans_v1 = [
-        { id: 'note:accom:P4', kind: 'note', of: 'accom', refId: 'P4', text: 'Hoover the dog hair from the sofa' },
+        { id: 'note:accom:P5', kind: 'note', of: 'accom', refId: 'P5', text: 'Dog bed and bowls out please' },
+        { id: 'note:accom:P2', kind: 'note', of: 'accom', refId: 'P2', text: 'Cot in bedroom 2' },
+        { id: 'setup:accom:P2', kind: 'accom', refId: 'P2' },
       ]
       return a
     }
@@ -553,15 +561,19 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       const pg = c.page
       await pg.getByText('Still to sign off').waitFor({ timeout: 15000 })
       const od = await pg.getByText('Still to sign off').locator('..').innerText()
-      check('notes: note on the overdue check-out', /Note: Hoover the dog hair from the sofa/.test(od), od)
+      check('notes: next guests\' note on the overdue check-out before them', /Leaving Guests/.test(od) && /Note: For Dog Owners, arriving .*: Dog bed and bowls out please/.test(od), od)
+      const live = await pg.locator('body').innerText()
+      check('notes: on the arrivals\' check-in too', (live.match(/Dog bed and bowls out please/g) || []).length >= 2, live.slice(0, 2000))
+      check('notes: with an extra clean, on that clean', /Note: For Next Hamlet, arriving .*: Cot in bedroom 2/.test(live), live.slice(0, 2000))
+      check('notes: not on the check-out before an extra-cleaned stay', !/Cot Family[^\n]*\n[^\n]*Note: For Next Hamlet/.test(live))
       await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
       await pg.getByRole('button', { name: /Show past/ }).click()
-      await pg.getByText('Dog Owners').first().waitFor({ timeout: 5000 })
+      await pg.getByText('Leaving Guests').first().waitFor({ timeout: 5000 })
       const bk = await pg.locator('body').innerText()
-      check('notes: note on the Bookings card', /Note: Hoover the dog hair/.test(bk))
+      check('notes: note on the Bookings card', /Note: For Dog Owners/.test(bk))
       // Sign off: refused until the note is ticked.
       await pg.getByRole('tab', { name: 'Live', exact: true }).click()
-      const row = pg.getByText('Still to sign off').locator('..').locator('div[style*="nowrap"]', { hasText: 'Dog Owners' }).filter({ has: pg.locator('button') }).last()
+      const row = pg.getByText('Still to sign off').locator('..').locator('div[style*="nowrap"]', { hasText: 'Leaving Guests' }).filter({ has: pg.locator('button') }).last()
       await row.getByRole('button', { name: 'To clean' }).click()
       await pg.getByText('Note from the office').waitFor({ timeout: 5000 })
       await pg.locator('input[type=number]').nth(0).fill('2')
@@ -572,7 +584,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.getByRole('button', { name: 'Done — ready' }).click()
       await pg.getByText('Edita hours').waitFor({ state: 'detached', timeout: 5000 })
       const r = (hk.hbf_changeovers_v1 || []).find((x) => x.id === 'accom:P4:amly')
-      check('notes: read tick saved with the wording', r && r.noteAck && r.noteAck.text === 'Hoover the dog hair from the sofa', JSON.stringify(r))
+      check('notes: read tick saved with the wording', r && r.noteAck && /^For Dog Owners, arriving .*: Dog bed and bowls out please$/.test(r.noteAck.text), JSON.stringify(r))
       check('notes: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
 
@@ -596,13 +608,13 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.getByRole('group', { name: 'Property status' }).locator('span[title]', { hasText: 'Hamlet' }).first().click()
       await pg.getByText('Notes to housekeepers', { exact: true }).waitFor({ timeout: 10000 })
       check('form: no "No clean" option', !/No clean at the end/.test(await pg.locator('body').innerText()))
-      const ta = pg.getByPlaceholder(/tick to say they have read it/)
+      const ta = pg.getByLabel('Notes to housekeepers')
       await ta.fill('Leave the cot up')
       await ta.blur()
       await pg.waitForTimeout(800)
       const n = (ad.hbf_setup_cleans_v1 || []).find((x) => x.id === 'note:accom:P1')
       check('notes: note saved on blur', n && n.kind === 'note' && n.of === 'accom' && n.text === 'Leave the cot up', JSON.stringify(ad.hbf_setup_cleans_v1))
-      check('notes: other notes kept', ad.hbf_setup_cleans_v1.some((x) => x.id === 'note:accom:P4'))
+      check('notes: other notes kept', ad.hbf_setup_cleans_v1.some((x) => x.id === 'note:accom:P5'))
       await ta.fill('')
       await ta.blur()
       await pg.waitForTimeout(800)

@@ -3,13 +3,15 @@
 // The three enquiry follow-ups, each OFF until switched on in Settings →
 // Email templates → Follow-ups (app_data hbf_automations_v1):
 //
-//   followup  First enquiry follow-up. An enquiry (including a brochure
-//             request) that has had no contact since it arrived, N days on:
-//             "did the brochure reach you, would you like to visit?"
-//   second    Second enquiry follow-up. An open enquiry with no activity for
-//             N days (our first follow-up counts as activity): a check-in.
-//   third     Third enquiry follow-up. No activity for N days since the
-//             second went.
+//   followup  First enquiry follow-up. Any enquiry (including a brochure
+//             request) N or more days old that has had no contact since it
+//             arrived — however old (28 Oct, Toby: catch everyone not yet
+//             emailed in one go, then trickle on). The per-run cap below
+//             spreads the first batch over a few mornings.
+//   second    Second enquiry follow-up. Only after the first: N days after
+//             the first went (or after their last activity, if later).
+//   third     Third enquiry follow-up. Only after the second: N days after
+//             the second went (or after their last activity, if later).
 //
 // The second and third can each "mark Freezing": when ticked, an enquiry with
 // no activity for X days after the last of them that went is set to
@@ -41,8 +43,9 @@
 // looked at that address, never beyond. An address Gmail has never been
 // asked about is never emailed.
 //
-// Never acts on anything old when first switched on: each rule has a window
-// (a few days to a few weeks past its trigger) and ignores what is outside it.
+// The first follow-up has no upper age limit, deliberately: switching it on
+// sends it to every open enquiry not yet contacted. The second and third only
+// ever follow our own previous email, so they cannot wake up history.
 //
 //   POST, x-admin-token: HBF_ADMIN_TOKEN       runs it (automations-cron.js)
 //   POST, Authorization: Bearer <admin JWT>    { dryRun: true } only — the
@@ -76,7 +79,7 @@ const EMAIL_LOG_KEY  = "hbf_email_log_v1";
 const FROM_EMAIL  = "hello@hawthbushfarm.co.uk";
 const FROM_HEADER = "Hawthbush Farm <" + FROM_EMAIL + ">";
 const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
-const FN_BUILD    = "2026-10-28a";
+const FN_BUILD    = "2026-10-28b";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
 // At most this many addresses looked up in Gmail a run (two reads each), and
 // only while the run is young: Netlify stops a function at 10 seconds, so the
@@ -105,9 +108,6 @@ const DEFAULTS = {
 };
 // The three emails, in order. Each is sent once; the next only after it.
 const STEPS = ["followup", "second", "third"];
-// How far past its trigger each rule still acts. Outside this, an enquiry is
-// history and is left alone.
-const WINDOW_DAYS = { followup: 7, second: 14, third: 14 };
 
 // Occasions where "found your venue elsewhere? congratulations" would be
 // badly wrong. The second and third never go to these; the neutral first
@@ -229,13 +229,12 @@ function planAutomations(o) {
     // Every gap is counted to the day Gmail last looked, not to today: three
     // days since the enquiry with Gmail last checked yesterday is two verified
     // days. The contact log counts as activity, so a logged call restarts the
-    // count. The window past the trigger is still measured to today, so a
-    // check that comes very late does not wake up history.
+    // count.
     if (cfg.followup.on && !m.followup && received && !viewing) {
       const age = daysBetween(received, today);
       const verified = verifiedQuietDays(received, checked);
       // "No contact since it arrived": nothing later than the day it came in.
-      if (age >= cfg.followup.days && age <= cfg.followup.days + WINDOW_DAYS.followup && last && last <= received) {
+      if (age >= cfg.followup.days && last && last <= received) {
         if (verified >= cfg.followup.days) {
           out.push({ kind: "followup", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens });
           planned = true; used[to] = true;
@@ -244,18 +243,20 @@ function planAutomations(o) {
         }
       }
     }
-    // Second and third: no activity for N days since the last touch — our
-    // own previous email counts as one, so they never follow too closely.
+    // Second and third: a chain from the first. Each only after the one
+    // before it, N days after it went — or after their last activity if they
+    // have been in touch since, so a reply is never answered with "we have
+    // not heard from you".
     [["second", "followup"], ["third", "second"]].forEach(function (pair) {
       const step = pair[0], prev = pair[1];
       const c = cfg[step];
       if (!c.on || m[step] || planned || viewing || sombre || !last) return;
-      if (step === "third" && !m.second) return;                   // the third only ever follows the second
-      const prevAt = m[prev] ? String(m[prev]).slice(0, 10) : null;
-      const touched = prevAt && prevAt > last ? prevAt : last;
+      if (!m[prev]) return;                                        // only ever after the one before it
+      const prevAt = String(m[prev]).slice(0, 10);
+      const touched = prevAt > last ? prevAt : last;
       const idle = daysBetween(touched, today);
       const verified = verifiedQuietDays(touched, checked);
-      if (idle >= c.days && idle <= c.days + WINDOW_DAYS[step]) {
+      if (idle >= c.days) {
         if (verified >= c.days) {
           out.push({ kind: step, mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched });
           planned = true; used[to] = true;
@@ -310,13 +311,26 @@ function escapeHtml(s) {
   return String(s === null || s === undefined ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+// Web addresses in an email become links, with or without the http(s)://
+// ("hawthbushfarm.co.uk/book-viewing", "www.example.com" — 28 Oct). An email
+// address is left alone; a full stop or bracket after an address stays text.
+var LINK_RE = /(^|[^@\w.\/-])((?:https?:\/\/|www\.)[^\s<]+|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:co\.uk|org\.uk|com|org|net|uk|events)(?:\/[^\s<]*)?)/gi;
+function linkifyEscaped(safe, short) {
+  return String(safe).replace(LINK_RE, function (m, pre, url) {
+    var tail = (/[.,;:!?)]+$/.exec(url) || [""])[0];
+    url = url.slice(0, url.length - tail.length);
+    if (!url) return m;
+    var href = /^https?:\/\//i.test(url) ? url : "https://" + url;
+    // Show something readable rather than a 200-character query string.
+    var label = short && url.length > 60 ? url.replace(/^https?:\/\//i, "").split("/")[0] + "/…" : url;
+    return pre + '<a href="' + href + '" style="color:#2d2a25;text-decoration:underline">' + label + '</a>' + tail;
+  });
+}
 function bodyToHtml(bodyText) {
   var paras = String(bodyText || "").replace(/\r\n/g, "\n").split(/\n{2,}/);
   return paras.map(function (p) {
     var safe = escapeHtml(p.trim()).replace(/\n/g, "<br>");
-    safe = safe.replace(/(https?:\/\/[^\s<]+)/g, function (url) {
-      return '<a href="' + url + '" style="color:#2d2a25;text-decoration:underline">' + url + '</a>';
-    });
+    safe = linkifyEscaped(safe, false);
     return '<p style="margin:0 0 15px;font-size:15px;line-height:1.65;color:' + BRAND.text + '">' + safe + '</p>';
   }).join("");
 }
