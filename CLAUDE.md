@@ -527,6 +527,16 @@ own header.
   start − 2h. A window belongs to the week it opens in — except one opening
   on a Sunday, which is the next week's clean unless the next guests arrive
   that same Sunday (`changeoverWeekOf`).
+- **Setup cleans** (`setupCleanItems`): a "Setup clean" tick box on the letting
+  form, the event form and the box office event editor (`SetupCleanToggle`,
+  saved to its own key `hbf_setup_cleans_v1` — `{ id: "setup:<kind>:<refId>" }` —
+  so no booking save path and no box office column is involved). Window: from
+  when the place was last left (`unitUsages`) if within `SETUP_CLEAN_LEAD_DAYS`
+  (7), else a week before; to check-in − 2h / the event's start. Sign-off id
+  `setup:<kind>:<refId>:<unit>`, kind `setup`, `setupOf` the record's kind. Red
+  from the day the window opens; once the stay or event has begun it no longer
+  turns the tile red. Draft box office events are not in housekeeping, so their
+  setup clean waits until published.
 - The housekeeping login stays signed in indefinitely (persisted session, no
   session time-box in Supabase); Sign out asks first, a stale build reloads
   itself when the app comes back to the front, and the App button (hidden once

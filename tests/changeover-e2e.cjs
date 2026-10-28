@@ -16,6 +16,8 @@
 //     page, filtered by property buttons, no prices, the lozenge on the same
 //     line on a phone;
 //   · Hours totals a month per cleaner and scrolls month to month;
+//   · setup cleans: ticked on a letting / event / box office event, their window,
+//     shown on Live, Upcoming and Bookings, signed off like a changeover;
 //   · admin: home tiles, lost property on the booking, box office events on
 //     the lettings calendar, Reports → Housekeeping Hours.
 //
@@ -343,6 +345,121 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('rolled window still reads Sun 12 pm – Fri 2 pm', /Sun 12 pm – Fri 2 pm/.test(nextWeek), nextWeek)
     } finally { await c.close() }
   } catch (e) { fails.push('sunday run: ' + e.message) }
+
+  // ── Setup cleans ─────────────────────────────────────────────────────────
+  // Window opens when the place was last left (within the week before), or a
+  // week before; closes at check-in − 2h / the event's start.
+  try {
+    const wd = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()]
+    const setupApp = () => {
+      const a = freshApp()
+      a.hbf_accom_v1 = [
+        { id: 'P1', guestName: 'First Family', status: 'confirmed', source: 'direct', stays: [stay('hamlet', plus(-1), plus(2))], schedule: [] },
+        { id: 'P2', guestName: 'Second Family', status: 'confirmed', source: 'direct', stays: [stay('hamlet', plus(6), plus(8))], schedule: [] },
+        { id: 'P3', guestName: 'Amly Arrivals', status: 'confirmed', source: 'direct', stays: [stay('amly', plus(10), plus(12))], schedule: [] },
+      ]
+      a.hawthbush_bookings_v6 = [{ id: 901, couple: 'Party Prep', date: plus(5), status: 'Confirmed', eventType: 'Party' }]
+      a.hbf_changeovers_v1 = []
+      a.hbf_setup_cleans_v1 = [
+        { id: 'setup:accom:P2', kind: 'accom', refId: 'P2' }, { id: 'setup:accom:P3', kind: 'accom', refId: 'P3' },
+        { id: 'setup:event:901', kind: 'event', refId: 901 }, { id: 'setup:box:bx-late', kind: 'box', refId: 'bx-late' },
+      ]
+      return a
+    }
+    const SBOX = [{ id: 'bx-late', name: 'Late Supper', starts_at: plus(12) + 'T18:30:00Z', ends_at: plus(12) + 'T22:00:00Z' }]
+    const openWith = async (appData, rpc) => {
+      const c = await openStaff({ distDir: DIST, appData: appData, rpc: rpc })
+      await c.page.route(HOST + '/rest/v1/app_data', async (route) => {
+        const req = route.request()
+        if (req.method() !== 'POST') return route.fallback()
+        const body = JSON.parse(req.postData() || '{}'); appData[body.key] = body.value
+        c.calls.push({ fn: 'write:app_data', args: req.postData() })
+        return route.fulfill({ status: 201, contentType: 'application/json', body: '[]' })
+      })
+      await c.page.route('**/.netlify/functions/box-admin', (r) => {
+        const body = JSON.parse(r.request().postData() || '{}')
+        if (body.action === 'housekeeping.events') return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: SBOX }) })
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ orders: [], events: [] }) })
+      })
+      await c.page.reload()
+      return c
+    }
+
+    // Housekeeping.
+    const hk = setupApp()
+    let c = await openWith(hk, cleanerRpc)
+    try {
+      await c.page.getByText('Still to sign off').waitFor({ timeout: 15000 })
+      const pg = c.page
+      const pillT = async (n) => pg.locator('span[title]', { hasText: n }).first().getAttribute('title')
+      check('setup: Grain St. red while its setup clean is due', (await pillT('Grain St.')) === 'To clean', await pillT('Grain St.'))
+      check('setup: Hamlet still shows its guests', (await pillT('Hamlet')) === 'Guests', await pillT('Hamlet'))
+      const od = await pg.getByText('Still to sign off').locator('..').innerText()
+      check('setup: due setup in Still to sign off', /Setup · Party Prep · by /.test(od), od)
+
+      await pg.getByRole('tab', { name: 'Upcoming', exact: true }).click()
+      await pg.getByText(/This week/).waitFor({ timeout: 5000 })
+      // Back a page if the event's window opened last week.
+      let up = await pg.locator('body').innerText()
+      for (let i = 0; i < 3 && !/Before Party Prep/.test(up); i++) { await pg.getByRole('button', { name: 'Earlier weeks' }).click(); up += await pg.locator('body').innerText() }
+      await pg.getByRole('button', { name: 'Back to this week' }).click().catch(() => {})
+      up += await pg.locator('body').innerText()
+      check('setup: Hamlet window from the last check-out', up.indexOf(wd(plus(2)) + ' 12 pm – ' + wd(plus(6)) + ' 2 pm') !== -1 && /Before Second Family arrive/.test(up), up.slice(0, 900))
+      check('setup: diary event window from a week before', /Before Party Prep arrives/.test(up))
+      await pg.getByRole('button', { name: 'Later weeks' }).click()
+      up = await pg.locator('body').innerText()
+      await pg.getByRole('button', { name: 'Back to this week' }).click()
+      up += await pg.locator('body').innerText()
+      check('setup: Amly window with nobody before it is the week before', up.indexOf('Before Amly Arrivals arrive') !== -1)
+      check('setup: box office setup opens when the diary event frees the Grain Store', /Before Late Supper arrives/.test(up) && up.indexOf(wd(plus(6)) + ' – ' + ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(plus(12) + 'T00:00:00Z').getUTCDay()] + ' 4:30 pm') !== -1, up.slice(0, 1500))
+
+      await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
+      await pg.getByText('Second Family').first().waitFor({ timeout: 5000 })
+      const bk = await pg.locator('body').innerText()
+      check('setup: four setup cards on Bookings', (bk.match(/Setup clean/g) || []).length === 4, String((bk.match(/Setup clean/g) || []).length))
+
+      // Sign off the event's setup clean.
+      await pg.getByRole('tab', { name: 'Live', exact: true }).click()
+      const row = pg.getByText('Still to sign off').locator('..').locator('div[style*="nowrap"]', { hasText: 'Party Prep' }).filter({ has: pg.locator('button') }).last()
+      await row.getByRole('button', { name: 'To clean' }).click()
+      await pg.getByText('Edita hours').waitFor({ timeout: 5000 })
+      check('setup: dialog says when it is needed by', /ready by/.test(await pg.locator('body').innerText()))
+      await pg.locator('input[type=number]').nth(0).fill('1.5')
+      await pg.getByRole('button', { name: 'Done — ready' }).click()
+      await pg.getByText('Edita hours').waitFor({ state: 'detached', timeout: 5000 })
+      const r = (hk.hbf_changeovers_v1 || []).find((x) => x.id === 'setup:event:901:grainstore')
+      check('setup: sign-off saved under its own id', r && r.kind === 'setup' && r.setupOf === 'event' && r.hours.edita === 1.5, JSON.stringify(hk.hbf_changeovers_v1))
+      check('setup: Grain St. ready after the sign-off', (await pillT('Grain St.')) === 'Ready', await pillT('Grain St.'))
+      check('setup: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+
+    // Admin: the tick box on the event, and on a letting.
+    const ad = setupApp()
+    c = await openWith(ad, undefined)
+    try {
+      const pg = c.page
+      await pg.locator('div[title="Open the event"]', { hasText: 'Grain Store' }).waitFor({ timeout: 15000 })
+      await pg.locator('div[title="Open the event"]', { hasText: 'Grain Store' }).click()
+      await pg.getByText('Setup clean', { exact: true }).waitFor({ timeout: 10000 })
+      const box = pg.locator('label', { has: pg.getByText('Setup clean', { exact: true }) }).locator('input[type=checkbox]')
+      check('setup: event form shows it ticked', await box.isChecked())
+      await box.click()
+      await pg.waitForTimeout(800)
+      check('setup: unticking removes only that request', Array.isArray(ad.hbf_setup_cleans_v1) && ad.hbf_setup_cleans_v1.length === 3 &&
+        !ad.hbf_setup_cleans_v1.some((x) => x.id === 'setup:event:901'), JSON.stringify(ad.hbf_setup_cleans_v1))
+      check('setup: box unticked', !(await box.isChecked()))
+      // A letting: the Hamlet tile (guests in) opens First Family.
+      await pg.goto(c.origin + '/')
+      await pg.locator('div[title="Open the booking"]', { hasText: 'The Hamlet' }).click()
+      await pg.getByText('Setup clean', { exact: true }).waitFor({ timeout: 10000 })
+      const lbox = pg.locator('label', { has: pg.getByText('Setup clean', { exact: true }) }).locator('input[type=checkbox]')
+      check('setup: letting without one is unticked', !(await lbox.isChecked()))
+      await lbox.click()
+      await pg.waitForTimeout(800)
+      check('setup: ticking a letting adds it', ad.hbf_setup_cleans_v1.some((x) => x.id === 'setup:accom:P1' && x.kind === 'accom' && x.refId === 'P1'), JSON.stringify(ad.hbf_setup_cleans_v1))
+      check('setup: no page errors (admin)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('setup run: ' + e.message) }
 
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and

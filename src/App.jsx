@@ -2773,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28f";
+const APP_BUILD = "2026-10-28g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4337,6 +4337,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           onUseFigure={function(v){ if (formStays.length === 1) updStay(0, "value", v); }}/>
       )}
 
+      {form.id && <SetupCleanToggle kind="accom" refId={form.id}/>}
       {form.id && <ChangeoverRecordPanel kind="accom" refId={form.id}/>}
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
@@ -6232,7 +6233,7 @@ const BACKUP_DATA_KEYS = [
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
   "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
-  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1"
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1", "hbf_setup_cleans_v1"
   // Not the follow-up keys: restoring the "already sent" record would send
   // everybody mailed since the snapshot their email again.
 ];
@@ -6244,7 +6245,7 @@ const KEY_LABELS = {
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
   "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings",
-  "hbf_changeovers_v1":"Changeover sign-offs"
+  "hbf_changeovers_v1":"Changeover sign-offs", "hbf_setup_cleans_v1":"Setup cleans asked for"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -6836,7 +6837,7 @@ function grainStoreEvents(events, boxEvents) {
 }
 
 // Every changeover the diary implies, oldest first.
-function changeoverJobs(properties, accom, events, boxEvents) {
+function changeoverJobs(properties, accom, events, boxEvents, setups) {
   const jobs = [];
   const propName = function(id) {
     const p = (properties || []).find(function(x) { return x.id === id; });
@@ -6884,8 +6885,155 @@ function changeoverJobs(properties, accom, events, boxEvents) {
       who: (bx.name || "Ticketed event") + " · Box office"
     });
   });
+  setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { jobs.push(x.job); });
   jobs.sort(function(a, z) { return a.due < z.due ? -1 : a.due > z.due ? 1 : 0; });
   return jobs;
+}
+
+// ─── SETUP CLEANS ────────────────────────────────────────────────────────────
+// A clean before a booking or event starts, asked for by ticking a box on the
+// letting, the diary event or the box office event. The request lives in its
+// own key (not on the record, so no booking save path is touched, and box
+// office events need no new column): { id: "setup:<kind>:<refId>", kind,
+// refId, at }. Its sign-off is an ordinary record in CHANGEOVERS_STORAGE, id
+// "setup:<kind>:<refId>:<unit>" — one per property for a multi-stay letting.
+//
+// The window opens when the place was last left (a check-out, or the end of
+// the previous Grain Store event) if that was within the week before, or a
+// week before otherwise; it closes at check-in less the early-arrival
+// allowance, or at the event's start.
+const SETUP_CLEANS_STORAGE = "hbf_setup_cleans_v1";
+const SETUP_CLEAN_LEAD_DAYS = 7;
+
+// When each unit was last left before a given moment: per unit, every use as
+// { begins: {date,time}, frees: {date,time} } — frees is when cleaning can
+// start (check-out + allowance; a diary event the morning after; a box office
+// event its end time).
+function unitUsages(properties, accom, events, boxEvents) {
+  const use = {};
+  const push = function(unit, u) { (use[unit] = use[unit] || []).push(u); };
+  const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
+  (accom || []).forEach(function(b) {
+    if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
+    ((b.stays && b.stays.length) ? b.stays : [b]).forEach(function(s) {
+      if (!s || !s.propertyId || !isValidEventDate(s.checkIn) || !isValidEventDate(s.checkOut)) return;
+      const t = stayTimes(b, s, propOf(s.propertyId));
+      push(s.propertyId, { key: "accom:" + b.id, begins: { date: s.checkIn, time: t.inTime },
+        frees: { date: s.checkOut, time: addMinutesHHMM(t.outTime, CHANGEOVER_GRACE_MIN) } });
+    });
+  });
+  (events || []).forEach(function(ev) {
+    if (!ev || !isValidEventDate(ev.date) || ev.status === "Cancelled" || ev.status === "Holding") return;
+    push(GRAIN_STORE_UNIT.id, { key: "event:" + ev.id, begins: { date: ev.date, time: null },
+      frees: { date: addDaysIso(eventEndDate(ev) || ev.date, 1), time: null } });
+  });
+  (boxEvents || []).forEach(function(bx) {
+    const d = londonDateOf(bx && bx.starts_at);
+    if (!d) return;
+    push(GRAIN_STORE_UNIT.id, { key: "box:" + bx.id, begins: { date: d, time: londonClockOf(bx.starts_at) },
+      frees: { date: londonDateOf(bx.ends_at) || d, time: bx.ends_at ? londonClockOf(bx.ends_at) : null } });
+  });
+  return use;
+}
+function ptKey(pt) { return pt.date + (pt.time || ""); }
+
+// Every requested setup clean as { job, window }. job is shaped like the
+// changeover jobs (kind "setup", red from the day its window opens); window
+// is shaped like changeoverWindows' rows, for Upcoming.
+function setupCleanItems(properties, accom, events, boxEvents, setups) {
+  const out = [];
+  if (!setups || !setups.length) return out;
+  const use = unitUsages(properties, accom, events, boxEvents);
+  const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
+  const add = function(req, unitId, unitName, unitShort, begins, closes, who, suffix) {
+    // The last time the place was left before this begins, if within the week.
+    const earliest = addDaysIso(begins.date, -SETUP_CLEAN_LEAD_DAYS);
+    const prev = (use[unitId] || []).filter(function(u) {
+      return u.key !== req.kind + ":" + req.refId && ptKey(u.frees) <= ptKey(begins) && u.frees.date >= earliest;
+    }).sort(function(a, z) { return ptKey(a.frees) < ptKey(z.frees) ? 1 : -1; })[0];
+    const opens = prev ? prev.frees : { date: earliest, time: null };
+    const id = "setup:" + req.kind + ":" + req.refId + ":" + unitId + (suffix || "");
+    out.push({
+      job: { id: id, kind: "setup", setupOf: req.kind, refId: req.refId, unitId: unitId, unitName: unitName,
+        start: opens.date, due: opens.date, eventStart: begins.date, who: "Setup · " + who },
+      window: { id: id, unitId: unitId, unitName: unitName, unitShort: unitShort, start: opens, end: closes,
+        outWho: "Setup clean", inWho: who, setup: true, tight: false }
+    });
+  };
+  setups.forEach(function(req) {
+    if (!req || !req.kind || req.refId == null) return;
+    if (req.kind === "accom") {
+      const b = (accom || []).find(function(x) { return String(x.id) === String(req.refId); });
+      if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
+      const seen = {};
+      ((b.stays && b.stays.length) ? b.stays : [b]).forEach(function(s) {
+        if (!s || !s.propertyId || !isValidEventDate(s.checkIn)) return;
+        seen[s.propertyId] = (seen[s.propertyId] || 0) + 1;
+        const p = propOf(s.propertyId);
+        const t = stayTimes(b, s, p);
+        add(req, s.propertyId, p ? p.name : s.propertyId, p ? shortPropLabel(p) : s.propertyId,
+          { date: s.checkIn, time: t.inTime },
+          { date: s.checkIn, time: addMinutesHHMM(t.inTime, -CHANGEOVER_GRACE_MIN) },
+          accomGuestLabel(b), seen[s.propertyId] > 1 ? ":" + seen[s.propertyId] : "");
+      });
+    } else if (req.kind === "event") {
+      const ev = (events || []).find(function(x) { return String(x.id) === String(req.refId); });
+      if (!ev || !isValidEventDate(ev.date) || ev.status === "Cancelled") return;
+      add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
+        { date: ev.date, time: null }, { date: ev.date, time: null }, ev.couple || "Event");
+    } else if (req.kind === "box") {
+      const bx = (boxEvents || []).find(function(x) { return String(x.id) === String(req.refId); });
+      const d = bx ? londonDateOf(bx.starts_at) : null;
+      if (!d) return;
+      const t = londonClockOf(bx.starts_at);
+      add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
+        { date: d, time: t }, { date: d, time: t ? addMinutesHHMM(t, -CHANGEOVER_GRACE_MIN) : null }, bx.name || "Ticketed event");
+    }
+  });
+  return out;
+}
+
+// The tick box on a letting, a diary event and a box office event. Loads and
+// saves its own key, so it can sit on any of the three forms.
+function SetupCleanToggle({ kind, refId }) {
+  const [list, setList] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr]   = useState("");
+  const save = useMergedSave(SETUP_CLEANS_STORAGE, list || [], setList);
+  useEffect(function() {
+    let off = false;
+    sbGet(SETUP_CLEANS_STORAGE).then(function(v) { if (!off) setList(Array.isArray(v) ? v : []); })
+      .catch(function() { if (!off) setList([]); });
+    return function() { off = true; };
+  }, [kind, refId]);
+  if (refId == null || refId === "") return null;
+  const id = "setup:" + kind + ":" + refId;
+  const on = !!(list && list.some(function(x) { return x && x.id === id; }));
+  const toggle = async function() {
+    setBusy(true); setErr("");
+    try {
+      await save(function(prev) {
+        const rest = (prev || []).filter(function(x) { return x && x.id !== id; });
+        return on ? rest : rest.concat([{ id: id, kind: kind, refId: refId, at: new Date().toISOString() }]);
+      });
+    } catch (e) { setErr(String((e && e.message) || e)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"11px 16px", margin:"0 0 16px" }}>
+      <label style={{ display:"flex", alignItems:"flex-start", gap:10, cursor: list && !busy ? "pointer" : "default", flexWrap:"nowrap" }}>
+        <input type="checkbox" checked={on} disabled={!list || busy} onChange={toggle}
+          style={{ width:18, height:18, marginTop:1, flexShrink:0, accentColor:T.accent }}/>
+        <span style={{ minWidth:0 }}>
+          <span style={{ fontSize:13.5, fontWeight:700, color:T.text }}>Setup clean</span>
+          <span style={{ display:"block", fontSize:12, color:T.textMid, lineHeight:1.5, marginTop:2 }}>
+            Housekeeping cleans before this starts — from when the place was last left, or the week before if it has been empty longer.
+          </span>
+        </span>
+      </label>
+      {err && <div style={{ fontSize:12, color:T.red, fontWeight:600, marginTop:6 }}>{err}</div>}
+    </div>
+  );
 }
 
 // Box office events in the shape the lettings calendar draws as its red "E".
@@ -6910,7 +7058,8 @@ async function loadBoxEventsForHousekeeping(since) {
 // can still be opened and corrected from what the record itself holds.
 function changeoverJobFromRecord(r) {
   return { id: r.id, kind: r.kind, refId: r.refId, unitId: r.unitId, unitName: r.unitName || r.unitId,
-    who: r.who || "", start: r.start || r.due || String(r.doneAt || "").slice(0, 10), due: r.due || String(r.doneAt || "").slice(0, 10) };
+    who: r.who || "", setupOf: r.setupOf, eventStart: r.eventStart,
+    start: r.start || r.due || String(r.doneAt || "").slice(0, 10), due: r.due || String(r.doneAt || "").slice(0, 10) };
 }
 
 function changeoverRecordMap(recs) {
@@ -6949,7 +7098,11 @@ function changeoverHoursText(rec) {
 function unitStatuses(units, jobs, recMap, today) {
   return (units || []).map(function(u) {
     const mine = (jobs || []).filter(function(j) { return j.unitId === u.id; });
-    const due = mine.filter(function(j) { return changeoverState(j, recMap[j.id], today) === "due"; });
+    // A setup clean nobody signed off before the guests arrived stays on the
+    // to-do list, but no longer turns the tile red over them.
+    const due = mine.filter(function(j) {
+      return changeoverState(j, recMap[j.id], today) === "due" && !(j.kind === "setup" && today >= j.eventStart);
+    });
     const inuse = mine.filter(function(j) { return changeoverState(j, recMap[j.id], today) === "inuse"; });
     const done = mine.filter(function(j) { return !!recMap[j.id]; })
       .sort(function(a, z) {
@@ -7019,6 +7172,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
     try {
       await onSave({
         id: job.id, kind: job.kind, refId: job.refId, unitId: job.unitId, unitName: job.unitName,
+        setupOf: job.setupOf || undefined, eventStart: job.eventStart || undefined,
         who: job.who, start: job.start, due: job.due, doneAt: doneAt, hours: h,
         comments: comments.trim(), lostProperty: lost.trim(),
         recordedAt: rec && rec.recordedAt ? rec.recordedAt : now,
@@ -7050,7 +7204,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ fontSize:17, fontWeight:800, color:T.text }}>{job.unitName}</div>
             <div style={{ fontSize:13, color:T.textMid, marginTop:2 }}>
-              {job.who} · {job.kind === "accom" ? "out " + fmtDate(job.due) : fmtDate(job.start)}
+              {job.who} · {job.kind === "accom" ? "out " + fmtDate(job.due) : job.kind === "setup" ? "ready by " + fmtDate(job.eventStart) : fmtDate(job.start)}
             </div>
           </div>
           <button onClick={onClose} disabled={busy}
@@ -7197,8 +7351,10 @@ function ChangeoverRecordPanel({ kind, refId }) {
     return function() { off = true; };
   }, [kind, refId]);
   if (!recs || refId == null) return null;
-  const prefix = kind + ":" + refId;
-  const mine = recs.filter(function(r) { return r && (r.id === prefix || String(r.id).indexOf(prefix + ":") === 0); });
+  const prefix = kind + ":" + refId, setupPrefix = "setup:" + kind + ":" + refId + ":";
+  const mine = recs.filter(function(r) {
+    return r && (r.id === prefix || String(r.id).indexOf(prefix + ":") === 0 || String(r.id).indexOf(setupPrefix) === 0);
+  });
   if (!mine.length) return null;
   return (
     <div style={{ background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"12px 16px", margin:"0 0 16px" }}>
@@ -7208,7 +7364,7 @@ function ChangeoverRecordPanel({ kind, refId }) {
         return (
           <div key={r.id} style={{ fontSize:13, color:T.text, padding:"5px 0", lineHeight:1.55 }}>
             <div>
-              <strong>{unit}</strong>
+              <strong>{unit}</strong>{r.kind === "setup" && <span style={{ color:T.midBlue, fontWeight:700 }}> · setup clean</span>}
               <span style={{ color:T.green, fontWeight:700 }}> · ready {fmtDoneAt(r.doneAt)}</span>
               {changeoverHoursText(r) && <span style={{ color:T.textMid }}> · {changeoverHoursText(r)}</span>}
             </div>
@@ -7236,7 +7392,7 @@ function lostPropertyFor(recs, bookingId) {
 // only thing it writes is the changeover sign-off (CHANGEOVERS_STORAGE).
 const CLEANER_DAYS_AHEAD = 14;
 
-function CleanerHome({ properties, accom, events, boxEvents, jobs, recMap, today, onOpenJob }) {
+function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMap, today, onOpenJob }) {
   const end = addDaysIso(today, CLEANER_DAYS_AHEAD);
 
   const propOf = function(id) {
@@ -7306,6 +7462,13 @@ function CleanerHome({ properties, accom, events, boxEvents, jobs, recMap, today
     });
   });
 
+  // Setup cleans, on the day their window opens.
+  (jobs || []).forEach(function(j) {
+    if (j.kind !== "setup") return;
+    add(j.start, { kind: "setup", rank: propRank(j.unitId) === 900 ? 999 : propRank(j.unitId), label: j.unitName,
+      detail: j.who.replace(/^Setup · /, "Before ") + " · by " + fmtDayShort(j.eventStart), job: j });
+  });
+
   const days = Object.keys(byDay).sort();
 
   // Changeovers whose day has gone by without a sign-off. Today's are in
@@ -7318,7 +7481,8 @@ function CleanerHome({ properties, accom, events, boxEvents, jobs, recMap, today
     const map = {
       out:   { text: "Check-out",  bg: "#fff7ed", fg: "#9a3412", bd: "#fdba74" },
       in:    { text: "Check-in",   bg: T.greenBg, fg: T.green,   bd: "#bbf7d0" },
-      event: { text: "Farm event", bg: T.tint, fg: T.midBlue, bd: T.infoBorder }
+      event: { text: "Farm event", bg: T.tint, fg: T.midBlue, bd: T.infoBorder },
+      setup: { text: "Setup",      bg: T.tint, fg: T.midBlue, bd: T.infoBorder }
     };
     const c = map[kind];
     return (
@@ -7357,7 +7521,7 @@ function CleanerHome({ properties, accom, events, boxEvents, jobs, recMap, today
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{j.unitName}</div>
                   <div style={{ fontSize:12, color:T.textMid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {j.who} · {j.kind === "accom" ? "out " : ""}{fmtDayShort(j.kind === "accom" ? j.due : j.start)}
+                    {j.who} · {j.kind === "accom" ? "out " + fmtDayShort(j.due) : j.kind === "setup" ? "by " + fmtDayShort(j.eventStart) : fmtDayShort(j.start)}
                   </div>
                 </div>
                 <ChangeoverButton job={j} rec={recMap[j.id]} today={today} onOpen={onOpenJob}/>
@@ -7377,7 +7541,7 @@ function CleanerHome({ properties, accom, events, boxEvents, jobs, recMap, today
       {days.map(function(d) {
         const items = byDay[d].slice().sort(function(a, z) {
           if (a.rank !== z.rank) return a.rank - z.rank;        // Hamlet, Amly, Glamping, then events
-          const order = { out: 0, in: 1, event: 2 };            // out before in on the same property
+          const order = { out: 0, setup: 1, in: 2, event: 3 };  // out, then setup, before in on the same property
           return order[a.kind] - order[z.kind];
         });
         const changeovers = changeoverProps(items);
@@ -7501,12 +7665,23 @@ function HousekeepingCard({ row, job, rec, today, lost, onOpenJob }) {
   );
 }
 
-function CleanerBookings({ properties, accom, events, boxEvents, boxErr, jobs, recMap, recs, today, onOpenJob }) {
+function CleanerBookings({ properties, accom, events, boxEvents, boxErr, setups, jobs, recMap, recs, today, onOpenJob }) {
   const [unit, setUnit] = useState("all");
   const [showPast, setShowPast] = useState(false);
   const jobById = {};
   (jobs || []).forEach(function(j) { jobById[j.id] = j; });
-  const all = housekeepingRows(properties, accom, events, boxEvents)
+  const setupRows = (jobs || []).filter(function(j) { return j.kind === "setup"; }).map(function(j) {
+    const p = (properties || []).find(function(x) { return x.id === j.unitId; });
+    return {
+      key: j.id, jobId: j.id, unitId: j.unitId, unitShort: p ? shortPropLabel(p) : GRAIN_STORE_UNIT.short,
+      unitColour: p ? p.colour : "#ef4444",
+      start: j.start, end: j.eventStart, name: j.who.replace(/^Setup · /, ""),
+      when: "From " + fmtDayShort(j.start) + " · by " + fmtDayShort(j.eventStart),
+      source: "Setup clean", sourceMeta: { bg: T.tint, text: T.midBlue },
+      status: "Before arrival", statusMeta: { bg: T.bgInput, text: T.textMid }
+    };
+  });
+  const all = housekeepingRows(properties, accom, events, boxEvents).concat(setupRows)
     .filter(function(r) { return unit === "all" || r.unitId === unit; });
   const upcoming = all.filter(function(r) { return r.end >= today; })
     .sort(function(a, z) { return a.start < z.start ? -1 : a.start > z.start ? 1 : 0; });
@@ -7621,7 +7796,7 @@ function fmtWindowEnd(pt, openedOn) {
   return fmtDayShort(pt.date).slice(0, -3) + (pt.time ? ", " + fmtClock(pt.time) : "");
 }
 
-function changeoverWindows(properties, accom, events, boxEvents) {
+function changeoverWindows(properties, accom, events, boxEvents, setups) {
   const out = [];
   const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
   // Every stay, per property, with its times.
@@ -7686,6 +7861,7 @@ function changeoverWindows(properties, accom, events, boxEvents) {
       outWho: ev.who, inWho: next ? next.who : "", tight: false
     });
   });
+  setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { out.push(x.window); });
   out.sort(function(a, z) {
     const x = a.start.date + (a.start.time || ""), y = z.start.date + (z.start.time || "");
     return x < y ? -1 : x > y ? 1 : 0;
@@ -7693,12 +7869,12 @@ function changeoverWindows(properties, accom, events, boxEvents) {
   return out;
 }
 
-function CleanerUpcoming({ properties, accom, events, boxEvents, jobs, recMap, today, onOpenJob }) {
+function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, recMap, today, onOpenJob }) {
   const WEEKS = 4;
   const [from, setFrom] = useState(mondayOf(today));
   const jobById = {};
   (jobs || []).forEach(function(j) { jobById[j.id] = j; });
-  const windows = changeoverWindows(properties, accom, events, boxEvents);
+  const windows = changeoverWindows(properties, accom, events, boxEvents, setups);
   const weeks = [];
   for (let i = 0; i < WEEKS; i++) weeks.push(addDaysIso(from, 7 * i));
   const last = addDaysIso(from, 7 * WEEKS - 1);
@@ -7747,12 +7923,13 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, jobs, recMap, t
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13.5, fontWeight:700, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
                       {x.unitShort}
+                      {x.setup && <span style={{ fontSize:10.5, fontWeight:800, color:T.midBlue, background:T.tint, borderRadius:6, padding:"1px 6px", marginLeft:6 }}>Setup</span>}
                       <span style={{ fontWeight:700, color: x.tight ? T.red : T.accent, marginLeft:8 }}>
                         {fmtWindowEnd(x.start, x.start.date)} – {x.end ? fmtWindowEnd(x.end, x.start.date) : "no one booked"}
                       </span>
                     </div>
                     <div style={{ fontSize:11.5, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                      {x.outWho}{x.inWho ? " → " + x.inWho : ""}
+                      {x.setup ? "Before " + x.inWho + " arrive" + (x.unitId === GRAIN_STORE_UNIT.id ? "s" : "") : x.outWho + (x.inWho ? " → " + x.inWho : "")}
                     </div>
                   </div>
                   {job && <ChangeoverButton job={job} rec={recMap[job.id]} today={today} onOpen={onOpenJob}/>}
@@ -7873,9 +8050,10 @@ function HousekeepingHoursReport({ onOpenEvent, onOpenAccom, onOpenBoxEvent }) {
         Hours from the housekeeping sign-offs, by the month the changeover was ready.
       </p>
       <HousekeepingHours recs={recs} onOpenRecord={function(r) {
-        if (r.kind === "accom" && onOpenAccom) onOpenAccom(r.refId);
-        else if (r.kind === "event" && onOpenEvent) onOpenEvent(r.refId);
-        else if (r.kind === "box" && onOpenBoxEvent) onOpenBoxEvent(r.refId);
+        const k = r.kind === "setup" ? r.setupOf : r.kind;
+        if (k === "accom" && onOpenAccom) onOpenAccom(r.refId);
+        else if (k === "event" && onOpenEvent) onOpenEvent(r.refId);
+        else if (k === "box" && onOpenBoxEvent) onOpenBoxEvent(r.refId);
       }}/>
     </div>
   );
@@ -7888,6 +8066,7 @@ function CleanerView() {
   const [boxEvents, setBoxEvents]   = useState([]);
   const [boxErr, setBoxErr]         = useState(false);
   const [recs, setRecs]             = useState([]);
+  const [setups, setSetups]         = useState([]);
   const [loaded, setLoaded]         = useState(false);
   const [tab, setTab]               = useState("home");
   const [cursor, setCursor]         = useState(new Date());
@@ -7904,7 +8083,8 @@ function CleanerView() {
     const load = async function() {
       try {
         const results = await Promise.all([
-          sbGet(PROPERTIES_STORAGE), sbGet(ACCOM_STORAGE), sbGet(BOOKING_STORAGE), sbGet(CHANGEOVERS_STORAGE)
+          sbGet(PROPERTIES_STORAGE), sbGet(ACCOM_STORAGE), sbGet(BOOKING_STORAGE), sbGet(CHANGEOVERS_STORAGE),
+          sbGet(SETUP_CLEANS_STORAGE)
         ]);
         if (cancelled) return;
         if (results[0] && results[0].length) setProperties(results[0]);
@@ -7913,6 +8093,7 @@ function CleanerView() {
         // A failed read leaves what is on screen; a save merges into a fresh
         // read either way, so nothing is lost by it.
         if (Array.isArray(results[3]) || (results[3] == null && !READ_FAILED[CHANGEOVERS_STORAGE])) setRecs(results[3] || []);
+        if (Array.isArray(results[4])) setSetups(results[4]);
       } catch (e) { /* leave the defaults; the view still renders */ }
       if (!cancelled) { setToday(londonToday()); setLoaded(true); }
       // Ticketed events come from the box office, separately and last: its
@@ -7935,7 +8116,7 @@ function CleanerView() {
     return function() { cancelled = true; document.removeEventListener("visibilitychange", onVis); };
   }, []);
 
-  const jobs = changeoverJobs(properties, accom, events, boxEvents);
+  const jobs = changeoverJobs(properties, accom, events, boxEvents, setups);
   const recMap = changeoverRecordMap(recs);
   const jobById = {};
   jobs.forEach(function(j) { jobById[j.id] = j; });
@@ -7958,9 +8139,9 @@ function CleanerView() {
     <div>
       <TabStrip tabs={tabs} value={tab} onChange={setTab}/>
 
-      {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events} boxEvents={boxEvents}
+      {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events} boxEvents={boxEvents} setups={setups}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
-      {tab === "upcoming" && <CleanerUpcoming properties={properties} accom={accom} events={events} boxEvents={boxEvents}
+      {tab === "upcoming" && <CleanerUpcoming properties={properties} accom={accom} events={events} boxEvents={boxEvents} setups={setups}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
       {tab === "hours" && <HousekeepingHours recs={recs}
         onOpenRecord={function(r) { setOpenJob(jobById[r.id] || changeoverJobFromRecord(r)); }}/>}
@@ -7974,7 +8155,7 @@ function CleanerView() {
           Nothing here opens a booking: the only thing a cleaner changes is
           the sign-off. */}
       {tab === "list" && (
-        <CleanerBookings properties={properties} accom={accom} events={events} boxEvents={boxEvents} boxErr={boxErr}
+        <CleanerBookings properties={properties} accom={accom} events={events} boxEvents={boxEvents} boxErr={boxErr} setups={setups}
           jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>
       )}
 
@@ -17945,6 +18126,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           confirmLabel="Yes, delete" onConfirm={onDelete} onCancel={function(){ setConfirmDelete(false); }}/>
       )}
       {/* The cleaners' sign-off after the event: hours, comments, lost property. */}
+      {isEdit && formData.id != null && <SetupCleanToggle kind="event" refId={formData.id}/>}
       {isEdit && formData.id != null && <ChangeoverRecordPanel kind="event" refId={formData.id}/>}
       <div style={{ display:"grid", gridTemplateColumns:"200px 1fr", gap:20 }}>
         <div>
@@ -20184,12 +20366,14 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const [boxDue, setBoxDue]               = useState(null);
   const [changeovers, setChangeovers]     = useState([]);
   const [hkBox, setHkBox]                 = useState([]);   // ticketed events, for the Grain Store tile
+  const [hkSetups, setHkSetups]           = useState([]);   // setup cleans asked for
   const [loaded, setLoaded]               = useState(false);
 
   useEffect(()=>{
     (async()=>{
       try { const b = await sbGet(ACCOM_STORAGE); setAccomBookings((b||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
       try { const co = await sbGet(CHANGEOVERS_STORAGE); setChangeovers(Array.isArray(co) ? co : []); } catch { setChangeovers([]); }
+      try { const su = await sbGet(SETUP_CLEANS_STORAGE); setHkSetups(Array.isArray(su) ? su : []); } catch { setHkSetups([]); }
       try { const l = await sbGet(EMAIL_LOG_STORAGE); setEmailLog(l||[]); } catch { setEmailLog([]); }
       try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecs(r||[]); } catch { setInvoiceRecs([]); }
       try { const r = await sbGet(BROCHURE_REQUESTS_STORAGE); setBrochureReqs(r||[]); } catch { setBrochureReqs([]); }
@@ -20371,7 +20555,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const fmtDay = (d) => d ? new Date(d+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—";
 
   const coProps = (accomProperties && accomProperties.length) ? accomProperties : INITIAL_PROPERTIES;
-  const unitStatusList = unitStatuses(changeoverUnits(coProps), changeoverJobs(coProps, accomBookings, bookings, hkBox),
+  const unitStatusList = unitStatuses(changeoverUnits(coProps), changeoverJobs(coProps, accomBookings, bookings, hkBox, hkSetups),
     changeoverRecordMap(changeovers), londonToday());
 
   return (
@@ -20393,7 +20577,10 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           cleaners, or ready — with the last sign-off's comments and lost
           property. A tile opens the booking or event it is about. */}
       {loaded && <UnitStatusBar statuses={unitStatusList}
-        onOpen={function(job) { if (job.kind === "event") openEvent(job.refId); else if (job.kind === "box") openBox(job.refId); else openLet(job.refId); }}/>}
+        onOpen={function(job) {
+          const k = job.kind === "setup" ? job.setupOf : job.kind;
+          if (k === "event") openEvent(job.refId); else if (k === "box") openBox(job.refId); else openLet(job.refId);
+        }}/>}
 
       {/* Booked online but not yet paid — these need chasing, so they stay
           near the top with the other things waiting on someone. */}
@@ -27619,6 +27806,8 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
           </div>
         </div>
       )}
+
+      <SetupCleanToggle kind="box" refId={eventId}/>
 
       <TabStrip tabs={panes} value={pane} onChange={setPane}/>
 
