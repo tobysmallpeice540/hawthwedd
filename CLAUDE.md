@@ -629,6 +629,10 @@ own header.
   (`hbf_housekeeping_pay_v1`, id = the Monday, amounts kept as paid so a later
   change shows against them). Karina's pay is House hours plus her changeover
   pop-up hours, by Toby's choice.
+- **Housekeeper's view** (admin menu, 28 Oct): view `"housekeeping"` renders
+  the housekeeping login's own shell and `CleanerView` for an admin
+  (`hkPreview`), with "← Back to admin" in place of Sign out and a note that
+  sign-offs made there are real.
 - The housekeeping login stays signed in indefinitely (persisted session, no
   session time-box in Supabase); Sign out asks first, a stale build reloads
   itself when the app comes back to the front, and the App button (hidden once

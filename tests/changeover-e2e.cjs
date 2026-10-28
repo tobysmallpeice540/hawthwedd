@@ -22,6 +22,7 @@
 //   · setup cleans: ticked on a letting / event / box office event, their window,
 //     shown on Live, Upcoming and Bookings, signed off like a changeover;
 //   · no exit clean: ticked, the clean after is no job — not red, not overdue;
+//   · admin: Housekeeper's view (the cleaners' screens, Back to admin);
 //   · admin: home tiles, lost property on the booking, box office events on
 //     the lettings calendar, Reports → Housekeeping Hours.
 //
@@ -756,6 +757,27 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('no exit: no page errors (admin)', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
   } catch (e) { fails.push('no exit run: ' + e.message) }
+
+  // ── Housekeeper's view: an admin sees the housekeeping login's screens ──
+  try {
+    const c = await open({})
+    try {
+      const pg = c.page
+      await pg.getByRole('group', { name: 'Property status' }).waitFor({ timeout: 15000 })
+      await pg.locator('nav, aside').getByText("Housekeeper's view", { exact: true }).first().click()
+      await pg.getByText('Still to sign off').waitFor({ timeout: 10000 })
+      const tabs = await pg.getByRole('tab').allInnerTexts()
+      check("hk view: the housekeeping tabs", tabs.join('|') === 'Live|Upcoming|Calendar|Bookings|House', tabs.join('|'))
+      const body = await pg.locator('body').innerText()
+      check("hk view: says what it is, and that sign-offs are real", /Housekeeper's view/.test(body) && /saved for real/.test(body))
+      check("hk view: no Sign out, a way back instead", (await pg.getByRole('button', { name: 'Sign out' }).count()) === 0
+        && (await pg.getByRole('button', { name: '← Back to admin' }).count()) === 1)
+      await pg.getByRole('button', { name: '← Back to admin' }).click()
+      await pg.getByText('Upcoming Events', { exact: false }).first().waitFor({ timeout: 10000 })
+      check("hk view: back to admin lands on the admin home", (await pg.getByRole('tab', { name: 'House', exact: true }).count()) === 0)
+      check("hk view: no page errors", c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('hk view run: ' + e.message) }
 
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and

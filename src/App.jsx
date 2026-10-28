@@ -723,6 +723,7 @@ const NAV_ICON_PATHS = {
   menu:      ["M4 7h16", "M4 12h16", "M4 17h16"],
   close:     ["M6 6l12 12", "M18 6 6 18"],
   back:      ["M14.5 6 8.5 12l6 6"],
+  housekeeping: ["M5 9.5h14l-1.6 10.5H6.6z", "M8 9.5V7a4 4 0 0 1 8 0v2.5"],
 };
 function NavIcon({ name, size }) {
   const paths = NAV_ICON_PATHS[name] || [];
@@ -2775,7 +2776,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28q";
+const APP_BUILD = "2026-10-28r";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -9268,6 +9269,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [appHelpOpen, setAppHelpOpen] = useState(false);   // housekeeping: put the app on the phone
   const barOnly     = role === "bar";
   const cleanerOnly = role === "cleaner";
+  // Housekeeper's view (28 Oct): an admin looking at exactly what the
+  // housekeeping login sees — the same shell and the same CleanerView — with
+  // a way back. It is the real thing: a sign-off made here is saved.
+  const hkPreview   = !barOnly && !cleanerOnly && view === "housekeeping";
+  const cleanerShell = cleanerOnly || hkPreview;
 
   // Publish this build on load, then watch for a newer one. Any tab left open
   // across a deploy finds out within a minute instead of silently running old
@@ -10120,7 +10126,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:T.fontUi,fontSize:20 }}>Loading…</div>;
 
   // Restricted logins: their own section, and nothing else reachable.
-  if (barOnly || cleanerOnly) {
+  if (barOnly || cleanerShell) {
     const shellTitle = barOnly ? "Bar Management" : "Housekeeping";
     // Bar staff also work the door. They get the scanner and nothing else from
     // the box office — box-admin.js allows a bar session the door actions only,
@@ -10155,7 +10161,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
           <span className="hb-mini-build" style={{ marginLeft:"auto", fontSize:11, color:UI_CLASSIC ? T.textLight : "rgba(255,255,255,.4)", whiteSpace:"nowrap" }}>build {APP_BUILD}</span>
           {/* Housekeeping: how to put the app on the phone. Gone once they are
               using the installed app, which is the only time it is not needed. */}
-          {cleanerOnly && !isStandaloneApp() && (
+          {cleanerShell && !isStandaloneApp() && (
             <button onClick={function(){ setAppHelpOpen(true); }}
               style={UI_CLASSIC
                 ? { background:"none", border:`1.5px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }
@@ -10163,7 +10169,15 @@ export default function App({ role = "admin", onSignOut } = {}) {
               App
             </button>
           )}
-          {onSignOut && (
+          {hkPreview && (
+            <button onClick={function(){ if (viewHistory.length) goBack(); else setView("home"); }}
+              style={UI_CLASSIC
+                ? { background:T.accent, border:`1.5px solid ${T.accent}`, color:"#fff", padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 }
+                : { background:"#fff", border:"1px solid #fff", color:T.slate, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 }}>
+              ← Back to admin
+            </button>
+          )}
+          {onSignOut && !hkPreview && (
             <button onClick={function() {
                 // Housekeeping stays signed in for good on its phones; a stray
                 // tap here would mean finding the password again.
@@ -10178,10 +10192,16 @@ export default function App({ role = "admin", onSignOut } = {}) {
           )}
         </header>
         <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-mini"} style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
+          {hkPreview && (
+            <div role="note" style={{ background:T.amberBg, border:`1px solid ${T.amber}`, borderRadius:8, padding:"8px 12px", marginBottom:14,
+              fontSize:12.5, color:T.text, lineHeight:1.5 }}>
+              <strong>Housekeeper's view</strong> — this is what the housekeeping login sees. Anything signed off here is saved for real.
+            </div>
+          )}
           {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
-          <PageErrorBoundary key={cleanerOnly ? "cleaner" : "bar-" + barSection} page={cleanerOnly ? "cleaner" : barSection}>
-          {cleanerOnly && <CleanerView/>}
-          {cleanerOnly && appHelpOpen && (
+          <PageErrorBoundary key={cleanerShell ? "cleaner" : "bar-" + barSection} page={cleanerShell ? "cleaner" : barSection}>
+          {cleanerShell && <CleanerView/>}
+          {cleanerShell && appHelpOpen && (
             <div onClick={function(){ setAppHelpOpen(false); }}
               style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex",
                 alignItems:"center", justifyContent:"center", padding:16 }}>
@@ -15542,6 +15562,9 @@ function buildSidebarNav(o) {
         return { label: r.label, on: view === "reports" && reportOn === r.id && !calOn && !evCalOn,
           go: function() { if (r.id === "accommodation") { openAccomReport(setView); } else { o.setReportType(r.id); setView("reports"); } } };
       }) },
+    // What the housekeeping login sees, for the office to check (28 Oct).
+    { id:"housekeeping", icon:"housekeeping", label:"Housekeeper's view", on: view === "housekeeping",
+      go: function() { setView("housekeeping"); } },
     { id:"settings", icon:"settings", label:"Settings", on: SETTINGS_VIEWS.indexOf(view) !== -1,
       go: function() { setView("settings"); },
       children: [
@@ -15724,6 +15747,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
     // Not "Events" — that has always meant weddings in this app.
     {id:"boxoffice",label:"Box Office"},
     {id:"reports",label:"Reports"},
+    {id:"housekeeping",label:"Housekeeper's view"},
     {id:"settings",label:"Settings"},
   ];
   const isXeroConnected  = !!xeroToken;
