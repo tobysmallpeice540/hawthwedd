@@ -101,6 +101,13 @@
 [functions."email-archive-cron"]
   schedule = "10,40 * * * *"
 
+# Staff checklists (checklists/checklists.js): starts the lists that have
+# become due — on a date, weekly, monthly, or before/after a check-in,
+# check-out, event, viewing or clean. Every 15 minutes, off the busy minutes.
+# Firing is idempotent, so a doubled run does nothing twice.
+[functions."checklists-cron"]
+  schedule = "2,17,32,47 * * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"

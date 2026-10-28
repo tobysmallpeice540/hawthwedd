@@ -79,7 +79,10 @@ const EVENT_COLS = [
   "waitlist_cta","waitlist_text","waitlist_confirmation",
   // Who sells the tickets: null payee = Hawthbush, otherwise a chef (box_payees)
   // and an optional per-event commission override in basis points.
-  "payee_id","commission_bps"
+  "payee_id","commission_bps",
+  // A pay bar at this event: it starts the bar's opening and closing
+  // checklists (supabase/2026-10-28t-checklists.sql).
+  "pay_bar"
 ];
 // What the office may edit about a chef. Deliberately NOT stripe_account_id or
 // charges_enabled — those come from Stripe, never from the browser.

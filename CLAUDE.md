@@ -730,6 +730,62 @@ own header.
   shows progress and has Read now. The enquiries list's "last contact" still
   uses the browser Gmail cache; the follow-up run checks Gmail itself.
 
+### Staff checklists (28 Oct 2026, migration t)
+
+- **Short phone checklists that start on their own.** Templates
+  (`chk_templates`: title, `trig` jsonb, `items` jsonb, `default_due_min`,
+  `fire_from`), lists that have started (`chk_runs`, unique per template +
+  `anchor_key`) and their items (`chk_run_items`, COPIED from the template when
+  a list starts, one row each so phones never collide). RLS on, no policies,
+  everything through `chk_` functions. SQL test:
+  `supabase/2026-10-28t-checklists-test.sql`.
+- **Triggers**: manual (Start now), once, weekly, monthly, letting check-in /
+  check-out (any or one property), event (any, wedding, party, celebration of
+  life, other, or **pay bar**), viewing, cleaned (a changeover sign-off, any
+  property or the Grain Store). Source triggers have `offset_min` — when the
+  list appears, before or after the anchor. **Every item's due time is an
+  offset from the anchor** (Toby), not from when the list appeared.
+- **Anchor keys never hold a movable date**: `in:<booking>:<property>[:n]`,
+  `out:…`, `event:<id>`, `box:<uuid>`, `viewing:enq|evt:<id>:<day>[:n]`,
+  `clean:<sign-off id>`, `weekly:<date>`, `monthly:<yyyy-mm>`, `once`. A moved
+  booking moves its untouched list.
+- **Firing is `netlify/functions/checklists/`** (every 15 minutes via
+  `checklists-cron.js`, or Settings → Checklists → Check now). `plan.js` is
+  pure (pinned by `tests/checklists-plan-test.cjs`; the run by
+  `tests/checklists-run-test.cjs`; the screens by `tests/checklists-e2e.cjs`).
+  It reads only what the switched-on templates need, works out every anchor,
+  and sends `fire` / `retime` / `cancel` to `chk_worker_apply` (service role
+  only), which fires a key once, never before the template's `fire_from`
+  (moved to now when a template's trigger changes or it is switched on again,
+  so nothing back-fires), re-opens a list the SYSTEM cancelled if its
+  booking comes back, marks the previous weekly/monthly list Missed, and
+  refuses to move or cancel a list anyone has ticked. **A failed or empty
+  read cancels nothing** (`sure` in plan.js).
+- **Who**: an item goes to a person (an office login), `role:admin` (Office),
+  `role:bar`, `role:cleaner` (Housekeeping) or `anyone`. The bar and
+  housekeeping logins are shared, so ticks from them read "Bar" /
+  "Housekeeping" (`chk_person_label`; office people by first name, the
+  surname's initial only when two share it). Anyone on staff may tick anyone's
+  item and **ignore a whole list** (Toby) — the name is kept. Untick: whoever
+  ticked, or an admin. Bar and housekeeping see only lists with something for
+  their role or Anyone; admins see everything.
+- An item ends **Done**, **Done with a comment** (`note`, comment required) or
+  **N/A** (comment optional). Comments and ignored / missed lists show on the
+  admin home ("From checklists") until Read (`chk_seen`).
+- **Pay bar**: `wp_drinks.staff_pay_bar` (the office's tick, set by
+  `wp_admin_set_pay_bar`, on the event's Drinks & bar) overrides the client's
+  `pay_bar` either way; null = go by the client. Ticketed events have
+  `box_events.pay_bar` (box office editor → The event; `EVENT_COLS`).
+- **Event start time** for event lists: the event's `guestArrivalTime` only if
+  it is a bare time like `13:00`, otherwise a default per type in
+  `app_data` `hbf_checklist_settings_v1` (`startTimes`; weddings 12:00,
+  parties 19:00, celebrations of life 12:00, other 12:00 until changed).
+  Ticketed events use `starts_at`.
+- A viewing on both an enquiry and the booking it became fires once (the
+  booking's — matched by email and day).
+- The Todoist box and its Settings card are gone (Toby, 28 Oct); the
+  `todoist-feed` function is left in place, unused.
+
 ## Working in this folder from a Claude session
 
 The repo is reached through a mount that does not allow deletion, and two

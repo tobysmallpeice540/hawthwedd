@@ -124,7 +124,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     await page.getByText('Still to sign off').waitFor({ timeout: 15000 })
     await page.getByText('Quiz Night').first().waitFor({ timeout: 5000 })
     const tabNames = await page.getByRole('tab').allInnerTexts()
-    check('tab order', tabNames.join('|') === 'Live|Upcoming|Calendar|Bookings|House', tabNames.join('|'))
+    check('tab order', tabNames.join('|') === 'Live|Checklists|Upcoming|Calendar|Bookings|House', tabNames.join('|'))
     check('no "next 14 days" heading', !/The next 14 days/.test(await page.locator('body').innerText()))
 
     // Status line.
@@ -775,7 +775,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.locator('nav, aside').getByText("Housekeeper's view", { exact: true }).first().click()
       await pg.getByText('Still to sign off').waitFor({ timeout: 10000 })
       const tabs = await pg.getByRole('tab').allInnerTexts()
-      check("hk view: the housekeeping tabs", tabs.join('|') === 'Live|Upcoming|Calendar|Bookings|House', tabs.join('|'))
+      check("hk view: the housekeeping tabs", tabs.join('|') === 'Live|Checklists|Upcoming|Calendar|Bookings|House', tabs.join('|'))
       const body = await pg.locator('body').innerText()
       check("hk view: says what it is, and that sign-offs are real", /Housekeeper's view/.test(body) && /saved for real/.test(body))
       check("hk view: no Sign out, a way back instead", (await pg.getByRole('button', { name: 'Sign out' }).count()) === 0

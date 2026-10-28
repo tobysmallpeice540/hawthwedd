@@ -724,6 +724,7 @@ const NAV_ICON_PATHS = {
   close:     ["M6 6l12 12", "M18 6 6 18"],
   back:      ["M14.5 6 8.5 12l6 6"],
   housekeeping: ["M5 9.5h14l-1.6 10.5H6.6z", "M8 9.5V7a4 4 0 0 1 8 0v2.5"],
+  checklists: ["M9.5 6.5h10", "M9.5 12h10", "M9.5 17.5h10", "m3.8 6.4 1.4 1.4 2.4-2.6", "m3.8 11.9 1.4 1.4 2.4-2.6", "M4 17.5h3"],
 };
 function NavIcon({ name, size }) {
   const paths = NAV_ICON_PATHS[name] || [];
@@ -2776,7 +2777,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28u";
+const APP_BUILD = "2026-10-28v";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6099,147 +6100,933 @@ function LettingsSetup({ properties, setProperties, onSaveProperties, discountCo
   );
 }
 
-// ── Todoist ──────────────────────────────────────────────────────────────────
-const TODOIST_ICS_KEY = "hbf_todoist_ics_v1";
+// ─── CHECKLISTS ──────────────────────────────────────────────────────────────
+// Short phone checklists that start on their own (28 Oct 2026). The lists and
+// ticks live in Supabase tables (supabase/2026-10-28t-checklists.sql), reached
+// only through chk_ functions — never an app_data array, because several
+// phones tick at once. netlify/functions/checklists starts them every 15
+// minutes; "Start now" starts one by hand.
+//
+// A list shows on the home page (and on the bar and housekeeping logins) from
+// when it starts until every item is done, N/A, or the list is ignored:
+// yellow while live, red once anything on it is overdue.
 
-function TodoistSettings() {
-  const [url, setUrl]     = useState("");
-  const [saved, setSaved] = useState(false);
-  const [test, setTest]   = useState(null);
-  const [busy, setBusy]   = useState(false);
+const CHK_SETTINGS_KEY = "hbf_checklist_settings_v1";
+const CHK_DEFAULT_START = { wedding: "12:00", party: "19:00", celebration: "12:00", other: "12:00" };
+const CHK_KINDS = [
+  ["manual", "Only when someone presses Start"],
+  ["once", "On a date and time"],
+  ["weekly", "Every week"],
+  ["monthly", "Every month"],
+  ["checkin", "A letting check-in"],
+  ["checkout", "A letting check-out"],
+  ["event", "An event"],
+  ["viewing", "A viewing"],
+  ["cleaned", "A property being cleaned"],
+];
+const CHK_SOURCE_KINDS = { checkin: true, checkout: true, event: true, viewing: true, cleaned: true };
+const CHK_WEEKDAYS = [[1, "Monday"], [2, "Tuesday"], [3, "Wednesday"], [4, "Thursday"], [5, "Friday"], [6, "Saturday"], [7, "Sunday"]];
+const CHK_EVENT_TYPES = [
+  ["any", "Any event (diary or ticketed)"],
+  ["wedding", "Weddings"],
+  ["party", "Parties"],
+  ["celebration", "Celebrations of life"],
+  ["other", "Other events"],
+  ["paybar", "Events with a pay bar (diary or ticketed)"],
+];
+const CHK_ANCHOR_WORDS = {
+  checkin: "the check-in", checkout: "the check-out", event: "the event starts", viewing: "the viewing",
+  cleaned: "the clean is signed off", once: "it starts", weekly: "it starts", monthly: "it starts", manual: "it is started"
+};
+const CHK_IGNORE_REASONS = ["Event cancelled", "Not needed this time", "Done another way"];
 
-  useEffect(function() {
-    (async function() {
-      try { setUrl((await sbGet(TODOIST_ICS_KEY)) || ""); } catch (e) { setUrl(""); }
-    })();
-  }, []);
-
-  async function save() {
-    setBusy(true); setTest(null);
-    try {
-      await sbSet(TODOIST_ICS_KEY, url.trim());
-      setSaved(true); setTimeout(function(){ setSaved(false); }, 2000);
-      if (url.trim()) {
-        const res = await fetch("/.netlify/functions/todoist-feed", {
-          method:"POST", headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
-          body: JSON.stringify({ url: url.trim(), force: true })
-        });
-        const d = await res.json();
-        if (!res.ok || d.error) setTest({ ok:false, text:d.error || "Could not read the feed" });
-        else setTest({ ok:true, text:"Found " + d.tasks.length + " task" + (d.tasks.length!==1?"s":"") + "." });
-      }
-    } catch (e) { setTest({ ok:false, text:String(e.message||e) }); }
-    setBusy(false);
+// "14:05" / "Fri 30 Oct 14:05" in UK time, for a due or done time.
+function chkWhen(iso) {
+  if (!iso) return "";
+  const s = isoToLondonLocal(iso);
+  const d = s.slice(0, 10), hm = s.slice(11, 16);
+  return d === londonToday() ? hm : fmtDayShort(d).replace(/ \d\d$/, "") + " " + hm;
+}
+function chkDueText(item, nowMs) {
+  if (!item || !item.due_at) return "";
+  return Date.parse(item.due_at) < nowMs ? "overdue, was due " + chkWhen(item.due_at) : "by " + chkWhen(item.due_at);
+}
+function chkSummary(run, nowMs) {
+  const items = (run && run.items) || [];
+  let done = 0, overdue = false, mineLeft = 0;
+  items.forEach(function(i) {
+    if (i.state !== "open") { done++; return; }
+    if (i.mine) mineLeft++;
+    if (i.due_at && Date.parse(i.due_at) < nowMs) overdue = true;
+  });
+  return { done: done, total: items.length, overdue: overdue, mineLeft: mineLeft };
+}
+// 90 -> "1½ hours"-ish wording kept plain: "90 minutes", "2 hours", "1 day".
+function chkSpan(min) {
+  const a = Math.abs(min);
+  if (a % 1440 === 0) return (a / 1440) + (a === 1440 ? " day" : " days");
+  if (a % 60 === 0) return (a / 60) + (a === 60 ? " hour" : " hours");
+  return a + (a === 1 ? " minute" : " minutes");
+}
+function chkOffsetText(min, anchorWord) {
+  const m = Number(min) || 0;
+  if (!m) return "when " + anchorWord.replace(/^the /, "the ");
+  return chkSpan(m) + (m < 0 ? " before " : " after ") + anchorWord;
+}
+function chkPropName(props, id) {
+  if (!id) return "any property";
+  if (id === "grainstore") return "the Grain Store";
+  const p = (props || []).find(function(x) { return x && x.id === id; });
+  return p ? p.name : id;
+}
+// The trigger as a sentence, for the settings list.
+function chkTriggerText(trig, props) {
+  const t = trig || {};
+  const off = Number(t.offset_min) || 0;
+  const when = function(word) { return off ? chkSpan(off) + (off < 0 ? " before " : " after ") + word : "At " + word; };
+  switch (t.kind) {
+    case "manual": return "Only when started by hand";
+    case "once": return "Once, on " + (t.at ? chkWhen(londonToIso(t.at)) : "a date not set");
+    case "weekly": return "Every " + ((CHK_WEEKDAYS.find(function(w) { return w[0] === Number(t.weekday); }) || [0, "week"])[1]) + " at " + (t.time || "?");
+    case "monthly": return "On the " + ordinalDay(Number(t.day) || 1) + " of every month at " + (t.time || "?");
+    case "checkin": return capFirst(when("each check-in")) + " (" + chkPropName(props, t.property) + ")";
+    case "checkout": return capFirst(when("each check-out")) + " (" + chkPropName(props, t.property) + ")";
+    case "event": {
+      const ty = (CHK_EVENT_TYPES.find(function(x) { return x[0] === (t.event_type || "any"); }) || CHK_EVENT_TYPES[0])[1];
+      return capFirst(when("the start")) + " of: " + ty.toLowerCase();
+    }
+    case "viewing": return capFirst(when("each viewing"));
+    case "cleaned": return capFirst(when("a clean is signed off")) + " (" + chkPropName(props, t.property) + ")";
+    default: return "Not set";
   }
+}
+function capFirst(s) { s = String(s || ""); return s.charAt(0).toUpperCase() + s.slice(1); }
+function ordinalDay(n) {
+  const s = (n % 10 === 1 && n !== 11) ? "st" : (n % 10 === 2 && n !== 12) ? "nd" : (n % 10 === 3 && n !== 13) ? "rd" : "th";
+  return n + s;
+}
+function chkErrText(e) {
+  const c = e && e.code;
+  if (c === "comment_needed") return "Write a comment first, or choose Not applicable.";
+  if (c === "closed") return "This list has been closed, so it can't be changed.";
+  if (c === "not_your_tick") return "Only whoever ticked it, or the office, can untick it.";
+  if (c === "not_yours" || c === "not_found") return "That list can't be found.";
+  if (c === "not_staff" || c === "not_admin") return "This login can't do that.";
+  return (e && e.message) || String(e);
+}
+// Which list kinds follow a booking or record that can be opened.
+function chkLinkLabel(link) {
+  if (!link) return "";
+  return { accom: "Open the letting", event: "Open the event", box: "Open the ticketed event", enquiry: "Open the enquiry" }[link.kind] || "";
+}
 
+// The live lists, read once and again every minute and whenever the app comes
+// back to the front. `missing` is true while the database has no chk_ tables
+// yet, so the pages can say so instead of looking empty.
+function useChecklistsLive() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [missing, setMissing] = useState(false);
+  const load = useCallback(async function() {
+    try {
+      const r = await sbRpcQuiet("chk_live", {});
+      setData(r); setErr(""); setMissing(false);
+    } catch (e) {
+      if (e && e.status === 404) setMissing(true);
+      else setErr(chkErrText(e));
+    }
+  }, []);
+  useEffect(function() {
+    load();
+    const t = setInterval(load, 60000);
+    const onVis = function() { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return function() { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+  }, [load]);
+  return { data: data, err: err, missing: missing, reload: load };
+}
+
+// One card per live list: title, what it is for, "8 of 9 done", yellow or red.
+function ChecklistCards({ runs, onOpen, nowMs }) {
+  if (!runs || !runs.length) return null;
   return (
-    <div>
-      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
-        Shows outstanding Todoist tasks on the Home page. Get the URL from Todoist: Settings &rarr; Integrations &rarr; Calendar feed.
-        Better still, set it as <code>TODOIST_ICS_URL</code> in Netlify instead of here &mdash; the URL contains a token granting read
-        access to your tasks, and anything saved on this page is readable by anyone who can load the app.
-      </p>
-      <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
-        <input value={url} onChange={function(e){ setUrl(e.target.value); }}
-          placeholder="https://ics.todoist.com/..."
-          style={{ flex:1, minWidth:240, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13, padding:"9px 12px", outline:"none" }}/>
-        <button onClick={save} disabled={busy}
-          style={{ background:saved?T.green:T.accent, color:"#fff", border:"none", padding:"9px 20px", borderRadius:7, cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
-          {busy ? "Checking..." : saved ? "Saved" : "Save & test"}
-        </button>
-      </div>
-      {test && (
-        <div style={{ marginTop:10, fontSize:12, color: test.ok ? T.green : T.red, lineHeight:1.6 }}>{test.text}</div>
-      )}
-      <p style={{ fontSize:11, color:T.textLight, margin:"10px 0 0", lineHeight:1.6 }}>
-        The feed URL acts like a password &mdash; anyone holding it can read your task list. Regenerate it in Todoist if it is ever shared by mistake.
-      </p>
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(min(100%, 270px), 1fr))", gap:10 }}>
+      {runs.map(function(r) {
+        const s = chkSummary(r, nowMs);
+        const red = s.overdue;
+        return (
+          <button key={r.id} type="button" onClick={function(){ onOpen(r.id); }}
+            aria-label={"Open checklist: " + r.title}
+            style={{ textAlign:"left", background: red ? T.redBg : T.amberBg, border:`1px solid ${red ? T.red : T.amber}66`,
+              borderLeft:`5px solid ${red ? T.red : T.amber}`, borderRadius:10, padding:"11px 13px", cursor:"pointer",
+              fontFamily:"inherit", color:T.text, minWidth:0 }}>
+            <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:8 }}>
+              <span style={{ fontSize:15, fontWeight:700, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.title}</span>
+              {red && <span style={{ fontSize:10.5, fontWeight:800, color:"#fff", background:T.red, borderRadius:6, padding:"2px 7px", flexShrink:0 }}>OVERDUE</span>}
+            </div>
+            {r.context && <div style={{ fontSize:12.5, color:T.textMid, marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.context}</div>}
+            <div style={{ fontSize:12.5, color:T.text, marginTop:5, fontWeight:600 }}>
+              {s.done} of {s.total} done
+              {s.mineLeft > 0 && <span style={{ fontWeight:500, color:T.textMid }}> · {s.mineLeft} for you</span>}
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-function TodoBox() {
-  const [tasks, setTasks] = useState(null);
-  const [err, setErr]     = useState(null);
-  const [configured, setConfigured] = useState(null);
-
-  async function load() {
-    try {
-      // The URL may live only in Netlify (TODOIST_ICS_URL), in which case
-      // there is nothing stored here — ask the function anyway and hide the
-      // box only if it reports nothing is configured at either end.
-      let url = "";
-      try { url = (await sbGet(TODOIST_ICS_KEY)) || ""; } catch (e) { url = ""; }
-      const res = await fetch("/.netlify/functions/todoist-feed", {
-        method:"POST", headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
-        body: JSON.stringify({ url: url })
-      });
-      const d = await res.json();
-      if (d && d.error === "No feed URL set") { setConfigured(false); return; }
-      setConfigured(true);
-      if (!res.ok || d.error) throw new Error(d.error || "Could not read Todoist");
-      setTasks(d.tasks || []); setErr(null);
-    } catch (e) { setErr(String(e.message||e)); }
+// Home: the live cards, and for the office the notes left on ticked items and
+// lists that were ignored or missed — each until someone presses Read.
+function ChecklistsHomePanel({ admin, onOpen, onAll }) {
+  const live = useChecklistsLive();
+  const [busy, setBusy] = useState(false);
+  const nowMs = Date.now();
+  const d = live.data;
+  if (!d || live.missing) return null;
+  const runs = d.runs || [], notes = d.notes || [], closed = d.closed || [];
+  if (!runs.length && !(admin && (notes.length || closed.length))) return null;
+  async function seen(items, runIds) {
+    setBusy(true);
+    try { await sbRpc("chk_seen", { p_items: items, p_runs: runIds }); await live.reload(); }
+    catch (e) { alert(chkErrText(e)); }
+    setBusy(false);
   }
-  useEffect(function(){ load(); }, []);
+  return (
+    <div style={{ marginBottom:18 }}>
+      {runs.length > 0 && (
+        <>
+          <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:10, marginBottom:8 }}>
+            <span style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.textMid, fontWeight:700 }}>Checklists</span>
+            {onAll && <button type="button" onClick={onAll} style={{ marginLeft:"auto", background:"none", border:"none", color:T.midBlue, fontFamily:"inherit", fontSize:12.5, cursor:"pointer", padding:0 }}>All checklists</button>}
+          </div>
+          <ChecklistCards runs={runs} onOpen={onOpen} nowMs={nowMs}/>
+        </>
+      )}
+      {admin && (notes.length > 0 || closed.length > 0) && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 14px", marginTop:12 }}>
+          <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:6 }}>From checklists</div>
+          {notes.map(function(n) {
+            return (
+              <div key={n.item_id} style={{ display:"flex", flexWrap:"nowrap", gap:10, alignItems:"flex-start", padding:"7px 0", borderTop:`1px solid ${T.border}` }}>
+                <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ onOpen(n.run_id); }}>
+                  <div style={{ fontSize:13, color:T.text }}><b>{n.title}</b> <span style={{ color:T.textLight }}>· {n.run_title}{n.context ? " · " + n.context : ""}</span></div>
+                  <div style={{ fontSize:13, color:T.text, marginTop:2 }}>{n.state === "na" ? "Not applicable: " : ""}{n.comment}</div>
+                  <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>{n.by} · {chkWhen(n.at)}</div>
+                </div>
+                <button type="button" disabled={busy} onClick={function(){ seen([n.item_id], []); }}
+                  style={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12, flexShrink:0 })}>Read</button>
+              </div>
+            );
+          })}
+          {closed.map(function(c) {
+            return (
+              <div key={c.run_id} style={{ display:"flex", flexWrap:"nowrap", gap:10, alignItems:"flex-start", padding:"7px 0", borderTop:`1px solid ${T.border}` }}>
+                <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ onOpen(c.run_id); }}>
+                  <div style={{ fontSize:13, color:T.text }}>
+                    <b>{c.title}</b> {c.status === "ignored" ? "was ignored" : "was not finished"}
+                    <span style={{ color:T.textLight }}>{c.context ? " · " + c.context : ""}</span>
+                  </div>
+                  <div style={{ fontSize:12.5, color:T.textMid, marginTop:2 }}>
+                    {c.status === "ignored" ? (c.by || "Someone") + (c.reason ? ": " + c.reason : "") : c.left + " left undone — the next one has started"}
+                  </div>
+                  <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>{chkWhen(c.at)}</div>
+                </div>
+                <button type="button" disabled={busy} onClick={function(){ seen([], [c.run_id]); }}
+                  style={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12, flexShrink:0 })}>Read</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
-  if (configured === false) return null;
+// The Checklists page: live lists, past ones, and one list opened.
+// Used by the office (view "checklists"), the bar login and housekeeping.
+function ChecklistsPage({ role, focusRunId, clearFocus, onOpenLink, onSettings, compact }) {
+  const live = useChecklistsLive();
+  const [openId, setOpenId] = useState(focusRunId || null);
+  const [tab, setTab] = useState("live");
+  const [past, setPast] = useState(null);
+  const [pastErr, setPastErr] = useState("");
+  useEffect(function() {
+    if (focusRunId) { setOpenId(focusRunId); if (clearFocus) clearFocus(); }
+  }, [focusRunId]);
+  useEffect(function() {
+    if (tab !== "past") return;
+    let gone = false;
+    sbRpcQuiet("chk_past", { p_days: 60 })
+      .then(function(r) { if (!gone) { setPast(r.runs || []); setPastErr(""); } })
+      .catch(function(e) { if (!gone) setPastErr(chkErrText(e)); });
+    return function() { gone = true; };
+  }, [tab, openId]);
 
-  const todayIso = new Date().toISOString().slice(0,10);
-  const horizon  = addDaysIso(todayIso, 7);
-  const overdue  = (tasks||[]).filter(function(t){ return t.date && t.date < todayIso; });
-  const dueToday = (tasks||[]).filter(function(t){ return t.date === todayIso; });
-  const soon     = (tasks||[]).filter(function(t){ return t.date && t.date > todayIso && horizon && t.date <= horizon; });
+  if (openId) {
+    return <ChecklistRunView key={openId} runId={openId} role={role} onOpenLink={onOpenLink}
+      onBack={function(){ setOpenId(null); live.reload(); }} onChanged={live.reload}/>;
+  }
+  const nowMs = Date.now();
+  const runs = (live.data && live.data.runs) || [];
+  return (
+    <div style={compact ? null : { maxWidth:980 }}>
+      {!compact && <PageHeader title="Checklists" sub="Lists that have started and are not finished yet. Tap one to work through it."
+        actions={onSettings ? <button type="button" onClick={onSettings} style={btnQuiet}>Set up checklists</button> : null}/>}
+      {live.missing && <ErrBanner text="Checklists are not set up in the database yet (migration 2026-10-28t)."/>}
+      {live.err && <ErrBanner text={live.err}/>}
+      <TabStrip tabs={[["live", "Live", runs.length || null], ["past", "Finished and past"]]} value={tab} onChange={setTab}/>
+      {tab === "live" && (
+        <div style={{ marginTop:12 }}>
+          {live.data && !runs.length && <div style={{ fontSize:14, color:T.textLight, padding:"18px 2px" }}>Nothing to do right now.</div>}
+          {!live.data && !live.err && !live.missing && <div style={quietText}>Loading…</div>}
+          <ChecklistCards runs={runs} onOpen={setOpenId} nowMs={nowMs}/>
+        </div>
+      )}
+      {tab === "past" && (
+        <div style={{ marginTop:12 }}>
+          {pastErr && <ErrBanner text={pastErr}/>}
+          {!past && !pastErr && <div style={quietText}>Loading…</div>}
+          {past && !past.length && <div style={{ fontSize:14, color:T.textLight, padding:"18px 2px" }}>Nothing in the last 60 days.</div>}
+          {(past || []).map(function(r) {
+            const s = chkSummary(r, nowMs);
+            const meta = { done: ["Done", T.green, T.greenBg], ignored: ["Ignored", T.textMid, T.bgInput],
+                           missed: ["Not finished", T.red, T.redBg], cancelled: ["Cancelled", T.textLight, T.bgInput] }[r.status] || [r.status, T.textMid, T.bgInput];
+            return (
+              <button key={r.id} type="button" onClick={function(){ setOpenId(r.id); }}
+                style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, width:"100%", textAlign:"left", background:"#fff",
+                  border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 12px", marginBottom:7, cursor:"pointer", fontFamily:"inherit", color:T.text }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:700, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.title}</div>
+                  <div style={{ fontSize:12, color:T.textMid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.context || ""}</div>
+                  <div style={{ fontSize:11.5, color:T.textLight }}>{s.done} of {s.total} · {chkWhen(r.closed_at)}{r.closed_by ? " · " + r.closed_by : ""}</div>
+                </div>
+                <span style={{ fontSize:11, fontWeight:700, color:meta[1], background:meta[2], borderRadius:6, padding:"3px 8px", flexShrink:0 }}>{meta[0]}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
-  function row(t, tone) {
+// One list, made for a phone: a big box to tap, the item, who and when.
+// "More" offers Not applicable (one tap) or Done with a comment.
+function ChecklistRunView({ runId, role, onBack, onOpenLink, onChanged }) {
+  const [run, setRun] = useState(null);
+  const [err, setErr] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [sheet, setSheet] = useState(null);       // the item "More" was pressed on
+  const [ignoring, setIgnoring] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(function() {
+    let gone = false;
+    sbRpcQuiet("chk_run_get", { p_id: runId })
+      .then(function(r) { if (!gone) { setRun(r.run); setErr(""); } })
+      .catch(function(e) { if (!gone) setErr(chkErrText(e)); });
+    const t = setInterval(function() { setNowMs(Date.now()); }, 30000);
+    return function() { gone = true; clearInterval(t); };
+  }, [runId]);
+
+  async function tick(item, state, comment) {
+    setBusyId(item.id); setErr("");
+    try {
+      const r = await sbRpc("chk_tick", { p_item: item.id, p_state: state, p_comment: comment || null });
+      setRun(r.run); setSheet(null);
+      if (onChanged) onChanged();
+    } catch (e) { setErr(chkErrText(e)); }
+    setBusyId(null);
+  }
+  async function ignore(reason) {
+    setErr("");
+    try {
+      await sbRpc("chk_ignore", { p_run: runId, p_reason: reason || null });
+      setIgnoring(false);
+      if (onChanged) onChanged();
+      onBack();
+    } catch (e) { setErr(chkErrText(e)); }
+  }
+  async function restore() {
+    setErr("");
+    try {
+      await sbRpc("chk_restore", { p_run: runId });
+      const r = await sbRpcQuiet("chk_run_get", { p_id: runId });
+      setRun(r.run);
+      if (onChanged) onChanged();
+    } catch (e) { setErr(chkErrText(e)); }
+  }
+
+  if (!run) {
     return (
-      <div key={t.uid} style={{ display:"flex", alignItems:"baseline", gap:10, padding:"5px 0", borderTop:`1px solid ${T.border}` }}>
-        <span style={{ fontSize:13, color:T.text, flex:1, minWidth:0 }}>{t.summary}</span>
-        <span style={{ fontSize:11, color:tone, whiteSpace:"nowrap", fontWeight:600 }}>
-          {t.date === todayIso ? "today" : fmtDate(t.date)}
-        </span>
+      <div>
+        <PageHeader title="Checklist" back="Checklists" onBack={onBack}/>
+        {err ? <ErrBanner text={err}/> : <div style={quietText}>Loading…</div>}
       </div>
     );
   }
+  const s = chkSummary(run, nowMs);
+  const editable = run.status === "open" || run.status === "done";
+  const items = run.items || [];
+  const shown = items.filter(function(i) {
+    if (filter === "mine") return i.mine;
+    if (filter === "left") return i.state === "open";
+    return true;
+  });
+  const mine = shown.filter(function(i) { return i.mine; });
+  const others = shown.filter(function(i) { return !i.mine; });
+  const statusMeta = run.status === "open"
+    ? (s.overdue ? ["Overdue", "#fff", T.red] : ["Live", T.text, T.amberBg])
+    : ({ done: ["Done", T.green, T.greenBg], ignored: ["Ignored", T.textMid, T.bgInput], missed: ["Not finished", T.red, T.redBg],
+         cancelled: ["Cancelled", T.textLight, T.bgInput] }[run.status] || [run.status, T.textMid, T.bgInput]);
 
   return (
-    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 22px", boxShadow:T.shadowCard, marginBottom:18 }}>
-      <div style={{ display:"flex", alignItems:"center", marginBottom:12, gap:10, flexWrap:"wrap" }}>
-        <h3 style={{ margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>To do</h3>
-        {overdue.length > 0 && (
-          <span style={{ fontSize:11, fontWeight:700, color:"#dc2626", background:"#fef2f2", padding:"2px 10px", borderRadius:8 }}>
-            {overdue.length} overdue
-          </span>
+    <div style={{ maxWidth:720 }}>
+      <PageHeader title={run.title} back="Checklists" onBack={onBack}
+        sub={<>{run.context || ""}{run.context ? " · " : ""}{s.done} of {s.total} done</>}/>
+      <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:10, marginTop:-10, marginBottom:12 }}>
+        <span style={{ fontSize:12, fontWeight:800, color:statusMeta[1], background:statusMeta[2], borderRadius:6, padding:"3px 9px" }}>{statusMeta[0]}</span>
+        {run.status === "ignored" && <span style={{ fontSize:12.5, color:T.textMid }}>by {run.closed_by || "someone"}{run.reason ? ": " + run.reason : ""}</span>}
+        {run.started_by && <span style={{ fontSize:12, color:T.textLight }}>Started by {run.started_by}</span>}
+        {role === "admin" && run.link && onOpenLink && (
+          <button type="button" onClick={function(){ onOpenLink(run.link); }}
+            style={{ background:"none", border:"none", color:T.midBlue, fontFamily:"inherit", fontSize:12.5, cursor:"pointer", padding:0 }}>{chkLinkLabel(run.link)}</button>
         )}
-        <button onClick={load} style={{ marginLeft:"auto", background:"none", border:`1px solid ${T.border}`, color:T.textLight, padding:"3px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>Refresh</button>
+      </div>
+      {err && <ErrBanner text={err}/>}
+      <TabStrip tabs={[["all", "Everyone"], ["mine", "Mine"], ["left", "Still to do"]]} value={filter} onChange={setFilter}/>
+      <div style={{ marginTop:10 }}>
+        {!shown.length && <div style={{ fontSize:14, color:T.textLight, padding:"16px 2px" }}>{filter === "mine" ? "Nothing on this list is yours." : "Nothing left to do."}</div>}
+        {mine.length > 0 && others.length > 0 && <div style={chkGroupHead}>For you</div>}
+        {mine.map(function(i) {
+          return <ChecklistItemRow key={i.id} item={i} nowMs={nowMs} busy={busyId === i.id} editable={editable}
+            onTick={tick} onMore={setSheet}/>;
+        })}
+        {mine.length > 0 && others.length > 0 && <div style={chkGroupHead}>For others</div>}
+        {others.map(function(i) {
+          return <ChecklistItemRow key={i.id} item={i} nowMs={nowMs} busy={busyId === i.id} editable={editable}
+            onTick={tick} onMore={setSheet}/>;
+        })}
       </div>
 
-      {err && <div style={{ fontSize:12, color:T.red, lineHeight:1.6 }}>{err}</div>}
-      {!err && tasks === null && <div style={{ fontSize:12, color:T.textLight }}>Loading...</div>}
-      {!err && tasks && !overdue.length && !dueToday.length && !soon.length && (
-        <div style={{ fontSize:13, color:T.textLight }}>Nothing due in the next week.</div>
+      {run.status === "open" && (
+        <div style={{ marginTop:22, paddingTop:12, borderTop:`1px solid ${T.border}` }}>
+          <button type="button" onClick={function(){ setIgnoring(true); }}
+            style={{ background:"none", border:"none", color:T.textMid, fontFamily:"inherit", fontSize:13, cursor:"pointer", padding:"6px 0", textDecoration:"underline" }}>
+            Ignore this list
+          </button>
+        </div>
+      )}
+      {role === "admin" && (run.status === "ignored" || run.status === "missed") && (
+        <div style={{ marginTop:18 }}>
+          <button type="button" onClick={restore} style={btnQuiet}>Bring this list back</button>
+        </div>
       )}
 
-      {overdue.length > 0 && (
-        <div style={{ marginBottom:10 }}>
-          <div style={{ fontSize:10, letterSpacing:1, textTransform:"uppercase", color:"#dc2626", fontWeight:700, marginBottom:2 }}>Overdue</div>
-          {overdue.slice(0,6).map(function(t){ return row(t, "#dc2626"); })}
-          {overdue.length > 6 && <div style={{ fontSize:11, color:T.textLight, paddingTop:4 }}>...and {overdue.length-6} more</div>}
+      {sheet && <ChecklistMoreSheet item={sheet} busy={busyId === sheet.id} onClose={function(){ setSheet(null); }} onTick={tick}/>}
+      {ignoring && <ChecklistIgnoreSheet title={run.title} onClose={function(){ setIgnoring(false); }} onIgnore={ignore}/>}
+    </div>
+  );
+}
+
+const chkGroupHead = { fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.textMid, fontWeight:700, margin:"12px 0 4px" };
+
+function ChecklistItemRow({ item, nowMs, busy, editable, onTick, onMore }) {
+  const open = item.state === "open";
+  const late = open && item.due_at && Date.parse(item.due_at) < nowMs;
+  const boxColour = item.state === "done" || item.state === "note" ? T.green : item.state === "na" ? T.textLight : late ? T.red : T.border;
+  const canPress = editable && !busy && (open || item.can_untick);
+  const doneWord = item.state === "na" ? "Not applicable" : item.state === "note" ? "Done, with a comment" : "Done";
+  return (
+    <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"flex-start", gap:12, padding:"10px 2px", borderBottom:`1px solid ${T.border}`,
+      opacity: open ? 1 : 0.78 }}>
+      <button type="button" disabled={!canPress}
+        aria-label={open ? "Mark done: " + item.title : "Untick: " + item.title} aria-pressed={open ? "false" : "true"}
+        onClick={function(){ onTick(item, open ? "done" : "open"); }}
+        style={{ width:42, height:42, flexShrink:0, borderRadius:9, border:`2.5px solid ${boxColour}`,
+          background: item.state === "done" || item.state === "note" ? T.green : item.state === "na" ? T.bgInput : "#fff",
+          color: item.state === "na" ? T.textMid : "#fff", fontSize: item.state === "na" ? 11 : 22, fontWeight:800, lineHeight:1,
+          cursor: canPress ? "pointer" : "default", fontFamily:"inherit", padding:0 }}>
+        {busy ? "…" : item.state === "na" ? "N/A" : open ? "" : <span>&#10003;</span>}
+      </button>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:15.5, fontWeight:600, color:T.text, lineHeight:1.3, textDecoration: item.state === "na" ? "line-through" : "none" }}>{item.title}</div>
+        {item.detail && <div style={{ fontSize:13, color:T.textMid, marginTop:2, lineHeight:1.4 }}>{item.detail}</div>}
+        <div style={{ fontSize:12, marginTop:3, color: late ? T.red : T.textLight, fontWeight: late ? 700 : 400 }}>
+          {open ? item.who_label + " · " + chkDueText(item, nowMs) : doneWord + " · " + (item.done_by || "") + " " + chkWhen(item.done_at)}
         </div>
+        {item.comment && (
+          <div style={{ fontSize:13, color:T.text, background:T.amberBg, borderRadius:7, padding:"6px 9px", marginTop:5, lineHeight:1.4 }}>{item.comment}</div>
+        )}
+      </div>
+      {editable && open && (
+        <button type="button" onClick={function(){ onMore(item); }} disabled={busy}
+          style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:8, padding:"8px 10px", fontFamily:"inherit",
+            fontSize:12.5, color:T.textMid, cursor:"pointer", flexShrink:0 }}>More</button>
       )}
-      {dueToday.length > 0 && (
-        <div style={{ marginBottom:10 }}>
-          <div style={{ fontSize:10, letterSpacing:1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:2 }}>Today</div>
-          {dueToday.slice(0,6).map(function(t){ return row(t, T.midBlue); })}
+    </div>
+  );
+}
+
+// A sheet from the bottom of the screen, for the two less common answers.
+function ChecklistSheetFrame({ onClose, children }) {
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.5)", zIndex:2000, display:"flex",
+      alignItems:"flex-end", justifyContent:"center" }}>
+      <div onClick={function(e){ e.stopPropagation(); }} role="dialog" aria-modal="true"
+        style={{ background:"#fff", width:"min(560px, 100%)", borderRadius:"14px 14px 0 0", padding:"16px 16px 22px",
+          boxSizing:"border-box", maxHeight:"88vh", overflowY:"auto", boxShadow:"0 -10px 40px rgba(0,0,0,.25)" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ChecklistMoreSheet({ item, busy, onClose, onTick }) {
+  const [text, setText] = useState("");
+  const big = { width:"100%", padding:"13px 14px", borderRadius:10, fontFamily:"inherit", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:10 };
+  return (
+    <ChecklistSheetFrame onClose={onClose}>
+      <div style={{ fontSize:16, fontWeight:700, color:T.text }}>{item.title}</div>
+      {item.detail && <div style={{ fontSize:13, color:T.textMid, marginTop:3 }}>{item.detail}</div>}
+      <button type="button" disabled={busy} onClick={function(){ onTick(item, "na", text); }}
+        style={Object.assign({}, big, { background:T.bgInput, border:`1.5px solid ${T.border}`, color:T.text })}>
+        Not applicable
+      </button>
+      <div style={{ fontSize:12, color:T.textLight, margin:"16px 0 5px" }}>Or done, with a comment the office will see:</div>
+      <textarea rows={3} value={text} onChange={function(e){ setText(e.target.value); }} maxLength={1000}
+        placeholder="e.g. Only two spare loo rolls left" style={Object.assign({}, inputCss, { fontSize:15, resize:"vertical" })}/>
+      <button type="button" disabled={busy || !text.trim()} onClick={function(){ onTick(item, "note", text); }}
+        style={Object.assign({}, big, { background: text.trim() ? T.green : T.bgInput, border:"none", color: text.trim() ? "#fff" : T.textLight })}>
+        Done, with this comment
+      </button>
+      <button type="button" onClick={onClose} style={Object.assign({}, big, { background:"none", border:"none", color:T.textMid, fontWeight:500 })}>Cancel</button>
+    </ChecklistSheetFrame>
+  );
+}
+
+function ChecklistIgnoreSheet({ title, onClose, onIgnore }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function go() { setBusy(true); await onIgnore(reason.trim()); setBusy(false); }
+  return (
+    <ChecklistSheetFrame onClose={onClose}>
+      <div style={{ fontSize:16, fontWeight:700, color:T.text }}>Ignore “{title}”?</div>
+      <div style={{ fontSize:13, color:T.textMid, marginTop:4, lineHeight:1.5 }}>
+        It comes off the home page and is kept in the history with your name. Why? (optional)
+      </div>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:12 }}>
+        {CHK_IGNORE_REASONS.map(function(r) {
+          const on = reason === r;
+          return <button key={r} type="button" onClick={function(){ setReason(on ? "" : r); }}
+            style={{ border:`1.5px solid ${on ? T.midBlue : T.border}`, background: on ? T.midBlueBg : "#fff", color:T.text,
+              borderRadius:18, padding:"7px 12px", fontFamily:"inherit", fontSize:13, cursor:"pointer" }}>{r}</button>;
+        })}
+      </div>
+      <input value={reason} onChange={function(e){ setReason(e.target.value); }} maxLength={300} placeholder="Or say why"
+        style={Object.assign({}, inputCss, { marginTop:10, fontSize:15 })}/>
+      <button type="button" disabled={busy} onClick={go}
+        style={{ width:"100%", padding:"13px 14px", borderRadius:10, fontFamily:"inherit", fontSize:15, fontWeight:700, cursor:"pointer",
+          marginTop:14, background:T.red, color:"#fff", border:"none" }}>Ignore this list</button>
+      <button type="button" onClick={onClose}
+        style={{ width:"100%", padding:"12px", background:"none", border:"none", color:T.textMid, fontFamily:"inherit", fontSize:14, cursor:"pointer", marginTop:4 }}>Cancel</button>
+    </ChecklistSheetFrame>
+  );
+}
+
+// ── Settings → Checklists ───────────────────────────────────────────────────
+
+// Minutes as "[12] [hours] [before]". `blank` allowed for an item that takes
+// the list's usual due time.
+function ChecklistOffsetInput({ value, onChange, allowBlank, noBefore, label }) {
+  const v = value == null || value === "" ? null : Number(value);
+  const initialUnit = v == null || v === 0 ? 60 : (Math.abs(v) % 1440 === 0 ? 1440 : Math.abs(v) % 60 === 0 ? 60 : 1);
+  const [unit, setUnit] = useState(initialUnit);
+  const [sign, setSign] = useState(v != null && v < 0 ? -1 : 1);
+  const num = v == null ? "" : String(Math.round((Math.abs(v) / unit) * 100) / 100);
+  function emit(n, u, sg) {
+    if (n === "" || n == null) { onChange(allowBlank ? null : 0); return; }
+    const x = Number(n);
+    if (!isFinite(x)) return;
+    onChange(Math.round(Math.abs(x) * u) * sg);
+  }
+  const sel = { padding:"7px 8px", borderRadius:8, border:`1.5px solid ${T.border}`, fontFamily:"inherit", fontSize:13.5, background:"#fff" };
+  return (
+    <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:6 }}>
+      {label && <span style={{ fontSize:13, color:T.textMid }}>{label}</span>}
+      <input value={num} inputMode="decimal" placeholder={allowBlank ? "usual" : "0"}
+        onChange={function(e){ emit(e.target.value.replace(/[^\d.]/g, ""), unit, sign); }}
+        style={Object.assign({}, sel, { width:64 })}/>
+      <select value={unit} onChange={function(e){ const u = Number(e.target.value); setUnit(u); emit(num, u, sign); }} style={sel}>
+        <option value={1}>minutes</option><option value={60}>hours</option><option value={1440}>days</option>
+      </select>
+      {!noBefore && (
+        <select value={sign} onChange={function(e){ const sg = Number(e.target.value); setSign(sg); emit(num, unit, sg); }} style={sel}>
+          <option value={-1}>before</option><option value={1}>after</option>
+        </select>
+      )}
+    </div>
+  );
+}
+
+function chkBlankTemplate() {
+  return { id: null, title: "", active: true, trig: { kind: "manual" }, default_due_min: 0,
+           items: [{ id: "", title: "", detail: "", who: "anyone", due_min: null }] };
+}
+
+function ChecklistSettings({ onOpenRun }) {
+  const [list, setList] = useState(null);
+  const [people, setPeople] = useState([]);
+  const [props, setProps] = useState([]);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [askDelete, setAskDelete] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [missing, setMissing] = useState(false);
+
+  async function load() {
+    try {
+      const r = await sbRpcQuiet("chk_templates_list", {});
+      setList(r.templates || []); setErr(""); setMissing(false);
+    } catch (e) { if (e && e.status === 404) setMissing(true); else setErr(chkErrText(e)); }
+  }
+  useEffect(function() {
+    load();
+    sbRpcQuiet("chk_people", {}).then(function(r) { setPeople(r.people || []); }).catch(function() {});
+    sbGet(PROPERTIES_STORAGE).then(function(p) { setProps(Array.isArray(p) ? p : []); }).catch(function() {});
+  }, []);
+
+  async function save(t) {
+    const r = await sbRpc("chk_template_save", { p: t });
+    setEdit(null); setNote("Saved “" + t.title + "”."); await load();
+    return r;
+  }
+  async function setActive(t, on) {
+    setErr("");
+    try { await sbRpc("chk_template_save", { p: Object.assign({}, t, { active: on }) }); await load(); }
+    catch (e) { setErr(chkErrText(e)); }
+  }
+  async function startNow(t) {
+    setErr(""); setNote("");
+    try {
+      const r = await sbRpc("chk_start_now", { p_template: t.id });
+      setNote("Started “" + t.title + "”.");
+      if (onOpenRun && r && r.run_id) onOpenRun(r.run_id);
+    } catch (e) { setErr(chkErrText(e)); }
+  }
+  async function remove(t) {
+    setErr("");
+    try { await sbRpc("chk_template_delete", { p_id: t.id }); setAskDelete(null); await load(); }
+    catch (e) { setErr(chkErrText(e)); }
+  }
+  async function checkNow() {
+    setChecking(true); setErr(""); setNote("");
+    try {
+      const res = await fetch("/.netlify/functions/checklists", {
+        method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()), body: "{}"
+      });
+      const d = await res.json().catch(function() { return {}; });
+      if (!res.ok) throw new Error(d.error || ("Check failed (" + res.status + ")"));
+      const n = (d.fired || 0) + (d.reopened || 0);
+      setNote(n ? "Started " + n + (n === 1 ? " list." : " lists.") : "Nothing new to start right now.");
+      await load();
+    } catch (e) { setErr(chkErrText(e)); }
+    setChecking(false);
+  }
+
+  if (edit) {
+    return <ChecklistTemplateEditor tpl={edit} people={people} props={props} onCancel={function(){ setEdit(null); }} onSave={save}/>;
+  }
+  return (
+    <div style={{ maxWidth:980 }}>
+      <PageHeader title="Checklists" sub="Lists that start on their own, or when you press Start. Keep them short."
+        actions={<>
+          <button type="button" onClick={checkNow} disabled={checking || missing} style={btnQuiet}>{checking ? "Checking…" : "Check now"}</button>
+          <button type="button" onClick={function(){ setEdit(chkBlankTemplate()); }} disabled={missing}
+            style={{ background:T.accent, color:"#fff", border:"none", borderRadius:8, padding:"9px 16px", fontFamily:"inherit", fontSize:13, fontWeight:700, cursor:"pointer" }}>New checklist</button>
+        </>}/>
+      {missing && <ErrBanner text="Checklists are not set up in the database yet (migration 2026-10-28t)."/>}
+      {err && <ErrBanner text={err}/>}
+      {note && <div style={{ background:T.greenBg, color:T.green, borderRadius:8, padding:"9px 13px", fontSize:13, marginBottom:12 }}>{note}</div>}
+      {!list && !missing && !err && <div style={quietText}>Loading…</div>}
+      {list && !list.length && <div style={{ fontSize:14, color:T.textLight, padding:"10px 2px 20px" }}>No checklists yet. Press New checklist to make the first.</div>}
+      {(list || []).map(function(t) {
+        return (
+          <div key={t.id} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 14px", marginBottom:9,
+            opacity: t.active ? 1 : 0.6 }}>
+            <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:10 }}>
+              <div style={{ flex:1, minWidth:200 }}>
+                <div style={{ fontSize:15, fontWeight:700, color:T.text }}>{t.title}{!t.active && <span style={{ fontWeight:500, color:T.textLight }}> · off</span>}</div>
+                <div style={{ fontSize:12.5, color:T.textMid, marginTop:2 }}>{chkTriggerText(t.trig, props)} · {(t.items || []).length} item{(t.items || []).length === 1 ? "" : "s"}</div>
+                {t.open_runs > 0 && <div style={{ fontSize:12, color:T.amber, marginTop:2 }}>{t.open_runs} live now</div>}
+              </div>
+              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, color:T.textMid, cursor:"pointer" }}>
+                <input type="checkbox" checked={!!t.active} onChange={function(e){ setActive(t, e.target.checked); }}/> On
+              </label>
+              <button type="button" onClick={function(){ startNow(t); }} style={btnQuiet}>Start now</button>
+              <button type="button" onClick={function(){ setEdit(t); }} style={btnQuiet}>Edit</button>
+              {askDelete === t.id
+                ? <button type="button" onClick={function(){ remove(t); }} style={Object.assign({}, btnQuiet, { color:"#fff", background:T.red, borderColor:T.red })}>Delete — sure?</button>
+                : <button type="button" onClick={function(){ setAskDelete(t.id); }} style={Object.assign({}, btnQuiet, { color:T.red })}>Delete</button>}
+            </div>
+          </div>
+        );
+      })}
+      <ChecklistStartTimes/>
+    </div>
+  );
+}
+
+// When an event "starts", for event lists, where the event itself has no bare
+// time typed in its guest arrival field.
+function ChecklistStartTimes() {
+  const [times, setTimes] = useState(null);
+  const [msg, setMsg] = useState("");
+  useEffect(function() {
+    sbGet(CHK_SETTINGS_KEY).then(function(v) {
+      setTimes(Object.assign({}, CHK_DEFAULT_START, (v && v.startTimes) || {}));
+    }).catch(function() { setTimes(Object.assign({}, CHK_DEFAULT_START)); });
+  }, []);
+  async function save() {
+    setMsg("");
+    try {
+      const prev = (await sbGetStrict(CHK_SETTINGS_KEY)) || {};
+      await sbSet(CHK_SETTINGS_KEY, Object.assign({}, prev, { startTimes: times }));
+      setMsg("Saved.");
+    } catch (e) { setMsg(e.message || String(e)); }
+  }
+  if (!times) return null;
+  const labels = [["wedding", "Weddings"], ["party", "Parties"], ["celebration", "Celebrations of life"], ["other", "Other events"]];
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px", marginTop:20 }}>
+      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:6 }}>When an event starts</div>
+      <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.5, marginBottom:10 }}>
+        Event checklists (such as the bar opening and closing lists) count from the event's start. Diary events have no start
+        time, so these are used — unless the event's guest arrival time is just a time, like 13:00. Ticketed events use their own start.
+      </div>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:12, alignItems:"flex-end" }}>
+        {labels.map(function(l) {
+          return (
+            <Field key={l[0]} label={l[1]} width={140}>
+              <input type="time" value={times[l[0]] || ""} onChange={function(e){ const v = e.target.value; setTimes(function(t){ return Object.assign({}, t, { [l[0]]: v }); }); }} style={inputCss}/>
+            </Field>
+          );
+        })}
+        <button type="button" onClick={save} style={btnQuiet}>Save times</button>
+        {msg && <span style={{ fontSize:12.5, color:T.textMid }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ChecklistTemplateEditor({ tpl, people, props, onCancel, onSave }) {
+  const [d, setD] = useState(function() {
+    return Object.assign({}, tpl, { trig: Object.assign({}, tpl.trig), items: (tpl.items || []).map(function(i) { return Object.assign({}, i); }) });
+  });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const k = d.trig.kind;
+  function setTrig(patch) { setD(function(x) { return Object.assign({}, x, { trig: Object.assign({}, x.trig, patch) }); }); }
+  function setKind(kind) {
+    const base = { kind: kind };
+    if (kind === "once") base.at = londonNowInput();
+    if (kind === "weekly") { base.weekday = 1; base.time = "09:00"; }
+    if (kind === "monthly") { base.day = 1; base.time = "09:00"; }
+    if (kind === "checkin") base.offset_min = -720;
+    if (kind === "checkout") base.offset_min = 0;
+    if (kind === "event") { base.event_type = "any"; base.offset_min = 0; }
+    if (kind === "viewing") base.offset_min = -60;
+    if (kind === "cleaned") base.offset_min = 0;
+    if (kind === "checkin" || kind === "checkout" || kind === "cleaned") base.property = null;
+    setD(function(x) { return Object.assign({}, x, { trig: base }); });
+  }
+  function setItem(idx, patch) {
+    setD(function(x) { return Object.assign({}, x, { items: x.items.map(function(it, i) { return i === idx ? Object.assign({}, it, patch) : it; }) }); });
+  }
+  function moveItem(idx, by) {
+    setD(function(x) {
+      const items = x.items.slice(); const j = idx + by;
+      if (j < 0 || j >= items.length) return x;
+      const tmp = items[idx]; items[idx] = items[j]; items[j] = tmp;
+      return Object.assign({}, x, { items: items });
+    });
+  }
+  function removeItem(idx) { setD(function(x) { return Object.assign({}, x, { items: x.items.filter(function(_, i) { return i !== idx; }) }); }); }
+  function addItem() { setD(function(x) { return Object.assign({}, x, { items: x.items.concat([{ id: "", title: "", detail: "", who: "anyone", due_min: null }]) }); }); }
+  async function save() {
+    setBusy(true); setErr("");
+    const items = d.items.filter(function(i) { return String(i.title || "").trim(); });
+    try { await onSave(Object.assign({}, d, { items: items })); }
+    catch (e) { setErr(chkErrText(e)); }
+    setBusy(false);
+  }
+  const sel = Object.assign({}, inputCss, { width:"auto" });
+  const anchorWord = CHK_ANCHOR_WORDS[k] || "it starts";
+  const propOptions = (props || []).filter(function(p) { return p && !p.archived; });
+  const whoOptions = (people || []).length ? people : [
+    { who: "role:admin", label: "Office" }, { who: "role:bar", label: "Bar" }, { who: "role:cleaner", label: "Housekeeping" }, { who: "anyone", label: "Anyone" }];
+  const onceInPast = k === "once" && d.trig.at && londonToIso(d.trig.at) && Date.parse(londonToIso(d.trig.at)) < Date.now();
+
+  return (
+    <div style={{ maxWidth:820 }}>
+      <PageHeader title={d.id ? "Edit checklist" : "New checklist"} back="Checklists" onBack={onCancel}/>
+      {err && <ErrBanner text={err}/>}
+      <div style={chkCard}>
+        <Field label="Title" width="100%">
+          <input value={d.title} onChange={function(e){ const v = e.target.value; setD(function(x){ return Object.assign({}, x, { title: v }); }); }}
+            maxLength={120} placeholder="e.g. Bar opening" style={Object.assign({}, inputCss, { fontSize:15 })}/>
+        </Field>
+        <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, color:T.textMid, marginTop:10, cursor:"pointer" }}>
+          <input type="checkbox" checked={d.active !== false} onChange={function(e){ const v = e.target.checked; setD(function(x){ return Object.assign({}, x, { active: v }); }); }}/>
+          Switched on
+        </label>
+      </div>
+
+      <div style={chkCard}>
+        <div style={chkCardHead}>When it starts</div>
+        <select value={k} onChange={function(e){ setKind(e.target.value); }} style={sel}>
+          {CHK_KINDS.map(function(o) { return <option key={o[0]} value={o[0]}>{o[1]}</option>; })}
+        </select>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", marginTop:10 }}>
+          {k === "once" && <input type="datetime-local" value={d.trig.at || ""} onChange={function(e){ setTrig({ at: e.target.value }); }} style={sel}/>}
+          {k === "weekly" && (
+            <>
+              <select value={d.trig.weekday} onChange={function(e){ setTrig({ weekday: Number(e.target.value) }); }} style={sel}>
+                {CHK_WEEKDAYS.map(function(w) { return <option key={w[0]} value={w[0]}>{w[1]}</option>; })}
+              </select>
+              <span style={{ fontSize:13, color:T.textMid }}>at</span>
+              <input type="time" value={d.trig.time || ""} onChange={function(e){ setTrig({ time: e.target.value }); }} style={sel}/>
+            </>
+          )}
+          {k === "monthly" && (
+            <>
+              <span style={{ fontSize:13, color:T.textMid }}>On the</span>
+              <select value={d.trig.day} onChange={function(e){ setTrig({ day: Number(e.target.value) }); }} style={sel}>
+                {Array.from({ length: 31 }, function(_, i) { return i + 1; }).map(function(n) { return <option key={n} value={n}>{ordinalDay(n)}</option>; })}
+              </select>
+              <span style={{ fontSize:13, color:T.textMid }}>at</span>
+              <input type="time" value={d.trig.time || ""} onChange={function(e){ setTrig({ time: e.target.value }); }} style={sel}/>
+            </>
+          )}
+          {(k === "checkin" || k === "checkout" || k === "cleaned") && (
+            <select value={d.trig.property || ""} onChange={function(e){ setTrig({ property: e.target.value || null }); }} style={sel}>
+              <option value="">Any property</option>
+              {propOptions.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
+              {k === "cleaned" && <option value="grainstore">Grain Store</option>}
+            </select>
+          )}
+          {k === "event" && (
+            <select value={d.trig.event_type || "any"} onChange={function(e){ setTrig({ event_type: e.target.value }); }} style={sel}>
+              {CHK_EVENT_TYPES.map(function(o) { return <option key={o[0]} value={o[0]}>{o[1]}</option>; })}
+            </select>
+          )}
         </div>
-      )}
-      {soon.length > 0 && (
-        <div>
-          <div style={{ fontSize:10, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:2 }}>Next 7 days</div>
-          {soon.slice(0,8).map(function(t){ return row(t, T.textLight); })}
-          {soon.length > 8 && <div style={{ fontSize:11, color:T.textLight, paddingTop:4 }}>...and {soon.length-8} more</div>}
+        {CHK_SOURCE_KINDS[k] && (
+          <div style={{ marginTop:12 }}>
+            <div style={{ fontSize:12.5, color:T.textMid, marginBottom:5 }}>It appears on phones:</div>
+            <ChecklistOffsetInput key={"off-" + k} value={d.trig.offset_min || 0} onChange={function(v){ setTrig({ offset_min: v || 0 }); }}/>
+            <div style={{ fontSize:12, color:T.textLight, marginTop:4 }}>… {anchorWord}. Leave it at 0 for the moment itself.</div>
+          </div>
+        )}
+        {onceInPast && <div style={{ fontSize:12.5, color:T.amber, marginTop:8 }}>That time has passed, so it won't start on its own — use Start now instead.</div>}
+        {k === "event" && d.trig.event_type === "paybar" && (
+          <div style={{ fontSize:12, color:T.textMid, marginTop:8, lineHeight:1.5 }}>
+            An event has a pay bar when the office ticks Pay bar on the event (Drinks &amp; bar), or — with no tick from the office — when the
+            client has asked for one in their portal. Ticketed events have their own Pay bar tick.
+          </div>
+        )}
+        <div style={{ fontSize:12.5, color:T.text, marginTop:12, fontWeight:600 }}>{chkTriggerText(d.trig, props)}</div>
+      </div>
+
+      <div style={chkCard}>
+        <div style={chkCardHead}>Items</div>
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12.5, color:T.textMid, marginBottom:5 }}>Items are due, unless an item says otherwise:</div>
+          <ChecklistOffsetInput key={"due-" + k} value={d.default_due_min || 0} noBefore={!CHK_SOURCE_KINDS[k]}
+            onChange={function(v){ setD(function(x){ return Object.assign({}, x, { default_due_min: v || 0 }); }); }}/>
+          <div style={{ fontSize:12, color:T.textLight, marginTop:4 }}>… {anchorWord}.</div>
         </div>
-      )}
+        {d.items.map(function(it, idx) {
+          return (
+            <div key={idx} style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 11px", marginBottom:8, background:T.bgInput }}>
+              <div style={{ display:"flex", flexWrap:"nowrap", gap:6, alignItems:"center" }}>
+                <span style={{ fontSize:12, color:T.textLight, width:18, flexShrink:0 }}>{idx + 1}</span>
+                <input value={it.title} onChange={function(e){ setItem(idx, { title: e.target.value }); }} maxLength={200}
+                  placeholder="What needs doing" style={Object.assign({}, inputCss, { flex:1, minWidth:0, fontSize:14.5 })}/>
+                <button type="button" aria-label="Move up" onClick={function(){ moveItem(idx, -1); }} disabled={idx === 0} style={chkMini}>&uarr;</button>
+                <button type="button" aria-label="Move down" onClick={function(){ moveItem(idx, 1); }} disabled={idx === d.items.length - 1} style={chkMini}>&darr;</button>
+                <button type="button" aria-label="Remove item" onClick={function(){ removeItem(idx); }} style={Object.assign({}, chkMini, { color:T.red })}>&times;</button>
+              </div>
+              <input value={it.detail || ""} onChange={function(e){ setItem(idx, { detail: e.target.value }); }} maxLength={1000}
+                placeholder="More detail (optional)" style={Object.assign({}, inputCss, { marginTop:6, fontSize:13 })}/>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", marginTop:6 }}>
+                <select value={it.who || "anyone"} onChange={function(e){ setItem(idx, { who: e.target.value }); }} style={Object.assign({}, sel, { fontSize:13 })}>
+                  {whoOptions.map(function(p) { return <option key={p.who} value={p.who}>{p.label}</option>; })}
+                  {it.who && !whoOptions.some(function(p) { return p.who === it.who; }) && <option value={it.who}>Someone without a login now</option>}
+                </select>
+                <ChecklistOffsetInput key={"item-" + idx + "-" + k} value={it.due_min} allowBlank noBefore={!CHK_SOURCE_KINDS[k]} label="due"
+                  onChange={function(v){ setItem(idx, { due_min: v }); }}/>
+              </div>
+            </div>
+          );
+        })}
+        <button type="button" onClick={addItem} style={btnQuiet}>+ Add an item</button>
+        <div style={{ fontSize:12, color:T.textLight, marginTop:8, lineHeight:1.5 }}>
+          Keep lists short — they only work if people do them. Bar and Housekeeping are the shared logins: whoever is on.
+        </div>
+      </div>
+
+      <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:6 }}>
+        <button type="button" onClick={save} disabled={busy}
+          style={{ background:T.accent, color:"#fff", border:"none", borderRadius:8, padding:"11px 22px", fontFamily:"inherit", fontSize:14, fontWeight:700, cursor:"pointer" }}>
+          {busy ? "Saving…" : "Save checklist"}
+        </button>
+        <button type="button" onClick={onCancel} style={btnQuiet}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+const chkCard = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px", marginBottom:14 };
+const chkCardHead = { fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 };
+const chkMini = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:6, width:30, height:30, cursor:"pointer", fontFamily:"inherit",
+  fontSize:15, color:T.textMid, flexShrink:0, padding:0 };
+
+// The office's own Pay bar tick on a diary event, beside the client's answer.
+// Overrides it either way; "As the client says" clears it.
+function ChecklistPayBarControl({ eventId, order, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const o = order || {};
+  if (!("staff_pay_bar" in o) && order) {
+    return <div style={{ fontSize:12, color:T.amber }}>The office pay bar tick arrives with the 28 Oct (t) migration.</div>;
+  }
+  const staff = o.staff_pay_bar === true ? "yes" : o.staff_pay_bar === false ? "no" : "client";
+  const effective = o.staff_pay_bar === true || (o.staff_pay_bar == null && o.pay_bar === true);
+  async function set(v) {
+    setBusy(true); setErr("");
+    try { await sbRpc("wp_admin_set_pay_bar", { p_event_id: eventId, p_value: v }); if (onChanged) await onChanged(); }
+    catch (e) { setErr(chkErrText(e)); }
+    setBusy(false);
+  }
+  const opt = function(key, label, v) {
+    const on = staff === key;
+    return <button type="button" disabled={busy} onClick={function(){ set(v); }}
+      style={{ border:`1.5px solid ${on ? T.midBlue : T.border}`, background: on ? T.midBlueBg : "#fff", color:T.text, fontWeight: on ? 700 : 500,
+        borderRadius:7, padding:"6px 11px", fontFamily:"inherit", fontSize:12.5, cursor:"pointer" }}>{label}</button>;
+  };
+  return (
+    <div style={{ marginTop:4 }}>
+      <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:7 }}>
+        <span>Office says:</span>
+        {opt("yes", "Pay bar", true)}{opt("no", "No pay bar", false)}{opt("client", "As the client says", null)}
+      </div>
+      <div style={{ fontSize:12, color:T.textMid }}>
+        So this event <b style={{ color: effective ? T.green : T.textMid }}>{effective ? "has a pay bar" : "has no pay bar"}</b> — that is what starts the bar checklists.
+      </div>
+      {err && <div style={{ fontSize:12, color:T.red }}>{err}</div>}
     </div>
   );
 }
@@ -6251,7 +7038,8 @@ const BACKUP_DATA_KEYS = [
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
   "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
-  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1", "hbf_setup_cleans_v1", "hbf_changeover_seen_v1", "hbf_house_hours_v1", "hbf_housekeeping_pay_v1"
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1", "hbf_setup_cleans_v1", "hbf_changeover_seen_v1", "hbf_house_hours_v1", "hbf_housekeeping_pay_v1",
+  "hbf_checklist_settings_v1"
   // Not the follow-up keys: restoring the "already sent" record would send
   // everybody mailed since the snapshot their email again.
 ];
@@ -6263,7 +7051,7 @@ const KEY_LABELS = {
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
   "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings",
-  "hbf_changeovers_v1":"Changeover sign-offs", "hbf_setup_cleans_v1":"Housekeeping requests (extra cleans, notes)", "hbf_changeover_seen_v1":"Housekeeping comments cleared", "hbf_house_hours_v1":"House timesheets", "hbf_housekeeping_pay_v1":"Housekeeping pay records"
+  "hbf_changeovers_v1":"Changeover sign-offs", "hbf_setup_cleans_v1":"Housekeeping requests (extra cleans, notes)", "hbf_changeover_seen_v1":"Housekeeping comments cleared", "hbf_house_hours_v1":"House timesheets", "hbf_housekeeping_pay_v1":"Housekeeping pay records", "hbf_checklist_settings_v1":"Checklist settings (event start times)"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -8635,6 +9423,7 @@ function CleanerView({ isAdmin }) {
   const [paidWeeks, setPaidWeeks]   = useState([]);          // weeks the office has paid (locks the timesheet)
   const [loaded, setLoaded]         = useState(false);
   const [tab, setTab]               = useState("home");
+  const [chkFocus, setChkFocus]     = useState(null);      // a checklist opened from Live
   const [cursor, setCursor]         = useState(new Date());
   const [openJob, setOpenJob]       = useState(null);
   const openJobRef = useRef(null);
@@ -8703,7 +9492,7 @@ function CleanerView({ isAdmin }) {
     return saveRecs(function(prev) { return (prev || []).filter(function(r) { return r.id !== id; }); });
   };
 
-  const tabs = [["home","Live"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["house","House"]];
+  const tabs = [["home","Live"],["checklists","Checklists"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["house","House"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
@@ -8711,8 +9500,15 @@ function CleanerView({ isAdmin }) {
     <div>
       <TabStrip tabs={tabs} value={tab} onChange={setTab}/>
 
+      {/* Live checklists for housekeeping, at the top of Live. */}
+      {tab === "home" && <div style={{ marginTop:12 }}><ChecklistsHomePanel onOpen={function(id){ setChkFocus(id); setTab("checklists"); }}/></div>}
       {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events} boxEvents={boxEvents} setups={setups}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
+      {tab === "checklists" && (
+        <div style={{ marginTop:14 }}>
+          <ChecklistsPage role={isAdmin ? "admin" : "cleaner"} compact focusRunId={chkFocus} clearFocus={function(){ setChkFocus(null); }}/>
+        </div>
+      )}
       {tab === "upcoming" && <CleanerUpcoming properties={properties} accom={accom} events={events} boxEvents={boxEvents} setups={setups}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
       {tab === "house" && <CleanerHouse sheets={sheets} paidWeeks={paidWeeks} today={today} onSave={saveSheet}/>}
@@ -9387,6 +10183,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // request, so a row on the home page opens the thing itself, not its list.
   const [focusBoxEventId, setFocusBoxEventId] = useState(null);
   const [focusViewingReqId, setFocusViewingReqId] = useState(null);
+  // A checklist to open on the Checklists page (or the bar / housekeeping tab).
+  const [focusChecklistId, setFocusChecklistId] = useState(null);
   const [accomBookings, setAccomBookings]     = useState([]);
   const [accomProperties, setAccomProperties] = useState([]);
   const [invoiceRecords, setInvoiceRecords]   = useState([]);
@@ -9443,6 +10241,15 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // A ticketed event's page in the box office, and a viewing request's card.
   const goToBoxEvent = (id) => { if (id == null) { setView("boxoffice"); return; } setFocusBoxEventId(id); setView("boxoffice"); };
   const goToViewingRequest = (id) => { setFocusViewingReqId(id == null ? null : id); setView("viewings"); };
+  const goToChecklist = (id) => { setFocusChecklistId(id || null); setView("checklists"); };
+  // What a checklist was for: its letting, event, ticketed event or enquiry.
+  const openChecklistLink = (link) => {
+    if (!link) return;
+    if (link.kind === "accom") goToAccomBooking(link.id);
+    else if (link.kind === "event") goToEvent(link.id);
+    else if (link.kind === "box") goToBoxEvent(link.id);
+    else if (link.kind === "enquiry") goToEnquiry(link.id);
+  };
 
   // Start a new accommodation booking for an event: every property, the night
   // before and the night of the event, pre-linked so it's billed via the event.
@@ -10268,7 +11075,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
     // the box office — box-admin.js allows a bar session the door actions only,
     // so the order list, buyer details and takings stay out of reach whatever
     // this screen tries to ask for.
-    const barTabs = [["bar","Bar Management"],["door","Ticket Check-in"]];
+    const barTabs = [["bar","Bar Management"],["door","Ticket Check-in"],["checklists","Checklists"]];
     return (
       <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:T.fontUi }}>
         <MobileGlobalStyles/>
@@ -10334,6 +11141,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
               <strong>Housekeeper's view</strong> — this is what the housekeeping login sees. Anything signed off here is saved for real.
             </div>
           )}
+          {/* The bar's live checklists sit above everything, on every tab, so
+              opening and closing lists are seen without going looking. */}
+          {barOnly && barSection !== "checklists" && (
+            <ChecklistsHomePanel onOpen={function(id){ setFocusChecklistId(id); setBarSection("checklists"); }}/>
+          )}
           {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
           <PageErrorBoundary key={cleanerShell ? "cleaner" : "bar-" + barSection} page={cleanerShell ? "cleaner" : barSection}>
           {cleanerShell && <CleanerView isAdmin={hkPreview}/>}
@@ -10353,6 +11165,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
           )}
           {barOnly && barSection === "bar"  && <BarView/>}
           {barOnly && barSection === "door" && <BoxDoorScreen/>}
+          {barOnly && barSection === "checklists" && (
+            <div style={{ marginTop:14 }}>
+              <ChecklistsPage role="bar" compact focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}/>
+            </div>
+          )}
           </PageErrorBoundary>
         </div>
       </div>
@@ -10392,7 +11209,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
             you move to another. pageArea is used by both layouts. */}
         <PageErrorBoundary key={view === "form" ? "form-" + formKey : view} page={view}>
         {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}
-          enquiries={enquiries} onOpenEnquiry={goToEnquiry} onOpenBoxEvent={goToBoxEvent} onOpenViewingRequest={goToViewingRequest}/>}
+          enquiries={enquiries} onOpenEnquiry={goToEnquiry} onOpenBoxEvent={goToBoxEvent} onOpenViewingRequest={goToViewingRequest}
+          onOpenChecklist={goToChecklist}/>}
+        {view==="checklists" && <ChecklistsPage role="admin" focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}
+          onOpenLink={openChecklistLink} onSettings={function(){ setView("chkSettings"); }}/>}
+        {view==="chkSettings" && <ChecklistSettings onOpenRun={goToChecklist}/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
@@ -13814,8 +14635,9 @@ function PortalEventDrinks({ eventId, booking }) {
         {"pay_bar" in o || !data.order ? (
           <>
             <div>
-              Pay bar: <b style={{ color: o.pay_bar ? T.green : T.textLight }}>{o.pay_bar === true ? "yes, they would like one" : o.pay_bar === false ? "no" : "not ticked yet"}</b>
+              Client says: <b style={{ color: o.pay_bar ? T.green : T.textLight }}>{o.pay_bar === true ? "yes, they would like a pay bar" : o.pay_bar === false ? "no pay bar" : "not ticked yet"}</b>
             </div>
+            <ChecklistPayBarControl eventId={eventId} order={data.order} onChanged={function(){ return load(); }}/>
             <div>
               Expected use: <b style={{ color:T.text }}>{o.bar_usage ? BAR_USAGE_LABEL[o.bar_usage] : "not said"}</b>
               {evening != null && <> · {evening} on site in the evening</>}
@@ -15639,7 +16461,7 @@ const REPORT_TYPES = [
 ];
 const HIDDEN_REPORT_TYPES = ["calendar"];
 // The pages under Settings in the sidebar.
-const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails"];
+const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails", "chkSettings"];
 function openAccomReport(setView) { navClick("lettings", "report"); setView("lettings"); }
 
 // The sidebar's contents, worked out from where the app is. Each entry's `go`
@@ -15665,6 +16487,7 @@ function buildSidebarNav(o) {
   function openEventsCalendar() { o.setReportType("calendar"); setView("reports"); }
   return [
     { id:"home", icon:"home", label:"Home", on: view === "home", go: function() { setView("home"); } },
+    { id:"checklists", icon:"checklists", label:"Checklists", on: view === "checklists", go: function() { setView("checklists"); } },
     { id:"calendar", icon:"calendar", label:"Calendar", origin:"calendar", on: calOn, go: o.onCalendarTab,
       children: [
         { label:"Lettings", on: calOn && onLetCal, go: o.onCalendarTab },
@@ -15708,6 +16531,7 @@ function buildSidebarNav(o) {
         { label:"Staff", on: view === "staff", go: function() { setView("staff"); } },
         { label:"Activity", on: view === "activity", go: function() { setView("activity"); } },
         { label:"Email templates", on: view === "emails", go: function() { setView("emails"); } },
+        { label:"Checklists", on: view === "chkSettings", go: function() { setView("chkSettings"); } },
       ] },
   ];
 }
@@ -15874,6 +16698,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
   // "calendar" is a virtual tab that maps to view="lettings" (calendar sub-tab)
   const tabs = [
     {id:"home",label:"Home"},
+    {id:"checklists",label:"Checklists"},
     {id:"calendar",label:"Calendar",virtual:true},
     {id:"lettings",label:"Lettings"},
     {id:"list",label:"Events"},
@@ -21056,7 +21881,7 @@ function enquiryForBrochure(enquiries, r) {
   return list.find(function(e) { return e && String(e.email || "").trim().toLowerCase() === em; }) || null;
 }
 
-function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent, enquiries, onOpenEnquiry, onOpenBoxEvent, onOpenViewingRequest }) {
+function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent, enquiries, onOpenEnquiry, onOpenBoxEvent, onOpenViewingRequest, onOpenChecklist }) {
   // Each row opens its own record; the section list is the fallback only when
   // the handler is missing (an older caller) or the record cannot be found.
   const openEvent = function(id) { if (onOpenEvent) onOpenEvent(id); else setView("list"); };
@@ -21282,6 +22107,11 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
     <div style={UI_CLASSIC ? { maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" } : { maxWidth:1100 }}>
       <PageHeader title="Home"
         sub={<>Today: {fmtDay(today)}{UI_CLASSIC && <span style={{ color:T.textLight, marginLeft:10, fontSize:11 }}>build {APP_BUILD}</span>}</>}/>
+
+      {/* Checklists that have started and are not finished — first, because
+          they are things somebody should be doing now. */}
+      <ChecklistsHomePanel admin onOpen={function(id){ if (onOpenChecklist) onOpenChecklist(id); else setView("checklists"); }}
+        onAll={function(){ setView("checklists"); }}/>
 
       {/* Payment status can only come from Xero — say so rather than letting an
           empty list read as "nothing outstanding". */}
@@ -21561,7 +22391,6 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
         <EmailViewerModal email={viewEmail} onClose={()=>setViewEmail(null)}/>
       </div>
 
-      <TodoBox/>
     </div>
   );
 }
@@ -26937,7 +27766,7 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
           they get the same pages as a row here. */}
       {!inSidebar && setView && (
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:18 }}>
-          {[["staff","Staff"],["activity","Activity"],["emails","Email templates"]].map(function(x){
+          {[["staff","Staff"],["activity","Activity"],["emails","Email templates"],["chkSettings","Checklists"]].map(function(x){
             return <button key={x[0]} onClick={function(){ setView(x[0]); }}
               style={{ background:"#fff", border:`1.5px solid ${T.border}`, color:T.midBlue, padding:"8px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>{x[1]} →</button>;
           })}
@@ -26962,12 +27791,6 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Weekly cleaning summary</div>
         <CleaningSummarySettings/>
-      </div>
-
-      {/* Todoist */}
-      <div style={card}>
-        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Todoist</div>
-        <TodoistSettings/>
       </div>
 
       {/* Logins are managed under Staff now that each person has their own.
@@ -28624,6 +29447,13 @@ function BoxEventDetails({ form, update }) {
           </BoxField>
           <BoxField label="Venue name"><BoxInput value={form.venue_name} onChange={v=>update("venue_name", v)}/></BoxField>
           <BoxField label="Postcode"><BoxInput value={form.venue_postcode} onChange={v=>update("venue_postcode", v)}/></BoxField>
+          {/* Starts the bar's opening and closing checklists. Absent until the
+              28 Oct (t) migration adds the column, so not offered before it. */}
+          {form.pay_bar !== undefined && (
+            <div style={{ gridColumn:"1/-1" }}>
+              <BoxCheck checked={!!form.pay_bar} onChange={v=>update("pay_bar", v)} label="Pay bar at this event (starts the bar checklists)"/>
+            </div>
+          )}
           <div style={{ gridColumn:"1/-1" }}>
             <BoxField label="Web address" hint={`hawthbushfarm.co.uk/tickets/${form.slug || ""}`}>
               <BoxInput value={form.slug} onChange={v=>update("slug", v)}/>

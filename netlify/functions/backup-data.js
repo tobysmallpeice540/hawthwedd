@@ -47,7 +47,10 @@ const DATA_KEYS = [
   "hbf_brochure_requests_v1",
   "hbf_brochure_settings_v1",
   "hbf_automations_v1",
-  "hbf_automation_sent_v1"
+  "hbf_automation_sent_v1",
+  // 28 Oct 2026: checklist settings (event start times). The checklists
+  // themselves are database tables (chk_*), covered by Supabase's backups.
+  "hbf_checklist_settings_v1"
 ];
 
 function jsonResponse(statusCode, body) {
