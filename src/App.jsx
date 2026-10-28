@@ -2775,7 +2775,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28p";
+const APP_BUILD = "2026-10-28q";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6905,9 +6905,12 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
     });
   });
   attachArrivalNotes(jobs, accom, setups);
-  setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { jobs.push(x.job); });
-  jobs.sort(function(a, z) { return a.due < z.due ? -1 : a.due > z.due ? 1 : 0; });
-  return jobs;
+  // "No exit clean needed" on the letting or event: its clean afterwards is
+  // not a job at all — never red, not on Live, Upcoming or the pay sheet.
+  const kept = jobs.filter(function(j) { return !noExitClean(setups, j.id); });
+  setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { kept.push(x.job); });
+  kept.sort(function(a, z) { return a.due < z.due ? -1 : a.due > z.due ? 1 : 0; });
+  return kept;
 }
 
 // ─── SETUP CLEANS ────────────────────────────────────────────────────────────
@@ -6940,6 +6943,16 @@ function hkRequest(setups, type, kind, refId) {
 function hkNote(setups, kind, refId) {
   const n = hkRequest(setups, "note", kind, refId);
   return n && typeof n.text === "string" ? n.text.trim() : "";
+}
+// "No exit clean needed" (28 Oct, Toby): ticked on a letting, a diary event or
+// a box office event, the clean after it is not asked for. Stored in the same
+// key as { id: "noexit:<kind>:<refId>", kind: "noexit", of, refId, at } — a
+// kind of its own, so a build before it ignores the row. Takes a changeover
+// job id: "accom:<id>:<property>[:n]", "event:<id>" or "box:<id>".
+function noExitClean(setups, jobId) {
+  const parts = String(jobId || "").split(":");
+  if (["accom", "event", "box"].indexOf(parts[0]) === -1 || !parts[1]) return false;
+  return !!hkRequest(setups, "noexit", parts[0], parts[1]);
 }
 function hkNoteForArrival(b, stay, text) {
   return text ? "For " + accomGuestLabel(b) + ", arriving " + fmtDayShort(stay.checkIn) + ": " + text : "";
@@ -7086,13 +7099,18 @@ function SetupCleanToggle({ kind, refId }) {
   const has = function(id) { return !!(list && list.some(function(x) { return x && x.id === id; })); };
   const stored = hkNote(list, kind, refId);
   const text = draft == null ? stored : draft;
+  const noExitId = "noexit:" + kind + ":" + refId;
   const toggle = async function(id) {
     const on = has(id);
+    // The extra clean keeps its old shape; "no exit clean" is a kind of its
+    // own (of = the record's kind), so builds before it ignore the row.
+    const row = id === noExitId ? { id: id, kind: "noexit", of: kind, refId: refId, at: new Date().toISOString() }
+      : { id: id, kind: kind, refId: refId, at: new Date().toISOString() };
     setBusy(true); setErr("");
     try {
       await save(function(prev) {
         const rest = (prev || []).filter(function(x) { return x && x.id !== id; });
-        return on ? rest : rest.concat([{ id: id, kind: kind, refId: refId, at: new Date().toISOString() }]);
+        return on ? rest : rest.concat([row]);
       });
     } catch (e) { setErr(String((e && e.message) || e)); }
     setBusy(false);
@@ -7123,7 +7141,10 @@ function SetupCleanToggle({ kind, refId }) {
   };
   return (
     <div style={{ background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"11px 16px", margin:"0 0 16px" }}>
-      {tick(setupId, lettings ? "Extra clean before arrival" : "Extra clean before the event")}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:"8px 22px" }}>
+        {tick(setupId, lettings ? "Extra clean before arrival" : "Extra clean before the event")}
+        {tick(noExitId, "No exit clean needed")}
+      </div>
       {lettings && (
         <div style={{ marginTop:10 }}>
           <div style={{ display:"flex", alignItems:"baseline", gap:"2px 8px", flexWrap:"wrap", marginBottom:4 }}>
@@ -7571,7 +7592,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       kind: "event", rank: 999,
       label: "Grain Store",
       detail: (ev.couple || "Event") + " · " + eventTypeLabel(ev) + (ev.status === "Holding" ? " (provisional)" : ""),
-      job: jobById["event:" + ev.id] || null
+      job: jobById["event:" + ev.id] || null, noExit: noExitClean(setups, "event:" + ev.id)
     });
   });
   (boxEvents || []).forEach(function(bx) {
@@ -7580,7 +7601,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       kind: "event", rank: 999, label: "Grain Store",
       time: new Date(bx.starts_at).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" }),
       detail: (bx.name || "Ticketed event") + " · Box office",
-      job: jobById["box:" + bx.id] || null
+      job: jobById["box:" + bx.id] || null, noExit: noExitClean(setups, "box:" + bx.id)
     });
   });
 
@@ -7601,7 +7622,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       const times = stayTimes(b, s, p);
       const tail = who + (guests ? " · " + guests : "");
       add(s.checkOut, { kind: "out", rank: propRank(s.propertyId), label: propName(s.propertyId),
-        time: times.outTime || "", detail: tail, job: jobById[jobId] || null });
+        time: times.outTime || "", detail: tail, job: jobById[jobId] || null, noExit: noExitClean(setups, jobId) });
       add(s.checkIn,  { kind: "in",  rank: propRank(s.propertyId), label: propName(s.propertyId),
         time: times.inTime || "", detail: tail, note: hkNote(setups, "accom", b.id) });
     });
@@ -7690,7 +7711,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
           const order = { out: 0, setup: 1, in: 2, event: 3 };  // out, then setup, before in on the same property
           return order[a.kind] - order[z.kind];
         });
-        const changeovers = changeoverProps(items);
+        const changeovers = changeoverProps(items.filter(function(it) { return !it.noExit; }));
         return (
           <div key={d} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10,
             padding:"13px 16px", marginBottom:10 }}>
@@ -7720,6 +7741,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
                     <HkNoteLine text={it.job ? it.job.note : it.note}/>
                   </div>
                   {it.job && <ChangeoverButton job={it.job} rec={recMap[it.job.id]} today={today} onOpen={onOpenJob}/>}
+                  {!it.job && it.noExit && <NoExitCleanChip/>}
                 </div>
               );
             })}
@@ -7782,7 +7804,16 @@ function housekeepingRows(properties, accom, events, boxEvents) {
 // property on the right; then source, booking status, and the changeover
 // lozenge on the right. Every row says nowrap so the phone stylesheet keeps
 // the lozenges where they are.
-function HousekeepingCard({ row, job, rec, today, lost, onOpenJob }) {
+// Where the lozenge would be, on a stay or event whose clean afterwards is
+// not needed.
+function NoExitCleanChip() {
+  return (
+    <span data-no-exit="1" style={{ fontSize:11, fontWeight:700, color:T.textMid, background:T.bgInput, border:"1.5px dashed " + T.border,
+      borderRadius:8, padding:"4px 10px", whiteSpace:"nowrap", flexShrink:0 }}>No exit clean</span>
+  );
+}
+
+function HousekeepingCard({ row, job, rec, today, lost, onOpenJob, noExit }) {
   const chip = function(text, bg, fg) {
     return (
       <span style={{ fontSize:11, fontWeight:700, color:fg, background:bg, padding:"2px 8px", borderRadius:8, whiteSpace:"nowrap", flexShrink:0 }}>{text}</span>
@@ -7808,6 +7839,7 @@ function HousekeepingCard({ row, job, rec, today, lost, onOpenJob }) {
         {chip(row.status, row.statusMeta.bg, row.statusMeta.text)}
         <span style={{ flex:1 }}/>
         {job && <ChangeoverButton job={job} rec={rec} today={today} onOpen={onOpenJob}/>}
+        {!job && noExit && <NoExitCleanChip/>}
       </div>
     </div>
   );
@@ -7842,7 +7874,8 @@ function CleanerBookings({ properties, accom, events, boxEvents, boxErr, setups,
   };
   const card = function(r) {
     const job = r.jobId ? jobById[r.jobId] || null : null;
-    return <HousekeepingCard key={r.key} row={r} job={job} rec={job ? recMap[job.id] : null} today={today} lost={lostOf(r)} onOpenJob={onOpenJob}/>;
+    return <HousekeepingCard key={r.key} row={r} job={job} rec={job ? recMap[job.id] : null} today={today} lost={lostOf(r)} onOpenJob={onOpenJob}
+      noExit={!!r.jobId && noExitClean(setups, r.jobId)}/>;
   };
   return (
     <div>
@@ -7992,6 +8025,7 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
       outWho: ev.who, inWho: next ? next.who : "", tight: false, occ: ev.occ
     });
   });
+  for (let i = out.length - 1; i >= 0; i--) if (noExitClean(setups, out[i].id)) out.splice(i, 1);
   setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { out.push(x.window); });
   out.sort(function(a, z) {
     const x = a.start.date + (a.start.time || ""), y = z.start.date + (z.start.time || "");

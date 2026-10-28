@@ -21,6 +21,7 @@
 //     day (a rise mid-week), Paid tick and date; Staff rates, PAYE / Self-employed;
 //   · setup cleans: ticked on a letting / event / box office event, their window,
 //     shown on Live, Upcoming and Bookings, signed off like a changeover;
+//   · no exit clean: ticked, the clean after is no job — not red, not overdue;
 //   · admin: home tiles, lost property on the booking, box office events on
 //     the lettings calendar, Reports → Housekeeping Hours.
 //
@@ -89,7 +90,7 @@ const cleanerRpc = { my_profile: () => ({ id: '00000000-0000-4000-8000-00000000b
 // The harness does not keep writes; here they are kept (so a read after a
 // save sees it, as the real database would) and box-admin is answered.
 async function open(opts) {
-  const appData = freshApp()
+  const appData = opts.app || freshApp()
   const box = opts.box || BOX
   const s = await openStaff(Object.assign({ distDir: DIST, appData: appData }, opts))
   await s.page.route(HOST + '/rest/v1/app_data', async (route) => {
@@ -698,6 +699,63 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('pay: no page errors', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
   } catch (e) { fails.push('pay run: ' + e.message) }
+
+  // ── No exit clean (28 Oct): ticked on a letting, an event or a box office
+  // event, the clean after it is not a job — not red, not overdue, not on the
+  // status line — and its card says "No exit clean" where the lozenge was.
+  try {
+    const nx = freshApp()
+    nx.hbf_setup_cleans_v1 = [
+      { id: 'noexit:accom:A1', kind: 'noexit', of: 'accom', refId: 'A1' },
+      { id: 'noexit:event:804', kind: 'noexit', of: 'event', refId: 804 },
+      { id: 'noexit:box:b-quiz', kind: 'noexit', of: 'box', refId: 'b-quiz' },
+    ]
+    let c = await open({ rpc: cleanerRpc, app: nx })
+    try {
+      const pg = c.page
+      await pg.getByRole('group', { name: 'Property status' }).waitFor({ timeout: 15000 })
+      await pg.getByText('Supper Club').first().waitFor({ timeout: 10000 })
+      const overdueBox = (await pg.getByText('Still to sign off').count()) ? await pg.getByText('Still to sign off').locator('..').innerText() : ''
+      check('no exit: not overdue (stay, event, box office)', !/Red Guest|Messy Do|Quiz Night/.test(overdueBox), overdueBox)
+      const pill = async (name) => pg.locator('span[title]', { hasText: name }).first().getAttribute('title')
+      check('no exit: Hamlet not "To clean"', (await pill('Hamlet')) !== 'To clean', await pill('Hamlet'))
+      check('no exit: Grain St. not "To clean"', (await pill('Grain St.')) !== 'To clean', await pill('Grain St.'))
+      check('no exit: Amly still in use (untouched)', (await pill('Amly')) === 'Guests')
+      await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
+      await pg.getByRole('button', { name: /past/i }).first().click().catch(() => {})
+      await pg.waitForTimeout(500)
+      const card = pg.locator('div', { has: pg.getByText('Red Guest', { exact: true }) }).filter({ has: pg.locator('[data-no-exit]') }).last()
+      check('no exit: the card says so where the lozenge was', (await card.count()) === 1 && (await card.getByRole('button', { name: /To clean|Ready/ }).count()) === 0)
+      check('no exit: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+
+    // Admin: the tick box sits by the extra clean and the notes; ticking it on
+    // an event saves its own row and the Grain Store stops being red.
+    const ad = freshApp()
+    c = await open({ app: ad })
+    try {
+      const pg = c.page
+      await pg.getByRole('group', { name: 'Property status' }).locator('span[title="To clean"]', { hasText: 'Hamlet' }).click()
+      await pg.getByText('No exit clean needed', { exact: true }).waitFor({ timeout: 10000 })
+      const lbox = pg.locator('label', { has: pg.getByText('No exit clean needed', { exact: true }) }).locator('input[type=checkbox]')
+      check('no exit: on the letting, unticked', !(await lbox.isChecked()))
+      const near = await pg.getByText('No exit clean needed', { exact: true }).evaluate((el) => {
+        const box = el.closest('div[style*="border-radius: 10px"]') || el.parentElement.parentElement.parentElement
+        return /Extra clean before arrival/.test(box.innerText) && /Notes to housekeepers/.test(box.innerText)
+      })
+      check('no exit: by the extra clean and the notes', near)
+      await lbox.click()
+      await pg.waitForTimeout(800)
+      const row = (ad.hbf_setup_cleans_v1 || []).find((x) => x.id === 'noexit:accom:A1')
+      check('no exit: ticking saves its own row', row && row.kind === 'noexit' && row.of === 'accom' && row.refId === 'A1', JSON.stringify(ad.hbf_setup_cleans_v1))
+      await pg.goto(c.origin + '/')
+      await pg.getByRole('group', { name: 'Property status' }).locator('span[title]', { hasText: 'Hamlet' }).first().waitFor({ timeout: 10000 })
+      await pg.waitForTimeout(800)
+      const t = await pg.getByRole('group', { name: 'Property status' }).locator('span[title]', { hasText: 'Hamlet' }).first().getAttribute('title')
+      check('no exit: Hamlet no longer red on the home page', t !== 'To clean', t)
+      check('no exit: no page errors (admin)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('no exit run: ' + e.message) }
 
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and

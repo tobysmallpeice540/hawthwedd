@@ -574,8 +574,13 @@ own header.
   arrival"** (lettings) / "Extra clean before the event" — a bare tick box, no
   explanation (Toby, 28 Oct). New jobs say `who: "Extra clean · …"`; older
   sign-offs say `"Setup · …"`, so strip both (`/^(Setup|Extra clean) · /`).
-  A "no clean at the end" option was built and then dropped at Toby's request
-  the same day — do not bring it back unasked.
+  **"No exit clean needed"** (reinstated by Toby, 28 Oct) is the tick beside
+  it on all three forms: `{ id: "noexit:<kind>:<refId>", kind: "noexit", of,
+  refId }` in the same key. `noExitClean(setups, jobId)` drops that record's
+  clean afterwards from `changeoverJobs` (after arrival notes are placed — a
+  note that lands on it shows only on the check-in row) and from
+  `changeoverWindows`; Live and Bookings show "No exit clean" where the
+  lozenge was, and the day card's "Changeover:" leaves it out.
 - **Notes to housekeepers** (28 Oct): a textarea on the letting form under the
   tick box, saved on blur into the SAME key as
   `{ id: "note:accom:<refId>", kind: "note", of, refId, text }` (empty text
