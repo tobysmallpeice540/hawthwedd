@@ -2,7 +2,8 @@
 //
 // The housekeeping sign-off, end to end. Built app, Supabase faked
 // (tests/portal-harness.cjs → openStaff), box-admin faked here:
-//   · the cleaner login has Live / Upcoming / Calendar / Bookings / Hours / App;
+//   · the cleaner login has Live / Upcoming / Calendar / Bookings / Hours, and
+//     an App button by Sign out with the install steps;
 //   · Upcoming: Monday weeks, each changeover's window (check-out + 2h to the
 //     next check-in − 2h), four weeks a page;
 //   · Live's status line: one line of short names (Hamlet, Amly, Glamping,
@@ -103,7 +104,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     await page.getByText('Still to sign off').waitFor({ timeout: 15000 })
     await page.getByText('Quiz Night').first().waitFor({ timeout: 5000 })
     const tabNames = await page.getByRole('tab').allInnerTexts()
-    check('tab order', tabNames.join('|') === 'Live|Upcoming|Calendar|Bookings|Hours|App', tabNames.join('|'))
+    check('tab order', tabNames.join('|') === 'Live|Upcoming|Calendar|Bookings|Hours', tabNames.join('|'))
     check('no "next 14 days" heading', !/The next 14 days/.test(await page.locator('body').innerText()))
 
     // Status line.
@@ -233,9 +234,11 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     await page.getByRole('button', { name: 'Next month' }).click()
     check('Hours: scrolls back and forth', (await page.locator('body').innerText()).indexOf('Edita\n' + sum('edita')) !== -1)
 
-    // App tab.
-    await page.getByRole('tab', { name: 'App', exact: true }).click()
-    check('App tab explains', await page.getByText('Put the app on your phone').isVisible())
+    // App button by Sign out.
+    await page.getByRole('button', { name: 'App', exact: true }).click()
+    check('App pop-up explains', await page.getByText('Put the app on your phone').isVisible())
+    await page.getByRole('button', { name: 'Close' }).click()
+    check('App pop-up closes', (await page.getByText('Put the app on your phone').count()) === 0)
     check('no page errors (cleaner)', s.errors.length === 0, s.errors.join(' | '))
   } catch (e) { fails.push('cleaner run: ' + e.message) }
   await s.close()
@@ -272,7 +275,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     if (monthOf(plus(-2)) !== monthOf(today)) await page.getByRole('button', { name: 'Previous month' }).click()
     check('Hours: no sideways scroll', await noScroll())
     await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-phone-hours.png') })
-    await page.getByRole('tab', { name: 'App', exact: true }).click()
+    const head = await page.locator('header').evaluate((h) => ({ sw: h.scrollWidth, cw: h.clientWidth, h: h.getBoundingClientRect().height }))
+    check('header fits with App and Sign out', head.sw <= head.cw + 1 && head.h < 90, JSON.stringify(head))
+    await page.getByRole('button', { name: 'App', exact: true }).click()
     await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-phone-app.png') })
   } catch (e) { fails.push('phone run: ' + e.message) }
   await s.close()

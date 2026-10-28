@@ -2773,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28d";
+const APP_BUILD = "2026-10-28e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7940,7 +7940,7 @@ function CleanerView() {
     return saveRecs(function(prev) { return (prev || []).filter(function(r) { return r.id !== id; }); });
   };
 
-  const tabs = [["home","Live"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["hours","Hours"],["app","App"]];
+  const tabs = [["home","Live"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["hours","Hours"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
@@ -7952,7 +7952,6 @@ function CleanerView() {
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
       {tab === "upcoming" && <CleanerUpcoming properties={properties} accom={accom} events={events} boxEvents={boxEvents}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
-      {tab === "app" && <HousekeepingAppTab/>}
       {tab === "hours" && <HousekeepingHours recs={recs}
         onOpenRecord={function(r) { setOpenJob(jobById[r.id] || changeoverJobFromRecord(r)); }}/>}
       {/* onOpen is deliberately a no-op — clicking a booking must not open an
@@ -8630,6 +8629,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [accomPrefill, setAccomPrefill]       = useState(null);
   const [staleBuild, setStaleBuild]           = useState(null);   // newer build seen
   const [barSection, setBarSection] = useState("bar");
+  const [appHelpOpen, setAppHelpOpen] = useState(false);   // housekeeping: put the app on the phone
   const barOnly     = role === "bar";
   const cleanerOnly = role === "cleaner";
 
@@ -9512,6 +9512,16 @@ export default function App({ role = "admin", onSignOut } = {}) {
             ? { fontSize:16, fontWeight:700, color:T.midBlue }
             : { fontFamily:T.fontDisplay, fontSize:22, fontWeight:600, color:"#fff", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{shellTitle}</span>
           <span className="hb-mini-build" style={{ marginLeft:"auto", fontSize:11, color:UI_CLASSIC ? T.textLight : "rgba(255,255,255,.4)", whiteSpace:"nowrap" }}>build {APP_BUILD}</span>
+          {/* Housekeeping: how to put the app on the phone. Gone once they are
+              using the installed app, which is the only time it is not needed. */}
+          {cleanerOnly && !isStandaloneApp() && (
+            <button onClick={function(){ setAppHelpOpen(true); }}
+              style={UI_CLASSIC
+                ? { background:"none", border:`1.5px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }
+                : { background:"none", border:"1px solid rgba(255,255,255,.28)", color:"#fff", padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:500, whiteSpace:"nowrap", flexShrink:0 }}>
+              App
+            </button>
+          )}
           {onSignOut && (
             <button onClick={function() {
                 // Housekeeping stays signed in for good on its phones; a stray
@@ -9530,6 +9540,20 @@ export default function App({ role = "admin", onSignOut } = {}) {
           {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
           <PageErrorBoundary key={cleanerOnly ? "cleaner" : "bar-" + barSection} page={cleanerOnly ? "cleaner" : barSection}>
           {cleanerOnly && <CleanerView/>}
+          {cleanerOnly && appHelpOpen && (
+            <div onClick={function(){ setAppHelpOpen(false); }}
+              style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex",
+                alignItems:"center", justifyContent:"center", padding:16 }}>
+              <div onClick={function(e){ e.stopPropagation(); }}
+                style={{ background:T.bg, borderRadius:12, width:"min(520px, 100%)", maxHeight:"90vh", overflowY:"auto",
+                  boxShadow:"0 20px 60px rgba(0,0,0,.3)", padding:"16px 16px 4px", boxSizing:"border-box", position:"relative" }}>
+                <button onClick={function(){ setAppHelpOpen(false); }} aria-label="Close"
+                  style={{ position:"absolute", top:10, right:12, background:"none", border:"none", fontSize:24, lineHeight:1,
+                    color:T.textLight, cursor:"pointer", padding:0, fontFamily:"inherit" }}>×</button>
+                <HousekeepingAppTab/>
+              </div>
+            </div>
+          )}
           {barOnly && barSection === "bar"  && <BarView/>}
           {barOnly && barSection === "door" && <BoxDoorScreen/>}
           </PageErrorBoundary>
@@ -14640,7 +14664,7 @@ function useInstallPrompt() {
   return { canInstall: !!installPromptEvent && !isStandaloneApp(), install: install, standalone: isStandaloneApp() };
 }
 
-// The housekeeping App tab: put the app on this phone in as few taps as the
+// The housekeeping App pop-up (the App button by Sign out): put the app on this phone in as few taps as the
 // phone allows. Android/Chrome can show its own Install box from a button;
 // iPhone cannot (Apple gives websites no way to), so it gets the steps, big,
 // with the Share icon drawn.
@@ -14736,7 +14760,7 @@ function HousekeepingAppTab() {
       {!ios && !android && (
         <div style={box}>
           <div style={{ fontSize:14, color:T.text, lineHeight:1.55, marginBottom:10 }}>
-            Open this address on the phone, sign in, and come back to this tab:
+            Open this address on the phone, sign in, and tap App again:
           </div>
           <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
             <span style={{ flex:1, minWidth:0, fontSize:15, fontWeight:700, color:T.accent, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{site}</span>

@@ -492,7 +492,8 @@ own header.
 
 - **The cleaners sign off every check-out and every confirmed event** — diary
   events and box office (ticketed) events alike — on the housekeeping login:
-  Live / Upcoming / Calendar / Bookings / Hours / App. State is worked out from dates;
+  Live / Upcoming / Calendar / Bookings / Hours, plus an App button by Sign out.
+  State is worked out from dates;
   only the sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id,
   saved with `useMergedSave` — the cleaner login writes nothing else).
 - Ids: `accom:<bookingId>:<propertyId>` (`:2` for a second stay at the same
@@ -526,7 +527,8 @@ own header.
   start − 2h. A window belongs to the week it opens in.
 - The housekeeping login stays signed in indefinitely (persisted session, no
   session time-box in Supabase); Sign out asks first, a stale build reloads
-  itself when the app comes back to the front, and the App tab installs it
+  itself when the app comes back to the front, and the App button (hidden once
+  installed) opens the install pop-up
   (Android button via `useInstallPrompt`; iPhone steps). Test:
   `tests/changeover-e2e.cjs`.
 
