@@ -4,9 +4,14 @@
 //   · A follow-up goes only to an enquiry with no contact since it arrived,
 //     inside its window, once; never to one booked, lost, opted out, or with a
 //     viewing to come.
-//   · A gone-quiet check-in counts our own follow-up as the last touch, goes
-//     once, and then the app's flag appears only after M quiet days.
-//   · The thank-you goes to confirmed events only, both addresses, once.
+//   · The second follow-up counts our own first as the last touch; the third
+//     goes only after the second; each once, one email a day at most.
+//   · "Mark Freezing" (on the second or third): X Gmail-confirmed quiet days
+//     after the last of them, nothing since — the enquiry's temperature is set
+//     to freezing, once, on a fresh read written only if nobody saved since.
+//     A Freezing enquiry is never emailed.
+//   · The run checks the farm Gmail itself for the addresses it may act on,
+//     and falls back to the app's cache if it cannot.
 //   · Nothing old is touched when a rule is first switched on.
 //   · Quiet days count only up to the day Gmail last checked the address,
 //     never up to today; an address never checked is never followed up.
@@ -20,7 +25,7 @@ const TODAY = "2026-10-23";
 const epoch = (iso) => String(Date.parse(iso + "T10:00:00Z"));
 const enq = (id, arrived, extra) => Object.assign({ id: "enq_" + epoch(arrived) + id, name: "Jane Smith", email: "jane" + id + "@example.com",
   outcome: "undecided", contacts: [{ date: arrived, method: "email", note: "Brochure requested" }], viewings: [] }, extra || {});
-const ON = { followup: { on: true }, quiet: { on: true }, thanks: { on: true, reviewUrl: "https://g.page/r/hawthbush/review" } };
+const ON = { followup: { on: true }, second: { on: true }, third: { on: true } };
 const kinds = (r) => r.due.map((d) => d.kind + ":" + d.refId);
 // Most cases below are about something else, so Gmail is taken to have checked
 // every address on the morning of the run (the date found stays as given).
@@ -34,18 +39,19 @@ function withChecks(list, seen, day) {
   return out;
 }
 const P = (o) => A.planAutomations(Object.assign({}, o, { emailSeen: withChecks(o.enquiries, o.emailSeen, o.today) }));
-const G = (e, marks, seen, cfg, day) => A.goneQuiet(e, marks, withChecks([e], seen, day), cfg, day);
 
+(async () => {
 console.log("off by default");
 {
   const r = P({ settings: null, enquiries: [enq("1", "2026-10-20")], events: [], today: TODAY });
   eq("nothing planned with no settings", r.due.length, 0);
-  eq("defaults are all off", [A.DEFAULTS.followup.on, A.DEFAULTS.quiet.on, A.DEFAULTS.thanks.on], [false, false, false]);
-  const m = A.mergeSettings({ followup: { on: "yes", days: "0", subject: "  " }, thanks: { on: true, reviewUrl: "javascript:alert(1)" } });
-  ok("only a real true switches on", m.followup.on === false && m.thanks.on === true);
-  eq("silly days fall back", m.followup.days, 3);
+  eq("defaults are all off", [A.DEFAULTS.followup.on, A.DEFAULTS.second.on, A.DEFAULTS.third.on], [false, false, false]);
+  eq("the three steps, and no thank-you", A.STEPS, ["followup", "second", "third"]);
+  const m = A.mergeSettings({ followup: { on: "yes", days: "0", subject: "  " }, second: { on: true, freezeOn: "yes", freezeDays: 0 }, thanks: { on: true } });
+  ok("only a real true switches on", m.followup.on === false && m.second.on === true && m.second.freezeOn === false);
+  eq("silly days fall back", [m.followup.days, m.second.freezeDays], [3, 7]);
   eq("blank subject falls back", m.followup.subject, A.DEFAULTS.followup.subject);
-  eq("only an https review link is kept", m.thanks.reviewUrl, "");
+  ok("an old thank-you setting is ignored", !("thanks" in m));
 }
 
 console.log("follow-up");
@@ -72,31 +78,104 @@ console.log("follow-up");
   eq("a name that is an email address reads as 'there'", A.firstName("jane@example.com"), "there");
 }
 
-console.log("gone quiet");
+console.log("second follow-up");
 {
   const q = enq("q", "2026-09-01", { contacts: [{ date: "2026-09-01" }, { date: "2026-09-25", method: "phone" }] });   // 28 days idle
   const recent = enq("r", "2026-09-01", { contacts: [{ date: "2026-10-10" }] });
   const ancient = enq("s", "2025-01-01", { contacts: [{ date: "2025-01-01" }] });
   const r = P({ settings: ON, today: TODAY, enquiries: [q, recent, ancient] });
-  eq("only the one quiet for 21+ days inside the window", kinds(r), ["quiet:" + q.id]);
+  eq("only the one quiet for 21+ days inside the window", kinds(r), ["second:" + q.id]);
   ok("records what it was based on", r.due[0].basedOn === "2026-09-25");
-  // our own follow-up resets the clock
   const f = enq("t", "2026-09-20");
   const r2 = P({ settings: ON, today: TODAY, enquiries: [f], marks: { ["enq:" + f.id]: { followup: "2026-10-15T09:00:00Z" } } });
-  eq("a follow-up 8 days ago means not quiet yet", r2.due.length, 0);
-  // and a follow-up and a check-in never go in the same run
+  eq("a first follow-up 8 days ago means not yet", r2.due.length, 0);
   const both = enq("u", "2026-10-20");
-  const r3 = P({ settings: Object.assign({}, ON, { quiet: { on: true, days: 1 } }), today: TODAY, enquiries: [both] });
+  const r3 = P({ settings: Object.assign({}, ON, { second: { on: true, days: 1 } }), today: TODAY, enquiries: [both] });
   eq("one email a day at most", kinds(r3), ["followup:" + both.id]);
+  const email = A.renderEmail(r.due[0], r.cfg);
+  eq("its own wording", email.subject, A.DEFAULTS.second.subject);
+}
 
-  // the app's flag
-  const marks = { ["enq:" + q.id]: { quiet: "2026-10-10T09:00:00Z" } };
-  ok("flagged after 7 quiet days", G(q, marks, {}, ON, TODAY));
-  ok("not before", !G(q, marks, {}, ON, "2026-10-15"));
-  ok("not once they reply", !G(Object.assign({}, q, { contacts: q.contacts.concat([{ date: "2026-10-12" }]) }), marks, {}, ON, TODAY));
-  ok("not once Gmail has seen an email", !G(q, marks, { "janeq@example.com": { date: "2026-10-20" } }, ON, TODAY));
-  ok("not once it is booked", !G(Object.assign({}, q, { outcome: "booked" }), marks, {}, ON, TODAY));
-  ok("never without a check-in", !G(q, {}, {}, ON, TODAY));
+console.log("third follow-up");
+{
+  const t = enq("th", "2026-08-01", { contacts: [{ date: "2026-08-01" }] });
+  const marks = (second) => ({ ["enq:" + t.id]: { followup: "2026-08-04T09:00:00Z", second: second } });
+  eq("14 days after the second, nothing since: sent", kinds(P({ settings: ON, today: TODAY, enquiries: [t], marks: marks("2026-10-09T09:00:00Z") })), ["third:" + t.id]);
+  eq("13 days: not yet", P({ settings: ON, today: TODAY, enquiries: [t], marks: marks("2026-10-10T09:00:00Z") }).due.length, 0);
+  eq("never without the second", P({ settings: { third: { on: true, days: 1 } }, today: TODAY, enquiries: [t], marks: { ["enq:" + t.id]: { followup: "2026-08-04T09:00:00Z" } } }).due.length, 0);
+  const replied = Object.assign({}, t, { contacts: t.contacts.concat([{ date: "2026-10-20", method: "email" }]) });
+  eq("a note logged since the second puts it back", P({ settings: ON, today: TODAY, enquiries: [replied], marks: marks("2026-10-09T09:00:00Z") }).due.length, 0);
+  eq("never twice", P({ settings: ON, today: TODAY, enquiries: [t], marks: { ["enq:" + t.id]: { second: "2026-10-09T09:00:00Z", third: "2026-10-23T09:00:00Z" } } }).due.length, 0);
+  eq("its own wording", A.renderEmail({ kind: "third", tokens: { firstName: "Jane" } }, A.mergeSettings(ON)).subject, A.DEFAULTS.third.subject);
+}
+
+console.log("mark Freezing");
+{
+  const e = enq("fz", "2026-08-01", { contacts: [{ date: "2026-08-01" }], temperature: "cold" });
+  const FZ = { second: { on: true, freezeOn: true, freezeDays: 7 }, third: { on: false } };
+  const sentSecond = (d) => ({ ["enq:" + e.id]: { second: d + "T09:00:00Z" } });
+  let r = P({ settings: FZ, today: TODAY, enquiries: [e], marks: sentSecond("2026-10-15") });
+  eq("8 quiet days after the second: frozen", r.freeze.map((f) => f.refId + ":" + f.after), [e.id + ":second"]);
+  eq("and nothing emailed", r.due.length, 0);
+  r = P({ settings: FZ, today: TODAY, enquiries: [e], marks: sentSecond("2026-10-18") });
+  eq("5 days: not yet", r.freeze.length, 0);
+  r = P({ settings: Object.assign({}, FZ, { second: { on: true, freezeOn: false } }), today: TODAY, enquiries: [e], marks: sentSecond("2026-10-01") });
+  eq("unticked: never", r.freeze.length, 0);
+  const noted = Object.assign({}, e, { contacts: e.contacts.concat([{ date: "2026-10-20", method: "note" }]) });
+  eq("a note logged since: not frozen", P({ settings: FZ, today: TODAY, enquiries: [noted], marks: sentSecond("2026-10-10") }).freeze.length, 0);
+  const seenEmail = A.planAutomations({ settings: FZ, today: TODAY, enquiries: [e], marks: sentSecond("2026-10-10"),
+    emailSeen: { [e.email]: { date: "2026-10-21", at: TODAY + "T07:00:00Z" } } });
+  eq("an email since: not frozen", seenEmail.freeze.length, 0);
+  const gmailBehind = A.planAutomations({ settings: FZ, today: TODAY, enquiries: [e], marks: sentSecond("2026-10-10"),
+    emailSeen: { [e.email]: { date: null, at: "2026-10-14T07:00:00Z" } } });
+  eq("Gmail has only confirmed 4 days: waiting, not frozen", [gmailBehind.freeze.length, gmailBehind.waiting.map((w) => w.kind + " " + w.verified + "/" + w.needed)], [0, ["freeze 4/7"]]);
+  eq("never twice", P({ settings: FZ, today: TODAY, enquiries: [e], marks: { ["enq:" + e.id]: { second: "2026-10-01T09:00:00Z", frozen: "2026-10-09T09:00:00Z" } } }).freeze.length, 0);
+  const already = Object.assign({}, e, { temperature: "freezing" });
+  eq("already Freezing: left alone", P({ settings: FZ, today: TODAY, enquiries: [already], marks: sentSecond("2026-10-01") }).freeze.length, 0);
+  // after the third, its own box decides; the count runs from the third
+  const T3 = { second: { on: true, freezeOn: true, freezeDays: 30 }, third: { on: true, freezeOn: true, freezeDays: 5 } };
+  r = P({ settings: T3, today: TODAY, enquiries: [e], marks: { ["enq:" + e.id]: { second: "2026-10-01T09:00:00Z", third: "2026-10-17T09:00:00Z" } } });
+  eq("6 quiet days after the third: frozen, after the third", r.freeze.map((f) => f.after), ["third"]);
+  // a Freezing enquiry gets no emails at all
+  const cold = enq("fc", "2026-10-20", { temperature: "freezing" });
+  eq("Freezing: no first follow-up", P({ settings: ON, today: TODAY, enquiries: [cold] }).due.length, 0);
+}
+
+console.log("Freezing is written carefully");
+{
+  const realFetch = global.fetch;
+  const list = [{ id: "a", outcome: "undecided", temperature: "cold", name: "A" }, { id: "b", outcome: "booked", temperature: "warm" },
+                { id: "c", outcome: "undecided", temperature: "warm", notes: "keep me" }];
+  let reads = 0, patches = [];
+  global.fetch = async (url, opts) => {
+    if (/app_data\?key=eq\.hbf_enquiries_v1&select=value,updated_at/.test(url)) {
+      reads++;
+      return { ok: true, json: async () => [{ value: JSON.parse(JSON.stringify(list)), updated_at: "2026-10-23T08:0" + reads + ":00Z" }] };
+    }
+    if (opts && opts.method === "PATCH") {
+      patches.push({ url: url, body: JSON.parse(opts.body) });
+      // the first write finds someone saved in between
+      return { ok: true, json: async () => (patches.length === 1 ? [] : [{}]) };
+    }
+    throw new Error("unexpected " + url);
+  };
+  const changed = await A.freezeEnquiries([{ refId: "a", after: "second" }, { refId: "b", after: "second" }], "2026-10-23");
+  global.fetch = realFetch;
+  eq("only the open one is frozen", changed, ["a"]);
+  eq("a clash is re-read and tried again", [reads, patches.length], [2, 2]);
+  ok("written only if unchanged since the read", /updated_at=eq\.2026-10-23T08%3A02%3A00Z/.test(patches[1].url));
+  const v = patches[1].body.value;
+  eq("only temperature and the auto fields change", v.find((x) => x.id === "a"), { id: "a", outcome: "undecided", temperature: "freezing", name: "A", autoFrozenAt: "2026-10-23", autoFrozenAfter: "second" });
+  eq("the others untouched", [v.find((x) => x.id === "b"), v.find((x) => x.id === "c")], [list[1], list[2]]);
+}
+
+console.log("the farm Gmail over the app's cache");
+{
+  const merged = A.mergeSeen({ "a@x.co": { date: "2026-10-01", at: "2026-10-02T07:00:00Z" }, "b@x.co": { date: "2026-10-05", at: "2026-10-05T07:00:00Z" } },
+                             { "a@x.co": { date: "2026-10-20", at: "2026-10-23T09:00:00Z" }, "b@x.co": { date: null, at: "2026-10-23T09:00:00Z" }, "c@x.co": { date: null, at: "2026-10-23T09:00:00Z" } });
+  eq("newer email wins, checked now", merged["a@x.co"], { date: "2026-10-20", at: "2026-10-23T09:00:00Z" });
+  eq("no email in Gmail keeps what the app saw, checked now", merged["b@x.co"], { date: "2026-10-05", at: "2026-10-23T09:00:00Z" });
+  eq("a new address is added", merged["c@x.co"], { date: null, at: "2026-10-23T09:00:00Z" });
 }
 
 console.log("quiet days are only what Gmail has confirmed");
@@ -115,11 +194,8 @@ console.log("quiet days are only what Gmail has confirmed");
   // the check-in, likewise
   const q = enq("x", "2026-09-01", { contacts: [{ date: "2026-09-01" }, { date: "2026-09-25", method: "phone" }] });
   const qs = (day) => ({ [q.email]: { date: null, at: day + "T07:00:00Z" } });
-  eq("check-in: 21 days since, but Gmail last looked after 19", A.planAutomations({ settings: ON, today: TODAY, enquiries: [q], emailSeen: qs("2026-10-14") }).due.length, 0);
-  eq("check-in: Gmail confirms 28", A.planAutomations({ settings: ON, today: TODAY, enquiries: [q], emailSeen: qs("2026-10-23") }).due.length, 1);
-  // and the flag
-  const marks = { ["enq:" + q.id]: { quiet: "2026-10-10T09:00:00Z" } };
-  ok("flag needs Gmail to confirm the 7 days", !A.goneQuiet(q, marks, qs("2026-10-14"), ON, TODAY) && A.goneQuiet(q, marks, qs("2026-10-18"), ON, TODAY));
+  eq("second: 21 days since, but Gmail last looked after 19", A.planAutomations({ settings: ON, today: TODAY, enquiries: [q], emailSeen: qs("2026-10-14") }).due.length, 0);
+  eq("second: Gmail confirms 28", A.planAutomations({ settings: ON, today: TODAY, enquiries: [q], emailSeen: qs("2026-10-23") }).due.length, 1);
   eq("London date of a late-evening check", A.gmailCheckedOn({ email: "a@b.co" }, { "a@b.co": { at: "2026-10-22T23:30:00Z" } }), "2026-10-23");
 }
 
@@ -140,30 +216,6 @@ console.log("who is left out");
   eq("two enquiries, one address: one email", dup.due.length, 1);
 }
 
-console.log("thank-you");
-{
-  const ev = { id: 7, status: "Confirmed", date: "2026-10-21", couple: "Elizabeth Bradley & Ashley Williams", email: "liz@example.com", email2: "ASH@example.com" };
-  const r = P({ settings: ON, today: TODAY, events: [ev,
-    Object.assign({}, ev, { id: 8, status: "Holding" }),
-    Object.assign({}, ev, { id: 9, date: "2026-10-22" }),                 // 1 day: too soon
-    Object.assign({}, ev, { id: 10, date: "2026-08-01" }),                // history
-    Object.assign({}, ev, { id: 11, date: "2026-10-19", endDate: "2026-10-21", email: "sam@example.com", email2: "" }),  // multi-day: counts from the end
-    Object.assign({}, ev, { id: 12, email: "", email2: "" })] });
-  eq("confirmed, two days after it ended, with an address", kinds(r), ["thanks:7", "thanks:11"]);
-  eq("both addresses, lower-cased", r.due[0].to, ["liz@example.com", "ash@example.com"]);
-  eq("first names of the couple", r.due[0].tokens.firstName, "Elizabeth and Ashley");
-  eq("from the client names when given", A.coupleFirstNames({ client1Name: "Sam Lee", client2Name: "Jo Park", couple: "x" }), "Sam and Jo");
-  const email = A.renderEmail(r.due[0], r.cfg);
-  ok("review button and link", email.html.indexOf("Leave a review") !== -1 && email.text.indexOf("https://g.page/r/hawthbush/review") !== -1);
-  const once = P({ settings: ON, today: TODAY, events: [ev], marks: { "ev:7:2026-10-21": { thanks: "2026-10-23T09:00:00Z" } } });
-  eq("never twice", once.due.length, 0);
-  const reused = P({ settings: ON, today: TODAY, events: [ev], marks: { "ev:7:2025-06-01": { thanks: "2025-06-03T09:00:00Z" } } });
-  eq("a reused id on a new date is still thanked", reused.due.length, 1);
-  const wake = P({ settings: ON, today: TODAY, events: [Object.assign({}, ev, { eventType: "Wake" })] });
-  eq("no thank-you after a wake", wake.due.length, 0);
-  const off = P({ settings: { followup: { on: true } }, today: TODAY, events: [ev] });
-  eq("off means off", off.due.length, 0);
-}
-
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(1); });

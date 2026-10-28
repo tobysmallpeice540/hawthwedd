@@ -1,31 +1,45 @@
 // netlify/functions/automations.js
 //
-// The three automatic follow-ups, each OFF until switched on in Settings →
+// The three enquiry follow-ups, each OFF until switched on in Settings →
 // Email templates → Follow-ups (app_data hbf_automations_v1):
 //
-//   followup  An enquiry (including a brochure request) that has had no
-//             contact since it arrived, N days on: "did the brochure reach
-//             you, would you like to visit?"
-//   quiet     An open enquiry with no activity for N days: a check-in. If
-//             nothing happens for a further M days after that, the app flags
-//             the enquiry "gone quiet" (worked out in the app from the
-//             marker this writes; nothing more is sent).
-//   thanks    N days after a confirmed event: thank you, and a review link.
+//   followup  First enquiry follow-up. An enquiry (including a brochure
+//             request) that has had no contact since it arrived, N days on:
+//             "did the brochure reach you, would you like to visit?"
+//   second    Second enquiry follow-up. An open enquiry with no activity for
+//             N days (our first follow-up counts as activity): a check-in.
+//   third     Third enquiry follow-up. No activity for N days since the
+//             second went.
 //
-// Each goes to a person once, ever. What was sent is recorded in its own key,
-// hbf_automation_sent_v1 ({ "enq:<id>": { followup, quiet },
-// "ev:<id>:<date>": { thanks } }), which nothing else writes — this never rewrites the shared
-// enquiries or events arrays. Every send is logged to hbf_email_log_v1 so it
-// shows in Recent Automated Emails.
+// The second and third can each "mark Freezing": when ticked, an enquiry with
+// no activity for X days after the last of them that went is set to
+// temperature "freezing" (Toby's choice — it used to be only flagged). That is
+// the ONE write this function makes to the shared enquiries array: just the
+// temperature (and autoFrozenAt / autoFrozenAfter) of those enquiries, on a
+// fresh read, written only if nobody has saved the array since that read
+// (app_data.updated_at), re-planned on a clash. A Freezing enquiry is never
+// emailed. Toby can warm one up again by hand; it is not frozen twice.
 //
-// "Activity" is what the app already counts as last contact: the contact log,
-// a viewing that has happened, email exchanged with the address AS LAST SEEN
-// BY THE APP (the Gmail cache, hbf_enquiry_email_seen_v1, refreshed when the
-// enquiries list is opened with Gmail connected), and the enquiry arriving.
-// Silence is only counted as far as Gmail has confirmed it: every gap runs
-// from the last activity to the day Gmail last looked at that address
-// (hbf_enquiry_email_seen_v1 records when), never to today. An address Gmail
-// has never been asked about is never emailed by the follow-up or check-in.
+// Each email goes to a person once, ever. What was sent (and frozen) is
+// recorded in its own key, hbf_automation_sent_v1 ({ "enq:<id>": { followup,
+// second, third, frozen } }), which nothing else writes. Every send is logged
+// to hbf_email_log_v1 so it shows in Recent Automated Emails.
+//
+// "Activity" is what the app already counts as last contact: the contact log
+// (every note logged there is dated), a viewing that has happened, email
+// exchanged with the address, and the enquiry arriving.
+//
+// Email is checked HERE, each run, in the farm's own Gmail
+// (hawthbushfarm@gmail.com — where enquiries arrive), with the read-only
+// access connected once for the Airbnb emails (airbnb_mail_state, sealed with
+// a key from HBF_ADMIN_TOKEN): for every enquiry the run might act on, the
+// newest message from or to the address. That result is merged over the
+// app's own cache (hbf_enquiry_email_seen_v1, refreshed when the enquiries
+// list is opened with Gmail connected), which is the fallback if the farm
+// Gmail cannot be reached. Silence is only counted as far as Gmail has
+// confirmed it: every gap runs from the last activity to the day Gmail last
+// looked at that address, never beyond. An address Gmail has never been
+// asked about is never emailed.
 //
 // Never acts on anything old when first switched on: each rule has a window
 // (a few days to a few weeks past its trigger) and ignores what is outside it.
@@ -62,7 +76,16 @@ const EMAIL_LOG_KEY  = "hbf_email_log_v1";
 const FROM_EMAIL  = "hello@hawthbushfarm.co.uk";
 const FROM_HEADER = "Hawthbush Farm <" + FROM_EMAIL + ">";
 const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
-const FN_BUILD    = "2026-10-23a";
+const FN_BUILD    = "2026-10-28a";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
+// At most this many addresses looked up in Gmail a run (two reads each), and
+// only while the run is young: Netlify stops a function at 10 seconds, so the
+// Gmail checks stop at GMAIL_BUDGET_MS and the sending at SEND_BUDGET_MS from
+// the start. Whatever is not reached waits for the next run (09:20, or
+// tomorrow) — unmarked, so it is never lost and never sent twice.
+const MAX_GMAIL_CHECKS = 40;
+const GMAIL_BUDGET_MS = 4000;
+const SEND_BUDGET_MS = 7500;
 
 // A bad day (a data import, a clock problem) must not become a mass mailing.
 const MAX_SENDS_PER_RUN = 15;
@@ -73,20 +96,22 @@ const DEFAULTS = {
   followup: { on: false, days: 3,
     subject: "Following up on your enquiry — Hawthbush Farm",
     body: "Hello {firstName},\n\nThank you again for getting in touch about Hawthbush Farm. I wanted to check that everything reached you, and to see whether you have any questions at all.\n\nIf you would like to come and see the farm, just reply with a few dates that suit you and we will arrange a viewing.\n\nAnd if you would rather we did not follow up, just say so — we will not mind in the least.\n\nWarm regards,\nHawthbush Farm" },
-  quiet: { on: false, days: 21, flagDays: 7,
+  second: { on: false, days: 21, freezeOn: false, freezeDays: 7,
     subject: "Still thinking about Hawthbush Farm?",
     body: "Hello {firstName},\n\nWe have not heard from you for a little while, so I wanted to check in. Dates do go, so if you are still thinking about Hawthbush Farm it is worth letting us know which ones you have in mind.\n\nAnd if you have found your venue elsewhere, congratulations — a one-line reply saying so would help us a great deal, and we will not email again.\n\nWarm regards,\nHawthbush Farm" },
-  thanks: { on: false, days: 2, reviewUrl: "", button: "Leave a review",
-    subject: "Thank you from Hawthbush Farm",
-    body: "Dear {firstName},\n\nThank you for celebrating with us. It was a real pleasure to be part of your day, and we hope you and your guests enjoyed every moment.\n\nIf you have a minute, a review would mean a great deal to a small venue like ours.\n\nWith warmest wishes,\nHawthbush Farm" }
+  third: { on: false, days: 14, freezeOn: false, freezeDays: 7,
+    subject: "A last note from Hawthbush Farm",
+    body: "Hello {firstName},\n\nI will not keep emailing, but I did not want your enquiry to slip through the cracks. If you are still looking, we would love to help — just reply with the dates you have in mind, or a good time to call.\n\nIf your plans have moved on, we wish you all the very best.\n\nWarm regards,\nHawthbush Farm" }
 };
-// How far past its trigger each rule still acts. Outside this, an enquiry or
-// event is history and is left alone.
-const WINDOW_DAYS = { followup: 7, quiet: 14, thanks: 14 };
+// The three emails, in order. Each is sent once; the next only after it.
+const STEPS = ["followup", "second", "third"];
+// How far past its trigger each rule still acts. Outside this, an enquiry is
+// history and is left alone.
+const WINDOW_DAYS = { followup: 7, second: 14, third: 14 };
 
-// Occasions where "thank you for celebrating with us" and "found your venue
-// elsewhere? congratulations" would be badly wrong. The check-in and the
-// thank-you never go to these; the neutral first follow-up still may.
+// Occasions where "found your venue elsewhere? congratulations" would be
+// badly wrong. The second and third never go to these; the neutral first
+// follow-up still may.
 const SOMBRE = /\b(wake|funeral|memorial|celebration of life)\b/i;
 
 // ─── Pure decisions (exported for tests) ─────────────────────────────────────
@@ -106,11 +131,9 @@ function mergeSettings(saved) {
       subject: String(v.subject || "").trim() || d.subject,
       body: String(v.body || "").trim() || d.body
     });
-    if (k === "quiet") out[k].flagDays = num(v.flagDays, d.flagDays);
-    if (k === "thanks") {
-      const url = String(v.reviewUrl || "").trim();
-      out[k].reviewUrl = /^https:\/\/\S+$/.test(url) ? url : "";
-      out[k].button = String(v.button || "").trim() || d.button;
+    if (k === "second" || k === "third") {
+      out[k].freezeOn = v.freezeOn === true;
+      out[k].freezeDays = num(v.freezeDays, d.freezeDays);
     }
   });
   return out;
@@ -160,22 +183,9 @@ function firstName(name, email) {
   if (!n || n.indexOf("@") !== -1) return "there";
   return n.split(/[\s&,]+/)[0];
 }
-// "Elizabeth and Ashley" from the two client names, or from "Elizabeth
-// Bradley & Ashley Williams" when only the couple field is filled in.
-function coupleFirstNames(ev) {
-  const named = [ev.client1Name, ev.client2Name].map(function (n) { return String(n || "").trim(); }).filter(Boolean);
-  const parts = named.length ? named : String(ev.couple || "").split(/\s*(?:&|\band\b|\+)\s*/i).map(function (x) { return x.trim(); }).filter(Boolean);
-  const firsts = parts.map(function (n) { return n.split(/\s+/)[0]; }).filter(Boolean).slice(0, 2);
-  return firsts.length ? firsts.join(" and ") : "there";
-}
 function fill(str, tokens) {
   return String(str || "").replace(/\{(\w+)\}/g, function (m, k) { return tokens[k] != null ? String(tokens[k]) : ""; });
 }
-function longDate(iso) {
-  if (!isIso(iso)) return "";
-  return new Date(iso + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/London" });
-}
-
 // Everything that is due today, without sending anything.
 function planAutomations(o) {
   const cfg = mergeSettings(o.settings);
@@ -183,6 +193,8 @@ function planAutomations(o) {
   const marks = o.marks || {};
   const seen = o.emailSeen || {};
   const out = [];
+  // Enquiries to mark Freezing (see the second and third follow-ups).
+  const freeze = [];
   // Due by the calendar but not yet confirmed by Gmail — shown in the preview
   // so "why has nothing gone?" has an answer.
   const waiting = [];
@@ -202,6 +214,7 @@ function planAutomations(o) {
     if (!e || !e.id || e.noAutoEmails) return;
     const outcome = String(e.outcome || "undecided");
     if (outcome === "booked" || outcome === "didnotbook") return;
+    if (String(e.temperature || "") === "freezing") return;     // given up on: never emailed
     const to = validEmail(e.email);
     if (!to || clients[to] || used[to]) return;
     const sombre = SOMBRE.test(String(e.eventType || ""));
@@ -227,77 +240,59 @@ function planAutomations(o) {
           out.push({ kind: "followup", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens });
           planned = true; used[to] = true;
         } else {
-          waiting.push({ kind: "followup", who: e.name || to, verified: verified, needed: cfg.followup.days, checked: checked });
+          waiting.push({ kind: "followup", who: e.name || to, addr: to, verified: verified, needed: cfg.followup.days, checked: checked });
         }
       }
     }
-    if (cfg.quiet.on && !m.quiet && !planned && !viewing && !sombre && last) {
-      // Our own follow-up counts as the last touch: a check-in the day after
-      // it would read as nagging.
-      const touched = m.followup && String(m.followup).slice(0, 10) > last ? String(m.followup).slice(0, 10) : last;
+    // Second and third: no activity for N days since the last touch — our
+    // own previous email counts as one, so they never follow too closely.
+    [["second", "followup"], ["third", "second"]].forEach(function (pair) {
+      const step = pair[0], prev = pair[1];
+      const c = cfg[step];
+      if (!c.on || m[step] || planned || viewing || sombre || !last) return;
+      if (step === "third" && !m.second) return;                   // the third only ever follows the second
+      const prevAt = m[prev] ? String(m[prev]).slice(0, 10) : null;
+      const touched = prevAt && prevAt > last ? prevAt : last;
       const idle = daysBetween(touched, today);
       const verified = verifiedQuietDays(touched, checked);
-      if (idle >= cfg.quiet.days && idle <= cfg.quiet.days + WINDOW_DAYS.quiet) {
-        if (verified >= cfg.quiet.days) {
-          out.push({ kind: "quiet", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched });
-          used[to] = true;
+      if (idle >= c.days && idle <= c.days + WINDOW_DAYS[step]) {
+        if (verified >= c.days) {
+          out.push({ kind: step, mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched });
+          planned = true; used[to] = true;
         } else {
-          waiting.push({ kind: "quiet", who: e.name || to, verified: verified, needed: cfg.quiet.days, checked: checked });
+          waiting.push({ kind: step, who: e.name || to, addr: to, verified: verified, needed: c.days, checked: checked });
+        }
+      }
+    });
+
+    // Mark Freezing: X quiet days (as Gmail confirms them) after the last of
+    // the second / third that went, when that email's box is ticked. Not
+    // twice: if Toby warms it up again, it stays warm.
+    if (!planned && !m.frozen) {
+      const lastStep = m.third ? "third" : m.second ? "second" : null;
+      const rule = lastStep === "third" && cfg.third.freezeOn ? cfg.third
+                 : lastStep && cfg.second.freezeOn ? cfg.second : null;
+      if (rule) {
+        const sentOn = String(m[lastStep]).slice(0, 10);
+        const quietDays = verifiedQuietDays(sentOn, checked);
+        if (!(last && last > sentOn)) {
+          if (quietDays >= rule.freezeDays) freeze.push({ refId: e.id, mark: "enq:" + e.id, who: e.name || to, addr: to, after: lastStep });
+          else if (daysBetween(sentOn, today) >= rule.freezeDays) {
+            waiting.push({ kind: "freeze", who: e.name || to, addr: to, verified: quietDays, needed: rule.freezeDays, checked: checked });
+          }
         }
       }
     }
   });
 
-  if (cfg.thanks.on) {
-    (o.events || []).forEach(function (ev) {
-      if (!ev || ev.id == null || String(ev.status || "") !== "Confirmed") return;
-      if (!isIso(ev.date) || SOMBRE.test(String(ev.eventType || ""))) return;
-      const end = isIso(ev.endDate) && ev.endDate > ev.date ? ev.endDate : ev.date;
-      const age = daysBetween(end, today);
-      if (age < cfg.thanks.days || age > cfg.thanks.days + WINDOW_DAYS.thanks) return;
-      // Keyed by id AND date: ids are reused after a delete, and a new event
-      // on an old id must not inherit "already thanked".
-      const mk = "ev:" + ev.id + ":" + ev.date;
-      const m = marks[mk] || {};
-      if (m.thanks) return;
-      const to = [validEmail(ev.email), validEmail(ev.email2)].filter(Boolean)
-        .filter(function (x, i, a) { return a.indexOf(x) === i && !used[x]; });
-      if (!to.length) return;
-      to.forEach(function (x) { used[x] = true; });
-      out.push({ kind: "thanks", mark: mk, refId: ev.id, to: to, who: ev.couple || to[0],
-                 tokens: { firstName: coupleFirstNames(ev), name: String(ev.couple || "").trim(), eventDate: longDate(ev.date),
-                           reviewLink: cfg.thanks.reviewUrl } });
-    });
-  }
-  return { cfg: cfg, due: out, waiting: waiting };
-}
-
-// The quiet-enquiry flag the app shows: a check-in went, and nothing has
-// happened in the M days since. Mirrors enquiryGoneQuiet in App.jsx.
-function goneQuiet(e, marks, emailSeen, settings, today) {
-  const cfg = mergeSettings(settings);
-  const m = (marks || {})["enq:" + (e && e.id)] || {};
-  if (!m.quiet) return false;
-  const outcome = String(e.outcome || "undecided");
-  if (outcome === "booked" || outcome === "didnotbook") return false;
-  const sent = String(m.quiet).slice(0, 10);
-  const last = lastActivity(e, emailSeen || {}, today);
-  if (last && last > sent) return false;
-  // As with the emails: silence counts only as far as Gmail has looked.
-  return verifiedQuietDays(sent, gmailCheckedOn(e, emailSeen || {})) >= cfg.quiet.flagDays;
+  return { cfg: cfg, due: out, waiting: waiting, freeze: freeze };
 }
 
 function renderEmail(item, cfg) {
   const t = cfg[item.kind];
   const subject = fill(t.subject, item.tokens);
-  let body = fill(t.body, item.tokens);
-  const opts = {};
-  if (item.kind === "thanks" && cfg.thanks.reviewUrl) {
-    opts.buttonUrl = cfg.thanks.reviewUrl;
-    opts.buttonLabel = cfg.thanks.button;
-    if (body.indexOf(cfg.thanks.reviewUrl) === -1) body += "\n\n" + cfg.thanks.reviewUrl;
-  }
-  return { subject: subject, text: body, html: buildEmailHtml(body, opts) };
+  const body = fill(t.body, item.tokens);
+  return { subject: subject, text: body, html: buildEmailHtml(body, {}) };
 }
 
 // ─── SHARED EMAIL SHELL (verbatim from _email-shell.js) ──────────────────────
@@ -399,6 +394,119 @@ async function logEmails(entries) {
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
   } catch (e) { console.error("email log write failed:", e.message); }
 }
+// ─── The farm's Gmail, checked by the run itself ─────────────────────────────
+// The refresh token the Airbnb-mail connection stored (same sealing as
+// airbnb-mail.js — copied, not shared, like every helper in this folder).
+function openSealedToken(sealed) {
+  const s = String(sealed || "");
+  if (!s.startsWith("v1:")) throw new Error("stored Gmail token is in an unknown form");
+  if (!ADMIN_TOKEN) throw new Error("HBF_ADMIN_TOKEN is not set");
+  const key = crypto.createHash("sha256").update(ADMIN_TOKEN + "|airbnb-gmail-refresh-token").digest();
+  const buf = Buffer.from(s.slice(3), "base64");
+  const d = crypto.createDecipheriv("aes-256-gcm", key, buf.subarray(0, 12));
+  d.setAuthTag(buf.subarray(12, 28));
+  return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString("utf8");
+}
+async function farmGmailAccess() {
+  const res = await fetch(SUPABASE_URL + "/rest/v1/airbnb_mail_state?id=eq.1&select=token_enc,account_email", {
+    headers: { apikey: SERVICE_KEY, Authorization: "Bearer " + SERVICE_KEY }
+  });
+  if (!res.ok) throw new Error("reading the Gmail connection: " + res.status);
+  const row = (await res.json())[0];
+  if (!row || !row.token_enc) throw new Error("the farm Gmail is not connected (Lettings → Settings → Airbnb Sync)");
+  const t = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
+      grant_type: "refresh_token", refresh_token: openSealedToken(row.token_enc) }).toString()
+  });
+  const data = await t.json().catch(function () { return {}; });
+  if (!t.ok || !data.access_token) throw new Error("Google refused the stored access (" + (data.error || t.status) + ")");
+  return { access: data.access_token, account: row.account_email || "" };
+}
+// The newest message from or to an address, as a London date (null: none).
+async function lastEmailWith(access, addr) {
+  const get = async function (path) {
+    const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/" + path, { headers: { Authorization: "Bearer " + access } });
+    if (!r.ok) throw new Error("Gmail " + r.status);
+    return r.json();
+  };
+  const q = "from:" + addr + " OR to:" + addr + " OR cc:" + addr;
+  const list = await get("messages?maxResults=1&q=" + encodeURIComponent(q));
+  const id = list && list.messages && list.messages[0] && list.messages[0].id;
+  if (!id) return null;
+  const msg = await get("messages/" + id + "?format=minimal");
+  const ms = Number(msg && msg.internalDate);
+  return ms ? new Date(ms).toLocaleDateString("en-CA", { timeZone: "Europe/London" }) : null;
+}
+// Check the addresses the run might act on; returns a cache in the app's
+// shape ({ addr: { date, at } }) for the ones Gmail answered for.
+async function checkFarmGmail(addrs, deadline) {
+  const g = await farmGmailAccess();
+  const out = {}, nowIso = new Date().toISOString();
+  let failed = 0;
+  const list = addrs.slice(0, MAX_GMAIL_CHECKS);
+  for (let i = 0; i < list.length; i += 5) {
+    if (deadline && Date.now() > deadline) break;
+    await Promise.all(list.slice(i, i + 5).map(async function (a) {
+      try { out[a] = { date: await lastEmailWith(g.access, a), at: nowIso }; }
+      catch (e) { failed++; }
+    }));
+  }
+  return { seen: out, account: g.account, checked: Object.keys(out).length, failed: failed,
+    skipped: Math.max(0, addrs.length - Object.keys(out).length - failed) };
+}
+// The run's view of email: the farm Gmail's answer where it has one (newest
+// date of the two, checked now), the app's cache otherwise.
+function mergeSeen(cache, fresh) {
+  const out = Object.assign({}, cache || {});
+  Object.keys(fresh || {}).forEach(function (a) {
+    const old = out[a] || {}, f = fresh[a];
+    const date = [old.date, f.date].filter(isIso).sort().pop() || null;
+    out[a] = { date: date, at: f.at };
+  });
+  return out;
+}
+
+// Mark enquiries Freezing: only their temperature, on a fresh read, written
+// only if nobody has saved the enquiries since that read; on a clash, read
+// and apply again (three tries). Anything no longer open is left alone.
+// Returns the ids actually changed.
+async function freezeEnquiries(items, today) {
+  if (!items.length) return [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + ENQUIRIES_KEY + "&select=value,updated_at", {
+      headers: { apikey: SERVICE_KEY, Authorization: "Bearer " + SERVICE_KEY }
+    });
+    if (!res.ok) throw new Error("reading enquiries: " + res.status);
+    const rows = await res.json();
+    if (!rows || !rows[0] || !Array.isArray(rows[0].value)) throw new Error("enquiries are not a list");
+    const stamp = rows[0].updated_at;
+    const want = {};
+    items.forEach(function (x) { want[String(x.refId)] = x.after; });
+    const changed = [];
+    const list = rows[0].value.map(function (e) {
+      if (!e || !(String(e.id) in want)) return e;
+      const outcome = String(e.outcome || "undecided");
+      if (outcome === "booked" || outcome === "didnotbook" || String(e.temperature || "") === "freezing") return e;
+      changed.push(e.id);
+      return Object.assign({}, e, { temperature: "freezing", autoFrozenAt: today, autoFrozenAfter: want[String(e.id)] });
+    });
+    if (!changed.length) return [];
+    if (list.length !== rows[0].value.length) throw new Error("enquiry count changed while freezing");
+    const cond = stamp ? "&updated_at=eq." + encodeURIComponent(stamp) : "&updated_at=is.null";
+    const w = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + ENQUIRIES_KEY + cond, {
+      method: "PATCH",
+      headers: { apikey: SERVICE_KEY, Authorization: "Bearer " + SERVICE_KEY, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ value: list, updated_at: new Date().toISOString() })
+    });
+    if (!w.ok) throw new Error("saving enquiries: " + w.status + " " + (await w.text()).slice(0, 200));
+    const back = await w.json();
+    if (Array.isArray(back) && back.length === 1) return changed;
+    // Someone saved in between: go round again on their copy.
+  }
+  throw new Error("the enquiries kept changing; nothing was marked Freezing this run");
+}
+
 async function resolveAdmin(event) {
   const auth = event.headers["authorization"] || event.headers["Authorization"] || "";
   const jwt = auth.replace(/^Bearer\s+/i, "").trim();
@@ -419,6 +527,7 @@ function reply(code, body) {
 }
 
 exports.handler = async function (event) {
+  const t0 = Date.now();
   if (event.httpMethod !== "POST") return reply(405, { error: "POST only" });
   if (!SERVICE_KEY) return reply(500, { error: "SUPABASE_SERVICE_KEY is not set" });
   let body = {};
@@ -442,16 +551,55 @@ exports.handler = async function (event) {
     return reply(500, { error: e.message });
   }
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
-  const plan = planAutomations({ settings: settings, enquiries: Array.isArray(enquiries) ? enquiries : [],
-    events: Array.isArray(events) ? events : [], emailSeen: emailSeen || {}, marks: marks || {}, today: today });
+  const input = { settings: settings, enquiries: Array.isArray(enquiries) ? enquiries : [],
+    events: Array.isArray(events) ? events : [], emailSeen: emailSeen || {}, marks: marks || {}, today: today };
+  // A first plan on the app's cache says which addresses matter today; the
+  // farm Gmail is asked about just those, and the plan is made again on what
+  // it says.
+  const first = planAutomations(input);
+  const addrs = [];
+  first.due.forEach(function (d) { d.to.forEach(function (a) { if (addrs.indexOf(a) === -1) addrs.push(a); }); });
+  first.waiting.concat(first.freeze).forEach(function (w) { if (w.addr && addrs.indexOf(w.addr) === -1) addrs.push(w.addr); });
+  let gmail = { source: "app", checked: 0 };
+  if (addrs.length) {
+    try {
+      const g = await checkFarmGmail(addrs, t0 + GMAIL_BUDGET_MS);
+      input.emailSeen = mergeSeen(emailSeen || {}, g.seen);
+      gmail = { source: "farm", account: g.account, checked: g.checked, failed: g.failed, skipped: g.skipped };
+    } catch (e) {
+      gmail = { source: "app", error: String(e.message || e) };
+      console.error("[automations] farm Gmail not used:", gmail.error);
+    }
+  }
+  const plan = addrs.length ? planAutomations(input) : first;
 
   if (body.dryRun) {
     return reply(200, { ok: true, today: today, dryRun: true,
       due: plan.due.map(function (d) { const r = renderEmail(d, plan.cfg); return { kind: d.kind, to: d.to, who: d.who, subject: r.subject }; }),
-      waiting: plan.waiting });
+      waiting: plan.waiting,
+      freeze: plan.freeze.map(function (f) { return { who: f.who, after: f.after }; }), gmail: gmail });
   }
-  if (!plan.due.length) return reply(200, { ok: true, today: today, sent: 0 });
-  if (!RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length });
+
+  // Freezing first, on its own: it sends nothing, and a failure here must not
+  // stop the emails (or the other way round).
+  let frozen = [], freezeError = null;
+  if (plan.freeze.length) {
+    try {
+      frozen = await freezeEnquiries(plan.freeze, today);
+      if (frozen.length) {
+        const ids = {}; frozen.forEach(function (id) { ids[String(id)] = true; });
+        await updateMarks(function (marks) {
+          plan.freeze.forEach(function (f) {
+            if (!ids[String(f.refId)]) return;
+            marks[f.mark] = Object.assign({}, marks[f.mark] || {}, { frozen: new Date().toISOString(), frozen_after: f.after });
+          });
+        });
+      }
+    } catch (e) { freezeError = String(e.message || e); console.error("[automations] freezing:", freezeError); }
+  }
+
+  if (!plan.due.length) return reply(freezeError ? 207 : 200, { ok: !freezeError, today: today, sent: 0, frozen: frozen.length, freezeError: freezeError, gmail: gmail });
+  if (!RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length, frozen: frozen.length });
 
   // Marked BEFORE sending, in one write. If the run is cut off part way, the
   // worst outcome is that somebody marked is not emailed — never that
@@ -473,7 +621,10 @@ exports.handler = async function (event) {
   }
 
   const sent = [], failed = [], logged = [];
+  let heldForTime = 0;
   for (const d of batch) {
+    // Out of time: give it back (unmarked below), for the next run.
+    if (Date.now() - t0 > SEND_BUDGET_MS) { failed.push({ kind: d.kind, ref: d.refId, mark: d.mark, error: "out of time — next run", held: true }); heldForTime++; continue; }
     const r = renderEmail(d, plan.cfg);
     try {
       const res = await fetch("https://api.resend.com/emails", {
@@ -502,8 +653,8 @@ exports.handler = async function (event) {
   await logEmails(logged);
   console.log("[automations] " + today + " sent " + sent.length + ", failed " + failed.length +
               (plan.due.length > MAX_SENDS_PER_RUN ? ", " + (plan.due.length - MAX_SENDS_PER_RUN) + " held to tomorrow" : ""));
-  return reply(failed.length ? 207 : 200, { ok: !failed.length, today: today, sent: sent, failed: failed,
-    held: Math.max(0, plan.due.length - MAX_SENDS_PER_RUN) });
+  return reply(failed.length || freezeError ? 207 : 200, { ok: !failed.length && !freezeError, today: today, sent: sent, failed: failed,
+    held: Math.max(0, plan.due.length - MAX_SENDS_PER_RUN) + heldForTime, frozen: frozen.length, freezeError: freezeError, gmail: gmail });
 };
 
-exports._test = { planAutomations, goneQuiet, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, coupleFirstNames, DEFAULTS };
+exports._test = { planAutomations, freezeEnquiries, mergeSeen, openSealedToken, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, DEFAULTS, STEPS };

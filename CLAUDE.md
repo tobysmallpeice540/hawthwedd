@@ -254,21 +254,40 @@ own header.
   provisional.
 - **Function sheet** (`functionSheetHtml`, Actions → Function sheet) escapes
   every value with `fsEsc`; it is written into a new window.
-- **Follow-ups** (`netlify/functions/automations.js`, run daily by
-  `automations-cron.js`): every rule off until switched on in Settings → Email
-  templates → Follow-ups. What was sent lives in `hbf_automation_sent_v1`,
-  written ONLY by the function, marked BEFORE sending (a cut-off run can miss
-  someone, never email twice). It and `hbf_automations_v1` are deliberately
-  NOT restorable from a backup — restoring the sent record would re-send.
-  Addresses with a live event, sombre event types (wake, funeral, memorial,
-  celebration of life) and duplicate addresses are left out.
-  **Quiet days count only up to the last Gmail check** of that address
-  (`at` in `hbf_enquiry_email_seen_v1`), never up to today — Toby's rule: 3
-  days since an enquiry with Gmail last checked yesterday is 2 verified days,
-  so nothing goes. Never checked = never followed up. The contact log is
-  activity and restarts the count. The preview lists what is waiting. The app's
-  `enquiryGoneQuiet` mirrors `goneQuiet()` there; `money-and-day-test.cjs`
-  pins them together.
+- **Follow-ups** (`netlify/functions/automations.js`, run at 09:00 and 09:20
+  UTC by `automations-cron.js`): three enquiry emails — **first** (N days
+  after it arrives, no contact since), **second** (N days with no activity; the
+  first counts as activity), **third** (N days after the second) — each off
+  until switched on in Settings → Email templates → Follow-ups, each once,
+  one email per address per run. The thank-you/review email is gone (28 Oct).
+  The second and third each have **"Then mark Freezing"** after X quiet days:
+  the run sets that enquiry's `temperature` to `freezing` (+ `autoFrozenAt`,
+  `autoFrozenAfter`) — its ONE write to the shared enquiries array, on a
+  fresh read, PATCHed only if `updated_at` is unchanged, re-planned on a clash
+  (`freezeEnquiries`). Once per enquiry (`frozen` in the sent record): warmed
+  up by hand, it stays warm. A Freezing enquiry is never emailed. What was
+  sent lives in `hbf_automation_sent_v1` (`followup`, `second`, `third`,
+  `frozen`), written ONLY by the function, marked BEFORE sending (a cut-off run
+  can miss someone, never email twice). It and `hbf_automations_v1` are
+  deliberately NOT restorable from a backup — restoring the sent record would
+  re-send. Addresses with a live event, sombre event types (wake, funeral,
+  memorial, celebration of life — second and third only) and duplicate
+  addresses are left out.
+  **Email is checked by the run itself in the farm Gmail**
+  (hawthbushfarm@gmail.com, the Airbnb-mail connection's sealed refresh token
+  in `airbnb_mail_state`): a first plan on the app's cache
+  (`hbf_enquiry_email_seen_v1`) picks the addresses that matter today, Gmail is
+  asked for the newest message from/to/cc each (`lastEmailWith`, at most 40,
+  stopping at 4s), merged over the cache (`mergeSeen`), and the plan is made
+  again. If the farm Gmail cannot be reached it falls back to the cache. Quiet
+  days count only up to the last Gmail check of that address, never past it;
+  never checked = never followed up. The contact log (every note there is
+  dated) is activity. Sending stops at 7.5s and anything unsent is unmarked
+  for the 09:20 run — Netlify's 10-second limit. The preview lists what would
+  go, what would be frozen, and which Gmail was used. Tests:
+  `tests/automations-test.cjs` (rules), `tests/automations-run-test.cjs` (the
+  whole run, faked at fetch), `money-and-day-test.cjs` (app and function
+  defaults agree).
 - **`sbRpcQuiet`** is `sbRpc` without the red banner, for optional reads and
   for functions a migration may not have created yet. Portal pages use
   `isMissingFunction(e)` the same way.

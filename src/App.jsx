@@ -2775,7 +2775,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28k";
+const APP_BUILD = "2026-10-28l";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -26018,54 +26018,25 @@ const DEFAULT_AUTOMATIONS = {
   followup: { on: false, days: 3,
     subject: "Following up on your enquiry — Hawthbush Farm",
     body: "Hello {firstName},\n\nThank you again for getting in touch about Hawthbush Farm. I wanted to check that everything reached you, and to see whether you have any questions at all.\n\nIf you would like to come and see the farm, just reply with a few dates that suit you and we will arrange a viewing.\n\nAnd if you would rather we did not follow up, just say so — we will not mind in the least.\n\nWarm regards,\nHawthbush Farm" },
-  quiet: { on: false, days: 21, flagDays: 7,
+  second: { on: false, days: 21, freezeOn: false, freezeDays: 7,
     subject: "Still thinking about Hawthbush Farm?",
     body: "Hello {firstName},\n\nWe have not heard from you for a little while, so I wanted to check in. Dates do go, so if you are still thinking about Hawthbush Farm it is worth letting us know which ones you have in mind.\n\nAnd if you have found your venue elsewhere, congratulations — a one-line reply saying so would help us a great deal, and we will not email again.\n\nWarm regards,\nHawthbush Farm" },
-  thanks: { on: false, days: 2, reviewUrl: "", button: "Leave a review",
-    subject: "Thank you from Hawthbush Farm",
-    body: "Dear {firstName},\n\nThank you for celebrating with us. It was a real pleasure to be part of your day, and we hope you and your guests enjoyed every moment.\n\nIf you have a minute, a review would mean a great deal to a small venue like ours.\n\nWith warmest wishes,\nHawthbush Farm" }
+  third: { on: false, days: 14, freezeOn: false, freezeDays: 7,
+    subject: "A last note from Hawthbush Farm",
+    body: "Hello {firstName},\n\nI will not keep emailing, but I did not want your enquiry to slip through the cracks. If you are still looking, we would love to help — just reply with the dates you have in mind, or a good time to call.\n\nIf your plans have moved on, we wish you all the very best.\n\nWarm regards,\nHawthbush Farm" }
 };
 function automationDays(v, d) { const n = Number(v); return isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : d; }
 
-// The flag on an enquiry that was sent a check-in and has had no activity in
-// the days since. Mirrors goneQuiet() in automations.js; activity is whatever
-// lastContactFrom counts.
-function enquiryGoneQuiet(e, marks, emailSeen, settings, todayIso) {
-  if (!e) return false;
-  const m = (marks || {})["enq:" + e.id] || {};
-  if (!m.quiet) return false;
-  const outcome = String(e.outcome || "undecided");
-  if (outcome === "booked" || outcome === "didnotbook") return false;
-  const sent = String(m.quiet).slice(0, 10);
-  const last = lastContactFrom(e, emailSeen || {}, todayIso);
-  if (last && last.date > sent) return false;
-  const q = (settings && settings.quiet) || {};
-  const flagDays = automationDays(q.flagDays, DEFAULT_AUTOMATIONS.quiet.flagDays);
-  // Silence counts only as far as Gmail has looked at this address — to the
-  // day of its last check, not to today.
-  const checked = gmailCheckedOnDay(e, emailSeen);
-  if (!checked || checked < sent) return false;
-  return Math.round((Date.parse(checked + "T00:00:00Z") - Date.parse(sent + "T00:00:00Z")) / 86400000) >= flagDays;
-}
-// The day (London) Gmail was last asked about an enquiry's address.
-function gmailCheckedOnDay(e, emailSeen) {
-  const em = String((e && e.email) || "").trim().toLowerCase();
-  const c = em && emailSeen && emailSeen[em];
-  const t = c && Date.parse(c.at || "");
-  if (!t || !isFinite(t)) return null;
-  return new Date(t).toLocaleDateString("en-CA", { timeZone: "Europe/London" });
-}
-
 const AUTOMATION_CARDS = [
-  { id: "followup", title: "Enquiry follow-up",
+  { id: "followup", title: "First enquiry follow-up",
     when: function(a) { return "Sent once Gmail has confirmed " + a.days + " day" + (a.days === 1 ? "" : "s") + " with no contact since an enquiry or brochure request arrived, and no viewing is booked."; },
     fields: ["{firstName}", "{name}"] },
-  { id: "quiet", title: "Gone quiet: check-in, then a flag",
-    when: function(a) { return "Sent once to an open enquiry when Gmail has confirmed " + a.days + " days with no activity. If Gmail then confirms " + a.flagDays + " more quiet days, the enquiry is flagged “gone quiet” in the list. Nothing else is sent."; },
+  { id: "second", title: "Second enquiry follow-up",
+    when: function(a) { return "Sent once to an open enquiry when Gmail has confirmed " + a.days + " days with no activity (the first follow-up counts as activity)."; },
     fields: ["{firstName}", "{name}"] },
-  { id: "thanks", title: "Thank you and a review request",
-    when: function(a) { return "Sent " + a.days + " day" + (a.days === 1 ? "" : "s") + " after a confirmed event ends, to its email and 2nd email."; },
-    fields: ["{firstName}", "{name}", "{eventDate}"] },
+  { id: "third", title: "Third enquiry follow-up",
+    when: function(a) { return "Sent once, only after the second, when Gmail has confirmed " + a.days + " days with no activity since it went."; },
+    fields: ["{firstName}", "{name}"] },
 ];
 
 function AutomationsPanel() {
@@ -26121,7 +26092,7 @@ function AutomationsPanel() {
       });
       const data = await res.json().catch(function() { return {}; });
       if (!res.ok) throw new Error(data.error || ("status " + res.status));
-      setPreview({ due: data.due || [], waiting: data.waiting || [], today: data.today });
+      setPreview({ due: data.due || [], waiting: data.waiting || [], freeze: data.freeze || [], gmail: data.gmail || null, today: data.today });
     } catch (e) { setPreview({ error: e.message || String(e) }); }
   }
 
@@ -26132,12 +26103,13 @@ function AutomationsPanel() {
     <div>
       <div style={Object.assign({}, card, { background:T.tint })}>
         <div style={{ fontSize:13, color:T.textMid, lineHeight:1.6 }}>
-          Each of these goes to a person once, ever, at about 9am, and shows in Recent Automated Emails.
-          They all start <b>off</b>. “Activity” means anything in the contact log, a viewing that has happened, and
-          email exchanged with the address. Quiet days only count <b>up to the last time Gmail was checked</b> for
-          that address, never up to today: three days after an enquiry, with Gmail last checked yesterday, is two
-          verified days, so nothing goes yet. Gmail is checked when the Enquiries list is opened with Gmail connected
-          (at most every six hours). An address Gmail has never been checked for is never followed up.
+          Each email goes to a person once, ever, at about 9am, and shows in Recent Automated Emails.
+          They all start <b>off</b>. “Activity” means anything logged in the contact log (any note you add there),
+          a viewing that has happened, and email to or from the address. Each morning the run looks in the
+          farm's Gmail (hawthbushfarm@gmail.com, connected under Lettings → Settings → Airbnb Sync) for the
+          enquiries it might email or freeze, so nobody needs to open Enquiries first; if that Gmail cannot be reached
+          it falls back to the app's own check. Quiet days only count <b>up to the last time Gmail was checked</b> for
+          that address. An enquiry marked Freezing — by hand or by the rule below — gets no more emails.
           Tick “No automatic follow-ups” on an enquiry to leave it out.
         </div>
         <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:10, flexWrap:"wrap" }}>
@@ -26147,12 +26119,26 @@ function AutomationsPanel() {
           </button>
           {preview && preview.error && <span style={{ fontSize:12, color:T.red }}>Could not check: {preview.error}. {dirty ? "Save first — it reads the saved settings." : ""}</span>}
           {preview && preview.due && <span style={{ fontSize:12, color:T.textMid }}>{preview.due.length === 0 ? "Nothing would be sent today." : preview.due.length + " would be sent today" + (dirty ? " (as saved — save to include your changes)" : "") + ":"}</span>}
+          {preview && preview.gmail && (
+            <span style={{ fontSize:12, color: preview.gmail.error ? T.amber : T.textLight }}>
+              {preview.gmail.source === "farm" ? "Gmail checked just now (" + (preview.gmail.account || "farm mailbox") + ", " + preview.gmail.checked + " address" + (preview.gmail.checked === 1 ? "" : "es") + ")."
+                : preview.gmail.error ? "Farm Gmail not reachable (" + preview.gmail.error + "), so the app's own check was used." : ""}
+            </span>
+          )}
         </div>
         {preview && preview.waiting && preview.waiting.length > 0 && (
           <div style={{ marginTop:8, display:"grid", gap:3 }}>
             <div style={{ fontSize:12, color:T.textMid }}>Waiting for Gmail to confirm the gap:</div>
             {preview.waiting.map(function(w, i) {
-              return <div key={i} style={{ fontSize:12, color:T.textLight }}>· <b>{w.who}</b> — {w.verified} of {w.needed} days confirmed{w.checked ? " (Gmail last checked " + fmtDate(w.checked) + ")" : " (Gmail has not checked this address)"}</div>;
+              return <div key={i} style={{ fontSize:12, color:T.textLight }}>· <b>{w.who}</b> — {w.kind === "freeze" ? "Freezing: " : ""}{w.verified} of {w.needed} days confirmed{w.checked ? " (Gmail last checked " + fmtDate(w.checked) + ")" : " (Gmail has not checked this address)"}</div>;
+            })}
+          </div>
+        )}
+        {preview && preview.freeze && preview.freeze.length > 0 && (
+          <div style={{ marginTop:8, display:"grid", gap:3 }}>
+            <div style={{ fontSize:12, color:T.textMid }}>Would be marked Freezing today:</div>
+            {preview.freeze.map(function(f, i) {
+              return <div key={i} style={{ fontSize:12, color:T.textMid }}>· <b>{f.who}</b> — no activity since the {f.after === "third" ? "third" : "second"} follow-up</div>;
             })}
           </div>
         )}
@@ -26168,7 +26154,6 @@ function AutomationsPanel() {
       {AUTOMATION_CARDS.map(function(c) {
         const a = cfg[c.id];
         const days = automationDays(a.days, DEFAULT_AUTOMATIONS[c.id].days);
-        const flagDays = automationDays(a.flagDays, DEFAULT_AUTOMATIONS.quiet.flagDays);
         return (
           <div key={c.id} style={card}>
             <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:6 }}>
@@ -26178,22 +26163,34 @@ function AutomationsPanel() {
                 {a.on ? "On" : "Off"}
               </label>
             </div>
-            <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>{c.when({ days: days, flagDays: flagDays })}</div>
+            <div style={{ fontSize:12, color:T.textLight, marginBottom:12 }}>
+              {c.when({ days: days })}
+              {(c.id === "second" || c.id === "third") && a.freezeOn &&
+                " Then, with " + automationDays(a.freezeDays, 7) + " more quiet days after it, the enquiry is set to Freezing and gets no more emails."}
+            </div>
+            {c.id === "second" && a.freezeOn && cfg.third && cfg.third.on &&
+              automationDays(a.freezeDays, 7) <= automationDays(cfg.third.days, DEFAULT_AUTOMATIONS.third.days) && (
+              <div style={{ fontSize:12, color:T.amber, fontWeight:600, margin:"-6px 0 10px" }}>
+                With these numbers the enquiry is marked Freezing before the third follow-up is due, so the third will never go.
+              </div>
+            )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(min(100%, 170px), 1fr))", gap:12, marginBottom:12 }}>
               <div>
-                <FLabel>{c.id === "thanks" ? "Days after the event" : c.id === "quiet" ? "Days with no activity" : "Days after it arrives"}</FLabel>
+                <FLabel>{c.id === "followup" ? "Days after it arrives" : c.id === "second" ? "Days with no activity" : "Days after the second"}</FLabel>
                 <input type="number" min="1" max="365" value={a.days} onChange={function(e){ set(c.id, "days", e.target.value); }} style={inp}/>
               </div>
-              {c.id === "quiet" && (
-                <div>
-                  <FLabel>Then flag after (days)</FLabel>
-                  <input type="number" min="1" max="365" value={a.flagDays} onChange={function(e){ set(c.id, "flagDays", e.target.value); }} style={inp}/>
-                </div>
-              )}
-              {c.id === "thanks" && (
+              {(c.id === "second" || c.id === "third") && (
                 <div style={{ gridColumn:"span 2" }}>
-                  <FLabel>Review link (https://…)</FLabel>
-                  <input type="url" value={a.reviewUrl || ""} placeholder="Your Google review link" onChange={function(e){ set(c.id, "reviewUrl", e.target.value); }} style={inp}/>
+                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700, color:T.text, cursor:"pointer", marginBottom:6 }}>
+                    <input type="checkbox" checked={!!a.freezeOn} onChange={function(e){ set(c.id, "freezeOn", e.target.checked); }}
+                      style={{ width:16, height:16, accentColor:T.accent }}/>
+                    Then mark Freezing
+                  </label>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", opacity: a.freezeOn ? 1 : .5 }}>
+                    <input type="number" min="1" max="365" value={a.freezeDays} disabled={!a.freezeOn} aria-label="Days before marking Freezing"
+                      onChange={function(e){ set(c.id, "freezeDays", e.target.value); }} style={Object.assign({}, inp, { width:80 })}/>
+                    <span style={{ fontSize:12, color:T.textMid }}>days with no activity after this email</span>
+                  </div>
                 </div>
               )}
             </div>
@@ -26202,7 +26199,7 @@ function AutomationsPanel() {
             <FLabel>Wording</FLabel>
             <textarea rows={8} value={a.body || ""} onChange={function(e){ set(c.id, "body", e.target.value); }} style={Object.assign({}, inp, { resize:"vertical", lineHeight:1.5 })}/>
             <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
-              Fills in: {c.fields.join(" ")}{c.id === "thanks" ? " · the review link is added as a button, and as a link if the wording does not already include it" : ""}. Leave a box empty to use the standard wording.
+              Fills in: {c.fields.join(" ")}. Leave a box empty to use the standard wording.
             </div>
           </div>
         );
@@ -26682,14 +26679,12 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
   const [seenLoaded, setSeenLoaded] = useState(false);
   const scannedRef = useRef("");
   const [sortDir, setSortDir] = useState("desc");   // for contact: desc = longest ago first
-  // What the daily follow-ups have sent, and their settings, for the "gone
-  // quiet" flag. Read only: the function is the one writer of the markers.
+  // What the daily follow-ups have sent, shown on each enquiry. Read only:
+  // the function is the one writer of the markers.
   const [autoMarks, setAutoMarks] = useState({});
-  const [autoCfg, setAutoCfg] = useState(null);
   useEffect(() => {
     let off = false;
     sbGet(AUTOMATION_SENT_KEY).then(m => { if (!off && m && typeof m === "object") setAutoMarks(m); }).catch(() => {});
-    sbGet(AUTOMATIONS_STORAGE).then(c => { if (!off) setAutoCfg(c || null); }).catch(() => {});
     return () => { off = true; };
   }, []);
   const [search, setSearch]       = useState("");
@@ -27056,10 +27051,10 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
                             : lastContact.method}
                           {" · "}{(e.contacts||[]).length} logged
                         </div>
-                        {enquiryGoneQuiet(e, autoMarks, emailSeen, autoCfg, new Date().toISOString().slice(0,10)) && (
-                          <div title="We sent a check-in and nothing has happened since"
-                            style={{ display:"inline-block", marginTop:3, fontSize:10, fontWeight:700, color:"#92400e", background:"#fffbeb", border:"1px solid #fde68a", borderRadius:9, padding:"1px 7px" }}>
-                            Gone quiet
+                        {e.temperature === "freezing" && e.autoFrozenAt && (
+                          <div title={"Marked Freezing automatically on " + fmtDate(e.autoFrozenAt) + ", with no activity after the " + (e.autoFrozenAfter === "third" ? "third" : "second") + " follow-up"}
+                            style={{ display:"inline-block", marginTop:3, fontSize:10, fontWeight:700, color:"#475569", background:"#eef2f7", border:"1px solid #cbd5e1", borderRadius:9, padding:"1px 7px" }}>
+                            Auto-frozen
                           </div>
                         )}
                       </>
@@ -27231,8 +27226,10 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
                   <input type="checkbox" checked={!!form.noAutoEmails} onChange={e=>update("noAutoEmails", e.target.checked)} style={{ width:15, height:15 }}/>
                   No automatic follow-ups
                 </label>
-                {autoMarks && autoMarks.followup && <span style={{ color:T.textLight }}>Follow-up sent {fmtDate(String(autoMarks.followup).slice(0,10))}</span>}
-                {autoMarks && autoMarks.quiet && <span style={{ color:T.textLight }}>Check-in sent {fmtDate(String(autoMarks.quiet).slice(0,10))}</span>}
+                {autoMarks && autoMarks.followup && <span style={{ color:T.textLight }}>1st follow-up sent {fmtDate(String(autoMarks.followup).slice(0,10))}</span>}
+                {autoMarks && (autoMarks.second || autoMarks.quiet) && <span style={{ color:T.textLight }}>2nd follow-up sent {fmtDate(String(autoMarks.second || autoMarks.quiet).slice(0,10))}</span>}
+                {autoMarks && autoMarks.third && <span style={{ color:T.textLight }}>3rd follow-up sent {fmtDate(String(autoMarks.third).slice(0,10))}</span>}
+                {autoMarks && autoMarks.frozen && <span style={{ color:T.textLight }}>Marked Freezing automatically {fmtDate(String(autoMarks.frozen).slice(0,10))}</span>}
               </div>
             </div>
           </div>

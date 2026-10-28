@@ -55,7 +55,7 @@ const NAMES = ["round2", "parseMoney", "isValidEventDate", "addDaysIso", "fmtDat
                "computeEventInvoiceStages", "findPushedInvoice", "isInvoiceableYear", "fmtMoney", "hhmm",
                "damageDepositInfo", "eventStatementRows", "vatOfInclusive", "signedAmount", "eventVatSplit",
                "venueAnswerText", "venueFormAnswered", "fsEsc", "functionSheetHtml",
-               "lastContactFrom", "automationDays", "enquiryGoneQuiet", "gmailCheckedOnDay",
+               "lastContactFrom", "automationDays",
                "longStayDiscountAmount", "seasonForDate", "getPriceForNight", "quoteStay",
                "lettingValue", "estimateLettingValue", "cashflowForecast", "cashflowExVat"];
 const ctx = {};
@@ -272,26 +272,14 @@ console.log("cashflow: wedding accommodation, when decided");
   eq("a hand-invoiced season's rooms come from their own schedule", m("2026-11").lets, 780);
 }
 
-console.log("gone-quiet flag (app side, mirrors automations.js)");
+console.log("follow-up settings: the app and the function agree");
 {
   const A = require("../netlify/functions/automations.js")._test;
-  const e = { id: "enq_1756720800000", email: "jo@example.com", outcome: "undecided", contacts: [{ date: "2026-09-25" }], viewings: [] };
-  const marks = { "enq:enq_1756720800000": { quiet: "2026-10-10T09:00:00Z" } };
-  const seen = (at, date) => ({ "jo@example.com": { date: date || "2026-09-25", at: at } });
-  const cases = [
-    [marks, seen("2026-10-22T08:00:00Z"), null, "2026-10-23"],          // 12 verified days
-    [marks, seen("2026-10-22T08:00:00Z"), null, "2026-10-15"],          // (today does not matter; Gmail does)
-    [marks, seen("2026-10-22T08:00:00Z"), { quiet: { flagDays: 20 } }, "2026-10-23"],
-    [marks, seen("2026-10-22T08:00:00Z", "2026-10-20"), null, "2026-10-23"],   // they emailed after the check-in
-    [{}, seen("2026-10-22T08:00:00Z"), null, "2026-10-23"],
-    [marks, seen("2026-10-14T08:00:00Z"), null, "2026-10-23"],          // only 4 verified days
-    [marks, {}, null, "2026-10-23"]                                      // never checked
-  ];
-  const app = cases.map(c => ctx.enquiryGoneQuiet(e, c[0], c[1], c[2], c[3]));
-  const fn  = cases.map(c => A.goneQuiet(e, c[0], c[1], c[2], c[3]));
-  eq("app and function agree", app, fn);
-  eq("flag only where Gmail confirms the quiet days", app, [true, true, false, false, false, false, false]);
-  eq("same standard wording in both", Object.keys(ctx.DEFAULT_AUTOMATIONS).map(k => ctx.DEFAULT_AUTOMATIONS[k].body), Object.keys(A.DEFAULTS).map(k => A.DEFAULTS[k].body));
+  eq("the same three steps", Object.keys(ctx.DEFAULT_AUTOMATIONS), A.STEPS);
+  eq("same standard wording in both", Object.keys(ctx.DEFAULT_AUTOMATIONS).map(k => [ctx.DEFAULT_AUTOMATIONS[k].subject, ctx.DEFAULT_AUTOMATIONS[k].body]),
+     Object.keys(A.DEFAULTS).map(k => [A.DEFAULTS[k].subject, A.DEFAULTS[k].body]));
+  eq("same days and Freezing defaults", Object.keys(ctx.DEFAULT_AUTOMATIONS).map(k => [ctx.DEFAULT_AUTOMATIONS[k].days, !!ctx.DEFAULT_AUTOMATIONS[k].freezeOn, ctx.DEFAULT_AUTOMATIONS[k].freezeDays || null]),
+     Object.keys(A.DEFAULTS).map(k => [A.DEFAULTS[k].days, !!A.DEFAULTS[k].freezeOn, A.DEFAULTS[k].freezeDays || null]));
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");
