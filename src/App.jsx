@@ -1277,6 +1277,9 @@ const STAFF_STORAGE   = "hawthbush_staff_v5";
 //   1  Deposit                              — raised at booking
 //   2  50% venue + 50% accom − deposit      — dated 1 Dec of the year BEFORE the event
 //   3  50% venue + 50% accom                — dated 4 weeks before the event
+// An event ticked "No advance on accommodation" (accomNoAdvance — an older
+// contract that promised it, 29 Oct 2026) puts NONE of the accommodation on
+// stage 2 and ALL of it on stage 3. The venue split is unchanged.
 // Deposit + stage2 + stage3 == venue + accom, exactly (see the rounding note in
 // computeEventInvoiceStages). All figures are VAT-INCLUSIVE, so invoices are
 // pushed with LineAmountTypes "Inclusive" — Xero would otherwise treat them as
@@ -1426,15 +1429,25 @@ function computeEventInvoiceStages(ev, accomBookings) {
     stage2Lines.push({ desc: "Venue fee (50%) — " + suffix, account: XERO_ACCOUNT_EVENTS, amount: venueHalf });
     stage3Lines.push({ desc: "Venue fee (50%) — " + suffix, account: XERO_ACCOUNT_EVENTS, amount: venueRest });
   }
+  var noAccomAdvance = !!ev.accomNoAdvance;
   stays.forEach(function(s) {
     if (!(s.value > 0)) return;
+    if (noAccomAdvance) {
+      stage3Lines.push({ desc: accomLineDescription(s, 100), account: XERO_ACCOUNT_ACCOM, amount: s.value });
+      return;
+    }
     var half = round2(s.value / 2);
     var rest = round2(s.value - half);
     stage2Lines.push({ desc: accomLineDescription(s, 50), account: XERO_ACCOUNT_ACCOM, amount: half });
     stage3Lines.push({ desc: accomLineDescription(s, 50), account: XERO_ACCOUNT_ACCOM, amount: rest });
   });
-  // Accommodation extras split 50:50 across stages 2 and 3, same as the stays.
+  // Accommodation extras follow the stays: 50:50 across stages 2 and 3, or
+  // all on stage 3 when there is no advance on accommodation.
   extras.forEach(function(x) {
+    if (noAccomAdvance) {
+      stage3Lines.push({ desc: x.desc, account: XERO_ACCOUNT_ACCOM, amount: x.amount });
+      return;
+    }
     var half = round2(x.amount / 2);
     var rest = round2(x.amount - half);
     stage2Lines.push({ desc: x.desc + " (50%)", account: XERO_ACCOUNT_ACCOM, amount: half });
@@ -2777,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28v";
+const APP_BUILD = "2026-10-29a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -17383,7 +17396,7 @@ function InvoiceWorklistView({ bookings, accomBookings, records, onSaveRecords, 
 
   const sections = [
     { stage:1, title:"Deposit invoices", blurb:"New bookings — deposit not yet raised." },
-    { stage:2, title:"Second invoices (1 Dec)", blurb:"50% venue + 50% accommodation, less the deposit. Raised from mid-November of the year before the event." },
+    { stage:2, title:"Second invoices (1 Dec)", blurb:"50% venue + 50% accommodation, less the deposit (no accommodation where the event is ticked No advance on accommodation). Raised from mid-November of the year before the event." },
     { stage:3, title:"Final invoices (4 weeks before)", blurb: showAll ? "50% venue + 50% accommodation." : "50% venue + 50% accommodation — events in the next " + STAGE3_WEEKS + " weeks." }
   ];
 
@@ -19032,7 +19045,7 @@ function EventVatSplitPanel({ formData, update, accomBookings }) {
 
 // Read-only preview of the three computed invoice stages, shown on the
 // Financials tab in place of the old manual 2nd/Final payment inputs.
-function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveInvoiceRecords }) {
+function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveInvoiceRecords, update }) {
   const [busyStage, setBusyStage] = useState(null);
   const [note, setNote] = useState(null);
 
@@ -19082,12 +19095,32 @@ function InvoiceSchedulePanel({ formData, accomBookings, invoiceRecords, onSaveI
   const grand = round2(venue + accom + extrasTotal);
   const staged = round2(stages.reduce(function(a,s){ return a + s.total; }, 0));
   const money = function(n) { return "£" + Number(n).toLocaleString("en-GB",{minimumFractionDigits:2, maximumFractionDigits:2}); };
+  // Changing the accommodation split after the second invoice is in Xero
+  // leaves that invoice charging 50% the schedule no longer expects, and the
+  // final one would then charge it again. Say so, and what to do.
+  const stage2Linked = findPushedInvoice(invoiceRecords, formData.id, 2);
+  const stage2Drifted = stage2Linked && stage2Linked.fingerprint !== invoiceLinesFingerprint(stages[1].lines);
+  const hasAccom = accom > 0 || extrasTotal > 0;
 
   return (
     <div style={{ background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:9, padding:"14px 16px", marginBottom:14 }}>
       <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>
         Invoice schedule <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:T.textLight }}>— computed, VAT inclusive</span>
       </div>
+      {update && (hasAccom || formData.accomNoAdvance) && (
+        <label style={{ display:"flex", alignItems:"flex-start", gap:7, cursor:"pointer", fontSize:12, color:T.textMid, marginBottom:10, lineHeight:1.5 }}>
+          <input type="checkbox" checked={!!formData.accomNoAdvance} onChange={function(e){ update("accomNoAdvance", e.target.checked); }}
+            style={{ width:15, height:15, accentColor:T.accent, cursor:"pointer", marginTop:1, flexShrink:0 }}/>
+          <span><strong>No advance on accommodation</strong> — their contract says so. Nothing for accommodation on the second payment; all of it on the final one, 4 weeks before.</span>
+        </label>
+      )}
+      {stage2Drifted && (
+        <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"8px 12px", marginBottom:10, fontSize:12, color:"#92400e", lineHeight:1.55 }}>
+          The second invoice ({stage2Linked.invoiceNumber || "in Xero"}, {money(stage2Linked.total)}) no longer matches the schedule
+          ({money(stages[1].total)}). The final invoice below assumes the new figure. Void or credit it in Xero,
+          then Unlink it in the Invoice worklist and Generate it again — otherwise the couple are charged twice.
+        </div>
+      )}
       {note && (
         <div style={{ background: note.kind==="ok" ? "#f0fdf4" : "#fef2f2", border:`1px solid ${note.kind==="ok" ? "#bbf7d0" : "#fecaca"}`,
           color: note.kind==="ok" ? "#166534" : "#dc2626", borderRadius:7, padding:"8px 12px", marginBottom:10, fontSize:12, lineHeight:1.55 }}>
@@ -19794,7 +19827,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                     The first address becomes the Xero contact's main email; any others are added as contact people and copied in on invoices.
                   </p>
                 </div>
-                <InvoiceSchedulePanel formData={formData} accomBookings={accomBookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={onSaveInvoiceRecords}/>
+                <InvoiceSchedulePanel formData={formData} accomBookings={accomBookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={onSaveInvoiceRecords} update={update}/>
                 <XeroContactField formData={formData} update={update}/>
                 {formData.xeroContactId && formData.xeroContactId.trim() && (
                   <XeroInvoicesPanel contactId={formData.xeroContactId.trim()} xeroToken={xeroToken} eventId={formData.id}/>
