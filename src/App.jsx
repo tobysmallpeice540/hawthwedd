@@ -2773,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-27a";
+const APP_BUILD = "2026-10-28a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3896,11 +3896,23 @@ function AccomValueCell({ b, properties }) {
   );
 }
 
+// Lost property the cleaners recorded after this booking.
+function LostPropertyChip({ text }) {
+  if (!text) return null;
+  return (
+    <span title={"Lost property: " + text}
+      style={{ display:"inline-block", marginLeft:6, fontSize:10.5, fontWeight:700, color:T.red, background:T.redBg,
+        padding:"1px 7px", borderRadius:8, maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", verticalAlign:"middle" }}>
+      Lost property: {text}
+    </span>
+  );
+}
+
 // Kept at module scope, not nested inside AccomList — a component defined
 // inside another is a new component type on every render, so React throws away
 // and rebuilds every row's DOM each time the filters change. Same rule as
 // AccomBadgeList, and the same one that cost the contract form its focus.
-function AccomListHeader({ properties, gridTemplate }) {
+function AccomListHeader({ properties, gridTemplate, noMoney }) {
   return (
     <div style={{ display:"grid", gridTemplateColumns:gridTemplate, background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:12, fontWeight:700, color:T.textMid }}>
       <div style={{ padding:"10px 12px" }}>Guest</div>
@@ -3916,13 +3928,13 @@ function AccomListHeader({ properties, gridTemplate }) {
       <div style={{ padding:"10px 12px" }}>Source</div>
       <div style={{ padding:"10px 12px" }}>Type</div>
       <div style={{ padding:"10px 12px" }}>Status</div>
-      <div style={{ padding:"10px 12px" }}>Value</div>
-      <div style={{ padding:"10px 12px" }}>Paid</div>
+      {!noMoney && <div style={{ padding:"10px 12px" }}>Value</div>}
+      {!noMoney && <div style={{ padding:"10px 12px" }}>Paid</div>}
     </div>
   );
 }
 
-function AccomListRow({ b, primary, properties, gridTemplate, onOpen }) {
+function AccomListRow({ b, primary, properties, gridTemplate, onOpen, noMoney, lost }) {
   const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
   const bProps = bookedPropIds(b);
   const srcLabel = accomSourceLabel(b);
@@ -3931,8 +3943,9 @@ function AccomListRow({ b, primary, properties, gridTemplate, onOpen }) {
     <div onClick={()=>onOpen(b)} style={{ display:"grid", gridTemplateColumns:gridTemplate, borderBottom:`1px solid ${T.tint}`, cursor:"pointer", fontSize:13, color:T.text, alignItems:"center" }}>
       <div style={{ padding:"11px 12px", fontWeight:600 }}>
         {accomGuestLabel(b)}
-        {b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
+        {!noMoney && b.estimated && b.value>0 && <span style={{ marginLeft:6, fontSize:10, color:T.amber, fontWeight:600 }}>est.</span>}
         <AirbnbAttentionChip b={b}/>
+        <LostPropertyChip text={lost}/>
       </div>
       {properties.map(p=>(
         <div key={p.id} style={{ padding:"8px 4px", textAlign:"center" }}>
@@ -3952,8 +3965,8 @@ function AccomListRow({ b, primary, properties, gridTemplate, onOpen }) {
           : <span style={{ color:T.textLight, fontSize:11 }}>Let</span>}
       </div>
       <div style={{ padding:"11px 12px" }}><span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8 }}>{meta.label}</span></div>
-      <div style={{ padding:"11px 12px" }}><AccomValueCell b={b} properties={properties}/></div>
-      <div style={{ padding:"11px 12px" }}>{accomPaidState(b)}</div>
+      {!noMoney && <div style={{ padding:"11px 12px" }}><AccomValueCell b={b} properties={properties}/></div>}
+      {!noMoney && <div style={{ padding:"11px 12px" }}>{accomPaidState(b)}</div>}
     </div>
   );
 }
@@ -3963,7 +3976,7 @@ function AccomListRow({ b, primary, properties, gridTemplate, onOpen }) {
 // turned every booking into ten unlabelled stacked cells, and the header into
 // ten stacked words. A card says the same things in the order they matter:
 // who, when, where, and whether the money has come in.
-function AccomListCard({ b, primary, properties, onOpen }) {
+function AccomListCard({ b, primary, properties, onOpen, noMoney, lost }) {
   const meta = ACCOM_STATUS_META[b.status] || ACCOM_STATUS_META.confirmed;
   const bProps = bookedPropIds(b);
   const srcLabel = accomSourceLabel(b);
@@ -3975,6 +3988,7 @@ function AccomListCard({ b, primary, properties, onOpen }) {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10, marginBottom:6 }}>
         <div style={{ minWidth:0 }}>
           <div style={{ fontWeight:700, color:T.text, fontSize:15, wordBreak:"break-word" }}>{accomGuestLabel(b)}<AirbnbAttentionChip b={b}/></div>
+          {lost && <div style={{ marginTop:3 }}><LostPropertyChip text={lost}/></div>}
           <div style={{ fontSize:12.5, color:T.accent, fontWeight:600, marginTop:2 }}>
             {fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}
           </div>
@@ -4005,16 +4019,20 @@ function AccomListCard({ b, primary, properties, onOpen }) {
         {b.bookingType && b.bookingType !== srcLabel && (
           <span style={{ fontSize:11, fontWeight:700, color: b.bookingType==="Blocked" ? "#64748b" : T.accent, background: b.bookingType==="Blocked" ? "#f1f5f9" : T.accentLight, padding:"2px 7px", borderRadius:8 }}>{b.bookingType}</span>
         )}
-        <span style={{ marginLeft:"auto", fontWeight:700, color:T.text }}>
-          <AccomValueCell b={b} properties={properties}/>
-        </span>
-        <span style={{ color:T.textLight }}>· {accomPaidState(b)}</span>
+        {!noMoney && (
+          <span style={{ marginLeft:"auto", fontWeight:700, color:T.text }}>
+            <AccomValueCell b={b} properties={properties}/>
+          </span>
+        )}
+        {!noMoney && <span style={{ color:T.textLight }}>· {accomPaidState(b)}</span>}
       </div>
     </div>
   );
 }
 
-function AccomList({ properties, bookings, filterProp, setFilterProp, filterStatus, setFilterStatus, onOpen }) {
+// noMoney: the housekeeping login's copy — no value or paid columns.
+// changeovers: sign-offs, for the lost-property chip on each booking.
+function AccomList({ properties, bookings, filterProp, setFilterProp, filterStatus, setFilterStatus, onOpen, noMoney, changeovers }) {
   const [showPast, setShowPast] = useState(false);
   const isMobile = useIsMobile();
   const today = new Date().toISOString().slice(0,10);
@@ -4043,7 +4061,8 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
 
   // Build dynamic grid: Guest | per-property | Dates | Source | Event | Status | Value | Paid
   const propCols = properties.map(function(){ return "0.55fr"; }).join(" ");
-  const gridTemplate = "1.5fr " + propCols + " 1.1fr 0.7fr 0.75fr 0.75fr 0.75fr 0.75fr";
+  const gridTemplate = "1.5fr " + propCols + " 1.1fr 0.7fr 0.75fr 0.75fr" + (noMoney ? "" : " 0.75fr 0.75fr");
+  const lostOf = function(b) { return changeovers ? lostPropertyFor(changeovers, b.id) : ""; };
 
   return (
     <div>
@@ -4064,13 +4083,13 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
 
       {isMobile ? (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          {currentRows.map(({ b, primary }) => <AccomListCard key={b.id} b={b} primary={primary} properties={properties} onOpen={onOpen}/>)}
+          {currentRows.map(({ b, primary }) => <AccomListCard key={b.id} b={b} primary={primary} properties={properties} onOpen={onOpen} noMoney={noMoney} lost={lostOf(b)}/>)}
           {!currentRows.length && <div style={{ padding:"22px", textAlign:"center", color:T.textLight, fontSize:13, background:"#fff", border:`1px solid ${T.border}`, borderRadius:10 }}>No upcoming bookings match.</div>}
         </div>
       ) : (
         <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff" }}>
-          <AccomListHeader properties={properties} gridTemplate={gridTemplate}/>
-          {currentRows.map(({ b, primary }) => <AccomListRow key={b.id} b={b} primary={primary} properties={properties} gridTemplate={gridTemplate} onOpen={onOpen}/>)}
+          <AccomListHeader properties={properties} gridTemplate={gridTemplate} noMoney={noMoney}/>
+          {currentRows.map(({ b, primary }) => <AccomListRow key={b.id} b={b} primary={primary} properties={properties} gridTemplate={gridTemplate} onOpen={onOpen} noMoney={noMoney} lost={lostOf(b)}/>)}
           {!currentRows.length && <div style={{ padding:"22px", textAlign:"center", color:T.textLight, fontSize:13 }}>No upcoming bookings match.</div>}
         </div>
       )}
@@ -4088,15 +4107,15 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
             <div style={{ fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4 }}>
               Past bookings (most recent first)
             </div>
-            {pastRows.map(({ b, primary }) => <AccomListCard key={b.id} b={b} primary={primary} properties={properties} onOpen={onOpen}/>)}
+            {pastRows.map(({ b, primary }) => <AccomListCard key={b.id} b={b} primary={primary} properties={properties} onOpen={onOpen} noMoney={noMoney} lost={lostOf(b)}/>)}
           </div>
         ) : (
         <div style={{ border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", background:"#fff", marginTop:10, opacity:.85 }}>
           <div style={{ padding:"8px 14px", background:T.bgInput, borderBottom:`1px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.textMid, textTransform:"uppercase", letterSpacing:.4 }}>
             Past bookings (most recent first)
           </div>
-          <AccomListHeader properties={properties} gridTemplate={gridTemplate}/>
-          {pastRows.map(({ b, primary }) => <AccomListRow key={b.id} b={b} primary={primary} properties={properties} gridTemplate={gridTemplate} onOpen={onOpen}/>)}
+          <AccomListHeader properties={properties} gridTemplate={gridTemplate} noMoney={noMoney}/>
+          {pastRows.map(({ b, primary }) => <AccomListRow key={b.id} b={b} primary={primary} properties={properties} gridTemplate={gridTemplate} onOpen={onOpen} noMoney={noMoney} lost={lostOf(b)}/>)}
         </div>
         )
       )}
@@ -4320,6 +4339,8 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           onMarkCancelled={onMarkAirbnbCancelled} onDismiss={onDismissAirbnbPrompt}
           onUseFigure={function(v){ if (formStays.length === 1) updStay(0, "value", v); }}/>
       )}
+
+      {form.id && <ChangeoverRecordPanel kind="accom" refId={form.id}/>}
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
         <LInput label="Guest name" value={form.guestName} onChange={v=>upd("guestName",v)} />
@@ -6214,7 +6235,7 @@ const BACKUP_DATA_KEYS = [
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
   "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
-  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1"
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1"
   // Not the follow-up keys: restoring the "already sent" record would send
   // everybody mailed since the snapshot their email again.
 ];
@@ -6225,7 +6246,8 @@ const KEY_LABELS = {
   "hbf_bar_products_v1":"Bar products", "hbf_bar_events_v1":"Bar orders & stocktakes",
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
-  "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings"
+  "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings",
+  "hbf_changeovers_v1":"Changeover sign-offs"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -6724,20 +6746,421 @@ function CleaningSummarySettings() {
   );
 }
 
+// ─── CHANGEOVERS ─────────────────────────────────────────────────────────────
+// Every check-out (one per property stay) and every confirmed farm event is a
+// changeover the cleaners sign off. Nothing is stored until they do: the state
+// is worked out from the dates, and the stored record is only the sign-off —
+// hours per cleaner, when it was ready, comments and lost property.
+//
+//   upcoming  the stay or event has not started yet          (grey)
+//   inuse     guests in / event on                            (yellow)
+//   due       check-out day or later, not signed off          (red)
+//   done      signed off                                      (green)
+//
+// A record is keyed by the booking and the property, never the dates, so moving
+// a stay's dates keeps its sign-off. Events are keyed by the event.
+const CHANGEOVERS_STORAGE = "hbf_changeovers_v1";
+// Check-outs before this date were never tracked, so they are not shown as
+// waiting — otherwise every past booking would be red on day one.
+const CHANGEOVER_FROM = "2026-10-24";
+// Two cleaners on different pay rates, so hours are recorded per person. The
+// key is what is stored; the label is only what is shown.
+const CHANGEOVER_CLEANERS = [
+  { key: "edita",  label: "Edita" },
+  { key: "karina", label: "Karina" }
+];
+const GRAIN_STORE_UNIT = { id: "grainstore", name: "Grain Store" };
+
+function londonToday() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+}
+// "YYYY-MM-DDTHH:MM", the value a datetime-local input takes, in UK time.
+function londonNowInput() {
+  const parts = {};
+  new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    .formatToParts(new Date()).forEach(function(p) { parts[p.type] = p.value; });
+  const hh = parts.hour === "24" ? "00" : parts.hour;
+  return parts.year + "-" + parts.month + "-" + parts.day + "T" + hh + ":" + parts.minute;
+}
+// doneAt is stored as typed — local UK wall-clock time, no zone (see CLAUDE.md:
+// everything is Europe/London).
+function fmtDoneAt(s) {
+  if (!s) return "";
+  const d = String(s).slice(0, 10), t = String(s).slice(11, 16);
+  return fmtDate(d) + (t ? " " + t : "");
+}
+
+function changeoverUnits(properties) {
+  return (properties || []).filter(function(p) { return p && !p.archived; })
+    .map(function(p) { return { id: p.id, name: p.name, colour: p.colour }; })
+    .concat([GRAIN_STORE_UNIT]);
+}
+
+// Every changeover the diary implies, oldest first.
+function changeoverJobs(properties, accom, events) {
+  const jobs = [];
+  const propName = function(id) {
+    const p = (properties || []).find(function(x) { return x.id === id; });
+    return p ? p.name : id;
+  };
+  (accom || []).forEach(function(b) {
+    if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
+    const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    const seen = {};
+    stays.forEach(function(s) {
+      if (!s || !s.propertyId || !isValidEventDate(s.checkIn) || !isValidEventDate(s.checkOut)) return;
+      seen[s.propertyId] = (seen[s.propertyId] || 0) + 1;
+      const n = seen[s.propertyId];
+      jobs.push({
+        id: "accom:" + b.id + ":" + s.propertyId + (n > 1 ? ":" + n : ""),
+        kind: "accom", refId: b.id, unitId: s.propertyId, unitName: propName(s.propertyId),
+        start: s.checkIn, due: s.checkOut,
+        who: accomGuestLabel(b)
+      });
+    });
+  });
+  (events || []).forEach(function(ev) {
+    if (!ev || !isValidEventDate(ev.date)) return;
+    // Holding dates may not happen; only confirmed events need cleaning.
+    if (ev.status === "Cancelled" || ev.status === "Holding") return;
+    const end = eventEndDate(ev) || ev.date;
+    jobs.push({
+      id: "event:" + ev.id,
+      kind: "event", refId: ev.id, unitId: GRAIN_STORE_UNIT.id, unitName: GRAIN_STORE_UNIT.name,
+      // An event is on from its first day to its last; the clean is due the
+      // morning after.
+      start: ev.date, due: addDaysIso(end, 1),
+      who: (ev.couple || "Event") + " · " + eventTypeLabel(ev)
+    });
+  });
+  jobs.sort(function(a, z) { return a.due < z.due ? -1 : a.due > z.due ? 1 : 0; });
+  return jobs;
+}
+
+function changeoverRecordMap(recs) {
+  const m = {};
+  (recs || []).forEach(function(r) { if (r && r.id) m[r.id] = r; });
+  return m;
+}
+
+function changeoverState(job, rec, today) {
+  if (rec) return "done";
+  if (today < job.start) return "upcoming";
+  if (today < job.due) return "inuse";
+  if (job.due < CHANGEOVER_FROM) return "untracked";
+  return "due";
+}
+
+function changeoverMeta(state) {
+  if (state === "done")  return { label: "Done",           bg: T.greenBg, fg: T.green, bd: T.green };
+  if (state === "inuse") return { label: "In use",         bg: T.amberBg, fg: T.amber, bd: T.amber };
+  if (state === "due")   return { label: "Needs cleaning", bg: T.redBg,   fg: T.red,   bd: T.red };
+  return { label: "Not yet", bg: T.bgInput, fg: T.textLight, bd: T.border };
+}
+
+function changeoverHoursText(rec) {
+  if (!rec || !rec.hours) return "";
+  return CHANGEOVER_CLEANERS.map(function(c) {
+    const h = Number(rec.hours[c.key]);
+    return h > 0 ? c.label + " " + h + "h" : "";
+  }).filter(Boolean).join(" · ");
+}
+
+// Where each unit stands today: red if any changeover is waiting, else yellow
+// if someone is in, else green. Comments and lost property come from the most
+// recent sign-off.
+function unitStatuses(units, jobs, recMap, today) {
+  return (units || []).map(function(u) {
+    const mine = (jobs || []).filter(function(j) { return j.unitId === u.id; });
+    const due = mine.filter(function(j) { return changeoverState(j, recMap[j.id], today) === "due"; });
+    const inuse = mine.filter(function(j) { return changeoverState(j, recMap[j.id], today) === "inuse"; });
+    const done = mine.filter(function(j) { return !!recMap[j.id]; })
+      .sort(function(a, z) {
+        const x = recMap[a.id].doneAt || "", y = recMap[z.id].doneAt || "";
+        return x < y ? 1 : x > y ? -1 : 0;
+      });
+    const last = done[0] || null;
+    let state = "done", job = last;
+    if (due.length) { state = "due"; job = due[0]; }
+    else if (inuse.length) { state = "inuse"; job = inuse[0]; }
+    return { unit: u, state: state, job: job, waiting: due.length, last: last, lastRec: last ? recMap[last.id] : null };
+  });
+}
+
+// The button on a check-out or event row. Grey and inert before the stay
+// starts; otherwise it opens the sign-off.
+function ChangeoverButton({ job, rec, today, onOpen }) {
+  const state = changeoverState(job, rec, today);
+  if (state === "untracked") return null;
+  const m = changeoverMeta(state);
+  const live = state !== "upcoming";
+  return (
+    <button type="button" disabled={!live}
+      onClick={function(e) { e.stopPropagation(); if (live) onOpen(job); }}
+      title={state === "done" ? "Signed off " + fmtDoneAt(rec.doneAt) + " — tap to change"
+        : state === "due" ? "Tap when it is cleaned and ready"
+        : state === "inuse" ? "Guests are in — tap if it is already cleaned"
+        : "Not started yet"}
+      style={{ background: m.bg, color: m.fg, border: "1.5px solid " + m.bd, borderRadius: 8,
+        padding: "5px 14px", fontFamily: "inherit", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap",
+        cursor: live ? "pointer" : "default", flexShrink: 0, minWidth: 64 }}>
+      {state === "done" ? "Done ✓" : "Done"}
+    </button>
+  );
+}
+
+// The sign-off itself. Module scope: it renders inputs.
+function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
+  const [hours, setHours] = useState(function() {
+    const h = {};
+    CHANGEOVER_CLEANERS.forEach(function(c) {
+      const v = rec && rec.hours ? rec.hours[c.key] : null;
+      h[c.key] = v != null && v !== "" ? String(v) : "";
+    });
+    return h;
+  });
+  const [doneAt, setDoneAt]   = useState(rec && rec.doneAt ? rec.doneAt : londonNowInput());
+  const [comments, setComments] = useState(rec ? rec.comments || "" : "");
+  const [lost, setLost]       = useState(rec ? rec.lostProperty || "" : "");
+  const [busy, setBusy]       = useState(false);
+  const [err, setErr]         = useState("");
+  const [askReopen, setAskReopen] = useState(false);
+
+  const bad = CHANGEOVER_CLEANERS.some(function(c) {
+    const v = hours[c.key];
+    return v !== "" && !(Number(v) >= 0 && Number(v) <= 24);
+  });
+  const anyHours = CHANGEOVER_CLEANERS.some(function(c) { return Number(hours[c.key]) > 0; });
+
+  const save = async function() {
+    if (bad) { setErr("Hours must be a number between 0 and 24."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(doneAt)) { setErr("Please put in the date and time it was ready."); return; }
+    setBusy(true); setErr("");
+    const h = {};
+    CHANGEOVER_CLEANERS.forEach(function(c) { h[c.key] = hours[c.key] === "" ? 0 : Math.round(Number(hours[c.key]) * 100) / 100; });
+    const now = new Date().toISOString();
+    try {
+      await onSave({
+        id: job.id, kind: job.kind, refId: job.refId, unitId: job.unitId, unitName: job.unitName,
+        due: job.due, doneAt: doneAt, hours: h,
+        comments: comments.trim(), lostProperty: lost.trim(),
+        recordedAt: rec && rec.recordedAt ? rec.recordedAt : now,
+        updatedAt: now
+      });
+      onClose();
+    } catch (e) {
+      setErr(String((e && e.message) || e)); setBusy(false);
+    }
+  };
+  const reopen = async function() {
+    setBusy(true); setErr("");
+    try { await onReopen(job.id); onClose(); }
+    catch (e) { setErr(String((e && e.message) || e)); setBusy(false); }
+  };
+
+  const lab = { display: "block", fontSize: 12, fontWeight: 700, color: T.textMid, margin: "12px 0 5px" };
+  const inp = { width: "100%", boxSizing: "border-box", border: "1.5px solid " + T.border, borderRadius: 8,
+    padding: "10px 12px", fontFamily: "inherit", fontSize: 15, color: T.text, background: "#fff", outline: "none" };
+
+  return (
+    <div onClick={busy ? undefined : onClose}
+      style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex",
+        alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={function(e){ e.stopPropagation(); }}
+        style={{ background:"#fff", borderRadius:12, width:"min(460px, 100%)", maxHeight:"90vh", overflowY:"auto",
+          boxShadow:"0 20px 60px rgba(0,0,0,.3)", padding:"18px 20px 20px", boxSizing:"border-box" }}>
+        <div style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:17, fontWeight:800, color:T.text }}>{job.unitName}</div>
+            <div style={{ fontSize:13, color:T.textMid, marginTop:2 }}>
+              {job.who} · {job.kind === "event" ? fmtDate(job.start) : "out " + fmtDate(job.due)}
+            </div>
+          </div>
+          <button onClick={onClose} disabled={busy}
+            style={{ background:"none", border:"none", fontSize:24, lineHeight:1, color:T.textLight, cursor:"pointer", padding:0, fontFamily:"inherit" }}>×</button>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)", gap:12 }}>
+          {CHANGEOVER_CLEANERS.map(function(c) {
+            return (
+              <div key={c.key}>
+                <label style={lab}>{c.label} hours</label>
+                <input type="number" inputMode="decimal" min="0" max="24" step="0.25" value={hours[c.key]}
+                  placeholder="0"
+                  onChange={function(e) { const v = e.target.value; setHours(function(h) { return Object.assign({}, h, { [c.key]: v }); }); }}
+                  style={inp}/>
+              </div>
+            );
+          })}
+        </div>
+
+        <label style={lab}>Ready for the next guests at</label>
+        <input type="datetime-local" value={doneAt} onChange={function(e){ setDoneAt(e.target.value); }} style={inp}/>
+        <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>Change this if it was ready earlier than now.</div>
+
+        <label style={lab}>Comments</label>
+        <textarea rows={3} value={comments} onChange={function(e){ setComments(e.target.value); }}
+          placeholder="Anything broken, missing, or worth knowing"
+          style={Object.assign({}, inp, { resize:"vertical", fontSize:14 })}/>
+
+        <label style={lab}>Lost property</label>
+        <textarea rows={2} value={lost} onChange={function(e){ setLost(e.target.value); }}
+          placeholder="e.g. black hat in bedroom 3"
+          style={Object.assign({}, inp, { resize:"vertical", fontSize:14 })}/>
+
+        {!anyHours && !bad && (
+          <div style={{ fontSize:12, color:T.amber, marginTop:10, fontWeight:600 }}>No hours entered.</div>
+        )}
+        {err && <div style={{ fontSize:13, color:T.red, marginTop:10, fontWeight:600 }}>{err}</div>}
+
+        <div style={{ display:"flex", gap:10, marginTop:16, alignItems:"center", flexWrap:"wrap" }}>
+          <button onClick={save} disabled={busy}
+            style={{ background:T.green, color:"#fff", border:"none", borderRadius:9, padding:"12px 24px",
+              fontFamily:"inherit", fontSize:15, fontWeight:800, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>
+            {busy ? "Saving…" : rec ? "Save changes" : "Done — ready"}
+          </button>
+          <button onClick={onClose} disabled={busy}
+            style={{ background:"#fff", color:T.textMid, border:"1.5px solid " + T.border, borderRadius:9, padding:"11px 18px",
+              fontFamily:"inherit", fontSize:14, fontWeight:600, cursor:"pointer" }}>
+            Cancel
+          </button>
+          {rec && !askReopen && (
+            <button onClick={function(){ setAskReopen(true); }} disabled={busy}
+              style={{ marginLeft:"auto", background:"none", border:"none", color:T.textLight, fontFamily:"inherit",
+                fontSize:12, textDecoration:"underline", cursor:"pointer", padding:0 }}>
+              Not done after all
+            </button>
+          )}
+          {rec && askReopen && (
+            <button onClick={reopen} disabled={busy}
+              style={{ marginLeft:"auto", background:T.redBg, color:T.red, border:"1.5px solid " + T.red, borderRadius:9,
+                padding:"8px 12px", fontFamily:"inherit", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+              Remove the sign-off
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Hamlet, Amly, Glamping, Grain Store at a glance — on the admin home and at
+// the top of the housekeeping Live tab.
+function UnitStatusBar({ statuses, onOpen, compact }) {
+  if (compact) {
+    // One line of coloured pills: name and state, nothing else.
+    return (
+      <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:14 }}>
+        {(statuses || []).map(function(s) {
+          const m = changeoverMeta(s.state);
+          const clickable = !!(onOpen && s.job && s.state !== "done");
+          return (
+            <span key={s.unit.id} onClick={clickable ? function(){ onOpen(s.job, s); } : undefined}
+              title={s.state === "done" ? "Ready" : m.label}
+              style={{ display:"inline-flex", alignItems:"center", gap:6, background:m.bg, color:m.fg,
+                border:"1.5px solid " + m.bd, borderRadius:20, padding:"4px 11px", fontSize:12.5, fontWeight:700,
+                whiteSpace:"nowrap", cursor: clickable ? "pointer" : "default" }}>
+              <span style={{ width:9, height:9, borderRadius:"50%", background:m.bd, flexShrink:0 }}/>
+              {s.unit.name}{s.waiting > 1 ? " ×" + s.waiting : ""}
+            </span>
+          );
+        })}
+      </div>
+    );
+  }
+  return (
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(190px, 1fr))", gap:10, marginBottom:18 }}>
+      {(statuses || []).map(function(s) {
+        const m = changeoverMeta(s.state);
+        const rec = s.lastRec;
+        const clickable = !!(onOpen && s.job);
+        return (
+          <div key={s.unit.id} onClick={clickable ? function(){ onOpen(s.job, s); } : undefined}
+            title={clickable ? "Open " + (s.job.kind === "event" ? "the event" : "the booking") : ""}
+            style={{ background:"#fff", border:"1px solid " + T.border, borderLeft:"5px solid " + m.bd, borderRadius:10,
+              padding:"10px 13px", cursor: clickable ? "pointer" : "default", minWidth:0 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"nowrap" }}>
+              <span style={{ width:11, height:11, borderRadius:"50%", background:m.bd, flexShrink:0 }}/>
+              <span style={{ fontSize:14, fontWeight:800, color:T.text, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.unit.name}</span>
+              <span style={{ fontSize:11, fontWeight:700, color:m.fg, whiteSpace:"nowrap" }}>
+                {s.state === "done" ? "Ready" : m.label}{s.waiting > 1 ? " ×" + s.waiting : ""}
+              </span>
+            </div>
+            <div style={{ fontSize:11.5, color:T.textMid, marginTop:4, lineHeight:1.5 }}>
+              {s.state === "due" && <>{s.job.who} · out {fmtDate(s.job.due)}</>}
+              {s.state === "inuse" && <>{s.job.who} · {s.job.kind === "event" ? fmtDate(s.job.start) : "leaves " + fmtDate(s.job.due)}</>}
+              {s.state === "done" && (rec ? <>Cleaned {fmtDoneAt(rec.doneAt)}</> : <span style={{ color:T.textLight }}>No changeovers recorded yet</span>)}
+            </div>
+            {rec && rec.comments && (
+              <div style={{ fontSize:11.5, color:T.text, marginTop:5, background:T.amberBg, borderRadius:6, padding:"4px 7px", lineHeight:1.45, wordBreak:"break-word" }}>
+                {rec.comments}
+              </div>
+            )}
+            {rec && rec.lostProperty && (
+              <div style={{ fontSize:11.5, color:T.red, fontWeight:700, marginTop:5, lineHeight:1.45, wordBreak:"break-word" }}>
+                Lost property: <span style={{ fontWeight:600 }}>{rec.lostProperty}</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// The sign-off shown on a booking or event record, read-only. Loads its own
+// copy so it can sit on any form without new props being threaded through.
+function ChangeoverRecordPanel({ kind, refId }) {
+  const [recs, setRecs] = useState(null);
+  useEffect(function() {
+    let off = false;
+    sbGet(CHANGEOVERS_STORAGE).then(function(v) { if (!off) setRecs(Array.isArray(v) ? v : []); })
+      .catch(function() { if (!off) setRecs([]); });
+    return function() { off = true; };
+  }, [kind, refId]);
+  if (!recs || refId == null) return null;
+  const prefix = kind + ":" + refId;
+  const mine = recs.filter(function(r) { return r && (r.id === prefix || String(r.id).indexOf(prefix + ":") === 0); });
+  if (!mine.length) return null;
+  return (
+    <div style={{ background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"12px 16px", margin:"0 0 16px" }}>
+      <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:6 }}>Changeover</div>
+      {mine.map(function(r) {
+        const unit = r.unitName || (r.unitId === GRAIN_STORE_UNIT.id ? GRAIN_STORE_UNIT.name : r.unitId);
+        return (
+          <div key={r.id} style={{ fontSize:13, color:T.text, padding:"5px 0", lineHeight:1.55 }}>
+            <div>
+              <strong>{unit}</strong>
+              <span style={{ color:T.green, fontWeight:700 }}> · ready {fmtDoneAt(r.doneAt)}</span>
+              {changeoverHoursText(r) && <span style={{ color:T.textMid }}> · {changeoverHoursText(r)}</span>}
+            </div>
+            {r.comments && <div style={{ color:T.textMid }}>{r.comments}</div>}
+            {r.lostProperty && <div style={{ color:T.red, fontWeight:700 }}>Lost property: <span style={{ fontWeight:600 }}>{r.lostProperty}</span></div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Lost property found after a lettings booking, for the chip on its row.
+function lostPropertyFor(recs, bookingId) {
+  const prefix = "accom:" + bookingId + ":";
+  return (recs || []).filter(function(r) { return r && r.lostProperty && String(r.id).indexOf(prefix) === 0; })
+    .map(function(r) { return r.lostProperty; }).join("; ");
+}
+
 // ─── CLEANER VIEW ─────────────────────────────────────────────────────────────
-// A read-only, three-tab app for whoever is cleaning: what's coming up, the
-// lettings calendar, and the bookings list. Loads its own data rather than
-// going through LettingsView, so none of the editing, pricing, payment or
-// email machinery is reachable — there is nothing here that can be changed.
+// The housekeeping login: Live (the next fortnight, with a Done button on every
+// check-out and event), Events, the lettings calendar, and the bookings list
+// without prices. Loads its own data rather than going through LettingsView, so
+// none of the editing, pricing, payment or email machinery is reachable. The
+// only thing it writes is the changeover sign-off (CHANGEOVERS_STORAGE).
 const CLEANER_DAYS_AHEAD = 14;
 
-function CleanerHome({ properties, accom, events }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const end = (function() {
-    const d = new Date(today + "T00:00:00Z");
-    d.setUTCDate(d.getUTCDate() + CLEANER_DAYS_AHEAD);
-    return d.toISOString().slice(0, 10);
-  })();
+function CleanerHome({ properties, accom, events, jobs, recMap, today, onOpenJob }) {
+  const end = addDaysIso(today, CLEANER_DAYS_AHEAD);
 
   const propOf = function(id) {
     return (properties || []).find(function(x) { return x.id === id; }) || null;
@@ -6753,6 +7176,8 @@ function CleanerHome({ properties, accom, events }) {
     const i = (properties || []).findIndex(function(x) { return x.id === id; });
     return i === -1 ? 900 : i;
   };
+  const jobById = {};
+  (jobs || []).forEach(function(j) { jobById[j.id] = j; });
 
   // Everything happening in the window, keyed by the day it happens on.
   const byDay = {};
@@ -6767,33 +7192,41 @@ function CleanerHome({ properties, accom, events }) {
     add(ev.date, {
       kind: "event", rank: 999,
       label: "Grain Store",
-      detail: (ev.couple || "Event") + " · " + eventTypeLabel(ev)
+      detail: (ev.couple || "Event") + " · " + eventTypeLabel(ev) + (ev.status === "Holding" ? " (provisional)" : ""),
+      job: jobById["event:" + ev.id] || null
     });
   });
 
   (accom || []).forEach(function(b) {
     if (b.status === "cancelled" || b.bookingType === "Blocked") return;
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
-    const wedding = b.bookingType === "Wedding";
+    const seen = {};
     stays.forEach(function(s) {
       const p = propOf(s.propertyId);
-      const who = b.guestName || "Guest";
+      seen[s.propertyId] = (seen[s.propertyId] || 0) + 1;
+      const n = seen[s.propertyId];
+      const jobId = "accom:" + b.id + ":" + s.propertyId + (n > 1 ? ":" + n : "");
+      const who = accomGuestLabel(b);
       const guests = b.guestCount ? b.guestCount + " guest" + (Number(b.guestCount) === 1 ? "" : "s") : "";
       // Wedding parties get earlier access and a later checkout, so the times
       // have to come from the booking type, not just the property.
       // A time typed onto the stay wins over the property's rule.
       const times = stayTimes(b, s, p);
-      const inTime  = times.inTime;
-      const outTime = times.outTime;
       const tail = who + (guests ? " · " + guests : "");
       add(s.checkOut, { kind: "out", rank: propRank(s.propertyId), label: propName(s.propertyId),
-        time: outTime || "", detail: tail });
+        time: times.outTime || "", detail: tail, job: jobById[jobId] || null });
       add(s.checkIn,  { kind: "in",  rank: propRank(s.propertyId), label: propName(s.propertyId),
-        time: inTime || "", detail: tail });
+        time: times.inTime || "", detail: tail });
     });
   });
 
   const days = Object.keys(byDay).sort();
+
+  // Changeovers whose day has gone by without a sign-off. Today's are in
+  // today's card below, so only earlier ones are listed here.
+  const overdue = (jobs || []).filter(function(j) {
+    return j.due < today && changeoverState(j, recMap[j.id], today) === "due";
+  });
 
   const chip = function(kind) {
     const map = {
@@ -6818,12 +7251,31 @@ function CleanerHome({ properties, accom, events }) {
                 .map(function(i){ return i.label; });
   };
 
+  const statuses = unitStatuses(changeoverUnits(properties), jobs, recMap, today);
+
   return (
     <div>
-      <h2 style={{ fontSize:20, fontWeight:800, color:T.text, margin:"0 0 2px" }}>The next {CLEANER_DAYS_AHEAD} days</h2>
-      <div style={{ fontSize:13, color:T.textMid, marginBottom:18 }}>
-        {fmtDate(today)} to {fmtDate(end)}
+      <h2 style={{ fontSize:20, fontWeight:800, color:T.text, margin:"0 0 2px" }}>Live</h2>
+      <div style={{ fontSize:13, color:T.textMid, marginBottom:14 }}>
+        Now, and the next {CLEANER_DAYS_AHEAD} days to {fmtDate(end)}
       </div>
+
+      <UnitStatusBar compact statuses={statuses} onOpen={function(job) { onOpenJob(job); }}/>
+
+      {overdue.length > 0 && (
+        <div style={{ background:T.redBg, border:"1px solid " + T.red, borderRadius:10, padding:"12px 16px", marginBottom:12 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:T.red, marginBottom:6 }}>Still to sign off</div>
+          {overdue.map(function(j) {
+            return (
+              <div key={j.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"5px 0", flexWrap:"wrap" }}>
+                <ChangeoverButton job={j} rec={recMap[j.id]} today={today} onOpen={onOpenJob}/>
+                <span style={{ fontSize:13, fontWeight:600, color:T.text, minWidth:96 }}>{j.unitName}</span>
+                <span style={{ fontSize:12, color:T.textMid }}>{j.who} · out {fmtDate(j.due)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {days.length === 0 && (
         <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 20px",
@@ -6861,7 +7313,8 @@ function CleanerHome({ properties, accom, events }) {
                   {it.time && (
                     <span style={{ fontSize:12, fontWeight:700, color:T.accent, minWidth:42 }}>{it.time}</span>
                   )}
-                  <span style={{ fontSize:12, color:T.textMid }}>{it.detail}</span>
+                  <span style={{ fontSize:12, color:T.textMid, flex:1, minWidth:120 }}>{it.detail}</span>
+                  {it.job && <ChangeoverButton job={it.job} rec={recMap[it.job.id]} today={today} onOpen={onOpenJob}/>}
                 </div>
               );
             })}
@@ -6872,34 +7325,115 @@ function CleanerHome({ properties, accom, events }) {
   );
 }
 
+// Every event from today on, for planning — with the same Done button as Live.
+function CleanerEvents({ events, recMap, jobs, today, onOpenJob }) {
+  const jobById = {};
+  (jobs || []).forEach(function(j) { jobById[j.id] = j; });
+  const rows = (events || []).filter(function(ev) {
+    return isValidEventDate(ev.date) && ev.status !== "Cancelled" && (eventEndDate(ev) || ev.date) >= today;
+  }).sort(function(a, z) { return a.date < z.date ? -1 : a.date > z.date ? 1 : 0; });
+  return (
+    <div>
+      <h2 style={{ fontSize:20, fontWeight:800, color:T.text, margin:"0 0 2px" }}>Events</h2>
+      <div style={{ fontSize:13, color:T.textMid, marginBottom:14 }}>{rows.length} coming up</div>
+      {rows.length === 0 && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 20px", fontSize:14, color:T.textLight }}>
+          No events booked.
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
+          {rows.map(function(ev) {
+            const end = eventEndDate(ev);
+            const multi = end && end > ev.date;
+            const job = jobById["event:" + ev.id] || null;
+            return (
+              <div key={ev.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"11px 16px",
+                borderBottom:`1px solid ${T.tint}`, flexWrap:"wrap" }}>
+                <div style={{ minWidth:150 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color: ev.date === today ? T.accent : T.text }}>
+                    {ev.date === today ? "Today · " : ""}{fmtWeekdayLong(ev.date)}
+                  </div>
+                  {multi && <div style={{ fontSize:11, color:T.textLight }}>to {fmtWeekdayLong(end)}</div>}
+                </div>
+                <div style={{ flex:1, minWidth:140 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{ev.couple || "Event"}</div>
+                  <div style={{ fontSize:12, color:T.textMid }}>
+                    {eventTypeLabel(ev)}
+                    {ev.status === "Holding" && <span style={{ color:T.amber, fontWeight:700 }}> · provisional</span>}
+                  </div>
+                </div>
+                {job && <ChangeoverButton job={job} rec={recMap[job.id]} today={today} onOpen={onOpenJob}/>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CleanerView() {
   const [properties, setProperties] = useState(INITIAL_PROPERTIES);
   const [accom, setAccom]           = useState([]);
   const [events, setEvents]         = useState([]);
+  const [recs, setRecs]             = useState([]);
   const [loaded, setLoaded]         = useState(false);
   const [tab, setTab]               = useState("home");
   const [cursor, setCursor]         = useState(new Date());
   const [filterProp, setFilterProp]     = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [openJob, setOpenJob]       = useState(null);
+  const openJobRef = useRef(null);
+  openJobRef.current = openJob;
+  const [today, setToday]           = useState(londonToday());
+  const saveRecs = useMergedSave(CHANGEOVERS_STORAGE, recs, setRecs);
 
+  // Read everything; again whenever the app comes back to the front, because a
+  // phone can leave this open for days and the colours depend on the date.
   useEffect(function() {
     let cancelled = false;
-    (async function() {
+    const load = async function() {
       try {
         const results = await Promise.all([
-          sbGet(PROPERTIES_STORAGE), sbGet(ACCOM_STORAGE), sbGet(BOOKING_STORAGE)
+          sbGet(PROPERTIES_STORAGE), sbGet(ACCOM_STORAGE), sbGet(BOOKING_STORAGE), sbGet(CHANGEOVERS_STORAGE)
         ]);
         if (cancelled) return;
         if (results[0] && results[0].length) setProperties(results[0]);
         setAccom(Array.isArray(results[1]) ? results[1].map(normalizeAccom) : []);
         setEvents(Array.isArray(results[2]) ? results[2] : []);
+        // A failed read leaves what is on screen; a save merges into a fresh
+        // read either way, so nothing is lost by it.
+        if (Array.isArray(results[3]) || (results[3] == null && !READ_FAILED[CHANGEOVERS_STORAGE])) setRecs(results[3] || []);
       } catch (e) { /* leave the defaults; the view still renders */ }
-      if (!cancelled) setLoaded(true);
-    })();
-    return function() { cancelled = true; };
+      if (!cancelled) { setToday(londonToday()); setLoaded(true); }
+    };
+    load();
+    const onVis = function() {
+      if (document.visibilityState !== "visible") return;
+      // A phone left open across a deploy would otherwise sit behind the
+      // "newer version" banner, refusing saves, until someone taps Reload.
+      // The sign-in survives a reload. Never while a sign-off is being typed.
+      if (STALE_BUILD_SEEN && !openJobRef.current) { window.location.reload(); return; }
+      load();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return function() { cancelled = true; document.removeEventListener("visibilitychange", onVis); };
   }, []);
 
-  const tabs = [["home","What's coming up"],["calendar","Calendar"],["list","Bookings"]];
+  const jobs = changeoverJobs(properties, accom, events);
+  const recMap = changeoverRecordMap(recs);
+
+  const saveRec = function(rec) {
+    return saveRecs(function(prev) {
+      return (prev || []).filter(function(r) { return r.id !== rec.id; }).concat([rec]);
+    });
+  };
+  const reopenRec = function(id) {
+    return saveRecs(function(prev) { return (prev || []).filter(function(r) { return r.id !== id; }); });
+  };
+
+  const tabs = [["home","Live"],["events","Events"],["calendar","Calendar"],["list","Bookings"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
@@ -6907,7 +7441,9 @@ function CleanerView() {
     <div>
       <TabStrip tabs={tabs} value={tab} onChange={setTab}/>
 
-      {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events}/>}
+      {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events}
+        jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
+      {tab === "events" && <CleanerEvents events={events} jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
       {/* onOpen is deliberately a no-op — clicking a booking must not open an
           editable form for someone who shouldn't be changing bookings. */}
       {tab === "calendar" && (
@@ -6915,10 +7451,15 @@ function CleanerView() {
           cursor={cursor} setCursor={setCursor} onOpen={function(){}} onViewEventsCalendar={null} readOnly/>
       )}
       {tab === "list" && (
-        <AccomList properties={properties} bookings={accom}
+        <AccomList properties={properties} bookings={accom} noMoney changeovers={recs}
           filterProp={filterProp} setFilterProp={setFilterProp}
           filterStatus={filterStatus} setFilterStatus={setFilterStatus}
           onOpen={function(){}}/>
+      )}
+
+      {openJob && (
+        <ChangeoverDialog key={openJob.id} job={openJob} rec={recMap[openJob.id] || null}
+          onSave={saveRec} onReopen={reopenRec} onClose={function(){ setOpenJob(null); }}/>
       )}
     </div>
   );
@@ -6956,6 +7497,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   const [sendingConfirm, setSendingConfirm] = useState(false);
   const [askDeleteBooking, setAskDeleteBooking] = useState(false);
   const [clashWarning, setClashWarning] = useState(null);   // { rec, stayOpen, clashes } or null
+  const [changeovers, setChangeovers] = useState([]);       // cleaners' sign-offs, for lost property on the list
   const propsSavedRef = useRef(INITIAL_PROPERTIES);   // what the server held when last read or saved
 
   useEffect(() => {
@@ -6975,6 +7517,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       try { const g = await sbGet(ACCOM_GUESTS_STORAGE); setGuests(g || []); } catch { setGuests([]); }
       try { const dc = await sbGet(DISCOUNT_CODES_STORAGE); setDiscountCodes(dc || []); } catch { setDiscountCodes([]); }
       try { const et = await sbGet(EMAIL_TEMPLATES_STORAGE); if (et && et.length) setEmailTemplates(et); } catch {}
+      try { const co = await sbGet(CHANGEOVERS_STORAGE); setChangeovers(Array.isArray(co) ? co : []); } catch {}
       setLoaded(true);
     })();
   }, []);
@@ -7391,7 +7934,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       {!loaded && <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>}
 
       {loaded && tab==="calendar" && <AccomCalendar properties={properties} bookings={bookings} events={events||[]} cursor={cursor} setCursor={setCursor} onOpen={openEdit} onOpenEvent={onOpenEvent} onViewEventsCalendar={setAppView && setAppReportType ? function(){ setAppReportType("calendar"); setAppView("reports"); } : null} />}
-      {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
+      {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} changeovers={changeovers} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
       {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
       {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} mutateAccom={mutateAccom} bookings={bookings} />}
       {loaded && tab==="settings" && (
@@ -8450,7 +8993,12 @@ export default function App({ role = "admin", onSignOut } = {}) {
             : { fontFamily:T.fontDisplay, fontSize:22, fontWeight:600, color:"#fff", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{shellTitle}</span>
           <span className="hb-mini-build" style={{ marginLeft:"auto", fontSize:11, color:UI_CLASSIC ? T.textLight : "rgba(255,255,255,.4)", whiteSpace:"nowrap" }}>build {APP_BUILD}</span>
           {onSignOut && (
-            <button onClick={onSignOut}
+            <button onClick={function() {
+                // Housekeeping stays signed in for good on its phones; a stray
+                // tap here would mean finding the password again.
+                if (cleanerOnly && !window.confirm("Sign out? You will need the email and password to sign back in.")) return;
+                onSignOut();
+              }}
               style={UI_CLASSIC
                 ? { background:"none", border:`1.5px solid ${T.border}`, color:T.textMid, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }
                 : { background:"none", border:"1px solid rgba(255,255,255,.28)", color:"#fff", padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:500, whiteSpace:"nowrap", flexShrink:0 }}>
@@ -16730,6 +17278,8 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
           subMessage={(formData.couple || "This event") + " will be permanently removed. This cannot be undone."}
           confirmLabel="Yes, delete" onConfirm={onDelete} onCancel={function(){ setConfirmDelete(false); }}/>
       )}
+      {/* The cleaners' sign-off after the event: hours, comments, lost property. */}
+      {isEdit && formData.id != null && <ChangeoverRecordPanel kind="event" refId={formData.id}/>}
       <div style={{ display:"grid", gridTemplateColumns:"200px 1fr", gap:20 }}>
         <div>
           <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", boxShadow:T.shadowCard }}>
@@ -18965,11 +19515,13 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   // Box office balances live in their own tables behind box-admin, so they
   // arrive separately from everything else on this page.
   const [boxDue, setBoxDue]               = useState(null);
+  const [changeovers, setChangeovers]     = useState([]);
   const [loaded, setLoaded]               = useState(false);
 
   useEffect(()=>{
     (async()=>{
       try { const b = await sbGet(ACCOM_STORAGE); setAccomBookings((b||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
+      try { const co = await sbGet(CHANGEOVERS_STORAGE); setChangeovers(Array.isArray(co) ? co : []); } catch { setChangeovers([]); }
       try { const l = await sbGet(EMAIL_LOG_STORAGE); setEmailLog(l||[]); } catch { setEmailLog([]); }
       try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecs(r||[]); } catch { setInvoiceRecs([]); }
       try { const r = await sbGet(BROCHURE_REQUESTS_STORAGE); setBrochureReqs(r||[]); } catch { setBrochureReqs([]); }
@@ -19149,6 +19701,10 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
 
   const fmtDay = (d) => d ? new Date(d+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—";
 
+  const coProps = (accomProperties && accomProperties.length) ? accomProperties : INITIAL_PROPERTIES;
+  const unitStatusList = unitStatuses(changeoverUnits(coProps), changeoverJobs(coProps, accomBookings, bookings),
+    changeoverRecordMap(changeovers), londonToday());
+
   return (
     <div style={UI_CLASSIC ? { maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" } : { maxWidth:1100 }}>
       <PageHeader title="Home"
@@ -19163,6 +19719,12 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
             : "Couldn’t read unpaid invoices from Xero (" + xeroInvErr + ")."}
         </div>
       )}
+
+      {/* Hamlet, Amly, Glamping, Grain Store: in use, waiting for the
+          cleaners, or ready — with the last sign-off's comments and lost
+          property. A tile opens the booking or event it is about. */}
+      {loaded && <UnitStatusBar statuses={unitStatusList}
+        onOpen={function(job) { if (job.kind === "event") openEvent(job.refId); else openLet(job.refId); }}/>}
 
       {/* Booked online but not yet paid — these need chasing, so they stay
           near the top with the other things waiting on someone. */}

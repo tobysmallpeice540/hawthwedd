@@ -488,6 +488,28 @@ own header.
   the same author said the same words on the same thread within two days. A
   forwarded copy may lose the `X-Template` header: nothing may depend on it alone.
 
+### Housekeeping changeovers (28 Oct 2026)
+
+- **The cleaners sign off every check-out and every confirmed event** on the
+  housekeeping login (Live / Events / Calendar / Bookings — Bookings has no
+  prices, `AccomList noMoney`). State is worked out from dates; only the
+  sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id, saved
+  with `useMergedSave` — the cleaner login writes nothing else).
+- Ids: `accom:<bookingId>:<propertyId>` (`:2` for a second stay at the same
+  property) and `event:<eventId>` — never the dates, so moving a stay keeps
+  its sign-off. Record: `doneAt` (UK wall-clock `YYYY-MM-DDTHH:MM`, editable),
+  `hours.edita` / `hours.karina` (`CHANGEOVER_CLEANERS`), `comments`,
+  `lostProperty`.
+- grey before the stay starts, yellow while in use, red from the check-out day
+  (events: the day after the last day), green once signed off. Holding events
+  get no button. Nothing before `CHANGEOVER_FROM` (2026-10-24) is ever red.
+- `UnitStatusBar` (Hamlet, Amly, Glamping, Grain Store): tiles on the admin home,
+  one compact line on Live. `ChangeoverRecordPanel` shows the sign-off on the
+  letting and event forms; the lettings list has a lost-property chip.
+- The housekeeping login stays signed in indefinitely (persisted session, no
+  session time-box in Supabase); Sign out asks first, and a stale build reloads
+  itself when the app comes back to the front. Test: `tests/changeover-e2e.cjs`.
+
 ## Working in this folder from a Claude session
 
 The repo is reached through a mount that does not allow deletion, and two
