@@ -868,6 +868,28 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     } finally { await c.close() }
   } catch (e) { fails.push('event hk run: ' + e.message) }
 
+  // ── An event with no earlier event: its note rides on its pre-clean ──
+  try {
+    const lone = freshApp()
+    lone.hawthbush_bookings_v6 = [{ id: 801, couple: 'Smith Wedding', date: plus(3), status: 'Confirmed', eventType: 'Wedding (Peak)' }]
+    lone.hbf_setup_cleans_v1 = [
+      { id: 'setup:event:801', kind: 'event', refId: 801 },
+      { id: 'note:event:801', kind: 'note', of: 'event', refId: 801, text: 'Tables out for 120' },
+    ]
+    const c = await open({ rpc: cleanerRpc, app: lone, box: [] })
+    try {
+      const pg = c.page
+      await pg.getByText('Still to sign off').waitFor({ timeout: 15000 })
+      const overdue = await pg.getByText('Still to sign off').locator('..').innerText()
+      check('lone event: note on its pre-clean', /Extra clean|Before Smith Wedding/.test(overdue) && /For Smith Wedding, on .*: Tables out for 120/.test(overdue), overdue)
+      const row = pg.locator('div', { hasText: 'Tables out for 120' }).filter({ has: pg.getByRole('button', { name: 'To clean' }) }).last()
+      await row.getByRole('button', { name: 'To clean' }).click()
+      await pg.getByText('Note from the office').waitFor({ timeout: 5000 })
+      check('lone event: and in the pre-clean\'s sign-off', /Tables out for 120/.test(await pg.getByText('Note from the office').locator('..').innerText()))
+      check('lone event: no page errors', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('lone event run: ' + e.message) }
+
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and
   // without box office events.
