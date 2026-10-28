@@ -2773,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28b";
+const APP_BUILD = "2026-10-28c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7563,6 +7563,198 @@ function CleanerBookings({ properties, accom, events, boxEvents, boxErr, jobs, r
   );
 }
 
+// ─── UPCOMING: changeover windows, week by week ──────────────────────────────
+// For every check-out, the time the cleaners have: from check-out plus the
+// late-checkout allowance, to the next guests' check-in minus the early
+// check-in allowance (Toby gives guests a couple of hours either way). The
+// Grain Store's window runs from the end of one event to the start of the
+// next. Weeks start on a Monday; a changeover belongs to the week its window
+// opens in.
+const CHANGEOVER_GRACE_MIN = 120;
+
+function addMinutesHHMM(hhmm, mins) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
+  if (!m) return null;
+  const t = Math.max(0, Math.min(23 * 60 + 59, Number(m[1]) * 60 + Number(m[2]) + mins));
+  return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+}
+// "12 pm", "2:30 pm"
+function fmtClock(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
+  if (!m) return "";
+  const h = Number(m[1]), mm = m[2];
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return h12 + (mm === "00" ? "" : ":" + mm) + " " + (h < 12 ? "am" : "pm");
+}
+function weekdayShort(iso) {
+  if (!isValidEventDate(iso)) return "";
+  return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(iso + "T00:00:00Z").getUTCDay()];
+}
+function mondayOf(iso) {
+  const d = new Date(iso + "T00:00:00Z");
+  const back = (d.getUTCDay() + 6) % 7;
+  return addDaysIso(iso, -back);
+}
+function londonClockOf(isoInstant) {
+  if (!isoInstant) return null;
+  const d = new Date(isoInstant);
+  if (isNaN(d)) return null;
+  return d.toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+// One end of a window: the day and the time when there is one. The day alone
+// is clear for anything within six days of the window opening ("Sun 12 pm –
+// Fri 2 pm"); further off it says the date too ("Fri 13 Nov, 2 pm").
+function fmtWindowEnd(pt, openedOn) {
+  if (!pt) return "";
+  if (pt.date <= addDaysIso(openedOn, 6)) return weekdayShort(pt.date) + (pt.time ? " " + fmtClock(pt.time) : "");
+  return fmtDayShort(pt.date).slice(0, -3) + (pt.time ? ", " + fmtClock(pt.time) : "");
+}
+
+function changeoverWindows(properties, accom, events, boxEvents) {
+  const out = [];
+  const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
+  // Every stay, per property, with its times.
+  const byProp = {};
+  (accom || []).forEach(function(b) {
+    if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
+    const stays = (b.stays && b.stays.length) ? b.stays : [b];
+    const seen = {};
+    stays.forEach(function(s) {
+      if (!s || !s.propertyId || !isValidEventDate(s.checkIn) || !isValidEventDate(s.checkOut)) return;
+      seen[s.propertyId] = (seen[s.propertyId] || 0) + 1;
+      const n = seen[s.propertyId];
+      const t = stayTimes(b, s, propOf(s.propertyId));
+      (byProp[s.propertyId] = byProp[s.propertyId] || []).push({
+        jobId: "accom:" + b.id + ":" + s.propertyId + (n > 1 ? ":" + n : ""),
+        checkIn: s.checkIn, checkOut: s.checkOut, inTime: t.inTime, outTime: t.outTime, who: accomGuestLabel(b)
+      });
+    });
+  });
+  Object.keys(byProp).forEach(function(pid) {
+    const list = byProp[pid].sort(function(a, z) { return a.checkIn < z.checkIn ? -1 : a.checkIn > z.checkIn ? 1 : 0; });
+    const p = propOf(pid);
+    list.forEach(function(st) {
+      const next = list.filter(function(x) { return x !== st && x.checkIn >= st.checkOut; })[0] || null;
+      const start = { date: st.checkOut, time: addMinutesHHMM(st.outTime, CHANGEOVER_GRACE_MIN) };
+      const end = next ? { date: next.checkIn, time: addMinutesHHMM(next.inTime, -CHANGEOVER_GRACE_MIN) } : null;
+      out.push({
+        id: st.jobId, unitId: pid, unitName: p ? p.name : pid, unitShort: p ? shortPropLabel(p) : pid,
+        start: start, end: end, outWho: st.who, inWho: next ? next.who : "",
+        tight: !!(end && end.date === start.date && start.time && end.time && end.time <= start.time)
+      });
+    });
+  });
+  // The Grain Store: diary events (not provisional) and box office events.
+  const gs = [];
+  (events || []).forEach(function(ev) {
+    if (!ev || !isValidEventDate(ev.date) || ev.status === "Cancelled" || ev.status === "Holding") return;
+    const last = eventEndDate(ev) || ev.date;
+    // A diary event has no times: it is cleaned from the morning after.
+    gs.push({ jobId: "event:" + ev.id, from: { date: ev.date, time: null },
+      after: { date: addDaysIso(last, 1), time: null }, who: ev.couple || "Event" });
+  });
+  (boxEvents || []).forEach(function(bx) {
+    const d = londonDateOf(bx && bx.starts_at);
+    if (!d) return;
+    const e = londonDateOf(bx.ends_at) || d;
+    gs.push({ jobId: "box:" + bx.id, from: { date: d, time: londonClockOf(bx.starts_at) },
+      after: { date: e, time: bx.ends_at ? londonClockOf(bx.ends_at) : null }, who: bx.name || "Ticketed event" });
+  });
+  gs.sort(function(a, z) {
+    const x = a.from.date + (a.from.time || ""), y = z.from.date + (z.from.time || "");
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+  gs.forEach(function(ev, i) {
+    const next = gs.slice(i + 1).filter(function(x) {
+      return (x.from.date + (x.from.time || "99")) >= (ev.after.date + (ev.after.time || ""));
+    })[0] || null;
+    out.push({
+      id: ev.jobId, unitId: GRAIN_STORE_UNIT.id, unitName: GRAIN_STORE_UNIT.name, unitShort: GRAIN_STORE_UNIT.short,
+      start: ev.after,
+      end: next ? { date: next.from.date, time: next.from.time ? addMinutesHHMM(next.from.time, -CHANGEOVER_GRACE_MIN) : null } : null,
+      outWho: ev.who, inWho: next ? next.who : "", tight: false
+    });
+  });
+  out.sort(function(a, z) {
+    const x = a.start.date + (a.start.time || ""), y = z.start.date + (z.start.time || "");
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+  return out;
+}
+
+function CleanerUpcoming({ properties, accom, events, boxEvents, jobs, recMap, today, onOpenJob }) {
+  const WEEKS = 4;
+  const [from, setFrom] = useState(mondayOf(today));
+  const jobById = {};
+  (jobs || []).forEach(function(j) { jobById[j.id] = j; });
+  const windows = changeoverWindows(properties, accom, events, boxEvents);
+  const weeks = [];
+  for (let i = 0; i < WEEKS; i++) weeks.push(addDaysIso(from, 7 * i));
+  const last = addDaysIso(from, 7 * WEEKS - 1);
+  const navBtn = { background:"#fff", border:"1.5px solid " + T.border, borderRadius:8, width:40, height:36,
+    fontSize:18, fontWeight:700, color:T.textMid, cursor:"pointer", fontFamily:"inherit", flexShrink:0 };
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"nowrap" }}>
+        <button type="button" onClick={function(){ setFrom(addDaysIso(from, -7 * WEEKS)); }} style={navBtn} aria-label="Earlier weeks">‹</button>
+        <div style={{ flex:1, textAlign:"center", minWidth:0 }}>
+          <div style={{ fontSize:17, fontWeight:800, color:T.text }}>{fmtDayShort(from).slice(4)} – {fmtDayShort(last).slice(4)}</div>
+          {from !== mondayOf(today) && (
+            <button type="button" onClick={function(){ setFrom(mondayOf(today)); }}
+              style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12, fontWeight:700, cursor:"pointer", padding:0 }}>
+              Back to this week
+            </button>
+          )}
+        </div>
+        <button type="button" onClick={function(){ setFrom(addDaysIso(from, 7 * WEEKS)); }} style={navBtn} aria-label="Later weeks">›</button>
+      </div>
+      <div style={{ fontSize:12, color:T.textMid, margin:"-6px 0 14px", textAlign:"center" }}>
+        Each window allows {CHANGEOVER_GRACE_MIN / 60} hours for a late check-out and an early check-in.
+      </div>
+
+      {weeks.map(function(w) {
+        const end = addDaysIso(w, 6);
+        const items = windows.filter(function(x) { return x.start.date >= w && x.start.date <= end && x.start.date >= CHANGEOVER_FROM; });
+        const thisWeek = today >= w && today <= end;
+        return (
+          <div key={w} style={{ background:"#fff", border:"1px solid " + (thisWeek ? T.accent : T.border), borderRadius:10, padding:"12px 14px", marginBottom:12 }}>
+            <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"nowrap", marginBottom: items.length ? 8 : 0 }}>
+              <span style={{ fontSize:14, fontWeight:800, color: thisWeek ? T.accent : T.text, whiteSpace:"nowrap" }}>
+                {thisWeek ? "This week" : "Week of " + fmtDayShort(w)}
+              </span>
+              <span style={{ fontSize:12, color:T.textLight, whiteSpace:"nowrap" }}>
+                {thisWeek ? fmtDayShort(w) + " – " + fmtDayShort(end) : ""}
+              </span>
+              <span style={{ marginLeft:"auto", fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>
+                {items.length ? items.length + " changeover" + (items.length === 1 ? "" : "s") : "None"}
+              </span>
+            </div>
+            {items.map(function(x) {
+              const job = jobById[x.id] || null;
+              return (
+                <div key={x.id} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, padding:"8px 0", borderTop:"1px solid " + T.tint }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13.5, fontWeight:700, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                      {x.unitShort}
+                      <span style={{ fontWeight:700, color: x.tight ? T.red : T.accent, marginLeft:8 }}>
+                        {fmtWindowEnd(x.start, x.start.date)} – {x.end ? fmtWindowEnd(x.end, x.start.date) : "no one booked"}
+                      </span>
+                    </div>
+                    <div style={{ fontSize:11.5, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                      {x.outWho}{x.inWho ? " → " + x.inWho : ""}
+                    </div>
+                  </div>
+                  {job && <ChangeoverButton job={job} rec={recMap[job.id]} today={today} onOpen={onOpenJob}/>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Month by month: hours each cleaner put in, from the sign-offs. Shared by the
 // housekeeping Hours tab and Reports → Housekeeping Hours. Months follow the
 // "ready at" time, which is when the work was done.
@@ -7747,7 +7939,7 @@ function CleanerView() {
     return saveRecs(function(prev) { return (prev || []).filter(function(r) { return r.id !== id; }); });
   };
 
-  const tabs = [["home","Live"],["calendar","Calendar"],["list","Bookings"],["hours","Hours"],["app","App"]];
+  const tabs = [["home","Live"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["hours","Hours"],["app","App"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
@@ -7756,6 +7948,8 @@ function CleanerView() {
       <TabStrip tabs={tabs} value={tab} onChange={setTab}/>
 
       {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events} boxEvents={boxEvents}
+        jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
+      {tab === "upcoming" && <CleanerUpcoming properties={properties} accom={accom} events={events} boxEvents={boxEvents}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
       {tab === "app" && <HousekeepingAppTab/>}
       {tab === "hours" && <HousekeepingHours recs={recs}

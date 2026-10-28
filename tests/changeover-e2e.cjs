@@ -2,7 +2,9 @@
 //
 // The housekeeping sign-off, end to end. Built app, Supabase faked
 // (tests/portal-harness.cjs → openStaff), box-admin faked here:
-//   · the cleaner login has Live / Calendar / Bookings / Hours / App;
+//   · the cleaner login has Live / Upcoming / Calendar / Bookings / Hours / App;
+//   · Upcoming: Monday weeks, each changeover's window (check-out + 2h to the
+//     next check-in − 2h), four weeks a page;
 //   · Live's status line: one line of short names (Hamlet, Amly, Glamping,
 //     Grain St.), red waiting, yellow in use, green ready — box office events
 //     count for the Grain Store;
@@ -101,7 +103,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     await page.getByText('Still to sign off').waitFor({ timeout: 15000 })
     await page.getByText('Quiz Night').first().waitFor({ timeout: 5000 })
     const tabNames = await page.getByRole('tab').allInnerTexts()
-    check('tab order', tabNames.join('|') === 'Live|Calendar|Bookings|Hours|App', tabNames.join('|'))
+    check('tab order', tabNames.join('|') === 'Live|Upcoming|Calendar|Bookings|Hours|App', tabNames.join('|'))
     check('no "next 14 days" heading', !/The next 14 days/.test(await page.locator('body').innerText()))
 
     // Status line.
@@ -158,6 +160,28 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     const r2 = w2 && w2.value.find((r) => r.id === 'accom:A1:hamlet')
     check('edit saved', r2 && r2.hours.edita === 3 && r2.lostProperty === 'umbrella', JSON.stringify(r2))
     check('edit is one record, not two', w2 && w2.value.filter((r) => r.id === 'accom:A1:hamlet').length === 1 && w2.value.length === 3)
+
+    // Upcoming: the Hamlet window runs from Red Guest's check-out (10am + 2h)
+    // to Later Guest's check-in (4pm − 2h), six days later — days only.
+    await page.getByRole('tab', { name: 'Upcoming', exact: true }).click()
+    await page.getByText(/changeover/).first().waitFor({ timeout: 5000 })
+    const wd = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()]
+    // The page opens on this week; on a Monday the window opened last week.
+    const monday = plus(-((new Date(today + 'T00:00:00Z').getUTCDay() + 6) % 7))
+    const startOn = plus(-1) < monday
+    if (startOn) await page.getByRole('button', { name: 'Earlier weeks' }).click()
+    let up = await page.locator('body').innerText()
+    check('Upcoming: Hamlet window', up.indexOf('Hamlet') !== -1 && up.indexOf(wd(plus(-1)) + ' 12 pm – ' + wd(plus(5)) + ' 2 pm') !== -1, up.slice(0, 600))
+    check('Upcoming: who out and in', /Red Guest → Later Guest/.test(up))
+    check('Upcoming: Amly has no one booked after', /Yellow Guest\b(?! →)/.test(up) && /Amly\s*\S+ 12 pm – no one booked/.test(up))
+    check('Upcoming: four weeks', (up.match(/This week|Week of/g) || []).length === 4)
+    if (startOn) await page.getByRole('button', { name: 'Back to this week' }).click()
+    up = await page.locator('body').innerText()
+    check('Upcoming: this week first', /This week/.test(up))
+    await page.getByRole('button', { name: 'Later weeks' }).click()
+    up = await page.locator('body').innerText()
+    check('Upcoming: pages on', !/This week/.test(up) && /Back to this week/.test(up))
+    await page.getByRole('button', { name: 'Back to this week' }).click()
 
     // Bookings: one page, lettings and the Grain Store together.
     await page.getByRole('tab', { name: 'Bookings', exact: true }).click()

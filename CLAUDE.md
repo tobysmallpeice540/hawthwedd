@@ -492,7 +492,7 @@ own header.
 
 - **The cleaners sign off every check-out and every confirmed event** — diary
   events and box office (ticketed) events alike — on the housekeeping login:
-  Live / Calendar / Bookings / Hours / App. State is worked out from dates;
+  Live / Upcoming / Calendar / Bookings / Hours / App. State is worked out from dates;
   only the sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id,
   saved with `useMergedSave` — the cleaner login writes nothing else).
 - Ids: `accom:<bookingId>:<propertyId>` (`:2` for a second stay at the same
@@ -518,6 +518,11 @@ own header.
   sign-off on the letting and event forms; the lettings list has a
   lost-property chip. Hours: `HousekeepingHours` on the Hours tab and Reports →
   Housekeeping Hours (above Hours Worked, which stays last).
+- **Upcoming** (`changeoverWindows`): four Monday-to-Sunday weeks a page, each
+  changeover listed in order with its window — check-out + 2h to the next
+  check-in − 2h (`CHANGEOVER_GRACE_MIN`, Toby's late/early allowance); Grain
+  Store from the event's end (diary: the morning after) to the next event's
+  start − 2h. A window belongs to the week it opens in.
 - The housekeeping login stays signed in indefinitely (persisted session, no
   session time-box in Supabase); Sign out asks first, a stale build reloads
   itself when the app comes back to the front, and the App tab installs it
