@@ -633,6 +633,12 @@ own header.
   the housekeeping login's own shell and `CleanerView` for an admin
   (`hkPreview`), with "← Back to admin" in place of Sign out and a note that
   sign-offs made there are real.
+- **Past weeks' sign-offs are the office's** (28 Oct): Upcoming pages back
+  as well as forward; a sign-off whose `doneAt` is before this week's Monday
+  opens read-only on the housekeeping login (`changeoverLocked`, the
+  dialog's `locked`) — no Save, no "Not done after all". The Housekeeper's
+  view (`CleanerView isAdmin`) can change it. Unsigned past jobs stay
+  signable by the housekeepers (Still to sign off).
 - The housekeeping login stays signed in indefinitely (persisted session, no
   session time-box in Supabase); Sign out asks first, a stale build reloads
   itself when the app comes back to the front, and the App button (hidden once

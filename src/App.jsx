@@ -2776,7 +2776,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28r";
+const APP_BUILD = "2026-10-28s";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7260,7 +7260,16 @@ function ChangeoverButton({ job, rec, today, onOpen }) {
 }
 
 // The sign-off itself. Module scope: it renders inputs.
-function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
+// A sign-off from a week before this one is history: the housekeeping login
+// can open it and read it, only an admin can change or remove it (28 Oct,
+// Toby). The week is the one it was ready in — the pay sheet's week.
+function changeoverLocked(rec, job, today, isAdmin) {
+  if (isAdmin || !rec) return false;
+  const day = /^\d{4}-\d{2}-\d{2}/.test(String(rec.doneAt || "")) ? String(rec.doneAt).slice(0, 10) : (job && job.due) || "";
+  return !!day && day < mondayOf(today);
+}
+
+function ChangeoverDialog({ job, rec, onSave, onReopen, onClose, locked }) {
   const [hours, setHours] = useState(function() {
     const h = {};
     CHANGEOVER_CLEANERS.forEach(function(c) {
@@ -7287,6 +7296,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
   const anyHours = CHANGEOVER_CLEANERS.some(function(c) { return Number(hours[c.key]) > 0; });
 
   const save = async function() {
+    if (locked) return;
     if (bad) { setErr("Hours must be a number between 0 and 24."); return; }
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(doneAt)) { setErr("Please put in the date and time it was ready."); return; }
     if (note && !noteRead) { setErr("Please tick to say you have read the note at the top."); return; }
@@ -7342,7 +7352,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
             <div style={{ fontSize:12, fontWeight:800, color:T.red, marginBottom:4 }}>Note from the office</div>
             <div style={{ fontSize:14, color:T.text, lineHeight:1.5, whiteSpace:"pre-wrap" }}>{note}</div>
             <label style={{ display:"flex", alignItems:"center", gap:9, marginTop:9, cursor:"pointer", flexWrap:"nowrap" }}>
-              <input type="checkbox" checked={noteRead} onChange={function(e) { setNoteRead(e.target.checked); }}
+              <input type="checkbox" checked={noteRead} disabled={locked} onChange={function(e) { setNoteRead(e.target.checked); }}
                 style={{ width:20, height:20, margin:0, flexShrink:0, accentColor:T.red }}/>
               <span style={{ fontSize:13.5, fontWeight:700, color:T.text }}>I have read this</span>
             </label>
@@ -7355,7 +7365,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
               <div key={c.key}>
                 <label style={lab}>{c.label} hours</label>
                 <input type="number" inputMode="decimal" min="0" max="24" step="0.25" value={hours[c.key]}
-                  placeholder="0"
+                  placeholder="0" disabled={locked}
                   onChange={function(e) { const v = e.target.value; setHours(function(h) { return Object.assign({}, h, { [c.key]: v }); }); }}
                   style={inp}/>
               </div>
@@ -7364,24 +7374,36 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
         </div>
 
         <label style={lab}>Ready for the next guests at</label>
-        <input type="datetime-local" value={doneAt} onChange={function(e){ setDoneAt(e.target.value); }} style={inp}/>
-        <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>Change this if it was ready earlier than now.</div>
+        <input type="datetime-local" value={doneAt} disabled={locked} onChange={function(e){ setDoneAt(e.target.value); }} style={inp}/>
+        {!locked && <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>Change this if it was ready earlier than now.</div>}
 
         <label style={lab}>Comments</label>
-        <textarea rows={3} value={comments} onChange={function(e){ setComments(e.target.value); }}
+        <textarea rows={3} value={comments} disabled={locked} onChange={function(e){ setComments(e.target.value); }}
           placeholder="Anything broken, missing, or worth knowing"
           style={Object.assign({}, inp, { resize:"vertical", fontSize:14 })}/>
 
         <label style={lab}>Lost property</label>
-        <textarea rows={2} value={lost} onChange={function(e){ setLost(e.target.value); }}
+        <textarea rows={2} value={lost} disabled={locked} onChange={function(e){ setLost(e.target.value); }}
           placeholder="e.g. black hat in bedroom 3"
           style={Object.assign({}, inp, { resize:"vertical", fontSize:14 })}/>
 
-        {!anyHours && !bad && (
+        {!anyHours && !bad && !locked && (
           <div style={{ fontSize:12, color:T.amber, marginTop:10, fontWeight:600 }}>No hours entered.</div>
         )}
         {err && <div style={{ fontSize:13, color:T.red, marginTop:10, fontWeight:600 }}>{err}</div>}
 
+        {locked ? (
+          <div style={{ marginTop:16 }}>
+            <div role="note" style={{ fontSize:12.5, color:T.textMid, background:T.bgInput, border:"1px solid " + T.border, borderRadius:8, padding:"8px 11px", lineHeight:1.5 }}>
+              Signed off in an earlier week. Only the office can change it.
+            </div>
+            <button onClick={onClose}
+              style={{ marginTop:12, background:"#fff", color:T.textMid, border:"1.5px solid " + T.border, borderRadius:9, padding:"11px 18px",
+                fontFamily:"inherit", fontSize:14, fontWeight:600, cursor:"pointer" }}>
+              Close
+            </button>
+          </div>
+        ) : (
         <div style={{ display:"flex", gap:10, marginTop:16, alignItems:"center", flexWrap:"wrap" }}>
           <button onClick={save} disabled={busy}
             style={{ background:T.green, color:"#fff", border:"none", borderRadius:9, padding:"12px 24px",
@@ -7408,6 +7430,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
             </button>
           )}
         </div>
+        )}
       </div>
     </div>
   );
@@ -8497,7 +8520,9 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
   );
 }
 
-function CleanerView() {
+// isAdmin: the office's Housekeeper's view, which may change past weeks'
+// sign-offs; the housekeeping login can only read them.
+function CleanerView({ isAdmin }) {
   const [properties, setProperties] = useState(INITIAL_PROPERTIES);
   const [accom, setAccom]           = useState([]);
   const [events, setEvents]         = useState([]);
@@ -8606,6 +8631,7 @@ function CleanerView() {
 
       {openJob && (
         <ChangeoverDialog key={openJob.id} job={openJob} rec={recMap[openJob.id] || null}
+          locked={changeoverLocked(recMap[openJob.id] || null, openJob, today, !!isAdmin)}
           onSave={saveRec} onReopen={reopenRec} onClose={function(){ setOpenJob(null); }}/>
       )}
     </div>
@@ -10200,7 +10226,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
           )}
           {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
           <PageErrorBoundary key={cleanerShell ? "cleaner" : "bar-" + barSection} page={cleanerShell ? "cleaner" : barSection}>
-          {cleanerShell && <CleanerView/>}
+          {cleanerShell && <CleanerView isAdmin={hkPreview}/>}
           {cleanerShell && appHelpOpen && (
             <div onClick={function(){ setAppHelpOpen(false); }}
               style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex",

@@ -46,6 +46,7 @@ const isoCode = (iso) => {
   const wk = 1 + Math.round(((d - first) / 86400000 - 3 + ((first.getUTCDay() + 6) % 7)) / 7)
   return String(y).slice(2) + String(wk).padStart(2, '0')
 }
+const addDaysT = (iso, n) => new Date(Date.parse(iso + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10)
 const mondayOfT = (iso) => { const d = new Date(iso + 'T00:00:00Z'); return new Date(d - ((d.getUTCDay() + 6) % 7) * 86400000).toISOString().slice(0, 10) }
 // The app's short date: "Mon 2 Nov 26".
 const dshort = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()] + ' ' +
@@ -778,6 +779,55 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check("hk view: no page errors", c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
   } catch (e) { fails.push('hk view run: ' + e.message) }
+
+  // ── Past weeks: the housekeepers can look back and read, only an admin
+  // (Housekeeper's view) can change a sign-off from before this week.
+  try {
+    const lastWeek = addDaysT(mondayOfT(today), -3)          // always the week before this one
+    const pw = freshApp()
+    pw.hbf_changeovers_v1 = CHANGEOVERS.map((r) => r.id === 'accom:A3:glamping' ? Object.assign({}, r, { doneAt: lastWeek + 'T15:30' }) : r)
+    let c = await open({ rpc: cleanerRpc, app: pw })
+    try {
+      const pg = c.page
+      await pg.getByRole('group', { name: 'Property status' }).waitFor({ timeout: 15000 })
+      await pg.getByRole('tab', { name: 'Upcoming', exact: true }).click()
+      await pg.getByRole('button', { name: 'Earlier weeks' }).click()
+      check('past: Upcoming goes back before this week', (await pg.getByRole('button', { name: 'Back to this week' }).count()) === 1)
+      await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
+      await pg.getByRole('button', { name: /past/i }).first().click().catch(() => {})
+      const card = pg.locator('div', { has: pg.getByText('Hat Guest', { exact: true }) }).filter({ has: pg.getByRole('button', { name: 'Ready' }) }).last()
+      await card.getByRole('button', { name: 'Ready' }).click()
+      await pg.getByText('Only the office can change it.').waitFor({ timeout: 5000 })
+      check('past: a housekeeper can read it', (await pg.locator('textarea').first().inputValue()) === 'Tent 4 zip sticking')
+      check('past: but not change it', (await pg.locator('input[type=number]').first().isDisabled()) && (await pg.getByRole('button', { name: 'Save changes' }).count()) === 0
+        && (await pg.getByRole('button', { name: 'Not done after all' }).count()) === 0)
+      await pg.getByRole('button', { name: 'Close', exact: true }).click()
+      // This week's are still theirs to change.
+      await pg.getByRole('tab', { name: 'Live', exact: true }).click()
+      check('past: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+
+    const pa = freshApp()
+    pa.hbf_changeovers_v1 = CHANGEOVERS.map((r) => r.id === 'accom:A3:glamping' ? Object.assign({}, r, { doneAt: lastWeek + 'T15:30' }) : r)
+    c = await open({ app: pa })
+    try {
+      const pg = c.page
+      await pg.getByRole('group', { name: 'Property status' }).waitFor({ timeout: 15000 })
+      await pg.locator('nav, aside').getByText("Housekeeper's view", { exact: true }).first().click()
+      await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
+      await pg.getByRole('button', { name: /past/i }).first().click().catch(() => {})
+      const card = pg.locator('div', { has: pg.getByText('Hat Guest', { exact: true }) }).filter({ has: pg.getByRole('button', { name: 'Ready' }) }).last()
+      await card.getByRole('button', { name: 'Ready' }).click()
+      await pg.getByRole('button', { name: 'Save changes' }).waitFor({ timeout: 5000 })
+      check('past: an admin can change it', !(await pg.locator('input[type=number]').first().isDisabled()) && (await pg.getByText('Only the office can change it.').count()) === 0)
+      await pg.locator('input[type=number]').first().fill('2.5')
+      await pg.getByRole('button', { name: 'Save changes' }).click()
+      await pg.waitForTimeout(800)
+      const r = (pa.hbf_changeovers_v1 || []).find((x) => x.id === 'accom:A3:glamping')
+      check('past: and it is saved', r && r.hours.edita === 2.5, JSON.stringify(r))
+      check('past: no page errors (admin)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('past run: ' + e.message) }
 
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and
