@@ -342,7 +342,8 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     check('home: Amly guests', (await hpill('Amly')) === 'Guests')
     check('home: Glamping ready', (await hpill('Glamping')) === 'Ready')
     check('home: Grain St. counts the box office event', (await hpill('Grain St.')) === 'To clean')
-    check('home: no names, comments or lost property', !/Tent 4 zip sticking/.test(home) && !/Lost property/.test(home))
+    const barText = await bar.innerText()
+    check('home: the status line has no names, comments or lost property', !/Tent 4 zip sticking/.test(barText) && !/Lost property/.test(barText), barText)
     const tops = await bar.locator('span[title]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)))
     check('home: all four on one line', new Set(tops).size === 1, JSON.stringify(tops))
     await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-home.png') })
@@ -444,7 +445,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('setup: Grain St. red while its setup clean is due', (await pillT('Grain St.')) === 'To clean', await pillT('Grain St.'))
       check('setup: Hamlet still shows its guests', (await pillT('Hamlet')) === 'Guests', await pillT('Hamlet'))
       const od = await pg.getByText('Still to sign off').locator('..').innerText()
-      check('setup: due setup in Still to sign off', /Setup · Party Prep · by /.test(od), od)
+      check('setup: due setup in Still to sign off', /Extra clean · Party Prep · by /.test(od), od)
 
       await pg.getByRole('tab', { name: 'Upcoming', exact: true }).click()
       await pg.getByText(/This week/).waitFor({ timeout: 5000 })
@@ -453,19 +454,19 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       for (let i = 0; i < 3 && !/before Party Prep/.test(up); i++) { await pg.getByRole('button', { name: 'Earlier weeks' }).click(); up += await pg.locator('body').innerText() }
       await pg.getByRole('button', { name: 'Back to this week' }).click().catch(() => {})
       up += await pg.locator('body').innerText()
-      check('setup: Hamlet setup shows the stay it is for', up.indexOf(dshort(plus(6)) + ' – ' + dshort(plus(8))) !== -1 && /Setup clean before Second Family/.test(up), up.slice(0, 900))
-      check('setup: diary event setup listed', /Setup clean before Party Prep/.test(up))
+      check('setup: Hamlet setup shows the stay it is for', up.indexOf(dshort(plus(6)) + ' – ' + dshort(plus(8))) !== -1 && /Extra clean before Second Family/.test(up), up.slice(0, 900))
+      check('setup: diary event setup listed', /Extra clean before Party Prep/.test(up))
       await pg.getByRole('button', { name: 'Later weeks' }).click()
       up = await pg.locator('body').innerText()
       await pg.getByRole('button', { name: 'Back to this week' }).click()
       up += await pg.locator('body').innerText()
-      check('setup: Amly setup listed', up.indexOf('Setup clean before Amly Arrivals') !== -1)
-      check('setup: box office setup shows the event date and time', /Setup clean before Late Supper/.test(up) && up.indexOf(dshort(plus(12)) + ' · ' + new Date(plus(12) + 'T18:30:00Z').toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })) !== -1, up.slice(0, 1500))
+      check('setup: Amly setup listed', up.indexOf('Extra clean before Amly Arrivals') !== -1)
+      check('setup: box office setup shows the event date and time', /Extra clean before Late Supper/.test(up) && up.indexOf(dshort(plus(12)) + ' · ' + new Date(plus(12) + 'T18:30:00Z').toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })) !== -1, up.slice(0, 1500))
 
       await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
       await pg.getByText('Second Family').first().waitFor({ timeout: 5000 })
       const bk = await pg.locator('body').innerText()
-      check('setup: four setup cards on Bookings', (bk.match(/Setup clean/g) || []).length === 4, String((bk.match(/Setup clean/g) || []).length))
+      check('setup: four extra-clean cards on Bookings', (bk.match(/Extra clean/g) || []).length === 4, String((bk.match(/Extra clean/g) || []).length))
 
       // Sign off the event's setup clean.
       await pg.getByRole('tab', { name: 'Live', exact: true }).click()
@@ -489,8 +490,8 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       const pg = c.page
       await pg.getByRole('group', { name: 'Property status' }).locator('span[title="To clean"]', { hasText: 'Grain St.' }).waitFor({ timeout: 15000 })
       await pg.getByRole('group', { name: 'Property status' }).locator('span[title="To clean"]', { hasText: 'Grain St.' }).click()
-      await pg.getByText('Setup clean', { exact: true }).waitFor({ timeout: 10000 })
-      const box = pg.locator('label', { has: pg.getByText('Setup clean', { exact: true }) }).locator('input[type=checkbox]')
+      await pg.getByText('Extra clean before the event', { exact: true }).waitFor({ timeout: 10000 })
+      const box = pg.locator('label', { has: pg.getByText('Extra clean before the event', { exact: true }) }).locator('input[type=checkbox]')
       check('setup: event form shows it ticked', await box.isChecked())
       await box.click()
       await pg.waitForTimeout(800)
@@ -500,8 +501,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       // A letting: the Hamlet tile (guests in) opens First Family.
       await pg.goto(c.origin + '/')
       await pg.getByRole('group', { name: 'Property status' }).locator('span[title]', { hasText: 'Hamlet' }).first().click()
-      await pg.getByText('Setup clean', { exact: true }).waitFor({ timeout: 10000 })
-      const lbox = pg.locator('label', { has: pg.getByText('Setup clean', { exact: true }) }).locator('input[type=checkbox]')
+      await pg.getByText('Extra clean before arrival', { exact: true }).waitFor({ timeout: 10000 })
+      check('setup: letting box has no explanation text', !/Housekeeping cleans before this starts/.test(await pg.locator('body').innerText()))
+      const lbox = pg.locator('label', { has: pg.getByText('Extra clean before arrival', { exact: true }) }).locator('input[type=checkbox]')
       check('setup: letting without one is unticked', !(await lbox.isChecked()))
       await lbox.click()
       await pg.waitForTimeout(800)
@@ -509,6 +511,105 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('setup: no page errors (admin)', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
   } catch (e) { fails.push('setup run: ' + e.message) }
+
+  // ── Notes to housekeepers, comments on the admin home ──────────────────
+  // P4 (Amly, out yesterday) has a note: on its Live card, on Bookings, and at
+  // the top of the sign-off, which refuses until ticked.
+  // The admin home lists sign-offs with comments or lost property until Read.
+  try {
+    const notesApp = () => {
+      const a = freshApp()
+      a.hbf_accom_v1 = [
+        { id: 'P1', guestName: 'Cot Family', status: 'confirmed', source: 'direct', stays: [stay('hamlet', plus(-1), plus(2))], schedule: [] },
+        { id: 'P4', guestName: 'Dog Owners', status: 'confirmed', source: 'direct', stays: [stay('amly', plus(-3), plus(-1))], schedule: [] },
+      ]
+      a.hawthbush_bookings_v6 = []
+      a.hbf_changeovers_v1 = [
+        { id: 'accom:OLD:hamlet', kind: 'accom', refId: 'OLD', unitId: 'hamlet', unitName: 'The Hamlet', who: 'Old Guest',
+          doneAt: plus(-5) + 'T12:00', hours: { edita: 2 }, comments: 'Kettle broken', lostProperty: 'Blue scarf' },
+        { id: 'accom:OLD2:amly', kind: 'accom', refId: 'OLD2', unitId: 'amly', unitName: 'Amly Barn', who: 'Quiet Guest',
+          doneAt: plus(-6) + 'T12:00', hours: { edita: 2 }, comments: '', lostProperty: '' },
+      ]
+      a.hbf_setup_cleans_v1 = [
+        { id: 'note:accom:P4', kind: 'note', of: 'accom', refId: 'P4', text: 'Hoover the dog hair from the sofa' },
+      ]
+      return a
+    }
+    const openNotes = async (appData, rpc) => {
+      const c = await openStaff({ distDir: DIST, appData: appData, rpc: rpc })
+      await c.page.route(HOST + '/rest/v1/app_data', async (route) => {
+        const req = route.request()
+        if (req.method() !== 'POST') return route.fallback()
+        const body = JSON.parse(req.postData() || '{}'); appData[body.key] = body.value
+        return route.fulfill({ status: 201, contentType: 'application/json', body: '[]' })
+      })
+      await c.page.route('**/.netlify/functions/box-admin', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"events":[],"orders":[]}' }))
+      await c.page.reload()
+      return c
+    }
+    const hk = notesApp()
+    let c = await openNotes(hk, cleanerRpc)
+    try {
+      const pg = c.page
+      await pg.getByText('Still to sign off').waitFor({ timeout: 15000 })
+      const od = await pg.getByText('Still to sign off').locator('..').innerText()
+      check('notes: note on the overdue check-out', /Note: Hoover the dog hair from the sofa/.test(od), od)
+      await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
+      await pg.getByRole('button', { name: /Show past/ }).click()
+      await pg.getByText('Dog Owners').first().waitFor({ timeout: 5000 })
+      const bk = await pg.locator('body').innerText()
+      check('notes: note on the Bookings card', /Note: Hoover the dog hair/.test(bk))
+      // Sign off: refused until the note is ticked.
+      await pg.getByRole('tab', { name: 'Live', exact: true }).click()
+      const row = pg.getByText('Still to sign off').locator('..').locator('div[style*="nowrap"]', { hasText: 'Dog Owners' }).filter({ has: pg.locator('button') }).last()
+      await row.getByRole('button', { name: 'To clean' }).click()
+      await pg.getByText('Note from the office').waitFor({ timeout: 5000 })
+      await pg.locator('input[type=number]').nth(0).fill('2')
+      await pg.getByRole('button', { name: 'Done — ready' }).click()
+      await pg.getByText(/Please tick to say you have read the note/).waitFor({ timeout: 3000 })
+      check('notes: sign-off refused until read', !(hk.hbf_changeovers_v1 || []).some((x) => x.id === 'accom:P4:amly'))
+      await pg.getByLabel('I have read this').check()
+      await pg.getByRole('button', { name: 'Done — ready' }).click()
+      await pg.getByText('Edita hours').waitFor({ state: 'detached', timeout: 5000 })
+      const r = (hk.hbf_changeovers_v1 || []).find((x) => x.id === 'accom:P4:amly')
+      check('notes: read tick saved with the wording', r && r.noteAck && r.noteAck.text === 'Hoover the dog hair from the sofa', JSON.stringify(r))
+      check('notes: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+
+    // Admin: the letting form's boxes and note; the home's comments panel.
+    const ad = notesApp()
+    c = await openNotes(ad, undefined)
+    try {
+      const pg = c.page
+      await pg.getByText('From housekeeping').waitFor({ timeout: 15000 })
+      const fb = pg.getByText('From housekeeping').locator('..')
+      const ft = await fb.innerText()
+      check('home: comments and lost property listed', /Kettle broken/.test(ft) && /Lost property: Blue scarf/.test(ft) && /Old Guest/.test(ft), ft)
+      check('home: a sign-off with nothing to say is not listed', !/Quiet Guest/.test(ft), ft)
+      await fb.getByRole('button', { name: 'Read' }).click()
+      await pg.getByText('From housekeeping').waitFor({ state: 'detached', timeout: 5000 })
+      await pg.waitForTimeout(800)
+      const seen = (ad.hbf_changeover_seen_v1 || []).find((x) => x.id === 'accom:OLD:hamlet')
+      check('home: Read is stored, the sign-off untouched', seen && seen.comments === 'Kettle broken' &&
+        ad.hbf_changeovers_v1.find((x) => x.id === 'accom:OLD:hamlet').officeSeen === undefined, JSON.stringify(ad.hbf_changeover_seen_v1))
+      // Open Cot Family from the Hamlet tile.
+      await pg.getByRole('group', { name: 'Property status' }).locator('span[title]', { hasText: 'Hamlet' }).first().click()
+      await pg.getByText('Notes to housekeepers', { exact: true }).waitFor({ timeout: 10000 })
+      check('form: no "No clean" option', !/No clean at the end/.test(await pg.locator('body').innerText()))
+      const ta = pg.getByPlaceholder(/tick to say they have read it/)
+      await ta.fill('Leave the cot up')
+      await ta.blur()
+      await pg.waitForTimeout(800)
+      const n = (ad.hbf_setup_cleans_v1 || []).find((x) => x.id === 'note:accom:P1')
+      check('notes: note saved on blur', n && n.kind === 'note' && n.of === 'accom' && n.text === 'Leave the cot up', JSON.stringify(ad.hbf_setup_cleans_v1))
+      check('notes: other notes kept', ad.hbf_setup_cleans_v1.some((x) => x.id === 'note:accom:P4'))
+      await ta.fill('')
+      await ta.blur()
+      await pg.waitForTimeout(800)
+      check('notes: emptying the note removes it', !ad.hbf_setup_cleans_v1.some((x) => x.id === 'note:accom:P1'), JSON.stringify(ad.hbf_setup_cleans_v1))
+      check('notes: no page errors (admin)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('notes run: ' + e.message) }
 
   // ── Pay: rates by date, the week's sums, Paid ───────────────────────────
   // Last week: Karina at The House Mon 2h (£18) and Tue 3h (£20 — her rise

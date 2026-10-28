@@ -558,7 +558,31 @@ own header.
   `setup:<kind>:<refId>:<unit>`, kind `setup`, `setupOf` the record's kind. Red
   from the day the window opens; once the stay or event has begun it no longer
   turns the tile red. Draft box office events are not in housekeeping, so their
-  setup clean waits until published.
+  setup clean waits until published. Shown to everyone as **"Extra clean before
+  arrival"** (lettings) / "Extra clean before the event" — a bare tick box, no
+  explanation (Toby, 28 Oct). New jobs say `who: "Extra clean · …"`; older
+  sign-offs say `"Setup · …"`, so strip both (`/^(Setup|Extra clean) · /`).
+  A "no clean at the end" option was built and then dropped at Toby's request
+  the same day — do not bring it back unasked.
+- **Notes to housekeepers** (28 Oct): a textarea on the letting form under the
+  tick box, saved on blur into the SAME key as
+  `{ id: "note:accom:<refId>", kind: "note", of, refId, text }` (empty text
+  removes it). The kind is deliberately not accom/event/box, so builds before
+  it ignore the row; `setupCleanItems` only reads ids starting `setup:`.
+  `changeoverJobs` puts `note` on the letting's check-out jobs and its extra
+  clean (`hkNote`); it shows on Live (incl. Still to sign off) and Bookings
+  cards (`HkNoteLine`) and in a red box at the top of the sign-off, which
+  refuses to save until "I have read this" is ticked. The tick is stored on
+  the sign-off as `noteAck: { text, at }`; a later change to the note asks
+  again. The code reads notes for events and box office too, but only the
+  letting form can write one.
+- **Admin Home → "From housekeeping"** (28 Oct): every sign-off with comments
+  or lost property, newest first, until someone presses **Read**. What was
+  read is stored in its own key `hbf_changeover_seen_v1` (`{ id: <sign-off id>,
+  comments, lostProperty, at }`) — the cleaners' records are never written
+  from the office. A sign-off whose comments or lost property change later
+  comes back. Read with `sbGetStrict`; if that read fails the panel is hidden
+  rather than listing everything.
 - **The House** (28 Oct): Karina also cleans Toby's own house, paid by the
   hour. The housekeeping **House** tab (it replaced Hours) is her Mon–Fri
   timesheet (`hbf_house_hours_v1`, one record a week, id `karina:<monday>`):

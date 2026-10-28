@@ -2775,7 +2775,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28m";
+const APP_BUILD = "2026-10-28n";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6250,7 +6250,7 @@ const BACKUP_DATA_KEYS = [
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
   "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
-  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1", "hbf_setup_cleans_v1", "hbf_house_hours_v1", "hbf_housekeeping_pay_v1"
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1", "hbf_setup_cleans_v1", "hbf_changeover_seen_v1", "hbf_house_hours_v1", "hbf_housekeeping_pay_v1"
   // Not the follow-up keys: restoring the "already sent" record would send
   // everybody mailed since the snapshot their email again.
 ];
@@ -6262,7 +6262,7 @@ const KEY_LABELS = {
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
   "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings",
-  "hbf_changeovers_v1":"Changeover sign-offs", "hbf_setup_cleans_v1":"Setup cleans asked for", "hbf_house_hours_v1":"House timesheets", "hbf_housekeeping_pay_v1":"Housekeeping pay records"
+  "hbf_changeovers_v1":"Changeover sign-offs", "hbf_setup_cleans_v1":"Housekeeping requests (extra cleans, notes)", "hbf_changeover_seen_v1":"Housekeeping comments cleared", "hbf_house_hours_v1":"House timesheets", "hbf_housekeeping_pay_v1":"Housekeeping pay records"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -6864,6 +6864,7 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
     if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
     const stays = (b.stays && b.stays.length) ? b.stays : [b];
     const seen = {};
+    const note = hkNote(setups, "accom", b.id);
     stays.forEach(function(s) {
       if (!s || !s.propertyId || !isValidEventDate(s.checkIn) || !isValidEventDate(s.checkOut)) return;
       seen[s.propertyId] = (seen[s.propertyId] || 0) + 1;
@@ -6872,7 +6873,7 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
         id: "accom:" + b.id + ":" + s.propertyId + (n > 1 ? ":" + n : ""),
         kind: "accom", refId: b.id, unitId: s.propertyId, unitName: propName(s.propertyId),
         start: s.checkIn, due: s.checkOut,
-        who: accomGuestLabel(b)
+        who: accomGuestLabel(b), note: note
       });
     });
   });
@@ -6887,7 +6888,7 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
       // An event is on from its first day to its last; the clean is due the
       // morning after.
       start: ev.date, due: addDaysIso(end, 1),
-      who: (ev.couple || "Event") + " · " + eventTypeLabel(ev)
+      who: (ev.couple || "Event") + " · " + eventTypeLabel(ev), note: hkNote(setups, "event", ev.id)
     });
   });
   // Ticketed events in the Grain Store: the same rule, cleaned the day after.
@@ -6899,7 +6900,7 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
       id: "box:" + bx.id,
       kind: "box", refId: bx.id, unitId: GRAIN_STORE_UNIT.id, unitName: GRAIN_STORE_UNIT.name,
       start: d, due: addDaysIso(e && e > d ? e : d, 1),
-      who: (bx.name || "Ticketed event") + " · Box office"
+      who: (bx.name || "Ticketed event") + " · Box office", note: hkNote(setups, "box", bx.id)
     });
   });
   setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { jobs.push(x.job); });
@@ -6921,6 +6922,20 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
 // allowance, or at the event's start.
 const SETUP_CLEANS_STORAGE = "hbf_setup_cleans_v1";
 const SETUP_CLEAN_LEAD_DAYS = 7;
+// The same key also holds notes to the housekeepers (28 Oct):
+//   { id: "note:<kind>:<refId>", kind: "note", of, refId, text, at }
+// shown on that record's cleans and at the top of the sign-off, which asks
+// them to tick that they have read it. The kind is new on purpose: builds
+// before it ignore any request whose kind is not accom / event / box, so an
+// old tab never reads a note as a clean.
+function hkRequest(setups, type, kind, refId) {
+  const id = type + ":" + kind + ":" + refId;
+  return (setups || []).find(function(x) { return x && x.id === id; }) || null;
+}
+function hkNote(setups, kind, refId) {
+  const n = hkRequest(setups, "note", kind, refId);
+  return n && typeof n.text === "string" ? n.text.trim() : "";
+}
 
 // When each unit was last left before a given moment: per unit, every use as
 // { begins: {date,time}, frees: {date,time} } — frees is when cleaning can
@@ -6972,13 +6987,15 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
     const id = "setup:" + req.kind + ":" + req.refId + ":" + unitId + (suffix || "");
     out.push({
       job: { id: id, kind: "setup", setupOf: req.kind, refId: req.refId, unitId: unitId, unitName: unitName,
-        start: opens.date, due: opens.date, eventStart: begins.date, who: "Setup · " + who },
+        start: opens.date, due: opens.date, eventStart: begins.date, who: "Extra clean · " + who,
+        note: hkNote(setups, req.kind, req.refId) },
       window: { id: id, unitId: unitId, unitName: unitName, unitShort: unitShort, start: opens, end: closes,
-        outWho: "Setup clean", inWho: who, setup: true, tight: false, occ: occ || "" }
+        outWho: "Extra clean", inWho: who, setup: true, tight: false, occ: occ || "" }
     });
   };
   setups.forEach(function(req) {
-    if (!req || !req.kind || req.refId == null) return;
+    // Only the extra-clean requests; notes share the key.
+    if (!req || !req.kind || req.refId == null || String(req.id).indexOf("setup:") !== 0) return;
     if (req.kind === "accom") {
       const b = (accom || []).find(function(x) { return String(x.id) === String(req.refId); });
       if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
@@ -7013,23 +7030,33 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
   return out;
 }
 
-// The tick box on a letting, a diary event and a box office event. Loads and
-// saves its own key, so it can sit on any of the three forms.
+// The housekeeping requests on a letting, a diary event and a box office
+// event: "Extra clean before arrival" on all three; on a letting also notes to
+// the housekeepers. Loads and saves its own
+// key, so it can sit on any of the three forms.
 function SetupCleanToggle({ kind, refId }) {
   const [list, setList] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr]   = useState("");
+  const [draft, setDraft] = useState(null);    // the note as typed, null until edited
+  const [saved, setSaved] = useState(false);
   const save = useMergedSave(SETUP_CLEANS_STORAGE, list || [], setList);
   useEffect(function() {
     let off = false;
+    setDraft(null);
     sbGet(SETUP_CLEANS_STORAGE).then(function(v) { if (!off) setList(Array.isArray(v) ? v : []); })
       .catch(function() { if (!off) setList([]); });
     return function() { off = true; };
   }, [kind, refId]);
   if (refId == null || refId === "") return null;
-  const id = "setup:" + kind + ":" + refId;
-  const on = !!(list && list.some(function(x) { return x && x.id === id; }));
-  const toggle = async function() {
+  const lettings = kind === "accom";
+  const setupId = "setup:" + kind + ":" + refId;
+  const noteId = "note:" + kind + ":" + refId;
+  const has = function(id) { return !!(list && list.some(function(x) { return x && x.id === id; })); };
+  const stored = hkNote(list, kind, refId);
+  const text = draft == null ? stored : draft;
+  const toggle = async function(id) {
+    const on = has(id);
     setBusy(true); setErr("");
     try {
       await save(function(prev) {
@@ -7039,18 +7066,45 @@ function SetupCleanToggle({ kind, refId }) {
     } catch (e) { setErr(String((e && e.message) || e)); }
     setBusy(false);
   };
+  const saveNote = async function() {
+    if (draft == null) return;
+    const t = draft.trim();
+    if (t === stored) { setDraft(null); return; }
+    setBusy(true); setErr(""); setSaved(false);
+    try {
+      await save(function(prev) {
+        const rest = (prev || []).filter(function(x) { return x && x.id !== noteId; });
+        return t ? rest.concat([{ id: noteId, kind: "note", of: kind, refId: refId, text: t, at: new Date().toISOString() }]) : rest;
+      });
+      setDraft(null); setSaved(true);
+      setTimeout(function() { setSaved(false); }, 2000);
+    } catch (e) { setErr(String((e && e.message) || e)); }
+    setBusy(false);
+  };
+  const tick = function(id, label) {
+    return (
+      <label style={{ display:"flex", alignItems:"center", gap:9, cursor: list && !busy ? "pointer" : "default", flexWrap:"nowrap" }}>
+        <input type="checkbox" checked={has(id)} disabled={!list || busy} onChange={function() { toggle(id); }}
+          style={{ width:18, height:18, margin:0, flexShrink:0, accentColor:T.accent }}/>
+        <span style={{ fontSize:13.5, fontWeight:700, color:T.text }}>{label}</span>
+      </label>
+    );
+  };
   return (
     <div style={{ background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"11px 16px", margin:"0 0 16px" }}>
-      <label style={{ display:"flex", alignItems:"flex-start", gap:10, cursor: list && !busy ? "pointer" : "default", flexWrap:"nowrap" }}>
-        <input type="checkbox" checked={on} disabled={!list || busy} onChange={toggle}
-          style={{ width:18, height:18, marginTop:1, flexShrink:0, accentColor:T.accent }}/>
-        <span style={{ minWidth:0 }}>
-          <span style={{ fontSize:13.5, fontWeight:700, color:T.text }}>Setup clean</span>
-          <span style={{ display:"block", fontSize:12, color:T.textMid, lineHeight:1.5, marginTop:2 }}>
-            Housekeeping cleans before this starts — from when the place was last left, or the week before if it has been empty longer.
-          </span>
-        </span>
-      </label>
+      {tick(setupId, lettings ? "Extra clean before arrival" : "Extra clean before the event")}
+      {lettings && (
+        <div style={{ marginTop:10 }}>
+          <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"nowrap", marginBottom:4 }}>
+            <span style={{ fontSize:12, fontWeight:700, color:T.textMid }}>Notes to housekeepers</span>
+            {saved && <span style={{ fontSize:11, fontWeight:700, color:T.green }}>Saved</span>}
+          </div>
+          <textarea rows={2} value={text} disabled={!list} placeholder="Shown on this letting's clean; they tick to say they have read it"
+            onChange={function(e) { setDraft(e.target.value); }} onBlur={saveNote}
+            style={{ width:"100%", boxSizing:"border-box", border:"1.5px solid " + T.border, borderRadius:8, padding:"8px 10px",
+              fontFamily:"inherit", fontSize:13.5, color:T.text, background:"#fff", resize:"vertical", outline:"none" }}/>
+        </div>
+      )}
       {err && <div style={{ fontSize:12, color:T.red, fontWeight:600, marginTop:6 }}>{err}</div>}
     </div>
   );
@@ -7167,6 +7221,10 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
   const [busy, setBusy]       = useState(false);
   const [err, setErr]         = useState("");
   const [askReopen, setAskReopen] = useState(false);
+  // A note from the office has to be ticked as read before signing off. A
+  // sign-off that read an earlier wording of the note asks again.
+  const note = job.note || "";
+  const [noteRead, setNoteRead] = useState(!!(rec && rec.noteAck && rec.noteAck.text === note));
 
   const bad = CHANGEOVER_CLEANERS.some(function(c) {
     const v = hours[c.key];
@@ -7177,6 +7235,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
   const save = async function() {
     if (bad) { setErr("Hours must be a number between 0 and 24."); return; }
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(doneAt)) { setErr("Please put in the date and time it was ready."); return; }
+    if (note && !noteRead) { setErr("Please tick to say you have read the note at the top."); return; }
     setBusy(true); setErr("");
     const h = {};
     CHANGEOVER_CLEANERS.forEach(function(c) { h[c.key] = hours[c.key] === "" ? 0 : Math.round(Number(hours[c.key]) * 100) / 100; });
@@ -7187,6 +7246,7 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
         setupOf: job.setupOf || undefined, eventStart: job.eventStart || undefined,
         who: job.who, start: job.start, due: job.due, doneAt: doneAt, hours: h,
         comments: comments.trim(), lostProperty: lost.trim(),
+        noteAck: note ? { text: note, at: rec && rec.noteAck && rec.noteAck.text === note ? rec.noteAck.at : now } : undefined,
         recordedAt: rec && rec.recordedAt ? rec.recordedAt : now,
         updatedAt: now
       });
@@ -7222,6 +7282,18 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
           <button onClick={onClose} disabled={busy}
             style={{ background:"none", border:"none", fontSize:24, lineHeight:1, color:T.textLight, cursor:"pointer", padding:0, fontFamily:"inherit" }}>×</button>
         </div>
+
+        {note && (
+          <div style={{ background:T.redBg, border:"1.5px solid " + T.red, borderRadius:10, padding:"10px 12px", marginTop:12 }}>
+            <div style={{ fontSize:12, fontWeight:800, color:T.red, marginBottom:4 }}>Note from the office</div>
+            <div style={{ fontSize:14, color:T.text, lineHeight:1.5, whiteSpace:"pre-wrap" }}>{note}</div>
+            <label style={{ display:"flex", alignItems:"center", gap:9, marginTop:9, cursor:"pointer", flexWrap:"nowrap" }}>
+              <input type="checkbox" checked={noteRead} onChange={function(e) { setNoteRead(e.target.checked); }}
+                style={{ width:20, height:20, margin:0, flexShrink:0, accentColor:T.red }}/>
+              <span style={{ fontSize:13.5, fontWeight:700, color:T.text }}>I have read this</span>
+            </label>
+          </div>
+        )}
 
         <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)", gap:12 }}>
           {CHANGEOVER_CLEANERS.map(function(c) {
@@ -7337,15 +7409,73 @@ function ChangeoverRecordPanel({ kind, refId }) {
         return (
           <div key={r.id} style={{ fontSize:13, color:T.text, padding:"5px 0", lineHeight:1.55 }}>
             <div>
-              <strong>{unit}</strong>{r.kind === "setup" && <span style={{ color:T.midBlue, fontWeight:700 }}> · setup clean</span>}
+              <strong>{unit}</strong>{r.kind === "setup" && <span style={{ color:T.midBlue, fontWeight:700 }}> · extra clean</span>}
               <span style={{ color:T.green, fontWeight:700 }}> · ready {fmtDoneAt(r.doneAt)}</span>
               {changeoverHoursText(r) && <span style={{ color:T.textMid }}> · {changeoverHoursText(r)}</span>}
+              {r.noteAck && <span style={{ color:T.textMid }}> · note read</span>}
             </div>
             {r.comments && <div style={{ color:T.textMid }}>{r.comments}</div>}
             {r.lostProperty && <div style={{ color:T.red, fontWeight:700 }}>Lost property: <span style={{ fontWeight:600 }}>{r.lostProperty}</span></div>}
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── HOUSEKEEPING FEEDBACK ON THE ADMIN HOME ─────────────────────────────────
+// Every sign-off with comments or lost property sits at the top of Home until
+// someone in the office presses Read. What was read is kept in its own key, by
+// sign-off id, with the wording read — so a sign-off whose comments or lost
+// property are changed later comes back. The cleaners' records are never
+// written from here.
+const CHANGEOVER_SEEN_STORAGE = "hbf_changeover_seen_v1";
+function changeoverFeedbackUnread(recs, seen) {
+  const byId = {};
+  (seen || []).forEach(function(x) { if (x && x.id) byId[x.id] = x; });
+  return (recs || []).filter(function(r) {
+    if (!r || !r.id || !(r.comments || r.lostProperty)) return false;
+    const x = byId[r.id];
+    return !(x && (x.comments || "") === (r.comments || "") && (x.lostProperty || "") === (r.lostProperty || ""));
+  }).sort(function(a, z) {
+    const x = a.doneAt || "", y = z.doneAt || "";
+    return x < y ? 1 : x > y ? -1 : 0;
+  });
+}
+function HousekeepingFeedback({ recs, seen, onRead, onOpen }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr]   = useState("");
+  const list = changeoverFeedbackUnread(recs, seen);
+  if (!list.length) return null;
+  const read = async function(r) {
+    setBusy(r.id); setErr("");
+    try { await onRead(r); } catch (e) { setErr(String((e && e.message) || e)); }
+    setBusy("");
+  };
+  return (
+    <div style={{ background:T.redBg, border:"1.5px solid " + T.red, borderRadius:10, padding:"11px 15px", marginBottom:16 }}>
+      <div style={{ fontSize:14, fontWeight:800, color:T.red, marginBottom:4 }}>From housekeeping</div>
+      {list.map(function(r) {
+        const unit = r.unitName || (r.unitId === GRAIN_STORE_UNIT.id ? GRAIN_STORE_UNIT.name : r.unitId);
+        return (
+          <div key={r.id} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"7px 0", borderTop:"1px solid " + T.border, flexWrap:"nowrap" }}>
+            <div onClick={function() { onOpen(r); }} style={{ flex:1, minWidth:0, cursor:"pointer", fontSize:13, lineHeight:1.5, color:T.text }}>
+              <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                <strong>{unit}</strong>
+                <span style={{ color:T.textMid }}> · {String(r.who || "").replace(/^(Setup|Extra clean) · /, "")} · ready {fmtDoneAt(r.doneAt)}</span>
+              </div>
+              {r.comments && <div style={{ whiteSpace:"pre-wrap" }}>{r.comments}</div>}
+              {r.lostProperty && <div style={{ color:T.red, fontWeight:700 }}>Lost property: <span style={{ fontWeight:600 }}>{r.lostProperty}</span></div>}
+            </div>
+            <button type="button" disabled={!!busy} onClick={function() { read(r); }}
+              style={{ background:"#fff", color:T.red, border:"1.5px solid " + T.red, borderRadius:8, padding:"6px 14px",
+                fontFamily:"inherit", fontSize:12.5, fontWeight:800, cursor: busy ? "default" : "pointer", flexShrink:0, whiteSpace:"nowrap" }}>
+              {busy === r.id ? "…" : "Read"}
+            </button>
+          </div>
+        );
+      })}
+      {err && <div style={{ fontSize:12, color:T.red, fontWeight:600, marginTop:6 }}>{err}</div>}
     </div>
   );
 }
@@ -7357,6 +7487,16 @@ function lostPropertyFor(recs, bookingId) {
     .map(function(r) { return r.lostProperty; }).join("; ");
 }
 
+// The office's note to the housekeepers, on the card of the clean it is for.
+function HkNoteLine({ text }) {
+  if (!text) return null;
+  return (
+    <div style={{ background:T.redBg, borderLeft:"3px solid " + T.red, borderRadius:6, padding:"5px 9px", margin:"2px 0 4px",
+      fontSize:12.5, color:T.text, lineHeight:1.45, whiteSpace:"pre-wrap" }}>
+      <strong style={{ color:T.red }}>Note: </strong>{text}
+    </div>
+  );
+}
 // ─── CLEANER VIEW ─────────────────────────────────────────────────────────────
 // The housekeeping login: Live (the next fortnight, with a Done button on every
 // check-out and event), Events, the lettings calendar, and the bookings list
@@ -7439,7 +7579,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
   (jobs || []).forEach(function(j) {
     if (j.kind !== "setup") return;
     add(j.start, { kind: "setup", rank: propRank(j.unitId) === 900 ? 999 : propRank(j.unitId), label: j.unitName,
-      detail: j.who.replace(/^Setup · /, "Before ") + " · by " + fmtDayShort(j.eventStart), job: j });
+      detail: j.who.replace(/^(Setup|Extra clean) · /, "Before ") + " · by " + fmtDayShort(j.eventStart), job: j });
   });
 
   const days = Object.keys(byDay).sort();
@@ -7455,7 +7595,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       out:   { text: "Check-out",  bg: "#fff7ed", fg: "#9a3412", bd: "#fdba74" },
       in:    { text: "Check-in",   bg: T.greenBg, fg: T.green,   bd: "#bbf7d0" },
       event: { text: "Farm event", bg: T.tint, fg: T.midBlue, bd: T.infoBorder },
-      setup: { text: "Setup",      bg: T.tint, fg: T.midBlue, bd: T.infoBorder }
+      setup: { text: "Extra clean", bg: T.tint, fg: T.midBlue, bd: T.infoBorder }
     };
     const c = map[kind];
     return (
@@ -7496,6 +7636,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
                   <div style={{ fontSize:12, color:T.textMid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                     {j.who} · {j.kind === "accom" ? "out " + fmtDayShort(j.due) : j.kind === "setup" ? "by " + fmtDayShort(j.eventStart) : fmtDayShort(j.start)}
                   </div>
+                  <HkNoteLine text={j.note}/>
                 </div>
                 <ChangeoverButton job={j} rec={recMap[j.id]} today={today} onOpen={onOpenJob}/>
               </div>
@@ -7544,6 +7685,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
                       {it.time && <span style={{ fontSize:12, fontWeight:700, color:T.accent, marginLeft:8 }}>{it.time}</span>}
                     </div>
                     <div style={{ fontSize:12, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{it.detail}</div>
+                    {it.job && <HkNoteLine text={it.job.note}/>}
                   </div>
                   {it.job && <ChangeoverButton job={it.job} rec={recMap[it.job.id]} today={today} onOpen={onOpenJob}/>}
                 </div>
@@ -7628,6 +7770,7 @@ function HousekeepingCard({ row, job, rec, today, lost, onOpenJob }) {
         </span>
       </div>
       {lost && <div style={{ marginTop:5 }}><LostPropertyChip text={lost}/></div>}
+      {job && job.note && <div style={{ marginTop:6 }}><HkNoteLine text={job.note}/></div>}
       <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:6, marginTop:8, paddingTop:8, borderTop:`1px solid ${T.border}` }}>
         {chip(row.source, row.sourceMeta.bg, row.sourceMeta.text)}
         {chip(row.status, row.statusMeta.bg, row.statusMeta.text)}
@@ -7648,9 +7791,9 @@ function CleanerBookings({ properties, accom, events, boxEvents, boxErr, setups,
     return {
       key: j.id, jobId: j.id, unitId: j.unitId, unitShort: p ? shortPropLabel(p) : GRAIN_STORE_UNIT.short,
       unitColour: p ? p.colour : "#ef4444",
-      start: j.start, end: j.eventStart, name: j.who.replace(/^Setup · /, ""),
+      start: j.start, end: j.eventStart, name: j.who.replace(/^(Setup|Extra clean) · /, ""),
       when: "From " + fmtDayShort(j.start) + " · by " + fmtDayShort(j.eventStart),
-      source: "Setup clean", sourceMeta: { bg: T.tint, text: T.midBlue },
+      source: "Extra clean", sourceMeta: { bg: T.tint, text: T.midBlue },
       status: "Before arrival", statusMeta: { bg: T.bgInput, text: T.textMid }
     };
   });
@@ -7876,11 +8019,11 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, r
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13.5, fontWeight:700, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
                       {x.unitShort}
-                      {x.setup && <span style={{ fontSize:10.5, fontWeight:800, color:T.midBlue, background:T.tint, borderRadius:6, padding:"1px 6px", marginLeft:6 }}>Setup</span>}
+                      {x.setup && <span style={{ fontSize:10.5, fontWeight:800, color:T.midBlue, background:T.tint, borderRadius:6, padding:"1px 6px", marginLeft:6 }}>Extra clean</span>}
                       <span style={{ fontWeight:700, color:T.accent, marginLeft:8 }}>{x.occ}</span>
                     </div>
                     <div style={{ fontSize:11.5, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                      {x.setup ? "Setup clean before " + x.inWho : x.outWho}
+                      {x.setup ? "Extra clean before " + x.inWho : x.outWho}
                     </div>
                   </div>
                   {job && <ChangeoverButton job={job} rec={recMap[job.id]} today={today} onOpen={onOpenJob}/>}
@@ -20702,7 +20845,10 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const [boxDue, setBoxDue]               = useState(null);
   const [changeovers, setChangeovers]     = useState([]);
   const [hkBox, setHkBox]                 = useState([]);   // ticketed events, for the Grain Store tile
-  const [hkSetups, setHkSetups]           = useState([]);   // setup cleans asked for
+  const [hkSetups, setHkSetups]           = useState([]);   // housekeeping requests (extra cleans, notes)
+  const [hkSeen, setHkSeen]               = useState([]);
+  const [hkSeenOk, setHkSeenOk]           = useState(false);   // housekeeping comments the office has read
+  const saveHkSeen = useMergedSave(CHANGEOVER_SEEN_STORAGE, hkSeen, setHkSeen);
   const [loaded, setLoaded]               = useState(false);
 
   useEffect(()=>{
@@ -20710,6 +20856,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
       try { const b = await sbGet(ACCOM_STORAGE); setAccomBookings((b||[]).map(normalizeAccom)); } catch { setAccomBookings([]); }
       try { const co = await sbGet(CHANGEOVERS_STORAGE); setChangeovers(Array.isArray(co) ? co : []); } catch { setChangeovers([]); }
       try { const su = await sbGet(SETUP_CLEANS_STORAGE); setHkSetups(Array.isArray(su) ? su : []); } catch { setHkSetups([]); }
+      // A failed read shows nothing rather than every comment ever: unread
+      // would otherwise mean "could not tell".
+      try { const sn = await sbGetStrict(CHANGEOVER_SEEN_STORAGE); setHkSeen(Array.isArray(sn) ? sn : []); setHkSeenOk(true); } catch { setHkSeenOk(false); }
       try { const l = await sbGet(EMAIL_LOG_STORAGE); setEmailLog(l||[]); } catch { setEmailLog([]); }
       try { const r = await sbGet(EVENT_INVOICES_STORAGE); setInvoiceRecs(r||[]); } catch { setInvoiceRecs([]); }
       try { const r = await sbGet(BROCHURE_REQUESTS_STORAGE); setBrochureReqs(r||[]); } catch { setBrochureReqs([]); }
@@ -20909,9 +21058,21 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
         </div>
       )}
 
+      {/* Comments and lost property from the cleaners' sign-offs, until read. */}
+      {loaded && hkSeenOk && <HousekeepingFeedback recs={changeovers} seen={hkSeen}
+        onRead={function(r) {
+          return saveHkSeen(function(prev) {
+            return (prev || []).filter(function(x) { return x && x.id !== r.id; })
+              .concat([{ id: r.id, comments: r.comments || "", lostProperty: r.lostProperty || "", at: new Date().toISOString() }]);
+          });
+        }}
+        onOpen={function(r) {
+          const k = r.kind === "setup" ? r.setupOf : r.kind;
+          if (k === "event") openEvent(r.refId); else if (k === "box") openBox(r.refId); else openLet(r.refId);
+        }}/>}
+
       {/* Hamlet, Amly, Glamping, Grain Store: in use, waiting for the
-          cleaners, or ready — with the last sign-off's comments and lost
-          property. A tile opens the booking or event it is about. */}
+          cleaners, or ready. A tile opens the booking or event it is about. */}
       {loaded && <UnitStatusBar statuses={unitStatusList}
         onOpen={function(job) {
           const k = job.kind === "setup" ? job.setupOf : job.kind;
