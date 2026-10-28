@@ -165,10 +165,16 @@ var DOOR_ACTIONS = {
   "door.admit": true, "door.unadmit": true
 };
 
+// Everything a housekeeping login may do: see when ticketed events are on, so
+// the Grain Store can be cleaned after them. Names and times only — no
+// tickets, buyers or money.
+var HOUSEKEEPING_ACTIONS = { "ping": true, "housekeeping.events": true };
+
 function allowedFor(role, action) {
   if (role === "admin") return true;
   if (role === "bar") return DOOR_ACTIONS[action] === true;
-  return false;   // cleaner has no business in the box office at all
+  if (role === "cleaner") return HOUSEKEEPING_ACTIONS[action] === true;
+  return false;
 }
 
 // Verified sessions, held briefly in memory.
@@ -861,6 +867,17 @@ exports.handler = async function(event) {
       // ── THE DOOR ───────────────────────────────────────────────────────────
       // The whole guest list in one response, on purpose: the scanner keeps
       // working when the barn wifi drops, which it does.
+      // ── HOUSEKEEPING ───────────────────────────────────────────────────────
+      // Ticketed events from a date on (default: 60 days back, so a missed
+      // clean still shows). Drafts are not events yet.
+      case "housekeeping.events": {
+        var hkSince = /^\d{4}-\d{2}-\d{2}$/.test(String(body.since || ""))
+          ? body.since : new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+        var hkEvents = await sbRest("box_events?status=neq.draft&starts_at=gte." + hkSince +
+          "&select=id,name,starts_at,ends_at,venue_name&order=starts_at.asc&limit=300");
+        return ok({ events: hkEvents || [] });
+      }
+
       // Just enough to choose a door: no takings, no order counts, no buyers.
       case "door.events": {
         var dEvents = await sbRest("box_events?status=neq.draft&select=id,name,starts_at,venue_name&order=starts_at.desc.nullslast&limit=50");

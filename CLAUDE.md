@@ -490,25 +490,39 @@ own header.
 
 ### Housekeeping changeovers (28 Oct 2026)
 
-- **The cleaners sign off every check-out and every confirmed event** on the
-  housekeeping login (Live / Events / Calendar / Bookings — Bookings has no
-  prices, `AccomList noMoney`). State is worked out from dates; only the
-  sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id, saved
-  with `useMergedSave` — the cleaner login writes nothing else).
+- **The cleaners sign off every check-out and every confirmed event** — diary
+  events and box office (ticketed) events alike — on the housekeeping login:
+  Live / Calendar / Bookings / Hours / App. State is worked out from dates;
+  only the sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id,
+  saved with `useMergedSave` — the cleaner login writes nothing else).
 - Ids: `accom:<bookingId>:<propertyId>` (`:2` for a second stay at the same
-  property) and `event:<eventId>` — never the dates, so moving a stay keeps
-  its sign-off. Record: `doneAt` (UK wall-clock `YYYY-MM-DDTHH:MM`, editable),
-  `hours.edita` / `hours.karina` (`CHANGEOVER_CLEANERS`), `comments`,
-  `lostProperty`.
-- grey before the stay starts, yellow while in use, red from the check-out day
-  (events: the day after the last day), green once signed off. Holding events
-  get no button. Nothing before `CHANGEOVER_FROM` (2026-10-24) is ever red.
-- `UnitStatusBar` (Hamlet, Amly, Glamping, Grain Store): tiles on the admin home,
-  one compact line on Live. `ChangeoverRecordPanel` shows the sign-off on the
-  letting and event forms; the lettings list has a lost-property chip.
+  property), `event:<eventId>`, `box:<box_events.id>` — never the dates, so
+  moving a stay keeps its sign-off. Record: `doneAt` (UK wall-clock
+  `YYYY-MM-DDTHH:MM`, editable), `hours.edita` / `hours.karina`
+  (`CHANGEOVER_CLEANERS`), `comments`, `lostProperty`, and `who` / `unitName`
+  so it still reads if the booking goes.
+- The lozenge shows the state: Not yet (grey, inert) before the stay starts,
+  In use (yellow), Needs cleaning (red) from the check-out day (events: the day
+  after the last day), Done (green, reopens to edit). Holding events get none.
+  Nothing before `CHANGEOVER_FROM` (2026-10-24) is ever red.
+- **Box office events reach housekeeping through `box-admin`'s
+  `housekeeping.events`** — the only action a cleaner login may call
+  (`HOUSEKEEPING_ACTIONS`): name, start, end, venue; drafts left out. The admin
+  lettings calendar uses it too (ids `box:<uuid>`, opening the box office).
+- Bookings (housekeeping) is one list of stays and Grain Store events, one card
+  per thing to clean, filtered by property buttons; no money on it. Every row
+  that must keep its lozenge on the line is a `flexWrap:"nowrap"` flex row —
+  never a grid, which the phone stylesheet folds into one column.
+- `UnitStatusBar`: tiles on the admin home, one compact line on Live (short
+  names: Hamlet, Amly, Glamping, Grain St.). `ChangeoverRecordPanel` shows the
+  sign-off on the letting and event forms; the lettings list has a
+  lost-property chip. Hours: `HousekeepingHours` on the Hours tab and Reports →
+  Housekeeping Hours (above Hours Worked, which stays last).
 - The housekeeping login stays signed in indefinitely (persisted session, no
-  session time-box in Supabase); Sign out asks first, and a stale build reloads
-  itself when the app comes back to the front. Test: `tests/changeover-e2e.cjs`.
+  session time-box in Supabase); Sign out asks first, a stale build reloads
+  itself when the app comes back to the front, and the App tab installs it
+  (Android button via `useInstallPrompt`; iPhone steps). Test:
+  `tests/changeover-e2e.cjs`.
 
 ## Working in this folder from a Claude session
 
