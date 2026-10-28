@@ -2,7 +2,7 @@
 //
 // The housekeeping sign-off, end to end. Built app, Supabase faked
 // (tests/portal-harness.cjs → openStaff), box-admin faked here:
-//   · the cleaner login has Live / Upcoming / Calendar / Bookings / Hours, and
+//   · the cleaner login has Live / Upcoming / Calendar / Bookings / House, and
 //     an App button by Sign out with the install steps;
 //   · Upcoming: Monday weeks, each changeover listed with the stay or event's
 //     own dates, four weeks a page; an empty Sunday is next week's;
@@ -15,7 +15,10 @@
 //   · Bookings: lettings and Grain Store events (diary and box office) on one
 //     page, filtered by property buttons, no prices, the lozenge on the same
 //     line on a phone;
-//   · Hours totals a month per cleaner and scrolls month to month;
+//   · House: Karina's Mon–Fri timesheet for The House, week codes (2644),
+//     grey / yellow / red / green, saved and submitted;
+//   · Reports → Housekeeping Hours: owed per week, priced at the rate on the
+//     day (a rise mid-week), Paid tick and date; Staff rates, PAYE / Self-employed;
 //   · setup cleans: ticked on a letting / event / box office event, their window,
 //     shown on Live, Upcoming and Bookings, signed off like a changeover;
 //   · admin: home tiles, lost property on the booking, box office events on
@@ -33,6 +36,15 @@ const check = (n, ok, d) => { if (ok) passes++; else fails.push(n + (d ? ': ' + 
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' })
 const plus = (n) => new Date(Date.parse(today + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10)
 const monthOf = (d) => String(d).slice(0, 7)
+// ISO week code, worked out independently of the app: YYWW.
+const isoCode = (iso) => {
+  const d = new Date(iso + 'T00:00:00Z'); const day = (d.getUTCDay() + 6) % 7
+  d.setUTCDate(d.getUTCDate() - day + 3)                          // Thursday of that week
+  const y = d.getUTCFullYear(); const first = new Date(Date.UTC(y, 0, 4))
+  const wk = 1 + Math.round(((d - first) / 86400000 - 3 + ((first.getUTCDay() + 6) % 7)) / 7)
+  return String(y).slice(2) + String(wk).padStart(2, '0')
+}
+const mondayOfT = (iso) => { const d = new Date(iso + 'T00:00:00Z'); return new Date(d - ((d.getUTCDay() + 6) % 7) * 86400000).toISOString().slice(0, 10) }
 // The app's short date: "Mon 2 Nov 26".
 const dshort = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()] + ' ' +
   Number(d.slice(8)) + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(d.slice(5, 7)) - 1] + ' ' + d.slice(2, 4)
@@ -109,7 +121,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     await page.getByText('Still to sign off').waitFor({ timeout: 15000 })
     await page.getByText('Quiz Night').first().waitFor({ timeout: 5000 })
     const tabNames = await page.getByRole('tab').allInnerTexts()
-    check('tab order', tabNames.join('|') === 'Live|Upcoming|Calendar|Bookings|Hours', tabNames.join('|'))
+    check('tab order', tabNames.join('|') === 'Live|Upcoming|Calendar|Bookings|House', tabNames.join('|'))
     check('no "next 14 days" heading', !/The next 14 days/.test(await page.locator('body').innerText()))
 
     // Status line.
@@ -223,20 +235,46 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     check('All filter', /Yellow Guest/.test(list) && /Smith Wedding/.test(list))
     check('past Glamping shows its lost property', /Lost property: black hat/.test(list))
 
-    // Hours: the month of the Hamlet sign-off.
-    await page.getByRole('tab', { name: 'Hours', exact: true }).click()
-    await page.getByText('Changeovers', { exact: true }).waitFor({ timeout: 5000 })
-    const target = monthOf(plus(-1))
-    if (target !== monthOf(today)) await page.getByRole('button', { name: 'Previous month' }).click()
-    const inMonth = (w2 ? w2.value : []).filter((r) => monthOf(r.doneAt) === target)
-    const sum = (k) => Math.round(inMonth.reduce((a, r) => a + (Number(r.hours[k]) || 0), 0) * 100) / 100
-    const hrs = await page.locator('body').innerText()
-    check('Hours: Edita total', hrs.indexOf('Edita\n' + sum('edita')) !== -1, 'want ' + sum('edita') + ' · ' + hrs.slice(hrs.indexOf('Edita'), hrs.indexOf('Edita') + 40))
-    check('Hours: Karina total', hrs.indexOf('Karina\n' + sum('karina')) !== -1, 'want ' + sum('karina'))
-    check('Hours: changeover count', new RegExp('Changeovers\\n' + inMonth.length + '\\b').test(hrs), String(inMonth.length))
-    await page.getByRole('button', { name: 'Previous month' }).click()
-    await page.getByRole('button', { name: 'Next month' }).click()
-    check('Hours: scrolls back and forth', (await page.locator('body').innerText()).indexOf('Edita\n' + sum('edita')) !== -1)
+    // House: Karina's timesheet for The House.
+    await page.getByRole('tab', { name: 'House', exact: true }).click()
+    await page.getByText("Karina's hours, Monday to Friday", { exact: false }).waitFor({ timeout: 5000 })
+    const mon = mondayOfT(today)
+    const houseRow = (m) => page.locator('div[style*="nowrap"]', { has: page.getByText(isoCode(m), { exact: true }) }).first()
+    let houseText = await page.locator('body').innerText()
+    check('House: five weeks listed with codes', [-14, -7, 0, 7, 14].every((n) => houseText.indexOf(isoCode(new Date(Date.parse(mon + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10))) !== -1), houseText.slice(0, 400))
+    check('House: a week code for this week', houseText.indexOf(isoCode(mon)) !== -1, isoCode(mon))
+    check('House: backlog from 2641 (Mon 5 Oct 26) is open', /2641\s*Mon 5 Oct 26/.test(houseText) && !/\b2640\b/.test(houseText), houseText.slice(0, 500))
+    check('House: backlog week is red', /To submit/.test(await houseRow('2026-10-05').innerText()))
+    const wk = (n) => new Date(Date.parse(mon + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10)
+    check('House: last week red until submitted', /To submit/.test(await houseRow(wk(-7)).innerText()))
+    const thisState = await houseRow(mon).innerText()
+    const weekday = new Date(today + 'T00:00:00Z').getUTCDay()
+    check('House: this week yellow up to Friday, red after', (weekday >= 1 && weekday <= 5) ? /This week/.test(thisState) : /To submit/.test(thisState), thisState)
+    check('House: next week grey', /Not yet/.test(await houseRow(wk(7)).innerText()))
+    await houseRow(wk(7)).click()
+    check('House: a future week does not open', (await page.getByText('Karina hours', { exact: true }).count()) === 0)
+    // Fill last week, save without submitting, then submit.
+    await houseRow(wk(-7)).click()
+    await page.getByText('Karina hours', { exact: true }).waitFor({ timeout: 5000 })
+    check('House: Monday to Friday only', (await page.locator('input[type=number]').count()) === 5 && !/Saturday|Sunday/.test(await page.locator('body').innerText()))
+    await page.getByLabel('Monday hours').fill('2')
+    await page.getByLabel('Tuesday hours').fill('3.5')
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await page.getByText('Karina hours', { exact: true }).waitFor({ state: 'detached', timeout: 5000 })
+    const hs = () => s.calls.filter((c) => c.fn === 'write:app_data').map((c) => JSON.parse(c.args)).filter((x) => x.key === 'hbf_house_hours_v1').pop()
+    let sh = hs() && hs().value.find((x) => x.id === 'karina:' + wk(-7))
+    check('House: saved, not submitted', sh && sh.days.mon === 2 && sh.days.tue === 3.5 && sh.submitted === false && sh.week === wk(-7), JSON.stringify(sh))
+    check('House: still red with hours in', /To submit/.test(await houseRow(wk(-7)).innerText()))
+    await houseRow(wk(-7)).click()
+    await page.getByText('Karina hours', { exact: true }).waitFor({ timeout: 5000 })
+    check('House: reopens with the hours', (await page.getByLabel('Tuesday hours').inputValue()) === '3.5')
+    await page.getByText('Submit — this week is complete').click()
+    await page.getByRole('button', { name: 'Save and submit' }).click()
+    await page.getByText('Karina hours', { exact: true }).waitFor({ state: 'detached', timeout: 5000 })
+    sh = hs() && hs().value.find((x) => x.id === 'karina:' + wk(-7))
+    check('House: submitted', sh && sh.submitted === true && !!sh.submittedAt)
+    check('House: green with the hours', /5\.5 h/.test(await houseRow(wk(-7)).innerText()), await houseRow(wk(-7)).innerText())
+    check('House: one record per week', hs().value.filter((x) => x.week === wk(-7)).length === 1)
 
     // App button by Sign out.
     await page.getByRole('button', { name: 'App', exact: true }).click()
@@ -274,11 +312,15 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     check('Bookings: lozenge on the same line', lines.every((x) => x.spread <= 6 && x.right <= 390), JSON.stringify(lines))
     await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-phone-bookings.png') })
 
-    await page.getByRole('tab', { name: 'Hours', exact: true }).click()
-    await page.getByText('Changeovers', { exact: true }).waitFor({ timeout: 5000 })
-    if (monthOf(plus(-2)) !== monthOf(today)) await page.getByRole('button', { name: 'Previous month' }).click()
-    check('Hours: no sideways scroll', await noScroll())
-    await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-phone-hours.png') })
+    await page.getByRole('tab', { name: 'House', exact: true }).click()
+    await page.getByText("Karina's hours, Monday to Friday", { exact: false }).waitFor({ timeout: 5000 })
+    check('House: no sideways scroll', await noScroll())
+    await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-phone-house.png') })
+    await page.locator('div[style*="nowrap"]', { has: page.getByText(isoCode(mondayOfT(today)), { exact: true }) }).first().click()
+    await page.getByText('Karina hours', { exact: true }).waitFor({ timeout: 5000 })
+    check('House dialog: no sideways scroll', await noScroll())
+    await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-phone-house-week.png') })
+    await page.getByRole('button', { name: 'Cancel' }).click()
     const head = await page.locator('header').evaluate((h) => ({ sw: h.scrollWidth, cw: h.clientWidth, h: h.getBoundingClientRect().height }))
     check('header fits with App and Sign out', head.sw <= head.cw + 1 && head.h < 90, JSON.stringify(head))
     await page.getByRole('button', { name: 'App', exact: true }).click()
@@ -290,18 +332,23 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
   s = await open({})
   page = s.page
   try {
-    await page.getByText('Lost property:').first().waitFor({ timeout: 15000 })
-    await page.getByText(/To clean ×2/).waitFor({ timeout: 5000 })
+    await page.getByText(/Grain St\. ×2/).waitFor({ timeout: 15000 })
     const home = await page.locator('body').innerText()
-    check('home: Glamping lost property', /Lost property: black hat/.test(home))
-    check('home: Glamping comment', /Tent 4 zip sticking/.test(home))
-    check('home: Hamlet needs cleaning', /The Hamlet[\s\S]{0,40}To clean/.test(home))
-    check('home: Amly in use', /Amly Barn[\s\S]{0,20}Guests/.test(home))
-    check('home: Grain Store counts the box office event', /Grain Store[\s\S]{0,40}To clean ×2/.test(home))
+    const bar = page.getByRole('group', { name: 'Property status' })
+    const hpill = async (n) => bar.locator('span[title]', { hasText: n }).first().getAttribute('title')
+    const pills = (await bar.locator('span[title]').allInnerTexts()).join('|')
+    check('home: one line of short names', pills === 'Hamlet|Amly|Glamping|Grain St. ×2', pills)
+    check('home: Hamlet to clean', (await hpill('Hamlet')) === 'To clean')
+    check('home: Amly guests', (await hpill('Amly')) === 'Guests')
+    check('home: Glamping ready', (await hpill('Glamping')) === 'Ready')
+    check('home: Grain St. counts the box office event', (await hpill('Grain St.')) === 'To clean')
+    check('home: no names, comments or lost property', !/Tent 4 zip sticking/.test(home) && !/Lost property/.test(home))
+    const tops = await bar.locator('span[title]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)))
+    check('home: all four on one line', new Set(tops).size === 1, JSON.stringify(tops))
     await page.screenshot({ path: path.join(os.tmpdir(), 'changeover-home.png') })
 
     // The Glamping tile opens Hat Guest's booking, which shows the sign-off.
-    await page.locator('div[title="Open the booking"]', { hasText: 'Glamping' }).click()
+    await bar.locator('span[title]', { hasText: 'Glamping' }).first().click()
     await page.getByText(/ready .* · Edita 2h/).waitFor({ timeout: 10000 })
     const form = await page.locator('body').innerText()
     check('booking shows lost property', /Lost property: black hat/.test(form))
@@ -310,7 +357,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     // Reports → Housekeeping Hours, listed before Hours Worked.
     await page.getByText('Reports', { exact: true }).first().click()
     await page.getByText('Housekeeping Hours', { exact: true }).first().click()
-    await page.getByText('Changeovers', { exact: true }).waitFor({ timeout: 10000 })
+    await page.getByText(/What each cleaner is owed/).waitFor({ timeout: 10000 })
     const nav = await page.locator('body').innerText()
     check('Reports: Housekeeping Hours sits above Hours Worked', nav.indexOf('Housekeeping Hours') < nav.lastIndexOf('Hours Worked'))
     check('no page errors (admin)', s.errors.length === 0, s.errors.join(' | '))
@@ -440,8 +487,8 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     c = await openWith(ad, undefined)
     try {
       const pg = c.page
-      await pg.locator('div[title="Open the event"]', { hasText: 'Grain Store' }).waitFor({ timeout: 15000 })
-      await pg.locator('div[title="Open the event"]', { hasText: 'Grain Store' }).click()
+      await pg.getByRole('group', { name: 'Property status' }).locator('span[title="To clean"]', { hasText: 'Grain St.' }).waitFor({ timeout: 15000 })
+      await pg.getByRole('group', { name: 'Property status' }).locator('span[title="To clean"]', { hasText: 'Grain St.' }).click()
       await pg.getByText('Setup clean', { exact: true }).waitFor({ timeout: 10000 })
       const box = pg.locator('label', { has: pg.getByText('Setup clean', { exact: true }) }).locator('input[type=checkbox]')
       check('setup: event form shows it ticked', await box.isChecked())
@@ -452,7 +499,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('setup: box unticked', !(await box.isChecked()))
       // A letting: the Hamlet tile (guests in) opens First Family.
       await pg.goto(c.origin + '/')
-      await pg.locator('div[title="Open the booking"]', { hasText: 'The Hamlet' }).click()
+      await pg.getByRole('group', { name: 'Property status' }).locator('span[title]', { hasText: 'Hamlet' }).first().click()
       await pg.getByText('Setup clean', { exact: true }).waitFor({ timeout: 10000 })
       const lbox = pg.locator('label', { has: pg.getByText('Setup clean', { exact: true }) }).locator('input[type=checkbox]')
       check('setup: letting without one is unticked', !(await lbox.isChecked()))
@@ -463,13 +510,89 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     } finally { await c.close() }
   } catch (e) { fails.push('setup run: ' + e.message) }
 
+  // ── Pay: rates by date, the week's sums, Paid ───────────────────────────
+  // Last week: Karina at The House Mon 2h (£18) and Tue 3h (£20 — her rise
+  // starts on the Tuesday); a changeover on the Wednesday, Edita 4h (£15) and
+  // Karina 1h (£20). Edita £60, Karina £36 + £60 + £20 = £116, total £176.
+  try {
+    const mon = mondayOfT(today)
+    const lw = (n) => new Date(Date.parse(mon + 'T00:00:00Z') + (n - 7) * 86400000).toISOString().slice(0, 10)
+    const appData = freshApp()
+    appData.hawthbush_staff_v5 = [
+      { id: 'TM', name: 'Taryn May', role: 'Bar Supervisor', active: true, rate: '£15 incl Roll Up', email: '', phone: '', notes: '' },
+      { id: 'ED', name: 'Edita', role: 'Housekeeping', active: true, employment: 'Self-employed', rate: '', email: '', phone: '', notes: '',
+        rates: [{ from: '2026-01-01', rate: 15, holidayRollup: false }] },
+      { id: 'KA', name: 'Karina', role: 'Housekeeping', active: true, employment: 'Self-employed', rate: '', email: '', phone: '', notes: '',
+        rates: [{ from: '2026-01-01', rate: 18, holidayRollup: false }, { from: lw(1), rate: 20, holidayRollup: true }] },
+    ]
+    appData.hbf_changeovers_v1 = [{ id: 'accom:PAY:hamlet', kind: 'accom', refId: 'PAY', unitId: 'hamlet', unitName: 'The Hamlet', who: 'Pay Guest',
+      doneAt: lw(2) + 'T14:00', hours: { edita: 4, karina: 1 }, comments: '', lostProperty: '' }]
+    appData.hbf_house_hours_v1 = [{ id: 'karina:' + lw(0), who: 'karina', week: lw(0), days: { mon: 2, tue: 3, wed: 0, thu: 0, fri: 0 }, submitted: true, submittedAt: lw(5) + 'T17:00:00Z' }]
+    const c = await openStaff({ distDir: DIST, appData: appData })
+    try {
+      await c.page.route(HOST + '/rest/v1/app_data', async (route) => {
+        const req = route.request()
+        if (req.method() !== 'POST') return route.fallback()
+        const b = JSON.parse(req.postData() || '{}'); appData[b.key] = b.value
+        return route.fulfill({ status: 201, contentType: 'application/json', body: '[]' })
+      })
+      await c.page.route('**/.netlify/functions/box-admin', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"events":[],"orders":[]}' }))
+      await c.page.reload()
+      const pg = c.page
+      await pg.getByText('Reports', { exact: true }).first().waitFor({ timeout: 15000 })
+      await pg.getByText('Reports', { exact: true }).first().click()
+      await pg.getByText('Housekeeping Hours', { exact: true }).first().click()
+      await pg.getByText(/What each cleaner is owed/).waitFor({ timeout: 10000 })
+      const row = pg.locator('div[style*="border-bottom: 1px"]', { hasText: isoCode(lw(0)) + ' · ' + dshort(lw(0)) }).last()
+      const rt = await row.innerText()
+      check('pay: week code and Monday', rt.indexOf(isoCode(lw(0))) !== -1 && rt.indexOf(dshort(lw(0))) !== -1, rt)
+      check('pay: Edita £60.00 (4h at £15)', /£60\.00/.test(rt) && /4 h/.test(rt), rt)
+      check('pay: Karina £116.00 (6h: House at £18 then £20, changeover at £20)', /£116\.00/.test(rt) && /6 h/.test(rt), rt)
+      check('pay: total £176.00', /£176\.00/.test(rt), rt)
+      await row.getByText('details').click()
+      const det = await row.innerText()
+      check('pay: breakdown shows the rise', /£18\.00\/h/.test(det) && /£20\.00\/h/.test(det) && /The House/.test(det) && /The Hamlet · Pay Guest/.test(det), det)
+      await row.getByLabel('Week ' + isoCode(lw(0)) + ' paid').check()
+      await pg.waitForTimeout(600)
+      const pr = (appData.hbf_housekeeping_pay_v1 || []).find((x) => x.id === lw(0))
+      check('pay: Paid saved with the amounts', pr && pr.paid && pr.code === isoCode(lw(0)) && pr.amounts.total === 176 && pr.amounts.karina === 116 && pr.paidOn === today, JSON.stringify(pr))
+      await row.getByLabel('Week ' + isoCode(lw(0)) + ' paid on').fill(lw(6))
+      await pg.waitForTimeout(600)
+      const pr2 = (appData.hbf_housekeeping_pay_v1 || []).find((x) => x.id === lw(0))
+      check('pay: paid date can be set', pr2 && pr2.paidOn === lw(6), JSON.stringify(pr2))
+      check('pay: still one record for the week', appData.hbf_housekeeping_pay_v1.filter((x) => x.id === lw(0)).length === 1)
+
+      // Staff: rates on the card, employment, kept off rotas.
+      await pg.getByText('Settings', { exact: true }).first().click().catch(() => {})
+      await pg.getByText('Staff', { exact: true }).first().click()
+      await pg.getByText('Staff Database').waitFor({ timeout: 10000 })
+      const staffText = await pg.locator('body').innerText()
+      check('staff: Karina card shows her current rate', /£20\.00\/hr incl\. holiday from/.test(staffText), staffText.slice(0, 1200))
+      check('staff: Self-employed and PAYE shown', /Self-employed/.test(staffText) && /PAYE/.test(staffText))
+      const card = pg.locator('div[style*="box-shadow"]', { has: pg.getByText('Karina', { exact: true }) }).first()
+      await card.getByRole('button', { name: 'Edit' }).click()
+      await pg.getByText('Pay rates by date').waitFor({ timeout: 5000 })
+      check('staff: form shows both rates', (await pg.getByLabel('Pounds an hour').count()) === 2)
+      check('staff: employment select', (await pg.locator('select').filter({ hasText: 'Self-employed' }).first().inputValue()) === 'Self-employed')
+      await pg.getByRole('button', { name: '+ Add a rate' }).click()
+      await pg.getByLabel('Rate starts').nth(2).fill('2027-04-01')
+      await pg.getByLabel('Pounds an hour').nth(2).fill('21.5')
+      await pg.getByRole('button', { name: 'Save Changes' }).click()
+      await pg.waitForTimeout(800)
+      const ka = (appData.hawthbush_staff_v5 || []).find((x) => x.id === 'KA')
+      check('staff: new rate saved as a number with its date', ka && ka.rates.length === 3 && ka.rates[2].from === '2027-04-01' && ka.rates[2].rate === 21.5, JSON.stringify(ka && ka.rates))
+      check('staff: other staff untouched', (appData.hawthbush_staff_v5 || []).some((x) => x.id === 'TM' && x.rate === '£15 incl Roll Up'))
+      check('pay: no page errors', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+  } catch (e) { fails.push('pay run: ' + e.message) }
+
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and
   // without box office events.
   const countEs = async (box) => {
     const c = await open({ box: box })
     try {
-      await c.page.getByText('Lost property:').first().waitFor({ timeout: 15000 })
+      await c.page.locator('span[title]', { hasText: 'Hamlet' }).first().waitFor({ timeout: 15000 })
       await c.page.getByText('Lettings', { exact: true }).first().click()
       await c.page.waitForTimeout(1500)
       const n = await c.page.locator('span', { hasText: /^E$/ }).count()

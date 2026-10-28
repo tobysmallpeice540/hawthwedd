@@ -492,7 +492,7 @@ own header.
 
 - **The cleaners sign off every check-out and every confirmed event** — diary
   events and box office (ticketed) events alike — on the housekeeping login:
-  Live / Upcoming / Calendar / Bookings / Hours, plus an App button by Sign out.
+  Live / Upcoming / Calendar / Bookings / House, plus an App button by Sign out.
   State is worked out from dates;
   only the sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id,
   saved with `useMergedSave` — the cleaner login writes nothing else).
@@ -515,11 +515,13 @@ own header.
   per thing to clean, filtered by property buttons; no money on it. Every row
   that must keep its lozenge on the line is a `flexWrap:"nowrap"` flex row —
   never a grid, which the phone stylesheet folds into one column.
-- `UnitStatusBar`: tiles on the admin home, one compact line on Live (short
-  names: Hamlet, Amly, Glamping, Grain St.). `ChangeoverRecordPanel` shows the
+- `UnitStatusBar`: one line of small coloured pills — short names (Hamlet,
+  Amly, Glamping, Grain St.) and the state colour, nothing else — on the admin
+  home and on Live (`role="group"`, `aria-label="Property status"`); fits a
+  375px phone. A pill opens its booking or event. `ChangeoverRecordPanel` shows the
   sign-off on the letting and event forms; the lettings list has a
-  lost-property chip. Hours: `HousekeepingHours` on the Hours tab and Reports →
-  Housekeeping Hours (above Hours Worked, which stays last).
+  lost-property chip. Reports → Housekeeping Hours sits above Hours Worked,
+  which stays last.
 - **Upcoming** (`changeoverWindows`): four Monday-to-Sunday weeks a page, each
   changeover listed in order showing the stay or event's own dates (`occ`, the
   same "Mon 2 Nov 26 – Wed 4 Nov 26" as Bookings) — Toby found the cleaning
@@ -538,6 +540,30 @@ own header.
   from the day the window opens; once the stay or event has begun it no longer
   turns the tile red. Draft box office events are not in housekeeping, so their
   setup clean waits until published.
+- **The House** (28 Oct): Karina also cleans Toby's own house, paid by the
+  hour. The housekeeping **House** tab (it replaced Hours) is her Mon–Fri
+  timesheet (`hbf_house_hours_v1`, one record a week, id `karina:<monday>`):
+  last two weeks, this week, next two; grey future (cannot open), yellow this
+  week up to Friday, red after Friday until submitted, green once submitted.
+  Weekends never. A week the office has marked paid is read-only to her.
+  Every unsubmitted week from `HOUSE_FROM` (Mon 5 Oct 2026, 2641 — Toby has
+  her hours to 2640) stays listed, red, until submitted.
+- **Weeks are coded YYWW from the ISO week** (`isoWeekCode`): 2601 is the week
+  of Mon 29 Dec 2025; 2026 has a week 2653.
+- **Pay rates live on the staff record as a history** — `rates: [{ from, rate,
+  holidayRollup }]`, numbers, each applying from its date (`staffRateOn`); the
+  old free-text "Pay Rate" stays a note for the Hours Worked report and is
+  never read for housekeeping pay. `employment`: "PAYE" (the default when
+  missing) or "Self-employed". Role **Housekeeping** is left out of rota
+  pickers. A cleaner key maps to the staff record with role Housekeeping and
+  that first name (`housekeepingStaffFor`).
+- **Reports → Housekeeping Hours is the weekly pay sheet**
+  (`HousekeepingPayReport`, `housekeepingWeek`): per week, changeover hours by
+  the day each was ready plus Karina's House hours, each priced at the rate on
+  its day; Edita, Karina, total, a breakdown, and Paid + date
+  (`hbf_housekeeping_pay_v1`, id = the Monday, amounts kept as paid so a later
+  change shows against them). Karina's pay is House hours plus her changeover
+  pop-up hours, by Toby's choice.
 - The housekeeping login stays signed in indefinitely (persisted session, no
   session time-box in Supabase); Sign out asks first, a stale build reloads
   itself when the app comes back to the front, and the App button (hidden once

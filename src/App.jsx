@@ -1757,7 +1757,9 @@ function GmailLink({ email }) {
 function StaffPicker({ label, value=[], onChange, staff }) {
   const [open, setOpen] = useState(false);
   const toggle = id => onChange(value.includes(id) ? value.filter(v=>v!==id) : [...value, id]);
-  const activeStaff = staff.filter(s=>s.active);
+  // Housekeeping is not on event rotas, so they are left out of the picker
+  // (anyone already on a rota stays shown).
+  const activeStaff = staff.filter(s=>s.active && (s.role !== "Housekeeping" || value.includes(s.id)));
   return (
     <div style={{ position:"relative" }}>
       <label style={{ display:"block", fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, marginBottom:5, fontWeight:600 }}>{label}</label>
@@ -2773,7 +2775,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28h";
+const APP_BUILD = "2026-10-28k";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6233,7 +6235,7 @@ const BACKUP_DATA_KEYS = [
   "hbf_properties_v1", "hbf_enquiries_v1", "hbf_viewings_v1", "hbf_viewing_requests_v1",
   "hbf_viewing_blocks_v1", "hbf_bar_products_v1", "hbf_bar_events_v1", "hbf_bar_pos_map_v1",
   "hbf_discount_codes_v1", "hbf_email_templates_v1", "hbf_email_log_v1", "hbf_event_invoices_v1", "hbf_terms_v1", "hbf_cleaning_email_v1", "hbf_starred_emails_v1",
-  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1", "hbf_setup_cleans_v1"
+  "hbf_brochure_requests_v1", "hbf_brochure_settings_v1", "hbf_changeovers_v1", "hbf_setup_cleans_v1", "hbf_house_hours_v1", "hbf_housekeeping_pay_v1"
   // Not the follow-up keys: restoring the "already sent" record would send
   // everybody mailed since the snapshot their email again.
 ];
@@ -6245,7 +6247,7 @@ const KEY_LABELS = {
   "hbf_bar_pos_map_v1":"Till mappings", "hbf_discount_codes_v1":"Discount codes",
   "hbf_email_templates_v1":"Email templates", "hbf_email_log_v1":"Email log", "hbf_event_invoices_v1":"Invoice records", "hbf_terms_v1":"Terms & Conditions", "hbf_cleaning_email_v1":"Cleaning summary settings", "hbf_starred_emails_v1":"Starred emails",
   "hbf_brochure_requests_v1":"Brochure requests", "hbf_brochure_settings_v1":"Brochure request settings",
-  "hbf_changeovers_v1":"Changeover sign-offs", "hbf_setup_cleans_v1":"Setup cleans asked for"
+  "hbf_changeovers_v1":"Changeover sign-offs", "hbf_setup_cleans_v1":"Setup cleans asked for", "hbf_house_hours_v1":"House timesheets", "hbf_housekeeping_pay_v1":"Housekeeping pay records"
 };
 
 // Compare a snapshot against what's live and report only what has been LOST:
@@ -7057,14 +7059,6 @@ async function loadBoxEventsForHousekeeping(since) {
   return Array.isArray(r && r.events) ? r.events : [];
 }
 
-// A sign-off whose booking or event has since gone (deleted, moved property)
-// can still be opened and corrected from what the record itself holds.
-function changeoverJobFromRecord(r) {
-  return { id: r.id, kind: r.kind, refId: r.refId, unitId: r.unitId, unitName: r.unitName || r.unitId,
-    who: r.who || "", setupOf: r.setupOf, eventStart: r.eventStart,
-    start: r.start || r.due || String(r.doneAt || "").slice(0, 10), due: r.due || String(r.doneAt || "").slice(0, 10) };
-}
-
 function changeoverRecordMap(recs) {
   const m = {};
   (recs || []).forEach(function(r) { if (r && r.id) m[r.id] = r; });
@@ -7278,65 +7272,26 @@ function ChangeoverDialog({ job, rec, onSave, onReopen, onClose }) {
   );
 }
 
-// Hamlet, Amly, Glamping, Grain Store at a glance — on the admin home and at
-// the top of the housekeeping Live tab.
-function UnitStatusBar({ statuses, onOpen, compact }) {
-  if (compact) {
-    // One line of coloured pills: name and state, nothing else.
-    return (
-      <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:14 }}>
-        {(statuses || []).map(function(s) {
-          const m = changeoverMeta(s.state);
-          // Green opens the last sign-off, so its hours and notes can be changed.
-          const clickable = !!(onOpen && s.job);
-          return (
-            <span key={s.unit.id} onClick={clickable ? function(){ onOpen(s.job, s); } : undefined}
-              title={m.label}
-              style={{ display:"inline-flex", alignItems:"center", gap:6, background:m.bg, color:m.fg,
-                border:"1.5px solid " + m.bd, borderRadius:20, padding:"4px 11px", fontSize:12.5, fontWeight:700,
-                whiteSpace:"nowrap", cursor: clickable ? "pointer" : "default" }}>
-              <span style={{ width:9, height:9, borderRadius:"50%", background:m.bd, flexShrink:0 }}/>
-              {s.unit.short || s.unit.name}{s.waiting > 1 ? " ×" + s.waiting : ""}
-            </span>
-          );
-        })}
-      </div>
-    );
-  }
+// Hamlet, Amly, Glamping, Grain Store at a glance: one line of small coloured
+// pills — short name and state colour, nothing else, so all four fit a phone —
+// on the admin home and at the top of the housekeeping Live tab. A pill opens
+// what it is about (green: the last sign-off). The flex row says nowrap only
+// where it must; here it may wrap on a very narrow screen rather than clip.
+function UnitStatusBar({ statuses, onOpen }) {
   return (
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(190px, 1fr))", gap:10, marginBottom:18 }}>
+    <div role="group" aria-label="Property status" style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:14 }}>
       {(statuses || []).map(function(s) {
         const m = changeoverMeta(s.state);
-        const rec = s.lastRec;
         const clickable = !!(onOpen && s.job);
         return (
-          <div key={s.unit.id} onClick={clickable ? function(){ onOpen(s.job, s); } : undefined}
-            title={clickable ? "Open " + (s.job.kind === "accom" ? "the booking" : "the event") : ""}
-            style={{ background:"#fff", border:"1px solid " + T.border, borderLeft:"5px solid " + m.bd, borderRadius:10,
-              padding:"10px 13px", cursor: clickable ? "pointer" : "default", minWidth:0 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"nowrap" }}>
-              <span style={{ width:11, height:11, borderRadius:"50%", background:m.bd, flexShrink:0 }}/>
-              <span style={{ fontSize:14, fontWeight:800, color:T.text, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.unit.name}</span>
-              <span style={{ fontSize:11, fontWeight:700, color:m.fg, whiteSpace:"nowrap" }}>
-                {m.label}{s.waiting > 1 ? " ×" + s.waiting : ""}
-              </span>
-            </div>
-            <div style={{ fontSize:11.5, color:T.textMid, marginTop:4, lineHeight:1.5 }}>
-              {s.state === "due" && <>{s.job.who} · out {fmtDate(s.job.due)}</>}
-              {s.state === "inuse" && <>{s.job.who} · {s.job.kind === "accom" ? "leaves " + fmtDate(s.job.due) : fmtDate(s.job.start)}</>}
-              {s.state === "done" && (rec ? <>Cleaned {fmtDoneAt(rec.doneAt)}</> : <span style={{ color:T.textLight }}>No changeovers recorded yet</span>)}
-            </div>
-            {rec && rec.comments && (
-              <div style={{ fontSize:11.5, color:T.text, marginTop:5, background:T.amberBg, borderRadius:6, padding:"4px 7px", lineHeight:1.45, wordBreak:"break-word" }}>
-                {rec.comments}
-              </div>
-            )}
-            {rec && rec.lostProperty && (
-              <div style={{ fontSize:11.5, color:T.red, fontWeight:700, marginTop:5, lineHeight:1.45, wordBreak:"break-word" }}>
-                Lost property: <span style={{ fontWeight:600 }}>{rec.lostProperty}</span>
-              </div>
-            )}
-          </div>
+          <span key={s.unit.id} onClick={clickable ? function(){ onOpen(s.job, s); } : undefined}
+            title={m.label}
+            style={{ display:"inline-flex", alignItems:"center", gap:5, background:m.bg, color:m.fg,
+              border:"1.5px solid " + m.bd, borderRadius:20, padding:"4px 9px", fontSize:12, fontWeight:700,
+              whiteSpace:"nowrap", cursor: clickable ? "pointer" : "default" }}>
+            <span style={{ width:8, height:8, borderRadius:"50%", background:m.bd, flexShrink:0 }}/>
+            {s.unit.short || s.unit.name}{s.waiting > 1 ? " ×" + s.waiting : ""}
+          </span>
         );
       })}
     </div>
@@ -7513,7 +7468,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
         Now, and the next {CLEANER_DAYS_AHEAD} days to {fmtDate(end)}
       </div>
 
-      <UnitStatusBar compact statuses={statuses} onOpen={function(job) { onOpenJob(job); }}/>
+      <UnitStatusBar statuses={statuses} onOpen={function(job) { onOpenJob(job); }}/>
 
       {overdue.length > 0 && (
         <div style={{ background:T.redBg, border:"1px solid " + T.red, borderRadius:10, padding:"12px 16px", marginBottom:12 }}>
@@ -7924,118 +7879,395 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, r
   );
 }
 
-// Month by month: hours each cleaner put in, from the sign-offs. Shared by the
-// housekeeping Hours tab and Reports → Housekeeping Hours. Months follow the
-// "ready at" time, which is when the work was done.
-function HousekeepingHours({ recs, onOpenRecord }) {
-  const [month, setMonth] = useState(londonToday().slice(0, 7));
-  const step = function(n) {
-    const y = Number(month.slice(0, 4)), m = Number(month.slice(5, 7)) - 1 + n;
-    const d = new Date(Date.UTC(y, m, 1));
-    setMonth(d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0"));
-  };
-  const label = new Date(month + "-01T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
-  const rows = (recs || []).filter(function(r) { return r && String(r.doneAt || "").slice(0, 7) === month; })
-    .sort(function(a, z) { return String(a.doneAt) < String(z.doneAt) ? -1 : 1; });
-  const totals = {};
-  CHANGEOVER_CLEANERS.forEach(function(c) { totals[c.key] = 0; });
-  rows.forEach(function(r) {
-    CHANGEOVER_CLEANERS.forEach(function(c) { totals[c.key] += Number(r.hours && r.hours[c.key]) || 0; });
+// ─── WEEKS, THE HOUSE TIMESHEET, RATES AND HOUSEKEEPING PAY ─────────────────
+// Weeks run Monday to Sunday and are named YYWW from the ISO week — 2601 is
+// the first week of 2026 (which starts Mon 29 Dec 2025), 2653 its last.
+function isoWeekCode(monday) {
+  const thu = addDaysIso(monday, 3);                       // a week belongs to the year its Thursday is in
+  const y = Number(thu.slice(0, 4));
+  const jan1 = Date.UTC(y, 0, 1);
+  const wk = 1 + Math.floor((Date.parse(thu + "T00:00:00Z") - jan1) / (7 * 86400000));
+  return String(y).slice(2) + String(wk).padStart(2, "0");
+}
+function weekTitle(monday) { return isoWeekCode(monday) + " · " + fmtDayShort(monday); }
+
+// Karina's timesheet for The House: Monday to Friday only (never weekends).
+// One record a week in its own key, written by the housekeeping login:
+// { id: "karina:<monday>", who, week, days: { mon..fri: hours }, submitted, submittedAt }.
+const HOUSE_HOURS_STORAGE = "hbf_house_hours_v1";
+const HOUSE_CLEANER = "karina";
+// The first week Toby does not already have Karina's House hours for (he has
+// them to the week of Mon 28 Sep 2026, 2640). Every week from here that is not
+// submitted stays listed, red, until it is; nothing earlier is ever asked for.
+const HOUSE_FROM = "2026-10-05";
+const HOUSE_DAYS = [["mon","Monday"],["tue","Tuesday"],["wed","Wednesday"],["thu","Thursday"],["fri","Friday"]];
+function houseSheetTotal(sheet) {
+  if (!sheet || !sheet.days) return 0;
+  return Math.round(HOUSE_DAYS.reduce(function(s, d) { return s + (Number(sheet.days[d[0]]) || 0); }, 0) * 100) / 100;
+}
+// grey (future), yellow (this week, up to Friday), red (Friday gone, not
+// submitted), green (submitted).
+function houseWeekState(monday, sheet, today) {
+  if (sheet && sheet.submitted) return "done";
+  const thisMonday = mondayOf(today);
+  if (monday > thisMonday) return "upcoming";
+  if (monday === thisMonday && today <= addDaysIso(monday, 4)) return "inuse";
+  return "due";
+}
+function houseWeekMeta(state) {
+  if (state === "done")  return { label: "Submitted", bg: T.greenBg, fg: T.green, bd: T.green };
+  if (state === "inuse") return { label: "This week", bg: T.amberBg, fg: T.amber, bd: T.amber };
+  if (state === "due")   return { label: "To submit", bg: T.redBg,   fg: T.red,   bd: T.red };
+  return { label: "Not yet", bg: T.bgInput, fg: T.textLight, bd: T.border };
+}
+
+// Paid weeks, recorded by the office: { id: <monday>, code, paid, paidOn,
+// amounts: { <cleaner>: pounds, total } } — amounts as they stood when ticked,
+// so a later change to the hours shows up against what was paid.
+const HOUSEKEEPING_PAY_STORAGE = "hbf_housekeeping_pay_v1";
+
+// Pay rates live on the staff record as a history, so a rise (or the minimum
+// wage going up) applies only from its date: rates: [{ from: "YYYY-MM-DD",
+// rate: <pounds an hour> }]. The old free-text "Pay Rate" is a note and is
+// never read as money.
+function staffRateOn(st, iso) {
+  const list = ((st && st.rates) || []).filter(function(r) { return r && isValidEventDate(r.from) && Number(r.rate) > 0; })
+    .sort(function(a, z) { return a.from < z.from ? -1 : a.from > z.from ? 1 : 0; });
+  let rate = null;
+  list.forEach(function(r) { if (r.from <= iso) rate = Number(r.rate); });
+  return rate;
+}
+// The staff record for a cleaner key: role Housekeeping, first name matching.
+function housekeepingStaffFor(staff, key) {
+  return (staff || []).find(function(s) {
+    return s && s.role === "Housekeeping" && String(s.name || "").trim().split(/\s+/)[0].toLowerCase() === key;
+  }) || null;
+}
+
+// Everything owed for one week: changeover hours per cleaner (by the day each
+// was ready), plus Karina's House hours, each priced at the rate on its day.
+function housekeepingWeek(monday, recs, sheets, staff) {
+  const sunday = addDaysIso(monday, 6);
+  const people = {};
+  CHANGEOVER_CLEANERS.forEach(function(c) {
+    people[c.key] = { key: c.key, label: c.label, hours: 0, pay: 0, unpriced: 0, lines: [], staff: housekeepingStaffFor(staff, c.key) };
   });
-  const fmtH = function(n) { const v = Math.round(n * 100) / 100; return v ? String(v) : "–"; };
-  const all = CHANGEOVER_CLEANERS.reduce(function(s, c) { return s + totals[c.key]; }, 0);
-  const navBtn = { background:"#fff", border:"1.5px solid " + T.border, borderRadius:8, width:40, height:36,
-    fontSize:18, fontWeight:700, color:T.textMid, cursor:"pointer", fontFamily:"inherit", flexShrink:0 };
-  // Rows are no-wrap flex, not grid: the phone stylesheet folds every grid
-  // into one column.
-  const rowBase = { display:"flex", flexWrap:"nowrap", alignItems:"flex-start", gap:8, padding:"9px 12px" };
-  const cWhen = { width:96, flexShrink:0, whiteSpace:"nowrap" };
-  const cHrs  = { width:50, flexShrink:0, textAlign:"right" };
+  const addLine = function(p, date, hours, what) {
+    if (!p || !(hours > 0)) return;
+    const rate = staffRateOn(p.staff, date);
+    p.hours += hours;
+    if (rate == null) p.unpriced += hours; else p.pay += hours * rate;
+    p.lines.push({ date: date, hours: hours, rate: rate, what: what });
+  };
+  (recs || []).forEach(function(r) {
+    const d = String((r && r.doneAt) || "").slice(0, 10);
+    if (!isValidEventDate(d) || d < monday || d > sunday) return;
+    CHANGEOVER_CLEANERS.forEach(function(c) {
+      addLine(people[c.key], d, Number(r.hours && r.hours[c.key]) || 0, (r.unitName || r.unitId) + (r.who ? " · " + r.who : ""));
+    });
+  });
+  const sheet = (sheets || []).find(function(x) { return x && x.week === monday && x.who === HOUSE_CLEANER; }) || null;
+  if (sheet) HOUSE_DAYS.forEach(function(d, i) {
+    addLine(people[HOUSE_CLEANER], addDaysIso(monday, i), Number(sheet.days && sheet.days[d[0]]) || 0, "The House");
+  });
+  const list = CHANGEOVER_CLEANERS.map(function(c) {
+    const p = people[c.key];
+    p.hours = Math.round(p.hours * 100) / 100;
+    p.pay = Math.round(p.pay * 100) / 100;
+    return p;
+  });
+  return {
+    monday: monday, code: isoWeekCode(monday), people: list, sheet: sheet,
+    total: Math.round(list.reduce(function(s, p) { return s + p.pay; }, 0) * 100) / 100,
+    hours: Math.round(list.reduce(function(s, p) { return s + p.hours; }, 0) * 100) / 100,
+    unpriced: list.some(function(p) { return p.unpriced > 0; })
+  };
+}
+
+// The House timesheet for one week. Module scope: it renders inputs.
+function HouseWeekDialog({ monday, sheet, paid, today, onSave, onClose }) {
+  const [days, setDays] = useState(function() {
+    const d = {};
+    HOUSE_DAYS.forEach(function(x) { const v = sheet && sheet.days ? sheet.days[x[0]] : null; d[x[0]] = v != null && v !== 0 ? String(v) : ""; });
+    return d;
+  });
+  const [submit, setSubmit] = useState(!!(sheet && sheet.submitted));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const locked = !!paid;
+  const bad = HOUSE_DAYS.some(function(x) { const v = days[x[0]]; return v !== "" && !(Number(v) >= 0 && Number(v) <= 24); });
+  const total = Math.round(HOUSE_DAYS.reduce(function(s, x) { return s + (Number(days[x[0]]) || 0); }, 0) * 100) / 100;
+  const save = async function() {
+    if (bad) { setErr("Hours must be a number between 0 and 24."); return; }
+    setBusy(true); setErr("");
+    const d = {};
+    HOUSE_DAYS.forEach(function(x) { d[x[0]] = days[x[0]] === "" ? 0 : Math.round(Number(days[x[0]]) * 100) / 100; });
+    const now = new Date().toISOString();
+    try {
+      await onSave({ id: HOUSE_CLEANER + ":" + monday, who: HOUSE_CLEANER, week: monday, code: isoWeekCode(monday), days: d,
+        submitted: submit, submittedAt: submit ? (sheet && sheet.submittedAt) || now : null, updatedAt: now });
+      onClose();
+    } catch (e) { setErr(String((e && e.message) || e)); setBusy(false); }
+  };
+  const inp = { width:86, boxSizing:"border-box", border:"1.5px solid " + T.border, borderRadius:8, padding:"9px 10px",
+    fontFamily:"inherit", fontSize:16, color:T.text, background: locked ? T.bgInput : "#fff", outline:"none", textAlign:"right" };
   return (
-    <div>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"nowrap" }}>
-        <button type="button" onClick={function(){ step(-1); }} style={navBtn} aria-label="Previous month">‹</button>
-        <div style={{ flex:1, textAlign:"center", fontSize:18, fontWeight:800, color:T.text }}>{label}</div>
-        <button type="button" onClick={function(){ step(1); }} style={navBtn} aria-label="Next month">›</button>
-      </div>
-
-      <div style={{ display:"flex", flexWrap:"nowrap", gap:8, marginBottom:16 }}>
-        {CHANGEOVER_CLEANERS.map(function(c) {
-          return (
-            <div key={c.key} style={{ flex:1, minWidth:0, background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"10px 12px" }}>
-              <div style={{ fontSize:12, fontWeight:700, color:T.textMid }}>{c.label}</div>
-              <div style={{ fontSize:26, fontWeight:800, color:T.midBlue }}>{fmtH(totals[c.key])}<span style={{ fontSize:13, fontWeight:600, color:T.textLight }}> h</span></div>
-            </div>
-          );
-        })}
-        <div style={{ flex:1, minWidth:0, background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"10px 12px" }}>
-          <div style={{ fontSize:12, fontWeight:700, color:T.textMid }}>Changeovers</div>
-          <div style={{ fontSize:26, fontWeight:800, color:T.midBlue }}>{rows.length}</div>
-          <div style={{ fontSize:11, color:T.textLight }}>{fmtH(all)} h in all</div>
-        </div>
-      </div>
-
-      {rows.length === 0 ? (
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 20px", fontSize:14, color:T.textLight }}>
-          No changeovers signed off in {label}.
-        </div>
-      ) : (
-        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
-          <div style={Object.assign({}, rowBase, { background:T.bgInput, fontSize:11, fontWeight:700, color:T.textMid, borderBottom:"1px solid " + T.border })}>
-            <div style={cWhen}>Ready</div><div style={{ flex:1, minWidth:0 }}>Where</div>
-            {CHANGEOVER_CLEANERS.map(function(c) { return <div key={c.key} style={cHrs}>{c.label}</div>; })}
+    <div onClick={busy ? undefined : onClose}
+      style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.55)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={function(e){ e.stopPropagation(); }}
+        style={{ background:"#fff", borderRadius:12, width:"min(400px, 100%)", maxHeight:"90vh", overflowY:"auto",
+          boxShadow:"0 20px 60px rgba(0,0,0,.3)", padding:"18px 20px 20px", boxSizing:"border-box" }}>
+        <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"nowrap" }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:17, fontWeight:800, color:T.text }}>Karina hours</div>
+            <div style={{ fontSize:13, color:T.textMid, marginTop:2 }}>The House · week {weekTitle(monday)}</div>
           </div>
-          {rows.map(function(r) {
-            const clickable = !!onOpenRecord;
+          <button onClick={onClose} disabled={busy} aria-label="Close"
+            style={{ background:"none", border:"none", fontSize:24, lineHeight:1, color:T.textLight, cursor:"pointer", padding:0, fontFamily:"inherit" }}>×</button>
+        </div>
+        <div style={{ marginTop:12 }}>
+          {HOUSE_DAYS.map(function(x, i) {
+            const date = addDaysIso(monday, i);
             return (
-              <div key={r.id} onClick={clickable ? function(){ onOpenRecord(r); } : undefined}
-                style={Object.assign({}, rowBase, { borderBottom:"1px solid " + T.tint, fontSize:12.5, color:T.text, cursor: clickable ? "pointer" : "default" })}>
-                <div style={cWhen}>
-                  <div>{fmtDayShort(String(r.doneAt || "").slice(0, 10))}</div>
-                  <div style={{ fontSize:11, color:T.textLight }}>{String(r.doneAt || "").slice(11, 16)}</div>
-                </div>
+              <div key={x[0]} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", flexWrap:"nowrap", borderBottom:"1px solid " + T.tint }}>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontWeight:600 }}>{r.unitName || r.unitId}</div>
-                  {r.who && <div style={{ fontSize:11.5, color:T.textMid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.who}</div>}
+                  <div style={{ fontSize:14, fontWeight:700, color: date === today ? T.accent : T.text }}>{x[1]}</div>
+                  <div style={{ fontSize:11.5, color:T.textLight }}>{fmtDayShort(date)}</div>
                 </div>
-                {CHANGEOVER_CLEANERS.map(function(c) {
-                  return <div key={c.key} style={Object.assign({}, cHrs, { fontWeight:700 })}>{fmtH(Number(r.hours && r.hours[c.key]) || 0)}</div>;
-                })}
+                <input type="number" inputMode="decimal" min="0" max="24" step="0.25" value={days[x[0]]} placeholder="0" disabled={locked}
+                  aria-label={x[1] + " hours"}
+                  onChange={function(e){ const v = e.target.value; setDays(function(d){ return Object.assign({}, d, { [x[0]]: v }); }); }}
+                  style={inp}/>
+                <span style={{ fontSize:12, color:T.textLight, width:10 }}>h</span>
               </div>
             );
           })}
-          <div style={Object.assign({}, rowBase, { fontSize:12.5, fontWeight:800, color:T.text, background:T.bgInput })}>
-            <div style={cWhen}>Total</div><div style={{ flex:1, minWidth:0 }}/>
-            {CHANGEOVER_CLEANERS.map(function(c) { return <div key={c.key} style={cHrs}>{fmtH(totals[c.key])}</div>; })}
+          <div style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0 2px", flexWrap:"nowrap" }}>
+            <div style={{ flex:1, fontSize:14, fontWeight:800, color:T.text }}>Total</div>
+            <div style={{ fontSize:16, fontWeight:800, color:T.midBlue }}>{total} h</div>
           </div>
         </div>
+        {locked ? (
+          <div style={{ fontSize:13, color:T.green, fontWeight:700, marginTop:12 }}>
+            Paid{paid.paidOn ? " on " + fmtDate(paid.paidOn) : ""} — ask the office if something needs changing.
+          </div>
+        ) : (
+          <label style={{ display:"flex", alignItems:"center", gap:10, marginTop:14, cursor:"pointer", flexWrap:"nowrap" }}>
+            <input type="checkbox" checked={submit} onChange={function(e){ setSubmit(e.target.checked); }}
+              style={{ width:20, height:20, flexShrink:0, accentColor:T.green }}/>
+            <span style={{ fontSize:14, fontWeight:700, color:T.text }}>Submit — this week is complete</span>
+          </label>
+        )}
+        {err && <div style={{ fontSize:13, color:T.red, marginTop:10, fontWeight:600 }}>{err}</div>}
+        {!locked && (
+          <div style={{ display:"flex", gap:10, marginTop:16, flexWrap:"nowrap" }}>
+            <button onClick={save} disabled={busy}
+              style={{ background: submit ? T.green : T.accent, color:"#fff", border:"none", borderRadius:9, padding:"12px 22px",
+                fontFamily:"inherit", fontSize:15, fontWeight:800, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>
+              {busy ? "Saving…" : submit ? "Save and submit" : "Save"}
+            </button>
+            <button onClick={onClose} disabled={busy}
+              style={{ background:"#fff", color:T.textMid, border:"1.5px solid " + T.border, borderRadius:9, padding:"11px 18px",
+                fontFamily:"inherit", fontSize:14, fontWeight:600, cursor:"pointer" }}>Cancel</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// The House tab: the last two weeks, this week and the next two — plus every
+// earlier week since HOUSE_FROM still waiting to be submitted.
+function CleanerHouse({ sheets, paidWeeks, today, onSave }) {
+  const [open, setOpen] = useState(null);
+  const thisMonday = mondayOf(today);
+  const sheetOf = function(m) { return (sheets || []).find(function(x) { return x && x.week === m && x.who === HOUSE_CLEANER; }) || null; };
+  const paidOf = function(m) { return (paidWeeks || []).find(function(x) { return x && x.id === m && x.paid; }) || null; };
+  const weeks = [];
+  for (let m = HOUSE_FROM; m < addDaysIso(thisMonday, -14); m = addDaysIso(m, 7)) {
+    const sh = sheetOf(m);
+    if (!(sh && sh.submitted)) weeks.push(m);
+  }
+  for (let i = -2; i <= 2; i++) {
+    const m = addDaysIso(thisMonday, 7 * i);
+    if (m >= HOUSE_FROM || i >= 0) weeks.push(m);
+  }
+  weeks.sort();
+  return (
+    <div>
+      <h2 style={{ fontSize:20, fontWeight:800, color:T.text, margin:"0 0 2px" }}>The House</h2>
+      <div style={{ fontSize:13, color:T.textMid, marginBottom:14 }}>Karina's hours, Monday to Friday. Submit each week when it's done.</div>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
+        {weeks.map(function(m) {
+          const sh = sheetOf(m);
+          const state = houseWeekState(m, sh, today);
+          const meta = houseWeekMeta(state);
+          const live = state !== "upcoming";
+          const total = houseSheetTotal(sh);
+          return (
+            <div key={m} onClick={live ? function(){ setOpen(m); } : undefined}
+              style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 14px", borderBottom:`1px solid ${T.tint}`,
+                flexWrap:"nowrap", cursor: live ? "pointer" : "default", opacity: live ? 1 : .7 }}>
+              <span style={{ fontSize:15, fontWeight:800, color:T.text, width:44, flexShrink:0 }}>{isoWeekCode(m)}</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:T.text, whiteSpace:"nowrap" }}>{fmtDayShort(m)}</div>
+                <div style={{ fontSize:11.5, color:T.textMid }}>{total ? total + " h" : state === "upcoming" ? "" : "No hours yet"}</div>
+              </div>
+              <span style={{ background:meta.bg, color:meta.fg, border:"1.5px solid " + meta.bd, borderRadius:8, padding:"5px 12px",
+                fontSize:12, fontWeight:800, whiteSpace:"nowrap", flexShrink:0, minWidth:80, textAlign:"center" }}>
+                {state === "done" ? total + " h" : meta.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {open && (
+        <HouseWeekDialog key={open} monday={open} sheet={sheetOf(open)} paid={paidOf(open)} today={today}
+          onSave={onSave} onClose={function(){ setOpen(null); }}/>
       )}
     </div>
   );
 }
 
-// Reports → Housekeeping Hours: the same view for the office, rows opening the
-// booking or event they were for.
-function HousekeepingHoursReport({ onOpenEvent, onOpenAccom, onOpenBoxEvent }) {
-  const [recs, setRecs] = useState(null);
+function fmtPounds(n) { return "£" + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2); }
+
+// Reports → Housekeeping Hours: what each cleaner is owed, week by week (a
+// month splits weeks, so weeks are the unit), with Paid and the date.
+function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent }) {
+  const [recs, setRecs]     = useState(null);
+  const [sheets, setSheets] = useState([]);
+  const [paid, setPaid]     = useState([]);
+  const [from, setFrom]     = useState(addDaysIso(mondayOf(londonToday()), -7 * 7));
+  const [openWeek, setOpenWeek] = useState(null);
+  const [err, setErr]       = useState("");
+  const savePaid = useMergedSave(HOUSEKEEPING_PAY_STORAGE, paid, setPaid);
   useEffect(function() {
     let off = false;
-    sbGet(CHANGEOVERS_STORAGE).then(function(v) { if (!off) setRecs(Array.isArray(v) ? v : []); })
-      .catch(function() { if (!off) setRecs([]); });
+    Promise.all([sbGet(CHANGEOVERS_STORAGE), sbGet(HOUSE_HOURS_STORAGE), sbGet(HOUSEKEEPING_PAY_STORAGE)]).then(function(r) {
+      if (off) return;
+      setRecs(Array.isArray(r[0]) ? r[0] : []); setSheets(Array.isArray(r[1]) ? r[1] : []); setPaid(Array.isArray(r[2]) ? r[2] : []);
+    }).catch(function() { if (!off) setRecs([]); });
     return function() { off = true; };
   }, []);
   if (!recs) return <div style={{ padding:30, color:T.textLight }}>Loading…</div>;
+
+  const WEEKS = 8;
+  const weeks = [];
+  for (let i = WEEKS - 1; i >= 0; i--) weeks.push(addDaysIso(from, 7 * i));   // newest first
+  const missing = CHANGEOVER_CLEANERS.filter(function(c) { return !housekeepingStaffFor(staff, c.key); });
+
+  const setWeekPaid = async function(w, on, paidOn) {
+    setErr("");
+    try {
+      await savePaid(function(prev) {
+        const rest = (prev || []).filter(function(x) { return x && x.id !== w.monday; });
+        if (!on) return rest;
+        const amounts = { total: w.total };
+        w.people.forEach(function(p) { amounts[p.key] = p.pay; });
+        return rest.concat([{ id: w.monday, code: w.code, paid: true, paidOn: paidOn || londonToday(), amounts: amounts, at: new Date().toISOString() }]);
+      });
+    } catch (e) { setErr(String((e && e.message) || e)); }
+  };
+
+  const navBtn = { background:"#fff", border:"1.5px solid " + T.border, borderRadius:8, width:40, height:36,
+    fontSize:18, fontWeight:700, color:T.textMid, cursor:"pointer", fontFamily:"inherit", flexShrink:0 };
+  const cell = { width:92, flexShrink:0, textAlign:"right" };
   return (
-    <div style={{ maxWidth:820 }}>
-      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 14px" }}>
-        Hours from the housekeeping sign-offs, by the month the changeover was ready.
+    <div style={{ maxWidth:900 }}>
+      <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
+        What each cleaner is owed, week by week (Monday to Sunday): changeover hours by the day each was ready, plus
+        Karina's hours at The House, each priced at the rate on that day (Staff → each person's pay rates).
       </p>
-      <HousekeepingHours recs={recs} onOpenRecord={function(r) {
-        const k = r.kind === "setup" ? r.setupOf : r.kind;
-        if (k === "accom" && onOpenAccom) onOpenAccom(r.refId);
-        else if (k === "event" && onOpenEvent) onOpenEvent(r.refId);
-        else if (k === "box" && onOpenBoxEvent) onOpenBoxEvent(r.refId);
-      }}/>
+      {missing.length > 0 && (
+        <div style={{ background:T.amberBg, border:"1px solid " + T.amber, borderRadius:8, padding:"9px 13px", fontSize:12.5, color:T.text, marginBottom:12 }}>
+          No Housekeeping staff record for {missing.map(function(c) { return c.label; }).join(" or ")} — add them on the Staff page with role Housekeeping and a pay rate.
+        </div>
+      )}
+      {err && <div style={{ background:T.redBg, color:T.red, borderRadius:8, padding:"9px 13px", fontSize:13, marginBottom:12 }}>{err}</div>}
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, flexWrap:"nowrap" }}>
+        <button type="button" onClick={function(){ setFrom(addDaysIso(from, -7 * WEEKS)); }} style={navBtn} aria-label="Earlier weeks">‹</button>
+        <div style={{ flex:1, textAlign:"center", fontSize:15, fontWeight:800, color:T.text }}>
+          {isoWeekCode(from)} – {isoWeekCode(addDaysIso(from, 7 * (WEEKS - 1)))}
+        </div>
+        <button type="button" onClick={function(){ setFrom(addDaysIso(from, 7 * WEEKS)); }} style={navBtn} aria-label="Later weeks">›</button>
+      </div>
+
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
+        <div style={{ display:"flex", flexWrap:"nowrap", gap:8, padding:"9px 14px", background:T.bgInput, fontSize:11, fontWeight:700, color:T.textMid, borderBottom:"1px solid " + T.border }}>
+          <div style={{ flex:1, minWidth:0 }}>Week</div>
+          {CHANGEOVER_CLEANERS.map(function(c) { return <div key={c.key} style={cell}>{c.label}</div>; })}
+          <div style={cell}>Total</div>
+          <div style={{ width:150, flexShrink:0 }}>Paid</div>
+        </div>
+        {weeks.map(function(m) {
+          const w = housekeepingWeek(m, recs, sheets, staff);
+          const p = paid.find(function(x) { return x && x.id === m && x.paid; }) || null;
+          const changed = p && p.amounts && Math.abs((p.amounts.total || 0) - w.total) >= 0.005;
+          const sheetState = houseWeekState(m, w.sheet, londonToday());
+          return (
+            <div key={m} style={{ borderBottom:"1px solid " + T.tint }}>
+              <div style={{ display:"flex", flexWrap:"nowrap", gap:8, padding:"10px 14px", alignItems:"center", fontSize:13, color:T.text }}>
+                <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ setOpenWeek(openWeek === m ? null : m); }}>
+                  <div style={{ fontWeight:800 }}>{w.code} <span style={{ fontWeight:500, color:T.textMid }}>· {fmtDayShort(m)}</span></div>
+                  <div style={{ fontSize:11.5, color:T.textLight }}>
+                    {w.hours ? w.hours + " h" : "No hours"}
+                    {w.sheet && !w.sheet.submitted && sheetState === "due" && <span style={{ color:T.red, fontWeight:700 }}> · House hours not submitted</span>}
+                    {w.unpriced && <span style={{ color:T.amber, fontWeight:700 }}> · some hours have no rate</span>}
+                    <span style={{ color:T.accent }}> · {openWeek === m ? "hide" : "details"}</span>
+                  </div>
+                </div>
+                {w.people.map(function(pp) {
+                  return (
+                    <div key={pp.key} style={cell}>
+                      <div style={{ fontWeight:700 }}>{pp.pay ? fmtPounds(pp.pay) : "–"}</div>
+                      <div style={{ fontSize:11, color:T.textLight }}>{pp.hours ? pp.hours + " h" : ""}</div>
+                    </div>
+                  );
+                })}
+                <div style={Object.assign({}, cell, { fontWeight:800 })}>{w.total ? fmtPounds(w.total) : "–"}</div>
+                <div style={{ width:150, flexShrink:0, display:"flex", alignItems:"center", gap:6, flexWrap:"nowrap" }}>
+                  <input type="checkbox" checked={!!p} aria-label={"Week " + w.code + " paid"}
+                    onChange={function(e){ setWeekPaid(w, e.target.checked, p && p.paidOn); }}
+                    style={{ width:18, height:18, flexShrink:0, accentColor:T.green }}/>
+                  {p && (
+                    <input type="date" value={p.paidOn || ""} aria-label={"Week " + w.code + " paid on"}
+                      onChange={function(e){ if (e.target.value) setWeekPaid(w, true, e.target.value); }}
+                      style={{ width:122, border:"1px solid " + T.border, borderRadius:6, padding:"4px 5px", fontFamily:"inherit", fontSize:12 }}/>
+                  )}
+                </div>
+              </div>
+              {changed && (
+                <div style={{ padding:"0 14px 8px", fontSize:11.5, color:T.amber, fontWeight:700 }}>
+                  Paid {fmtPounds(p.amounts.total)} — the hours have changed since, now {fmtPounds(w.total)}.
+                </div>
+              )}
+              {openWeek === m && (
+                <div style={{ padding:"4px 14px 12px", background:T.bgInput }}>
+                  {w.people.map(function(pp) {
+                    return (
+                      <div key={pp.key} style={{ marginTop:8 }}>
+                        <div style={{ fontSize:12, fontWeight:800, color:T.midBlue, marginBottom:3 }}>{pp.label}</div>
+                        {pp.lines.length === 0 && <div style={{ fontSize:12, color:T.textLight }}>Nothing this week.</div>}
+                        {pp.lines.map(function(l, i) {
+                          return (
+                            <div key={i} style={{ display:"flex", flexWrap:"nowrap", gap:8, fontSize:12, color:T.text, padding:"2px 0" }}>
+                              <span style={{ width:96, flexShrink:0 }}>{fmtDayShort(l.date)}</span>
+                              <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{l.what}</span>
+                              <span style={{ width:46, flexShrink:0, textAlign:"right" }}>{l.hours} h</span>
+                              <span style={{ width:70, flexShrink:0, textAlign:"right", color: l.rate == null ? T.amber : T.textMid }}>{l.rate == null ? "no rate" : fmtPounds(l.rate) + "/h"}</span>
+                              <span style={{ width:64, flexShrink:0, textAlign:"right", fontWeight:700 }}>{l.rate == null ? "–" : fmtPounds(l.hours * l.rate)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -8048,6 +8280,8 @@ function CleanerView() {
   const [boxErr, setBoxErr]         = useState(false);
   const [recs, setRecs]             = useState([]);
   const [setups, setSetups]         = useState([]);
+  const [sheets, setSheets]         = useState([]);          // the House timesheets
+  const [paidWeeks, setPaidWeeks]   = useState([]);          // weeks the office has paid (locks the timesheet)
   const [loaded, setLoaded]         = useState(false);
   const [tab, setTab]               = useState("home");
   const [cursor, setCursor]         = useState(new Date());
@@ -8056,6 +8290,10 @@ function CleanerView() {
   openJobRef.current = openJob;
   const [today, setToday]           = useState(londonToday());
   const saveRecs = useMergedSave(CHANGEOVERS_STORAGE, recs, setRecs);
+  const saveSheets = useMergedSave(HOUSE_HOURS_STORAGE, sheets, setSheets);
+  const saveSheet = function(sheet) {
+    return saveSheets(function(prev) { return (prev || []).filter(function(x) { return x.id !== sheet.id; }).concat([sheet]); });
+  };
 
   // Read everything; again whenever the app comes back to the front, because a
   // phone can leave this open for days and the colours depend on the date.
@@ -8065,7 +8303,7 @@ function CleanerView() {
       try {
         const results = await Promise.all([
           sbGet(PROPERTIES_STORAGE), sbGet(ACCOM_STORAGE), sbGet(BOOKING_STORAGE), sbGet(CHANGEOVERS_STORAGE),
-          sbGet(SETUP_CLEANS_STORAGE)
+          sbGet(SETUP_CLEANS_STORAGE), sbGet(HOUSE_HOURS_STORAGE), sbGet(HOUSEKEEPING_PAY_STORAGE)
         ]);
         if (cancelled) return;
         if (results[0] && results[0].length) setProperties(results[0]);
@@ -8075,6 +8313,8 @@ function CleanerView() {
         // read either way, so nothing is lost by it.
         if (Array.isArray(results[3]) || (results[3] == null && !READ_FAILED[CHANGEOVERS_STORAGE])) setRecs(results[3] || []);
         if (Array.isArray(results[4])) setSetups(results[4]);
+        if (Array.isArray(results[5]) || (results[5] == null && !READ_FAILED[HOUSE_HOURS_STORAGE])) setSheets(results[5] || []);
+        if (Array.isArray(results[6])) setPaidWeeks(results[6]);
       } catch (e) { /* leave the defaults; the view still renders */ }
       if (!cancelled) { setToday(londonToday()); setLoaded(true); }
       // Ticketed events come from the box office, separately and last: its
@@ -8112,7 +8352,7 @@ function CleanerView() {
     return saveRecs(function(prev) { return (prev || []).filter(function(r) { return r.id !== id; }); });
   };
 
-  const tabs = [["home","Live"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["hours","Hours"]];
+  const tabs = [["home","Live"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["house","House"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
@@ -8124,8 +8364,7 @@ function CleanerView() {
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
       {tab === "upcoming" && <CleanerUpcoming properties={properties} accom={accom} events={events} boxEvents={boxEvents} setups={setups}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
-      {tab === "hours" && <HousekeepingHours recs={recs}
-        onOpenRecord={function(r) { setOpenJob(jobById[r.id] || changeoverJobFromRecord(r)); }}/>}
+      {tab === "house" && <CleanerHouse sheets={sheets} paidWeeks={paidWeeks} today={today} onSave={saveSheet}/>}
       {/* onOpen is deliberately a no-op — clicking a booking must not open an
           editable form for someone who shouldn't be changing bookings. */}
       {tab === "calendar" && (
@@ -9610,9 +9849,14 @@ export default function App({ role = "admin", onSignOut } = {}) {
   };
   const handleSubmitStaff = async ()=>{
     if(!staffForm.id||!staffForm.name){ alert("Initials and name are required."); return; }
+    // Rates are numbers from a date; a half-filled line is dropped, not guessed.
+    const rates = (staffForm.rates || []).filter(function(r) { return r && isValidEventDate(r.from) && Number(r.rate) > 0; })
+      .map(function(r) { return { from: r.from, rate: Math.round(Number(r.rate) * 100) / 100, holidayRollup: !!r.holidayRollup }; })
+      .sort(function(a, z) { return a.from < z.from ? -1 : 1; });
+    const formToSave = Object.assign({}, staffForm, { rates: rates });
     let updated;
-    if(editStaffId) updated=staff.map(s=>s.id===editStaffId?{...staffForm}:s);
-    else { if(staff.find(s=>s.id===staffForm.id)){ alert(`Initials "${staffForm.id}" already exists.`); return; } updated=[...staff,staffForm]; }
+    if(editStaffId) updated=staff.map(s=>s.id===editStaffId?formToSave:s);
+    else { if(staff.find(s=>s.id===staffForm.id)){ alert(`Initials "${staffForm.id}" already exists.`); return; } updated=[...staff,formToSave]; }
     try { await saveStaff(updated); }
     catch (e) { alert(e.message || "Could not save. Nothing was changed."); return; }   // the form stays open with their edit in it
     setStaffForm(null); setEditStaffId(null);
@@ -18421,7 +18665,56 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 }
 
 // ─── STAFF TAB ────────────────────────────────────────────────────────────────
-const ROLES = ["Day Manager","Bar Supervisor","Bar Staff","Handy","Other"];
+const ROLES = ["Day Manager","Bar Supervisor","Bar Staff","Handy","Housekeeping","Other"];
+const EMPLOYMENT_TYPES = ["PAYE", "Self-employed"];   // no field on a record = PAYE
+
+// A person's pay rates over time. Each applies from its date until the next;
+// hours are priced at the rate on the day they were worked. Module scope: it
+// renders inputs.
+function StaffRatesEditor({ rates, onChange }) {
+  const list = rates || [];
+  const set = function(i, k, v) { onChange(list.map(function(r, j) { return j === i ? Object.assign({}, r, { [k]: v }) : r; })); };
+  const inp = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 9px", outline:"none" };
+  return (
+    <div>
+      {list.length === 0 && <div style={{ fontSize:12, color:T.textLight, marginBottom:6 }}>No rate yet.</div>}
+      {list.map(function(r, i) {
+        return (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:8 }}>
+            <span style={{ fontSize:12, color:T.textMid }}>From</span>
+            <input type="date" value={r.from || ""} aria-label="Rate starts" onChange={function(e){ set(i, "from", e.target.value); }} style={Object.assign({}, inp, { width:150 })}/>
+            <span style={{ fontSize:14, color:T.textMid }}>£</span>
+            <input type="number" step="0.01" min="0" value={r.rate == null ? "" : r.rate} aria-label="Pounds an hour"
+              onChange={function(e){ set(i, "rate", e.target.value); }} style={Object.assign({}, inp, { width:90 })}/>
+            <span style={{ fontSize:12, color:T.textLight }}>/hr</span>
+            <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12.5, color:T.text, cursor:"pointer" }}>
+              <input type="checkbox" checked={!!r.holidayRollup} onChange={function(e){ set(i, "holidayRollup", e.target.checked); }}
+                style={{ accentColor:T.accent }}/>
+              Includes holiday pay roll-up
+            </label>
+            <button type="button" onClick={function(){ onChange(list.filter(function(x, j) { return j !== i; })); }} aria-label="Remove this rate"
+              style={{ background:"none", border:"none", color:T.textLight, cursor:"pointer", fontSize:16, fontFamily:"inherit", padding:"0 4px" }}>×</button>
+          </div>
+        );
+      })}
+      <button type="button" onClick={function(){ onChange(list.concat([{ from: londonToday(), rate: "", holidayRollup: false }])); }}
+        style={{ background:"none", border:`1.5px dashed ${T.border}`, color:T.accent, borderRadius:6, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:700 }}>
+        + Add a rate
+      </button>
+    </div>
+  );
+}
+// The rate a person is on today, for their card: "£18.00/hr from 1 Jan 26".
+function staffRateSummary(st) {
+  const today = londonToday();
+  const list = ((st && st.rates) || []).filter(function(r) { return r && isValidEventDate(r.from) && Number(r.rate) > 0; })
+    .sort(function(a, z) { return a.from < z.from ? -1 : 1; });
+  const cur = list.filter(function(r) { return r.from <= today; }).pop() || null;
+  const next = list.filter(function(r) { return r.from > today; })[0] || null;
+  if (!cur && !next) return "";
+  const one = function(r) { return fmtPounds(r.rate) + "/hr" + (r.holidayRollup ? " incl. holiday" : ""); };
+  return (cur ? one(cur) + " from " + fmtDate(cur.from) : "") + (next ? (cur ? " · " : "") + one(next) + " from " + fmtDate(next.from) : "");
+}
 
 function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNew, onEdit, onDelete, onSubmit, onCancel, onPurgeOrphan }) {
   const updateForm = (k,v) => setStaffForm(f=>({...f,[k]:v}));
@@ -18556,6 +18849,20 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
                 {ROLES.map(r=><option key={r}>{r}</option>)}
               </select>
             </div>
+            <div>
+              <FLabel>Employment</FLabel>
+              <select value={staffForm.employment || "PAYE"} onChange={e=>updateForm("employment",e.target.value)}
+                style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"8px 11px", outline:"none" }}>
+                {EMPLOYMENT_TYPES.map(function(t){ return <option key={t}>{t}</option>; })}
+              </select>
+            </div>
+            <div style={{ gridColumn:"1/-1" }}>
+              <FLabel>Pay rates by date</FLabel>
+              <StaffRatesEditor rates={staffForm.rates} onChange={function(v){ updateForm("rates", v); }}/>
+              <div style={{ fontSize:10.5, color:T.textLight, marginTop:4 }}>
+                A new rate applies from its date — hours before it keep the old rate. Used for housekeeping pay.
+              </div>
+            </div>
             <div style={{ gridColumn:"1/-1" }}>
               <FLabel>Notes</FLabel>
               <FTextarea value={staffForm.notes} onChange={v=>updateForm("notes",v)} rows={2}/>
@@ -18589,7 +18896,9 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
               </div>
               {s.email&&<div style={{ fontSize:12, color:T.textLight, marginBottom:3, display:"flex", alignItems:"center", gap:8 }}>{s.email} <GmailLink email={s.email}/></div>}
               {s.phone&&<div style={{ fontSize:12, color:T.textLight, marginBottom:3 }}>{s.phone}</div>}
+              {staffRateSummary(s) && <div style={{ fontSize:12, color:T.accent, marginBottom:4, fontWeight:700 }}>{staffRateSummary(s)}</div>}
               {s.rate&&<div style={{ fontSize:12, color:T.accent, marginBottom:8, fontWeight:600 }}>{s.rate}</div>}
+              <div style={{ fontSize:11, color:T.textLight, marginBottom:8 }}>{s.employment || "PAYE"}</div>
               {s.notes&&<div style={{ fontSize:11, color:T.textMid, marginBottom:8, fontStyle:"italic" }}>{s.notes}</div>}
               <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:10, display:"flex", gap:16 }}>
                 <span style={{ fontSize:11, color:T.textLight }}><span style={{ color:T.accent, fontWeight:700 }}>{total}</span> total</span>
@@ -18968,7 +19277,7 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
       {activeType==="calendar"  && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
       {activeType==="staffing"  && <StaffingRota bookings={bookings} staff={staff} onOpenEvent={onEditBooking}/>}
       {activeType==="hours"     && <HoursReport bookings={bookings} staff={staff} onOpenEvent={onEditBooking}/>}
-      {activeType==="housekeeping" && <HousekeepingHoursReport onOpenEvent={onEditBooking} onOpenAccom={onOpenAccom} onOpenBoxEvent={onOpenBoxEvent}/>}
+      {activeType==="housekeeping" && <HousekeepingPayReport staff={staff} onOpenEvent={onEditBooking} onOpenAccom={onOpenAccom} onOpenBoxEvent={onOpenBoxEvent}/>}
       {activeType==="timeline"  && <StaffTimelineReport bookings={bookings} staff={staff}/>}
       {activeType==="funnel"    && <SalesFunnelReport enquiries={enquiries||[]} bookings={bookings}/>}
       {activeType==="cashflow"  && <CashflowReport bookings={bookings} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onOpenEvent={onEditBooking} onOpenAccom={onOpenAccom}/>}
