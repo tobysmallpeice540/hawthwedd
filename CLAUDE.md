@@ -536,7 +536,8 @@ own header.
   the stay starts, Guests (yellow) while in use, To clean (red) from the
   check-out day (events: the day after the last day), Ready (green, reopens to
   edit). All four come from `changeoverMeta`. Holding events get none.
-  Nothing before `CHANGEOVER_FROM` (2026-10-24) is ever red.
+  Nothing before `CHANGEOVER_FROM` (Mon 5 Oct 2026 — moved back from
+  24 Oct so the weeks after the first week of October are signed off) is ever red.
 - **Box office events reach housekeeping through `box-admin`'s
   `housekeeping.events`** — the only action a cleaner login may call
   (`HOUSEKEEPING_ACTIONS`): name, start, end, venue; drafts left out. The admin

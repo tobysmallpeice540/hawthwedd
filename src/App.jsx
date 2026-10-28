@@ -2775,7 +2775,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28o";
+const APP_BUILD = "2026-10-28p";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6776,8 +6776,10 @@ function CleaningSummarySettings() {
 // a stay's dates keeps its sign-off. Events are keyed by the event.
 const CHANGEOVERS_STORAGE = "hbf_changeovers_v1";
 // Check-outs before this date were never tracked, so they are not shown as
-// waiting — otherwise every past booking would be red on day one.
-const CHANGEOVER_FROM = "2026-10-24";
+// waiting — otherwise every past booking would be red on day one. Moved back
+// from 24 Oct to Mon 5 Oct 2026 (Toby, 28 Oct): everything after the first
+// week of October is to be signed off, the same start as Karina's House weeks.
+const CHANGEOVER_FROM = "2026-10-05";
 // Two cleaners on different pay rates, so hours are recorded per person. The
 // key is what is stored; the label is only what is shown.
 const CHANGEOVER_CLEANERS = [
