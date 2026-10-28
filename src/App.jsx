@@ -2773,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28c";
+const APP_BUILD = "2026-10-28d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6928,9 +6928,10 @@ function changeoverState(job, rec, today) {
 }
 
 function changeoverMeta(state) {
-  if (state === "done")  return { label: "Done",           bg: T.greenBg, fg: T.green, bd: T.green };
-  if (state === "inuse") return { label: "In use",         bg: T.amberBg, fg: T.amber, bd: T.amber };
-  if (state === "due")   return { label: "Needs cleaning", bg: T.redBg,   fg: T.red,   bd: T.red };
+  // Toby's words: Not yet / Guests / To clean / Ready.
+  if (state === "done")  return { label: "Ready",    bg: T.greenBg, fg: T.green, bd: T.green };
+  if (state === "inuse") return { label: "Guests",   bg: T.amberBg, fg: T.amber, bd: T.amber };
+  if (state === "due")   return { label: "To clean", bg: T.redBg,   fg: T.red,   bd: T.red };
   return { label: "Not yet", bg: T.bgInput, fg: T.textLight, bd: T.border };
 }
 
@@ -6980,7 +6981,7 @@ function ChangeoverButton({ job, rec, today, onOpen }) {
       style={{ background: m.bg, color: m.fg, border: "1.5px solid " + m.bd, borderRadius: 8,
         padding: "5px 12px", fontFamily: "inherit", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap",
         cursor: live ? "pointer" : "default", flexShrink: 0, minWidth: 80 }}>
-      {state === "done" ? "Done ✓" : m.label}
+      {m.label}
     </button>
   );
 }
@@ -7133,7 +7134,7 @@ function UnitStatusBar({ statuses, onOpen, compact }) {
           const clickable = !!(onOpen && s.job);
           return (
             <span key={s.unit.id} onClick={clickable ? function(){ onOpen(s.job, s); } : undefined}
-              title={s.state === "done" ? "Ready" : m.label}
+              title={m.label}
               style={{ display:"inline-flex", alignItems:"center", gap:6, background:m.bg, color:m.fg,
                 border:"1.5px solid " + m.bd, borderRadius:20, padding:"4px 11px", fontSize:12.5, fontWeight:700,
                 whiteSpace:"nowrap", cursor: clickable ? "pointer" : "default" }}>
@@ -7160,7 +7161,7 @@ function UnitStatusBar({ statuses, onOpen, compact }) {
               <span style={{ width:11, height:11, borderRadius:"50%", background:m.bd, flexShrink:0 }}/>
               <span style={{ fontSize:14, fontWeight:800, color:T.text, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.unit.name}</span>
               <span style={{ fontSize:11, fontWeight:700, color:m.fg, whiteSpace:"nowrap" }}>
-                {s.state === "done" ? "Ready" : m.label}{s.waiting > 1 ? " ×" + s.waiting : ""}
+                {m.label}{s.waiting > 1 ? " ×" + s.waiting : ""}
               </span>
             </div>
             <div style={{ fontSize:11.5, color:T.textMid, marginTop:4, lineHeight:1.5 }}>

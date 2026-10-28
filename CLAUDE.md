@@ -501,9 +501,10 @@ own header.
   `YYYY-MM-DDTHH:MM`, editable), `hours.edita` / `hours.karina`
   (`CHANGEOVER_CLEANERS`), `comments`, `lostProperty`, and `who` / `unitName`
   so it still reads if the booking goes.
-- The lozenge shows the state: Not yet (grey, inert) before the stay starts,
-  In use (yellow), Needs cleaning (red) from the check-out day (events: the day
-  after the last day), Done (green, reopens to edit). Holding events get none.
+- The lozenge shows the state, in Toby's words: Not yet (grey, inert) before
+  the stay starts, Guests (yellow) while in use, To clean (red) from the
+  check-out day (events: the day after the last day), Ready (green, reopens to
+  edit). All four come from `changeoverMeta`. Holding events get none.
   Nothing before `CHANGEOVER_FROM` (2026-10-24) is ever red.
 - **Box office events reach housekeeping through `box-admin`'s
   `housekeeping.events`** — the only action a cleaner login may call
