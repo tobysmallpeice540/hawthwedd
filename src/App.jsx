@@ -2773,7 +2773,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28e";
+const APP_BUILD = "2026-10-28f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -7591,6 +7591,16 @@ function weekdayShort(iso) {
   if (!isValidEventDate(iso)) return "";
   return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(iso + "T00:00:00Z").getUTCDay()];
 }
+// Which week a changeover belongs to. Normally the week its window opens in —
+// but a window opening on a Sunday is next week's clean (the place sits empty
+// and is cleaned on the Monday), unless the next guests arrive that same
+// Sunday, when it has to be done that day. Toby's rule.
+function changeoverWeekOf(x) {
+  const d = x.start.date;
+  const sunday = new Date(d + "T00:00:00Z").getUTCDay() === 0;
+  if (sunday && !(x.end && x.end.date === d)) return addDaysIso(d, 1);
+  return mondayOf(d);
+}
 function mondayOf(iso) {
   const d = new Date(iso + "T00:00:00Z");
   const back = (d.getUTCDay() + 6) % 7;
@@ -7715,7 +7725,7 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, jobs, recMap, t
 
       {weeks.map(function(w) {
         const end = addDaysIso(w, 6);
-        const items = windows.filter(function(x) { return x.start.date >= w && x.start.date <= end && x.start.date >= CHANGEOVER_FROM; });
+        const items = windows.filter(function(x) { return changeoverWeekOf(x) === w && x.start.date >= CHANGEOVER_FROM; });
         const thisWeek = today >= w && today <= end;
         return (
           <div key={w} style={{ background:"#fff", border:"1px solid " + (thisWeek ? T.accent : T.border), borderRadius:10, padding:"12px 14px", marginBottom:12 }}>

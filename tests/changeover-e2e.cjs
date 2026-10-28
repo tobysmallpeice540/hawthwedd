@@ -5,7 +5,7 @@
 //   · the cleaner login has Live / Upcoming / Calendar / Bookings / Hours, and
 //     an App button by Sign out with the install steps;
 //   · Upcoming: Monday weeks, each changeover's window (check-out + 2h to the
-//     next check-in − 2h), four weeks a page;
+//     next check-in − 2h), four weeks a page; an empty Sunday is next week's;
 //   · Live's status line: one line of short names (Hamlet, Amly, Glamping,
 //     Grain St.), red waiting, yellow in use, green ready — box office events
 //     count for the Grain Store;
@@ -312,6 +312,37 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     check('no page errors (admin)', s.errors.length === 0, s.errors.join(' | '))
   } catch (e) { fails.push('admin run: ' + e.message) }
   await s.close()
+
+  // ── Upcoming: a Sunday window is next week's clean ──────────────────────
+  // unless the next guests arrive that same Sunday.
+  try {
+    const dow = new Date(today + 'T00:00:00Z').getUTCDay()
+    const sun = plus(dow === 0 ? 7 : 7 - dow)          // the coming Sunday (never today)
+    const add = (n) => new Date(Date.parse(sun + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10)
+    const appData = freshApp()
+    appData.hbf_accom_v1 = [
+      { id: 'S1', guestName: 'Sunday Leaver', status: 'confirmed', source: 'direct', stays: [stay('hamlet', add(-2), sun)], schedule: [] },
+      { id: 'S2', guestName: 'Friday Arriver', status: 'confirmed', source: 'direct', stays: [stay('hamlet', add(5), add(7))], schedule: [] },
+      { id: 'S3', guestName: 'Amly Leaver', status: 'confirmed', source: 'direct', stays: [stay('amly', add(-2), sun)], schedule: [] },
+      { id: 'S4', guestName: 'Sunday Arriver', status: 'confirmed', source: 'direct', stays: [stay('amly', sun, add(3))], schedule: [] },
+    ]
+    appData.hawthbush_bookings_v6 = []
+    const c = await openStaff({ distDir: DIST, appData: appData, rpc: cleanerRpc })
+    try {
+      await c.page.route('**/.netlify/functions/box-admin', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"events":[]}' }))
+      await c.page.reload()
+      await c.page.getByRole('tab', { name: 'Upcoming', exact: true }).click()
+      await c.page.getByText(/This week/).waitFor({ timeout: 15000 })
+      const weekText = async (label) => c.page.locator('div[style*="border-radius: 10px"]', { has: c.page.getByText(label, { exact: true }) }).first().innerText()
+      const thisWeek = await weekText('This week')
+      const nextLabel = 'Week of ' + ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(add(1) + 'T00:00:00Z').getUTCDay()] + ' ' +
+        Number(add(1).slice(8)) + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(add(1).slice(5, 7)) - 1] + ' ' + add(1).slice(2, 4)
+      const nextWeek = await weekText(nextLabel)
+      check('Sunday clean with no one arriving rolls to next week', /Sunday Leaver → Friday Arriver/.test(nextWeek) && !/Sunday Leaver/.test(thisWeek), thisWeek + ' || ' + nextWeek)
+      check('Sunday clean with Sunday arrivals stays this week', /Amly Leaver → Sunday Arriver/.test(thisWeek) && !/Amly Leaver/.test(nextWeek), thisWeek + ' || ' + nextWeek)
+      check('rolled window still reads Sun 12 pm – Fri 2 pm', /Sun 12 pm – Fri 2 pm/.test(nextWeek), nextWeek)
+    } finally { await c.close() }
+  } catch (e) { fails.push('sunday run: ' + e.message) }
 
   // ── Admin lettings calendar: box office events as red E's ────────────────
   // The year view names nothing until hovered, so count the markers with and

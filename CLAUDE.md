@@ -524,7 +524,9 @@ own header.
   changeover listed in order with its window — check-out + 2h to the next
   check-in − 2h (`CHANGEOVER_GRACE_MIN`, Toby's late/early allowance); Grain
   Store from the event's end (diary: the morning after) to the next event's
-  start − 2h. A window belongs to the week it opens in.
+  start − 2h. A window belongs to the week it opens in — except one opening
+  on a Sunday, which is the next week's clean unless the next guests arrive
+  that same Sunday (`changeoverWeekOf`).
 - The housekeeping login stays signed in indefinitely (persisted session, no
   session time-box in Supabase); Sign out asks first, a stale build reloads
   itself when the app comes back to the front, and the App button (hidden once
