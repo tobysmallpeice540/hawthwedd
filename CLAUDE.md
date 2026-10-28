@@ -590,6 +590,63 @@ own header.
   (Android button via `useInstallPrompt`; iPhone steps). Test:
   `tests/changeover-e2e.cjs`.
 
+### Email archive (28 Oct 2026, migration s)
+
+- **Every email to and from the people on events, enquiries and lettings is
+  kept in the database**, so nobody has to Connect Gmail to see it.
+  `netlify/functions/email-archive/` reads the farm Gmail (the Airbnb-mail
+  connection's sealed token in `airbnb_mail_state`, read only) at 10 and 40
+  past (`email-archive-cron.js`). `parse.js` is pure, pinned by
+  `tests/email-archive-test.cjs`; the run by `tests/email-archive-run-test.cjs`;
+  the screens by `tests/email-archive-e2e.cjs`; the SQL by
+  `supabase/2026-10-28s-email-archive-test.sql`.
+- Tables (no policies, service role only): `email_messages` (one row per
+  email: who, when, `direction` in/out/app, subject, the TEXT with the quoted
+  history cut off, capped at 20,000 characters, and the LIST of real
+  attachments `[{part, name, mime, size}]`), `email_archive_addresses` (record
+  addresses already read back to 1 Jan 2025), `email_archive_seen` (recent
+  Gmail ids that were nobody's), `email_archive_state`.
+- A run: copies in the app's own emails from `hbf_email_log_v1` (which keeps
+  only 500; id `app:<log id>`, direction `app`, `body_html` kept for those
+  only); looks at what is new since two days before the last good run
+  (From/To/Cc/Bcc only; read in full only if an address is on a record); then
+  reads back each address not yet read back, eight at a time. Three Gmail reads
+  at a time, paced; a 429 stops the run as `throttled`, nothing marked done
+  that was not read. A new enquiry's earlier emails arrive this way.
+- **Whose:** a record's addresses (events: email, email2, email3 and any in
+  `invoiceEmails`; enquiries: email; lettings: email), never ours
+  (`hawthbushfarm.co.uk`, `smallpeice.net`, the farm Gmail) and never a relay
+  (Airbnb, Booking.com — the Airbnb reader has those).
+- **Admins only.** `email_admin_messages(addresses, ref)` and
+  `email_admin_status()` check `wp_is_admin()`; the function's attachment
+  action checks the admin role. Anyone else sees only the app's own emails.
+  Guest email text is only ever rendered as text, never as HTML.
+- **Attachments are listed, not stored.** Signature logos are left out (an
+  image under 50KB, or inline / Content-ID under 200KB; S/MIME and
+  winmail.dat). "Save to files" calls `email-archive` `{action:"attachment",
+  gmail_id, part, folder}`: only an attachment the archive lists, found again
+  by PART number (Gmail's attachment ids change between reads), uploaded with
+  the service key to `booking-files/<folder>/…`; the app then adds it to the
+  record's `files` with `source` `email-in` / `email-out`, `gmailId`,
+  `gmailPart`.
+- **File flavours:** `source` on a file — `uploaded`, `contract`, `email-in`
+  ("Email attachment from guest"), `email-out` ("… from Hawthbush"). Older
+  files: SignWell = contract, else uploaded (`fileSource`). Delete takes a
+  second press and saves the record BEFORE removing the stored file.
+- Lettings now have a Files section; its saves write only `files`, on a fresh
+  read (`patchAccom`). A new booking is saved before it can take files.
+- **Retention:** daily, `email_purge(keep, before)` deletes emails older than
+  two years unless anybody on them is on an event, a letting or an enquiry
+  that booked (booking ids are on the keep list for the app's own emails). It
+  refuses an empty keep list or anything under 700 days; the worker skips it
+  if the events or lettings read came back empty.
+- `RecordEmailsPanel` replaced the browser-Gmail `GmailThreadPanel` on events
+  (Contact), enquiries and lettings, and the "Emails Sent" / "Viewing Emails
+  Sent" lists there (box office orders keep `EmailHistoryPanel`). Stars still
+  live in `hbf_starred_emails_v1` by Gmail thread id. Settings → Email archive
+  shows progress and has Read now. The enquiries list's "last contact" still
+  uses the browser Gmail cache; the follow-up run checks Gmail itself.
+
 ## Working in this folder from a Claude session
 
 The repo is reached through a mount that does not allow deletion, and two

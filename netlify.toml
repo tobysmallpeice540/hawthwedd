@@ -92,6 +92,15 @@
 [functions."airbnb-mail-cron"]
   schedule = "25 * * * *"
 
+# The email archive (email-archive): every email to and from the people on our
+# events, enquiries and lettings, read from the farm Gmail and kept in the
+# database, so nobody has to Connect Gmail to see them. At 10 and 40 past —
+# clear of the iCal sync on the hour and the Airbnb emails at 25 past, which
+# read the same mailbox. Each run reads for about five seconds; the first read
+# back to January 2025 therefore takes a day or two, gently, by design.
+[functions."email-archive-cron"]
+  schedule = "10,40 * * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"

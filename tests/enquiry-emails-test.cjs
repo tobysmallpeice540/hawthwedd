@@ -1,4 +1,4 @@
-// The Emails Sent panel on an enquiry.
+// The emails shown on an enquiry (and, since 28 Oct 2026, every record).
 //
 // It used to be "Viewing Emails Sent" and filtered to template ids beginning
 // `viewing_`, so an enquiry that had been sent the brochure — or arrival
@@ -94,22 +94,27 @@ const oldWay = matches(LOG, { emails: ["jo@example.com"], typeFilter: t => t.ind
   .map(e => e.id);
 eq("the old viewings-only filter showed one of the four", JSON.stringify(oldWay), JSON.stringify(["1"]));
 
-// ── The call sites, read back out of the shipped file ───────────────────────
+// -- The call sites, read back out of the shipped file --------------------
+// Since 28 Oct 2026 every record shows ONE list, RecordEmailsPanel: the email
+// archive (the farm Gmail, kept in the database) and everything the app sent.
+// The event form's viewings-only list went with it: Toby asked for the app's
+// own emails to be tracked on the record, all of them.
 console.log("\nThe shipped call sites");
 
-const enquiryCall = lift('<EmailHistoryPanel emails={[form.email]}', "/>");
-ok("the enquiry panel is titled Emails Sent", enquiryCall.indexOf('title="Emails Sent"') !== -1);
-ok("and no longer filters to viewings", enquiryCall.indexOf("typeFilter") === -1);
-ok("its empty state speaks of emails, not viewings",
-   enquiryCall.indexOf("No emails sent to this enquiry yet.") !== -1);
+const addrsFn = lift("function recordEmailAddresses(list) {", "\n}");
+const recordEmailAddresses = new Function(addrsFn + "\nreturn recordEmailAddresses;")();
+const panelMatch = (log, emails) => { const a = recordEmailAddresses(emails); return log.filter(e => recordEmailAddresses(e.to).some(x => a.indexOf(x) !== -1)).map(e => e.id); };
+eq("the panel matches the same four, whatever the case", JSON.stringify(panelMatch(LOG, ["Jo@Example.com"])), JSON.stringify(["1", "2", "3", "5"]));
+eq("an invoice field with words and two addresses", JSON.stringify(recordEmailAddresses(["Email a@x.com, B@y.co.uk."])), JSON.stringify(["a@x.com", "b@y.co.uk"]));
 
-// The event form keeps its viewings-only list on purpose: a booked wedding's
-// deposit and arrival emails have their own place, and this one answers "did
-// we ever get them through the door".
-ok("the event form still filters to viewings",
-   SRC.indexOf('title="Viewing Emails Sent"') !== -1);
-eq("and it is the only one left that does",
-   SRC.split('title="Viewing Emails Sent"').length - 1, 1);
+const enquiryCall = lift('<RecordEmailsPanel addresses={[form.email]} formData={form}', "/>");
+ok("the enquiry shows its emails from the archive", enquiryCall.indexOf('entityType="enquiry"') !== -1);
+ok("its empty state speaks of emails", enquiryCall.indexOf("No emails with this enquiry yet.") !== -1);
+ok("no list filters to viewings any more", SRC.indexOf('title="Viewing Emails Sent"') === -1 && lift("function RecordEmailsPanel(", "\n}\n").indexOf("typeFilter") === -1);
+ok("the event form shows every address's emails, the invoice one too",
+   SRC.indexOf("<RecordEmailsPanel addresses={[formData.email, formData.email2, formData.email3, formData.invoiceEmails]}") !== -1);
+ok("a letting asks by its booking id as well", SRC.indexOf("<RecordEmailsPanel addresses={[form.email]} refId={form.id}") !== -1);
+ok("nothing needs Connect Gmail any more", SRC.indexOf("GmailThreadPanel") === -1);
 
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

@@ -2775,7 +2775,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-28l";
+const APP_BUILD = "2026-10-28m";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4165,7 +4165,7 @@ function StayTimeField({ booking, stay, prop, which, onChange }) {
   );
 }
 
-function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent, onMarkAirbnbCancelled, onDismissAirbnbPrompt }) {
+function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent, onMarkAirbnbCancelled, onDismissAirbnbPrompt, onSaveFiles }) {
   const isMobile = useIsMobile();
   var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
   var selPropIds = formStays.map(function(s){ return s.propertyId; });
@@ -4643,7 +4643,22 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             code={(form.airbnb && form.airbnb.code) || (String(form.notes || "").match(/reservations\/details\/(HM[A-Z0-9]{8})/) || [])[1] || null}/>
         )}
         <ManualEmailSenders booking={form} onBuildSchedule={form.linkedEventId ? null : regenSchedule}/>
-        <EmailHistoryPanel bookingId={form.id} title="Emails Sent" emptyLabel="No emails sent for this booking yet."/>
+        {/* Every email with the guest, from the email archive, and what the
+            app sent them (logged against this booking). */}
+        <h3 style={{ margin:"18px 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Emails</h3>
+        <RecordEmailsPanel addresses={[form.email]} refId={form.id} formData={onSaveFiles ? form : null} update={upd}
+          onAutoSave={onSaveFiles} entityType="accom" entityId={form.id} emptyLabel="No emails for this booking yet."/>
+      </div>
+
+      {/* Files: uploads, and attachments saved from the emails above. Written
+          on their own (only the files field, on a fresh read), so they can be
+          added while the rest of the booking is mid-edit. A new booking is
+          saved first, so its files have somewhere to belong. */}
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"16px 18px", marginBottom:18 }}>
+        <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12 }}>Files</div>
+        {onSaveFiles
+          ? <BookingFilesSection formData={form} update={upd} onAutoSave={onSaveFiles} entityId={form.id} entityType="accom"/>
+          : <div style={{ fontSize:12.5, color:T.textLight }}>Save the booking first, then files can be added here.</div>}
       </div>
 
       {/* Save keeps the booking open so the schedule can be built, emails sent
@@ -8878,7 +8893,8 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
         <div>
           <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
           <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} onOpenEvent={onOpenEvent}
-            onMarkAirbnbCancelled={markAirbnbCancelled} onDismissAirbnbPrompt={dismissAirbnbPrompt} />
+            onMarkAirbnbCancelled={markAirbnbCancelled} onDismissAirbnbPrompt={dismissAirbnbPrompt}
+            onSaveFiles={editId ? function(rec) { return patchAccom(editId, function(b) { return Object.assign({}, b, { files: rec.files || [] }); }); } : null} />
         </div>
       )}
     </div>
@@ -17093,302 +17109,334 @@ async function mapWithLimit(items, limit, fn) {
   return out;
 }
 
-function GmailThreadPanel({ emails, gmailToken, formData, update, onAutoSave, entityId, entityType="booking" }) {
+// ─── EMAILS ON A RECORD (the email archive, 28 Oct 2026) ─────────────────────
+// Every email to and from a record's addresses, kept in the database by
+// netlify/functions/email-archive (read twice an hour from the farm Gmail), so
+// nobody has to Connect Gmail to see them — plus the emails the app sent
+// itself, from hbf_email_log_v1, until the archive has copied them in.
+//
+// Admins only: email_admin_messages refuses anybody else, and then this shows
+// only the app's own emails, as the old "Emails sent" panel did.
+//
+// Attachments are listed, never fetched until somebody presses Save to files:
+// the function copies that one file into the bucket, and it joins the record's
+// Files as "Email attachment from guest" or "… from Hawthbush".
+const EMAIL_ARCHIVE_FN = "/.netlify/functions/email-archive";
+async function emailArchiveCall(body) {
+  const res = await fetch(EMAIL_ARCHIVE_FN, {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(function() { return {}; });
+  if (!res.ok || data.ok === false) throw new Error(data.error || ("The email archive failed (" + res.status + ")"));
+  return data;
+}
+
+// Every address in a record's email fields (an invoice field can hold two,
+// and words besides), lower case, once each.
+function recordEmailAddresses(list) {
+  const out = [];
+  (Array.isArray(list) ? list : [list]).forEach(function(v) {
+    String(v || "").replace(/[^\s<>(),;:"'[\]]+@[^\s<>(),;:"'[\]]+\.[a-z]{2,}/gi, function(m) {
+      const a = m.toLowerCase().replace(/\.+$/, "");
+      if (out.indexOf(a) === -1) out.push(a);
+      return m;
+    });
+  });
+  return out;
+}
+
+// A logged app email in the archive's shape. The id matches the worker's
+// (parse.js appLogId), so the two copies are recognised as one.
+function emailLogAsRow(e) {
+  return { id: "app:" + (e.id || ((e.sentAt || "") + "|" + (e.to || ""))), dir: "app", at: e.sentAt,
+    from: "hello@hawthbushfarm.co.uk", to: recordEmailAddresses(e.to), subject: e.subject || "",
+    body: e.body || "", html: e.bodyHtml || "", kind: e.template || e.type || "", ref: e.bookingId != null ? String(e.bookingId) : null, atts: [] };
+}
+
+function fmtEmailWhen(iso, withTime) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const o = { day:"numeric", month:"short", year:"numeric", timeZone:"Europe/London" };
+  if (withTime) { o.hour = "2-digit"; o.minute = "2-digit"; }
+  return d.toLocaleString("en-GB", o);
+}
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  return v >= 1048576 ? (v / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(v / 1024)) + " KB";
+}
+
+// Which way an email went, in words: from the guest, from us, or sent by the app.
+function emailDirMeta(row, addrs) {
+  if (row.dir === "app") {
+    const k = emailKindLabel(row.kind);
+    return { label: "Sent by the app" + (k ? " · " + k : ""), bg:"#f3e8ff", fg:"#7c3aed" };
+  }
+  if (row.dir === "out") return { label: "From Hawthbush", bg: T.midBlueBg, fg: T.midBlue };
+  const theirs = addrs.indexOf(String(row.from || "").toLowerCase()) !== -1;
+  return { label: theirs ? "From guest" : "From " + (row.from_name || row.from || "someone else"), bg: T.greenBg, fg: T.green };
+}
+
+function emailAttIcon(name) {
+  return /\.pdf$/i.test(name) ? "📄" : /\.(doc|docx|odt|pages)$/i.test(name) ? "📝" : /\.(xls|xlsx|csv|numbers)$/i.test(name) ? "📊"
+    : /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name) ? "🖼" : "📎";
+}
+
+// Module scope (an inner component is a new type every render).
+function EmailAttachmentRow({ att, saved, busy, error, canSave, onSave }) {
+  return (
+    <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, padding:"6px 10px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:6 }}>
+      <span style={{ fontSize:16, flexShrink:0 }}>{emailAttIcon(att.name)}</span>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:12, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{att.name}</div>
+        <div style={{ fontSize:10.5, color: error ? T.red : T.textLight }}>{error || fmtBytes(att.size)}</div>
+      </div>
+      {saved
+        ? <span style={{ fontSize:11, color:T.green, fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>✓ In Files</span>
+        : canSave
+          ? <button type="button" onClick={onSave} disabled={busy}
+              style={{ background:T.midBlue, color:"#fff", border:"none", padding:"5px 10px", borderRadius:5, cursor:busy?"wait":"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600, opacity:busy?0.6:1, flexShrink:0, whiteSpace:"nowrap" }}>
+              {busy ? "Saving…" : "Save to files"}
+            </button>
+          : null}
+    </div>
+  );
+}
+
+function EmailArchiveRow({ row, addrs, isOpen, onToggle, starred, onStar, files, savingKey, saveErrors, canSave, onSaveAtt }) {
+  const meta = emailDirMeta(row, addrs);
+  const atts = row.atts || [];
+  const who = row.dir === "in"
+    ? (row.from_name ? row.from_name + " <" + row.from + ">" : row.from || "")
+    : "To " + ((row.to || []).join(", ") || "—");
+  const firstLine = String(row.body || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  const gmailUrl = row.dir !== "app" ? "https://mail.google.com/mail/?authuser=hawthbushfarm@gmail.com#all/" + row.id : null;
+  return (
+    <div data-email-row={row.id} style={{ background: starred ? "#fffdf5" : "#fff", border:`1px solid ${starred ? "#fde68a" : T.border}`, borderRadius:8, overflow:"hidden" }}>
+      <div onClick={onToggle} role="button" aria-expanded={isOpen} style={{ padding:"9px 12px", cursor:"pointer" }}>
+        <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:10, fontWeight:700, color:meta.fg, background:meta.bg, borderRadius:6, padding:"2px 7px", whiteSpace:"nowrap", flexShrink:0, maxWidth:"45%", overflow:"hidden", textOverflow:"ellipsis" }}>{meta.label}</span>
+          <span style={{ flex:1, minWidth:0, fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.subject || "(no subject)"}</span>
+          {atts.length > 0 && <span style={{ fontSize:10, background:"#fef9c3", color:"#92400e", borderRadius:10, padding:"1px 6px", fontWeight:700, flexShrink:0 }}>📎 {atts.length}</span>}
+          <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap", flexShrink:0 }}>{fmtEmailWhen(row.at)}</span>
+        </div>
+        <div style={{ fontSize:11, color:T.textLight, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{who}</div>
+        {!isOpen && firstLine && <div style={{ fontSize:11.5, color:T.textMid, marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{firstLine}</div>}
+      </div>
+      {isOpen && (
+        <div style={{ borderTop:`1px solid ${T.border}`, background:T.bgInput, padding:"10px 12px" }}>
+          <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, fontSize:11, color:T.textLight, marginBottom:8 }}>
+            <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+              {fmtEmailWhen(row.at, true)}{row.dir === "in" && row.to && row.to.length ? " · to " + row.to.join(", ") : ""}{row.cc && row.cc.length ? " · cc " + row.cc.join(", ") : ""}
+            </span>
+            {row.thread && onStar && (
+              <button type="button" onClick={function(){ onStar(row.thread, row.subject); }} title={starred ? "Remove star" : "Star this conversation"}
+                style={{ background:"none", border:"none", cursor:"pointer", padding:0, fontSize:15, lineHeight:1, color: starred ? "#eab308" : T.textLight, fontFamily:"inherit", flexShrink:0 }}>
+                {starred ? "★" : "☆"}
+              </button>
+            )}
+            {gmailUrl && <a href={gmailUrl} target="_blank" rel="noreferrer" style={{ color:T.midBlue, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>Open in Gmail ↗</a>}
+          </div>
+          <div style={{ fontSize:12.5, color:T.text, whiteSpace:"pre-wrap", lineHeight:1.55, maxHeight:340, overflowY:"auto", overflowWrap:"anywhere" }}>
+            {row.body || <span style={{ color:T.textLight }}>No text in this email.</span>}
+          </div>
+          {atts.length > 0 && (
+            <div style={{ marginTop:10, display:"flex", flexDirection:"column", gap:6 }}>
+              <div style={{ fontSize:10.5, color:T.textMid, fontWeight:700, textTransform:"uppercase", letterSpacing:0.8 }}>Attachments</div>
+              {atts.map(function(a) {
+                const k = row.id + "#" + a.part;
+                const saved = (files || []).some(function(f) { return f && f.gmailId === row.id && String(f.gmailPart) === String(a.part); });
+                return <EmailAttachmentRow key={k} att={a} saved={saved} busy={savingKey === k} error={saveErrors[k]} canSave={canSave}
+                  onSave={function(){ onSaveAtt(row, a); }}/>;
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecordEmailsPanel({ addresses, refId, formData, update, onAutoSave, entityType = "booking", entityId, emptyLabel }) {
+  const addrs = recordEmailAddresses(addresses);
+  const ref = refId != null && refId !== "" ? String(refId) : null;
+  const loadKey = addrs.join(",") + "|" + (ref || "");
+  const [rows, setRows] = useState(null);
+  const [mode, setMode] = useState("loading");     // archive | logonly | absent | error
+  const [loadErr, setLoadErr] = useState(null);
+  const [open, setOpen] = useState({});
+  const [viewing, setViewing] = useState(null);
+  const [savingKey, setSavingKey] = useState(null);
+  const [saveErrors, setSaveErrors] = useState({});
+  const [shown, setShown] = useState(25);
   const [starred, setStarred] = useState({});
+  const latestRef = useRef(formData);
+  latestRef.current = formData;
+
+  const load = useCallback(async function() {
+    let archive = [], m = "archive", err = null;
+    if (addrs.length || ref) {
+      try {
+        const d = await sbRpcQuiet("email_admin_messages", { p_addresses: addrs, p_ref: ref });
+        archive = (d && d.messages) || [];
+      } catch (e) {
+        if (e.code === "not_admin") m = "logonly";
+        else if (e.status === 404) m = "absent";
+        else { m = "error"; err = e.message; }
+      }
+    }
+    let log = [];
+    try { log = (await sbGet(EMAIL_LOG_STORAGE)) || []; } catch (e) { log = []; }
+    const have = {};
+    archive.forEach(function(r) { have[r.id] = true; });
+    const fromLog = (Array.isArray(log) ? log : []).filter(function(e) {
+      if (!e || !e.sentAt) return false;
+      const byRef = ref && e.bookingId != null && String(e.bookingId) === ref;
+      const byAddr = recordEmailAddresses(e.to).some(function(a) { return addrs.indexOf(a) !== -1; });
+      return byRef || byAddr;
+    }).map(emailLogAsRow).filter(function(r) { return !have[r.id]; });
+    const all = archive.concat(fromLog).sort(function(a, z) { return String(z.at || "") > String(a.at || "") ? 1 : -1; });
+    setRows(all); setMode(m); setLoadErr(err);
+  }, [loadKey]);
+  useEffect(function() { setRows(null); load(); }, [load]);
 
   useEffect(function() {
     let cancelled = false;
-    (async function() {
-      try {
-        const st = await sbGet(STARRED_EMAILS_KEY);
-        if (!cancelled && st && typeof st === "object") setStarred(st);
-      } catch (e) { /* stars are a convenience; failing to load one isn't worth surfacing */ }
-    })();
+    sbGet(STARRED_EMAILS_KEY).then(function(st) { if (!cancelled && st && typeof st === "object") setStarred(st); }).catch(function() {});
     return function() { cancelled = true; };
   }, []);
-
   const toggleStar = async function(threadId, subject) {
-    // Read the server copy first: two people looking at different bookings
-    // share this one record, and writing a stale copy would drop their stars.
+    // The server copy first: everybody shares this one record.
     let base = {};
-    try {
-      const server = await sbGetStrict(STARRED_EMAILS_KEY);
-      if (server && typeof server === "object") base = server;
-    } catch (e) { base = starred; }
-
+    try { const s = await sbGetStrict(STARRED_EMAILS_KEY); if (s && typeof s === "object") base = s; }
+    catch (e) { alert("Couldn't read the stars — try again."); return; }
     const next = Object.assign({}, base);
-    if (next[threadId]) delete next[threadId];
-    else next[threadId] = { at: new Date().toISOString(), subject: subject || "" };
-
+    if (next[threadId]) delete next[threadId]; else next[threadId] = { at: new Date().toISOString(), subject: subject || "" };
     setStarred(next);
     try { await sbSet(STARRED_EMAILS_KEY, next); }
     catch (e) { setStarred(base); alert("Couldn't save that star — the database didn't respond."); }
   };
 
-  const [threads,      setThreads]      = useState(null);
-  const [loading,      setLoading]      = useState(false);
-  const [error,        setError]        = useState(null);
-  const [expanded,     setExpanded]     = useState({});
-  const [fullMsgs,     setFullMsgs]     = useState({}); // threadId -> full messages
-  const [importing,    setImporting]    = useState({}); // attachmentKey -> bool
-  const [importedKeys, setImportedKeys] = useState({}); // attachmentKey -> true
-
-  const decodeEntities = (str) => {
-    if (!str) return "";
-    return str.replace(/&#(\d+);/g, (_,n)=>String.fromCharCode(n))
-              .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
-              .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&apos;/g,"'");
-  };
-
-  const emailList = Array.isArray(emails) ? emails.filter(Boolean) : [emails].filter(Boolean);
-
-  const load = async () => {
-    const token = gmailGetValidToken();
-    if (!token || !emailList.length) return;
-    setLoading(true); setError(null);
+  const saveAtt = async function(row, att) {
+    const k = row.id + "#" + att.part;
+    if (savingKey) return;
+    setSavingKey(k);
+    setSaveErrors(function(p) { const n = Object.assign({}, p); delete n[k]; return n; });
     try {
-      const query = emailList.map(e => `from:${e} OR to:${e}`).join(" OR ");
-      const searchRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/threads?q=${encodeURIComponent(query)}&maxResults=15`,
-        { headers: { Authorization: `Bearer ${token.access_token}` } }
-      );
-      if (!searchRes.ok) throw new Error(`Gmail search failed: ${searchRes.status}`);
-      const searchData = await searchRes.json();
-      const threadList = searchData.threads || [];
-      const detailed = await Promise.all(threadList.map(async t => {
-        const res = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date&metadataHeaders=Content-Type`,
-          { headers: { Authorization: `Bearer ${token.access_token}` } }
-        );
-        if (!res.ok) return t;
-        return res.json();
-      }));
-      setThreads(detailed);
-    } catch(err) { setError(err.message); }
-    finally { setLoading(false); }
+      const base = latestRef.current || {};
+      const id = String(entityId || base.id || "unknown").replace(/[^A-Za-z0-9_.@-]/g, "_").slice(0, 100);
+      const d = await emailArchiveCall({ action: "attachment", gmail_id: row.id, part: att.part, folder: entityType + "s/" + id });
+      const file = { name: d.name, url: storageUrl(d.path), path: d.path, type: d.mime || "", docType: guessDocType(d.name),
+        uploadedAt: new Date().toISOString().slice(0, 10), source: d.direction === "out" ? "email-out" : "email-in",
+        gmailId: row.id, gmailPart: String(att.part) };
+      // The record as it is NOW: the copy took seconds.
+      const latest = latestRef.current || {};
+      const files = (latest.files || []).concat([file]);
+      if (update) update("files", files);
+      if (onAutoSave) await onAutoSave(Object.assign({}, latest, { files: files }));
+    } catch (e) {
+      setSaveErrors(function(p) { return Object.assign({}, p, { [k]: "Not saved — " + (e.message || e) }); });
+    } finally { setSavingKey(null); }
   };
 
-  useEffect(() => { if (gmailToken) load(); }, [emails?.join(","), gmailToken?.access_token]);
-
-  const loadFullThread = async (threadId) => {
-    if (fullMsgs[threadId]) return; // already loaded
-    const token = gmailGetValidToken();
-    if (!token) return;
-    try {
-      const res = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
-        { headers: { Authorization: `Bearer ${token.access_token}` } }
-      );
-      if (!res.ok) return;
-      const data = await res.json();
-      setFullMsgs(prev => ({ ...prev, [threadId]: data.messages || [] }));
-    } catch(e) { console.warn("Full thread fetch failed:", e); }
-  };
-
-  const handleExpand = (threadId) => {
-    const nowOpen = !expanded[threadId];
-    setExpanded(e => ({ ...e, [threadId]: nowOpen }));
-    if (nowOpen) loadFullThread(threadId);
-  };
-
-  // Get all attachment parts from a message recursively
-  const getAttachments = (parts) => {
-    if (!parts) return [];
-    const atts = [];
-    for (const part of parts) {
-      if (part.filename && part.filename.length > 0 && part.body?.attachmentId) {
-        atts.push({ filename: part.filename, mimeType: part.mimeType, attachmentId: part.body.attachmentId, size: part.body.size || 0 });
-      }
-      if (part.parts) atts.push(...getAttachments(part.parts));
-    }
-    return atts;
-  };
-
-  const importAttachment = async (msgId, att) => {
-    const key = `${msgId}_${att.attachmentId}`;
-    if (importing[key] || importedKeys[key]) return;
-    const token = gmailGetValidToken();
-    if (!token) { alert("Gmail token expired — please reconnect Gmail."); return; }
-    setImporting(p => ({ ...p, [key]: true }));
-    try {
-      // Fetch the attachment data
-      const res = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/attachments/${att.attachmentId}`,
-        { headers: { Authorization: `Bearer ${token.access_token}` } }
-      );
-      if (!res.ok) throw new Error(`Attachment fetch failed: ${res.status}`);
-      const data = await res.json();
-      // Decode base64url
-      const b64 = (data.data || "").replace(/-/g, "+").replace(/_/g, "/");
-      const binary = atob(b64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes], { type: att.mimeType || "application/octet-stream" });
-      // Upload to Supabase Storage
-      const id = entityId || formData?.id || formData?.couple?.replace(/[^a-z0-9]/gi,"_").toLowerCase() || "unknown";
-      const safeName = att.filename.replace(/[^a-zA-Z0-9._-]/g,"_");
-      const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
-      // Was a second copy of the upload helper. One path in and out means the
-      // bucket can be changed in one place rather than two.
-      const url = await sbUploadFile(path, blob);
-      // Add to booking files
-      const newFile = { name: att.filename, url, path, type: att.mimeType || "", docType: guessDocType(att.filename), uploadedAt: new Date().toISOString().slice(0,10) };
-      const currentFiles = formData?.files || [];
-      const updatedFiles = [...currentFiles, newFile];
-      if (update) update("files", updatedFiles);
-      if (onAutoSave && formData) await onAutoSave({ ...formData, files: updatedFiles });
-      setImportedKeys(p => ({ ...p, [key]: true }));
-    } catch(err) {
-      alert("Import failed: " + err.message);
-    } finally {
-      setImporting(p => ({ ...p, [key]: false }));
-    }
-  };
-
-  const getHeader = (msg, name) => msg?.payload?.headers?.find(h=>h.name===name)?.value || "";
-  const decodeBody = (msg) => {
-    const parts = msg?.payload?.parts || [msg?.payload];
-    for (const part of (parts||[])) {
-      if (part?.mimeType === "text/plain" && part?.body?.data) {
-        try { return atob(part.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch {}
-      }
-      if (part?.parts) {
-        for (const sub of part.parts) {
-          if (sub?.mimeType === "text/plain" && sub?.body?.data) {
-            try { return atob(sub.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch {}
-          }
-        }
-      }
-    }
-    return msg?.snippet || "";
-  };
-
-  if (!gmailToken) return (
-    <div style={{ marginTop:16, padding:"10px 14px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, fontSize:12, color:"#dc2626" }}>
-      Connect Gmail (button in nav bar) to see email threads here.
-    </div>
-  );
-  if (!emailList.length) return null;
-  if (loading) return <div style={{ marginTop:16, padding:"12px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>Loading emails from Gmail…</div>;
-  if (error) return (
-    <div style={{ marginTop:16, padding:"10px 14px", background:T.redBg, border:"1px solid #fca5a5", borderRadius:8, fontSize:12, color:T.red, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-      <span>⚠ {error}</span>
-      <button onClick={load} style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:12, fontWeight:600, textDecoration:"underline" }}>Retry</button>
-    </div>
-  );
-  if (!threads) return null;
-  if (threads.length === 0) return (
-    <div style={{ marginTop:16, padding:"10px 14px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>No emails found for {emailList.join(", ")}.</div>
-  );
-
+  const gmailCount = (rows || []).filter(function(r) { return r.dir !== "app"; }).length;
+  const list = rows || [];
   return (
-    <div style={{ marginTop:16 }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-        <span style={{ fontSize:12, color:T.textMid, fontWeight:600 }}>
-          📧 {threads.length} email thread{threads.length!==1?"s":""} with {emailList.join(", ")}
-          {(function() {
-            const n = threads.filter(function(t){ return starred[t.id]; }).length;
-            return n ? <span style={{ marginLeft:8, color:"#a16207" }}>★ {n} starred</span> : null;
-          })()}
+    <div>
+      <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", justifyContent:"space-between", gap:10, marginBottom:10 }}>
+        <span style={{ fontSize:12, color:T.textMid, fontWeight:600, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          {rows === null ? "Loading emails…" : list.length + " email" + (list.length === 1 ? "" : "s") + (addrs.length ? " with " + addrs.join(", ") : "")}
         </span>
-        <button onClick={load} style={{ background:"none", border:"none", color:T.midBlue, cursor:"pointer", fontSize:11, fontWeight:600 }}>↻ Refresh</button>
+        <button type="button" onClick={function(){ setRows(null); load(); }} style={{ background:"none", border:"none", color:T.midBlue, cursor:"pointer", fontSize:11.5, fontWeight:600, flexShrink:0, fontFamily:"inherit" }}>↻ Refresh</button>
       </div>
+      {mode === "absent" && <div style={{ fontSize:12, color:T.amber, marginBottom:8 }}>The email archive is not installed yet (migration 2026-10-28s) — only the app's own emails are shown.</div>}
+      {mode === "error" && <div style={{ fontSize:12, color:T.red, marginBottom:8 }}>Couldn't read the email archive ({loadErr}) — only the app's own emails are shown.</div>}
+      {rows !== null && list.length === 0 && (
+        <div style={{ padding:"10px 12px", background:T.bgInput, borderRadius:8, fontSize:12, color:T.textLight }}>
+          {emptyLabel || "No emails yet."}{mode === "archive" ? " New emails appear within half an hour." : ""}
+        </div>
+      )}
       <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-        {threads.slice().sort(function(a, z) {
-          // Starred to the top, otherwise leave Gmail's own ordering alone.
-          const sa = starred[a.id] ? 1 : 0, sz = starred[z.id] ? 1 : 0;
-          return sz - sa;
-        }).map(thread => {
-          const lastMsg  = thread.messages?.[thread.messages.length-1];
-          const firstMsg = thread.messages?.[0];
-          const subject  = getHeader(firstMsg, "Subject") || "(no subject)";
-          const from     = getHeader(lastMsg, "From") || "";
-          const date     = getHeader(lastMsg, "Date") || "";
-          const snippet  = thread.snippet || "";
-          const isOpen   = expanded[thread.id];
-          const msgCount = thread.messages?.length || 1;
-          const fullMessages = fullMsgs[thread.id];
-          const gmailUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(emailList.map(e=>`from:${e} OR to:${e}`).join(" OR "))}/${thread.id}`;
-          // Count attachments across all full messages
-          const totalAtts = fullMessages ? fullMessages.reduce((s,m) => s + getAttachments(m?.payload?.parts).length, 0) : 0;
-          return (
-            <div key={thread.id} style={{ background: starred[thread.id] ? "#fffdf5" : "#fff",
-              border:`1px solid ${starred[thread.id] ? "#fde68a" : T.border}`, borderRadius:8, overflow:"hidden",
-              boxShadow:"0 1px 3px rgba(0,0,0,.05)" }}>
-              <div onClick={()=>handleExpand(thread.id)}
-                style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 14px", cursor:"pointer" }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
-                    <span style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{subject}</span>
-                    {msgCount > 1 && <span style={{ fontSize:10, background:T.midBlueBg, color:T.midBlue, borderRadius:10, padding:"1px 6px", fontWeight:600, flexShrink:0 }}>{msgCount}</span>}
-                    {totalAtts > 0 && <span style={{ fontSize:10, background:"#fef9c3", color:"#92400e", borderRadius:10, padding:"1px 6px", fontWeight:600, flexShrink:0 }}>📎 {totalAtts}</span>}
-                  </div>
-                  <div style={{ fontSize:11, color:T.textLight, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{from}</div>
-                  {!isOpen && <div style={{ fontSize:11, color:T.textMid, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{decodeEntities(snippet)}</div>}
-                </div>
-                <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
-                  <button onClick={function(e){ e.stopPropagation(); toggleStar(thread.id, subject); }}
-                    title={starred[thread.id] ? "Remove star" : "Star this email as important"}
-                    style={{ background:"none", border:"none", cursor:"pointer", padding:"0 2px", fontSize:15, lineHeight:1,
-                      color: starred[thread.id] ? "#eab308" : T.border, fontFamily:"inherit" }}>
-                    {starred[thread.id] ? "★" : "☆"}
-                  </button>
-                  <span style={{ fontSize:10, color:T.textLight, whiteSpace:"nowrap" }}>{new Date(date).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</span>
-                  <a href={gmailUrl} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()}
-                    style={{ color:T.midBlue, fontSize:11, fontWeight:600, textDecoration:"none" }}>↗</a>
-                  <span style={{ color:T.textLight, fontSize:12 }}>{isOpen?"▲":"▼"}</span>
-                </div>
-              </div>
-              {isOpen && (
-                <div style={{ borderTop:`1px solid ${T.border}`, background:T.bgInput }}>
-                  {(fullMessages || thread.messages || []).map((msg, mi) => {
-                    const atts = getAttachments(msg?.payload?.parts);
-                    const msgs = fullMessages || thread.messages || [];
-                    return (
-                      <div key={msg.id} style={{ padding:"10px 14px", borderBottom:mi<msgs.length-1?`1px solid ${T.border}`:"none" }}>
-                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                          <span style={{ fontSize:11, fontWeight:600, color:T.text }}>{getHeader(msg,"From")}</span>
-                          <span style={{ fontSize:10, color:T.textLight }}>{new Date(getHeader(msg,"Date")).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
-                        </div>
-                        <div style={{ fontSize:12, color:T.textMid, whiteSpace:"pre-wrap", lineHeight:1.5, maxHeight:200, overflow:"auto" }}>{decodeEntities(decodeBody(msg)||msg.snippet)}</div>
-                        {atts.length > 0 && (
-                          <div style={{ marginTop:10, display:"flex", flexDirection:"column", gap:6 }}>
-                            <div style={{ fontSize:11, color:T.textMid, fontWeight:600, textTransform:"uppercase", letterSpacing:0.8 }}>Attachments</div>
-                            {atts.map((att, ai) => {
-                              const key = `${msg.id}_${att.attachmentId}`;
-                              const isImporting = importing[key];
-                              const isImported  = importedKeys[key] || (formData?.files||[]).some(f=>f.name===att.filename);
-                              const sizeKb = Math.round(att.size / 1024);
-                              return (
-                                <div key={ai} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:6 }}>
-                                  <span style={{ fontSize:18 }}>{/\.pdf$/i.test(att.filename)?"📄":/\.(doc|docx)$/i.test(att.filename)?"📝":/\.(xls|xlsx)$/i.test(att.filename)?"📊":/\.(jpe?g|png|gif|webp)$/i.test(att.filename)?"🖼":"📎"}</span>
-                                  <div style={{ flex:1, minWidth:0 }}>
-                                    <div style={{ fontSize:12, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{att.filename}</div>
-                                    <div style={{ fontSize:10, color:T.textLight }}>{sizeKb > 0 ? `${sizeKb} KB` : ""} · {guessDocType(att.filename)}</div>
-                                  </div>
-                                  {isImported
-                                    ? <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ In Files</span>
-                                    : formData
-                                      ? <button onClick={()=>importAttachment(msg.id, att)} disabled={isImporting}
-                                          style={{ background:T.midBlue, color:"#fff", border:"none", padding:"4px 10px", borderRadius:5, cursor:isImporting?"wait":"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600, opacity:isImporting?0.6:1, flexShrink:0 }}>
-                                          {isImporting ? "Saving…" : "⬆ Add to Files"}
-                                        </button>
-                                      : null
-                                  }
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
+        {list.slice(0, shown).map(function(r) {
+          return <EmailArchiveRow key={r.id} row={r} addrs={addrs} isOpen={!!open[r.id]}
+            onToggle={function(){ if (r.dir === "app") setViewing({ subject:r.subject, to:(r.to || []).join(", "), sentAt:r.at, body:r.body, bodyHtml:r.html, template:r.kind }); else setOpen(function(o){ return Object.assign({}, o, { [r.id]: !o[r.id] }); }); }}
+            starred={!!(r.thread && starred[r.thread])} onStar={mode === "archive" ? toggleStar : null}
+            files={formData ? formData.files : []} savingKey={savingKey} saveErrors={saveErrors}
+            canSave={!!formData && mode === "archive"} onSaveAtt={saveAtt}/>;
         })}
       </div>
+      {list.length > shown && (
+        <button type="button" onClick={function(){ setShown(shown + 25); }}
+          style={{ marginTop:8, background:"none", border:`1px solid ${T.border}`, borderRadius:6, padding:"6px 12px", color:T.midBlue, fontFamily:"inherit", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+          Show {Math.min(25, list.length - shown)} more
+        </button>
+      )}
+      {mode === "archive" && gmailCount === 0 && list.length > 0 && (
+        <div style={{ marginTop:8, fontSize:11, color:T.textLight }}>Emails from the farm Gmail appear here once the archive has read them (twice an hour).</div>
+      )}
+      <EmailViewerModal email={viewing} onClose={function(){ setViewing(null); }}/>
+    </div>
+  );
+}
+
+// Settings → the email archive: how far the reading has got, and Read now.
+function EmailArchiveSettings() {
+  const [st, setSt] = useState(null);
+  const [state, setState] = useState("loading");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  async function load() {
+    try { setSt(await sbRpcQuiet("email_admin_status")); setState("ready"); }
+    catch (e) { setState(e && e.code === "not_admin" ? "hidden" : (e && e.status === 404 ? "absent" : "error")); }
+  }
+  useEffect(function() { load(); }, []);
+  if (state === "hidden") return null;
+  async function readNow() {
+    setBusy(true); setNote(null);
+    let stored = 0;
+    const pause = function(ms) { return new Promise(function(r){ setTimeout(r, ms); }); };
+    try {
+      for (let i = 0; i < 40; i++) {
+        const d = await emailArchiveCall({ action: "sync" });
+        stored += d.stored || 0;
+        const sofar = stored + " email" + (stored === 1 ? "" : "s") + " added";
+        if (!d.more) { setNote({ kind: d.error ? "error" : "ok", text: sofar + (d.error ? " — " + d.error : ". Up to date.") }); break; }
+        if (d.throttled) { setNote({ kind:"ok", text: sofar + " — Gmail asked us to slow down, carrying on in a minute…" }); await pause(65000); }
+        else { setNote({ kind:"ok", text: sofar + " — " + (d.pending ? d.pending + " address" + (d.pending === 1 ? "" : "es") + " still to read back…" : "carrying on…") }); await pause(1500); }
+      }
+    } catch (e) { setNote({ kind:"error", text: e.message }); }
+    setBusy(false); load();
+  }
+  const when = function(iso) { return iso ? new Date(iso).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "never"; };
+  const r = (st && st.last_result) || {};
+  return (
+    <div>
+      <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
+        Every email to and from the people on events, enquiries and lettings is read from the farm Gmail twice an hour and kept,
+        so it shows on the record without connecting Gmail. Only admins can read them. Attachments are listed on each email
+        (not signature logos) and saved to the record's Files only when you press Save. Emails of enquiries that never booked
+        are deleted after two years.
+      </div>
+      {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
+      {state === "absent" && <div style={{ fontSize:12.5, color:T.amber }}>The database part is not installed yet (migration 2026-10-28s).</div>}
+      {state === "error" && <div style={{ fontSize:12.5, color:T.red }}>Could not read the archive's status.</div>}
+      {state === "ready" && st && (
+        <div style={{ fontSize:12.5, color:T.text, lineHeight:1.7, marginBottom:10 }}>
+          <div>{st.connected ? <>Reading <strong>{st.account || "the farm Gmail"}</strong>.</> : "The farm Gmail is not connected — connect it in Lettings → Settings → Airbnb Sync."}</div>
+          <div style={{ color:T.textMid }}>
+            {st.messages} email{st.messages === 1 ? "" : "s"} kept{st.oldest ? " (back to " + new Date(st.oldest).toLocaleDateString("en-GB", { month:"short", year:"numeric" }) + ")" : ""}
+            {" · "}{st.app_messages} sent by the app
+            {" · "}last read {when(st.last_sync_at)}
+            {r.pending ? " · reading back to January 2025: " + r.pending + " of " + r.addresses + " addresses to go" : r.addresses ? " · all " + r.addresses + " addresses read back" : ""}
+          </div>
+          {st.last_error && <div style={{ color:T.red, marginTop:4 }}>{st.last_error}</div>}
+        </div>
+      )}
+      {state === "ready" && st && st.connected && (
+        <button type="button" disabled={busy} onClick={readNow} style={smallBtn}>{busy ? "Reading…" : "Read now"}</button>
+      )}
+      {note && <div style={{ marginTop:9, fontSize:12, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
     </div>
   );
 }
@@ -18640,20 +18688,18 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
           {activeSection==="contact" && (
             <>
-              {(formData.email || formData.email2 || formData.email3) && (
-                <div style={{ marginBottom:18 }}>
-                  <GmailThreadPanel emails={[formData.email, formData.email2, formData.email3].filter(Boolean)} gmailToken={gmailToken} formData={formData} update={update} onAutoSave={onAutoSave}/>
+              {/* Every email with the couple, from the email archive (no
+                  Gmail connection needed), the app's own among them. */}
+              {(formData.email || formData.email2 || formData.email3 || formData.invoiceEmails) && (
+                <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, marginBottom:18 }}>
+                  <h3 style={{ margin:"0 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Emails</h3>
+                  <RecordEmailsPanel addresses={[formData.email, formData.email2, formData.email3, formData.invoiceEmails]}
+                    formData={formData} update={update} onAutoSave={onAutoSave} emptyLabel="No emails with this couple yet."/>
                 </div>
               )}
               <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, marginBottom:18 }}>
                 <ContactHistoryPanel contacts={formData.contacts||[]} onChange={(c)=>update("contacts",c)}/>
               </div>
-              {(formData.email || formData.email2 || formData.email3) && (
-                <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22 }}>
-                  <EmailHistoryPanel emails={[formData.email, formData.email2, formData.email3].filter(Boolean)} typeFilter={(t)=>t.indexOf("viewing_")===0}
-                    title="Viewing Emails Sent" emptyLabel="No viewing emails sent yet."/>
-                </div>
-              )}
             </>
           )}
 
@@ -24148,14 +24194,38 @@ function FileDocTypeSelect({ file, onDocType }) {
   );
 }
 
+// Where a file came from (28 Oct 2026): uploaded here, a signed contract, or
+// an attachment saved from an email in the archive — from the guest or from
+// us. Files from before have no `source`: a SignWell one is a contract, the
+// rest were uploaded.
+const FILE_SOURCE_LABELS = { uploaded: "Uploaded", contract: "Contract", "email-in": "Email attachment from guest", "email-out": "Email attachment from Hawthbush" };
+function fileSource(f) { return (f && f.source) || (f && f.signwellDocumentId ? "contract" : "uploaded"); }
+function FileSourceChip({ file }) {
+  const src = fileSource(file);
+  const c = src === "email-in" ? [T.greenBg, T.green] : src === "email-out" ? [T.midBlueBg, T.midBlue] : src === "contract" ? ["#fef3c7", "#92400e"] : [T.bgInput, T.textMid];
+  return <span data-file-source={src} style={{ fontSize:10.5, fontWeight:700, background:c[0], color:c[1], borderRadius:6, padding:"2px 7px", whiteSpace:"nowrap", flexShrink:0 }}>{FILE_SOURCE_LABELS[src] || src}</span>;
+}
+// Deleting takes a second press: it removes the file from storage for good.
+function FileRemoveButton({ file, onDelete, pad }) {
+  const [armed, setArmed] = useState(false);
+  return (
+    <button type="button" onBlur={function(){ setArmed(false); }}
+      onClick={function(){ if (!armed) { setArmed(true); return; } setArmed(false); onDelete(file); }}
+      style={{ background: armed ? T.red : T.redBg, border:"none", color: armed ? "#fff" : T.red, padding: pad || "4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }}>
+      {armed ? "Delete for good?" : "✕ Delete"}
+    </button>
+  );
+}
+
 function FileFooterBar({ file, tight, onDocType, onDelete }) {
   return (
     <div style={{ display:"flex", alignItems:"center", gap:8, padding:tight?"8px 14px":"10px 14px", borderTop:`1px solid ${T.border}`, flexWrap:"wrap" }}>
       <span style={{ flex:1, fontSize:13, color:T.text, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{file.name}</span>
+      <FileSourceChip file={file}/>
       <FileDocTypeSelect file={file} onDocType={onDocType}/>
       {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight, whiteSpace:"nowrap" }}>{file.uploadedAt}</span>}
       <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"4px 10px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap" }}>⬇ Open</a>
-      <button onClick={()=>onDelete(file)} style={{ background:T.redBg, border:"none", color:T.red, padding:"4px 10px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>✕ Remove</button>
+      <FileRemoveButton file={file} onDelete={onDelete}/>
     </div>
   );
 }
@@ -24264,7 +24334,7 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path = `${entityType}s/${id}/${Date.now()}_${safeName}`;
         const url  = await sbUploadFile(path, file);
-        made.push({ name:file.name, url, path, type:file.type||"", docType:guessDocType(file.name), uploadedAt:new Date().toISOString().slice(0,10) });
+        made.push({ name:file.name, url, path, type:file.type||"", docType:guessDocType(file.name), uploadedAt:new Date().toISOString().slice(0,10), source:"uploaded" });
       }
     } catch(err) { setError("Upload failed: "+err.message + (made.length ? " — the " + made.length + " before it uploaded and are attached." : "")); }
     // Whatever reached the bucket is attached, onto the list as it is now.
@@ -24287,12 +24357,17 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
   const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); };
 
   const handleDelete = async (file) => {
+    // The record first, then the stored file: a failed save leaves both as
+    // they were, rather than a record listing a file that is gone.
     const key = storedFileKey(file);
-    try { if (file.path) await sbDeleteFile(file.path); } catch(e) { console.warn("Delete failed:",e); }
     const latest = latestRef.current;
     const updated = (latest.files || []).filter(f=>storedFileKey(f)!==key);
     update("files", updated);
-    if (onAutoSave) { await onAutoSave({...latest, files:updated}); flash(); }
+    if (onAutoSave) {
+      try { await onAutoSave({...latest, files:updated}); flash(); }
+      catch (e) { update("files", latest.files || []); setError("Not deleted — saving the record failed: " + (e.message || e)); return; }
+    }
+    try { if (file.path) await sbDeleteFile(file.path); } catch(e) { console.warn("Delete failed:",e); }
   };
 
   const updateDocType = (file, docType) => {
@@ -24388,11 +24463,14 @@ function BookingFilesSection({ formData, update, onAutoSave, entityId, entityTyp
                 <div style={{ fontSize:26, flexShrink:0 }}>{/\.(doc|docx)$/i.test(file.name)?"📝":/\.(xls|xlsx)$/i.test(file.name)?"📊":"📎"}</div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{file.name}</div>
-                  {file.uploadedAt && <div style={{ fontSize:11, color:T.textLight, marginTop:2 }}>Uploaded {file.uploadedAt}</div>}
+                  <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:3, flexWrap:"wrap" }}>
+                    <FileSourceChip file={file}/>
+                    {file.uploadedAt && <span style={{ fontSize:11, color:T.textLight }}>{file.uploadedAt}</span>}
+                  </div>
                 </div>
                 <FileDocTypeSelect file={file} onDocType={updateDocType}/>
                 <a href="#" onClick={e=>{ e.preventDefault(); openStoredFile(file); }} style={{ background:T.midBlueBg, color:T.midBlue, border:`1px solid ${T.border}`, borderRadius:5, padding:"6px 12px", fontSize:12, fontWeight:600, textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>⬇ Open</a>
-                <button onClick={()=>handleDelete(file)} style={{ background:T.redBg, border:"none", color:T.red, padding:"6px 12px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, flexShrink:0 }}>✕ Remove</button>
+                <FileRemoveButton file={file} onDelete={handleDelete} pad="6px 12px"/>
               </div>
             </div>
           );
@@ -26527,6 +26605,13 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
           cottage guests as well as ticket buyers. */}
       <BoxBrevoPanel/>
 
+      {/* The email archive: every email with our clients, read from the farm
+          Gmail and kept, so the records show them without Connect Gmail. */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Email archive</div>
+        <EmailArchiveSettings/>
+      </div>
+
       {/* Integrations */}
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:14 }}>Integrations</div>
@@ -27281,11 +27366,13 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
 
         {/* Right column: gmail + contact history */}
         <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-          {/* Gmail threads */}
+          {/* Every email with this person, from the email archive (no Gmail
+              connection needed) — what the app sent them among them. */}
           {form.email && (
             <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:22, boxShadow:T.shadowCard }}>
-              <h3 style={{ margin:"0 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Gmail</h3>
-              <GmailThreadPanel emails={[form.email].filter(Boolean)} gmailToken={gmailToken} formData={form} update={(k,v)=>{ setForm(f=>({...f,[k]:v})); setDirty(true); }} onAutoSave={onUpdate} entityId={form.id||form.name?.replace(/[^a-z0-9]/gi,"_").toLowerCase()} entityType="enquiry"/>
+              <h3 style={{ margin:"0 0 12px", color:T.midBlue, fontWeight:700, fontSize:15, borderBottom:`1px solid ${T.border}`, paddingBottom:10 }}>Emails</h3>
+              <RecordEmailsPanel addresses={[form.email]} formData={form} update={(k,v)=>{ setForm(f=>({...f,[k]:v})); setDirty(true); }} onAutoSave={onUpdate}
+                entityId={form.id||form.name?.replace(/[^a-z0-9]/gi,"_").toLowerCase()} entityType="enquiry" emptyLabel="No emails with this enquiry yet."/>
             </div>
           )}
           {/* Contact history */}
@@ -27369,17 +27456,6 @@ function EnquiryDetail({ enq, onUpdate, onDelete, onBack, isNew, confirmDlg, set
             })}
           </div>
 
-          {form.email && (
-            <div style={{ marginTop:6, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
-              {/* Every automated email this person has had, not just the
-                  viewing ones: the brochure reply, arrival information, a
-                  balance request — anything the app sent to this address.
-                  Filtering to viewings meant an enquiry that had been sent the
-                  brochure looked like one nobody had written to. */}
-              <EmailHistoryPanel emails={[form.email]}
-                title="Emails Sent" emptyLabel="No emails sent to this enquiry yet."/>
-            </div>
-          )}
 
           {dirty && (
             <button onClick={save} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, marginTop:"auto" }}>Save Changes</button>
