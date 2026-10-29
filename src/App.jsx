@@ -2790,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-29c";
+const APP_BUILD = "2026-10-29d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6837,6 +6837,27 @@ function ChecklistStartTimes() {
   );
 }
 
+// A text box that wraps and grows with what is typed (and can be dragged
+// taller), for checklist items too long to read in a one-line input.
+// `oneLine` keeps it to a single paragraph: Enter does nothing and pasted
+// line breaks become spaces, because an item's title is shown as one line.
+function GrowTextarea({ value, onChange, oneLine, style, maxLength, placeholder }) {
+  const ref = useRef(null);
+  useEffect(function() {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = (el.scrollHeight + 3) + "px";
+  }, [value]);
+  return (
+    <textarea ref={ref} rows={1} value={value}
+      onChange={function(e){ onChange(oneLine ? e.target.value.replace(/[\r\n]+/g, " ") : e.target.value); }}
+      onKeyDown={oneLine ? function(e){ if (e.key === "Enter") e.preventDefault(); } : undefined}
+      maxLength={maxLength} placeholder={placeholder}
+      style={Object.assign({}, style, { resize:"vertical", overflow:"hidden", lineHeight:1.35, display:"block" })}/>
+  );
+}
+
 function ChecklistTemplateEditor({ tpl, people, props, onCancel, onSave }) {
   const [d, setD] = useState(function() {
     return Object.assign({}, tpl, { trig: Object.assign({}, tpl.trig), items: (tpl.items || []).map(function(i) { return Object.assign({}, i); }) });
@@ -6967,15 +6988,15 @@ function ChecklistTemplateEditor({ tpl, people, props, onCancel, onSave }) {
         {d.items.map(function(it, idx) {
           return (
             <div key={idx} style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 11px", marginBottom:8, background:T.bgInput }}>
-              <div style={{ display:"flex", flexWrap:"nowrap", gap:6, alignItems:"center" }}>
-                <span style={{ fontSize:12, color:T.textLight, width:18, flexShrink:0 }}>{idx + 1}</span>
-                <input value={it.title} onChange={function(e){ setItem(idx, { title: e.target.value }); }} maxLength={200}
+              <div style={{ display:"flex", flexWrap:"nowrap", gap:6, alignItems:"flex-start" }}>
+                <span style={{ fontSize:12, color:T.textLight, width:18, flexShrink:0, paddingTop:10 }}>{idx + 1}</span>
+                <GrowTextarea value={it.title} oneLine onChange={function(v){ setItem(idx, { title: v }); }} maxLength={200}
                   placeholder="What needs doing" style={Object.assign({}, inputCss, { flex:1, minWidth:0, fontSize:14.5 })}/>
                 <button type="button" aria-label="Move up" onClick={function(){ moveItem(idx, -1); }} disabled={idx === 0} style={chkMini}>&uarr;</button>
                 <button type="button" aria-label="Move down" onClick={function(){ moveItem(idx, 1); }} disabled={idx === d.items.length - 1} style={chkMini}>&darr;</button>
                 <button type="button" aria-label="Remove item" onClick={function(){ removeItem(idx); }} style={Object.assign({}, chkMini, { color:T.red })}>&times;</button>
               </div>
-              <input value={it.detail || ""} onChange={function(e){ setItem(idx, { detail: e.target.value }); }} maxLength={1000}
+              <GrowTextarea value={it.detail || ""} oneLine onChange={function(v){ setItem(idx, { detail: v }); }} maxLength={1000}
                 placeholder="More detail (optional)" style={Object.assign({}, inputCss, { marginTop:6, fontSize:13 })}/>
               <div style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", marginTop:6 }}>
                 <select value={it.who || "anyone"} onChange={function(e){ setItem(idx, { who: e.target.value }); }} style={Object.assign({}, sel, { fontSize:13 })}>
