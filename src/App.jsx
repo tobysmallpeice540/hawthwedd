@@ -2790,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-29a";
+const APP_BUILD = "2026-10-29b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -9287,6 +9287,10 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
   const [err, setErr]       = useState("");
   const savePaid = useMergedSave(HOUSEKEEPING_PAY_STORAGE, paid, setPaid);
   const [loadErr, setLoadErr] = useState("");
+  // On a phone the money columns are narrowed, Paid is just the tick (its date
+  // drops to a line of its own) and the week's date gets a line to itself, so
+  // the first column is wide enough to read (Toby, 29 Oct).
+  const narrow = useIsMobile();
   // Strict reads: a sheet missing the House hours or the Paid records would
   // show less than is owed, and ticking Paid would record that lower figure
   // (28 Oct review). A failed read says so and shows no sheet.
@@ -9321,7 +9325,10 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
 
   const navBtn = { background:"#fff", border:"1.5px solid " + T.border, borderRadius:8, width:40, height:36,
     fontSize:18, fontWeight:700, color:T.textMid, cursor:"pointer", fontFamily:"inherit", flexShrink:0 };
-  const cell = { width:92, flexShrink:0, textAlign:"right" };
+  const cell = { width: narrow ? 60 : 92, flexShrink:0, textAlign:"right" };
+  const paidW = narrow ? 30 : 150;
+  const rowPad = narrow ? "10px 10px" : "10px 14px";
+  const rowGap = narrow ? 6 : 8;
   return (
     <div style={{ maxWidth:900 }}>
       <p style={{ fontSize:13, color:T.textMid, margin:"0 0 12px", lineHeight:1.6 }}>
@@ -9343,11 +9350,11 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
       </div>
 
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
-        <div style={{ display:"flex", flexWrap:"nowrap", gap:8, padding:"9px 14px", background:T.bgInput, fontSize:11, fontWeight:700, color:T.textMid, borderBottom:"1px solid " + T.border }}>
+        <div style={{ display:"flex", flexWrap:"nowrap", gap:rowGap, padding: narrow ? "9px 10px" : "9px 14px", background:T.bgInput, fontSize:11, fontWeight:700, color:T.textMid, borderBottom:"1px solid " + T.border }}>
           <div style={{ flex:1, minWidth:0 }}>Week</div>
           {CHANGEOVER_CLEANERS.map(function(c) { return <div key={c.key} style={cell}>{c.label}</div>; })}
           <div style={cell}>Total</div>
-          <div style={{ width:150, flexShrink:0 }}>Paid</div>
+          <div style={{ width:paidW, flexShrink:0, textAlign: narrow ? "center" : "left" }}>Paid</div>
         </div>
         {weeks.map(function(m) {
           const w = housekeepingWeek(m, recs, sheets, staff);
@@ -9356,9 +9363,16 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
           const sheetState = houseWeekState(m, w.sheet, londonToday());
           return (
             <div key={m} style={{ borderBottom:"1px solid " + T.tint }}>
-              <div style={{ display:"flex", flexWrap:"nowrap", gap:8, padding:"10px 14px", alignItems:"center", fontSize:13, color:T.text }}>
+              <div style={{ display:"flex", flexWrap:"nowrap", gap:rowGap, padding:rowPad, alignItems:"center", fontSize: narrow ? 12.5 : 13, color:T.text }}>
                 <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ setOpenWeek(openWeek === m ? null : m); }}>
-                  <div style={{ fontWeight:800 }}>{w.code} <span style={{ fontWeight:500, color:T.textMid }}>· {fmtDayShort(m)}</span></div>
+                  {narrow ? (
+                    <div>
+                      <div style={{ fontWeight:800 }}>{w.code}</div>
+                      <div style={{ fontWeight:500, color:T.textMid, whiteSpace:"nowrap" }}>{fmtDayShort(m)}</div>
+                    </div>
+                  ) : (
+                    <div style={{ fontWeight:800 }}>{w.code} <span style={{ fontWeight:500, color:T.textMid }}>· {fmtDayShort(m)}</span></div>
+                  )}
                   <div style={{ fontSize:11.5, color:T.textLight }}>
                     {w.hours ? w.hours + " h" : "No hours"}
                     {w.sheet && !w.sheet.submitted && sheetState === "due" && <span style={{ color:T.red, fontWeight:700 }}> · House hours not submitted</span>}
@@ -9375,19 +9389,27 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
                   );
                 })}
                 <div style={Object.assign({}, cell, { fontWeight:800 })}>{w.total ? fmtPounds(w.total) : "–"}</div>
-                <div style={{ width:150, flexShrink:0, display:"flex", alignItems:"center", gap:6, flexWrap:"nowrap" }}>
+                <div style={{ width:paidW, flexShrink:0, display:"flex", alignItems:"center", justifyContent: narrow ? "center" : "flex-start", gap:6, flexWrap:"nowrap" }}>
                   <input type="checkbox" checked={!!p} aria-label={"Week " + w.code + " paid"}
                     onChange={function(e){ setWeekPaid(w, e.target.checked, p && p.paidOn); }}
                     style={{ width:18, height:18, flexShrink:0, accentColor:T.green }}/>
-                  {p && (
+                  {p && !narrow && (
                     <input type="date" value={p.paidOn || ""} aria-label={"Week " + w.code + " paid on"}
                       onChange={function(e){ if (e.target.value) setWeekPaid(w, true, e.target.value); }}
                       style={{ width:122, border:"1px solid " + T.border, borderRadius:6, padding:"4px 5px", fontFamily:"inherit", fontSize:12 }}/>
                   )}
                 </div>
               </div>
+              {p && narrow && (
+                <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", justifyContent:"flex-end", gap:6, padding:"0 10px 8px", fontSize:12, color:T.textMid }}>
+                  <span>Paid on</span>
+                  <input type="date" value={p.paidOn || ""} aria-label={"Week " + w.code + " paid on"}
+                    onChange={function(e){ if (e.target.value) setWeekPaid(w, true, e.target.value); }}
+                    style={{ width:130, border:"1px solid " + T.border, borderRadius:6, padding:"4px 5px", fontFamily:"inherit", fontSize:12 }}/>
+                </div>
+              )}
               {changed && (
-                <div style={{ padding:"0 14px 8px", fontSize:11.5, color:T.amber, fontWeight:700 }}>
+                <div style={{ padding: narrow ? "0 10px 8px" : "0 14px 8px", fontSize:11.5, color:T.amber, fontWeight:700 }}>
                   Paid {fmtPounds(p.amounts.total)} — the hours have changed since, now {fmtPounds(w.total)}.
                 </div>
               )}
@@ -9399,6 +9421,19 @@ function HousekeepingPayReport({ staff, onOpenEvent, onOpenAccom, onOpenBoxEvent
                         <div style={{ fontSize:12, fontWeight:800, color:T.midBlue, marginBottom:3 }}>{pp.label}</div>
                         {pp.lines.length === 0 && <div style={{ fontSize:12, color:T.textLight }}>Nothing this week.</div>}
                         {pp.lines.map(function(l, i) {
+                          if (narrow) return (
+                            <div key={i} style={{ fontSize:12, color:T.text, padding:"4px 0", borderTop: i > 0 ? "1px solid " + T.tint : "none" }}>
+                              <div style={{ display:"flex", flexWrap:"nowrap", gap:8 }}>
+                                <span style={{ flexShrink:0, whiteSpace:"nowrap", fontWeight:600 }}>{fmtDayShort(l.date)}</span>
+                                <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:T.textMid }}>{l.what}</span>
+                              </div>
+                              <div style={{ display:"flex", flexWrap:"nowrap", justifyContent:"flex-end", gap:10, color:T.textMid }}>
+                                <span>{l.hours} h</span>
+                                <span style={{ color: l.rate == null ? T.amber : T.textMid }}>{l.rate == null ? "no rate" : "@ " + fmtPounds(l.rate) + "/h"}</span>
+                                <span style={{ fontWeight:700, color:T.text, minWidth:58, textAlign:"right" }}>{l.rate == null ? "–" : fmtPounds(l.hours * l.rate)}</span>
+                              </div>
+                            </div>
+                          );
                           return (
                             <div key={i} style={{ display:"flex", flexWrap:"nowrap", gap:8, fontSize:12, color:T.text, padding:"2px 0" }}>
                               <span style={{ width:96, flexShrink:0 }}>{fmtDayShort(l.date)}</span>
