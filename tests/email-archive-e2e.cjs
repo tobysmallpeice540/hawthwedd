@@ -170,11 +170,20 @@ const rows = (page) => page.locator('[data-email-row]')
     // A letting: Emails and Files (from Home's check-ins).
     await page.locator('nav, aside').getByText('Home', { exact: true }).first().click()
     await page.getByText('Michael and Sonia', { exact: true }).first().click()
+    // The letting is in tabs (29 Oct): the guest's name is the page title,
+    // emails on Emails, files on Files.
+    await page.locator('.hb-title', { hasText: 'Michael and Sonia' }).first().waitFor({ timeout: 8000 })
+    check('F0 the guest\'s name is the page title', true)
+    await page.getByRole('tab', { name: 'Emails' }).click()
     await page.locator('h3', { hasText: /^Emails$/ }).first().waitFor({ timeout: 8000 })
     await page.waitForTimeout(500)
     const let1 = await page.locator('body').innerText()
     check('F1 a letting shows its guest\'s emails and the app\'s', /Parking for two cars\?/.test(let1) && /Booking confirmed/.test(let1), let1.slice(0, 200))
-    check('F2 and has Files', /Drag files here|Upload Files/.test(let1))
+    check('F1b and Send an email now, on the same tab', /Send an email now/.test(let1))
+    await page.getByRole('tab', { name: /^Files/ }).click()
+    await page.waitForTimeout(300)
+    const let2 = await page.locator('body').innerText()
+    check('F2 and has Files', /Drag files here|Upload Files/.test(let2))
     check('F3 asked by booking id too', s.calls.some((c) => c.fn === 'email_admin_messages' && c.args.p_ref === 'A100'))
 
     // An event: Contact → Emails, invoice address included.

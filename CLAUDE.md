@@ -785,6 +785,32 @@ own header.
   booking's — matched by email and day).
 - The Todoist box and its Settings card are gone (Toby, 28 Oct); the
   `todoist-feed` function is left in place, unused.
+- **A record's own checklists** (29 Oct, migration u): `chk_for_record(kind,
+  id)` returns every list whose `link` is that letting / event / ticketed
+  event (cancelled ones left out, not-yet-open ones in). `RecordChecklistsPanel`
+  shows them on the letting (Details, under housekeeping), the event (Event
+  Details, under housekeeping) and the box office editor — nothing at all
+  while a record has none or the function is missing — and opens one in
+  `ChecklistRunModal` over the form, so unsaved edits are not lost.
+- **Finished and past** is grouped by the day each list was FOR (`anchor_at`,
+  never `closed_at`), then by its record (`chkPastGroups`). The record's name
+  comes from the context the worker wrote (`chkRecordInfo`: "Emma Juner
+  letting", "Smith wedding"); a clean's context has no name, so it borrows
+  one from another list in the group or says "A letting". Pinned by
+  `tests/letting-form-e2e.cjs`.
+
+### Letting form (29 Oct 2026)
+
+- **Tabs, like the event form**: Details (type, source, link, guest, stays,
+  housekeeping, checklists, notes), Payments (discount, extras, breakage,
+  schedule), Emails (Airbnb conversation, Send an email now, the archive),
+  Files. Save / Exit sit under every tab. The guest's name is the page title
+  (`PageHeader`, back to Lettings = Exit) with `accomFormSub` under it.
+- On a phone: rows are wrapping flex with a basis per field, not grids (the
+  stylesheet folds every grid to one column) — guest + status, email +
+  phone. The payment schedule is ONE `nowrap` line per payment (name,
+  amount, due, paid tick) under a header row; extras likewise. Notes grow
+  with the text up to 60vh, then scroll (`GrowTextarea maxHeight`).
 
 ## Working in this folder from a Claude session
 

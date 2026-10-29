@@ -2790,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-29d";
+const APP_BUILD = "2026-10-29e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3894,6 +3894,19 @@ function bookedPropIds(b) {
 }
 
 // The guest label, which varies by what kind of booking it is.
+// The letting form's subtitle: where and when, then the status.
+function accomFormSub(b, properties) {
+  const stays = (b && b.stays && b.stays.length) ? b.stays : [b || {}];
+  const names = stays.map(function(s) {
+    const p = (properties || []).find(function(x) { return x.id === s.propertyId; });
+    return p ? p.name : (s.propertyName || "");
+  }).filter(Boolean);
+  const ins = stays.map(function(s) { return s.checkIn; }).filter(isValidEventDate).sort();
+  const outs = stays.map(function(s) { return s.checkOut; }).filter(isValidEventDate).sort();
+  const when = ins.length ? fmtDayShort(ins[0]) + (outs.length ? " – " + fmtDayShort(outs[outs.length - 1]) : "") : "";
+  const st = b && b.status ? b.status.charAt(0).toUpperCase() + b.status.slice(1) : "";
+  return [names.join(", "), when, b && b.bookingType === "Blocked" ? "Blocked" : st].filter(Boolean).join(" · ");
+}
 function accomGuestLabel(b) {
   return b.guestName
     || (b.bookingType==="Blocked" ? "Not available"
@@ -4182,6 +4195,9 @@ function StayTimeField({ booking, stay, prop, which, onChange }) {
 
 function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent, onMarkAirbnbCancelled, onDismissAirbnbPrompt, onSaveFiles }) {
   const isMobile = useIsMobile();
+  const [pane, setPane] = useState("details");
+  const schedW = isMobile ? { amount: 72, date: 122, paid: 34 } : { amount: 110, date: 150, paid: 44 };
+  const schedPad = isMobile ? { padding:"8px 6px", fontSize:13 } : {};
   var formStays = (form.stays && form.stays.length) ? form.stays : [{ propertyId:form.propertyId||"hamlet", propertyName:"", checkIn:form.checkIn||"", checkOut:form.checkOut||"", nights:null, guestCount:form.guestCount||"", value:Number(form.value)||0 }];
   var selPropIds = formStays.map(function(s){ return s.propertyId; });
   var totalValue = formStays.reduce(function(s,st){ return s+(Number(st.value)||0); }, 0);
@@ -4259,13 +4275,20 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
 
   return (
     <div style={{ maxWidth:1020 }}>
+      {/* Like the event form: the booking in tabs, so no one page holds
+          everything. Save and Exit sit under every tab. */}
+      <TabStrip tabs={[["details", "Details"], ["money", "Payments"], ["emails", "Emails"], ["files", "Files", (form.files || []).length || null]]}
+        value={pane} onChange={setPane}/>
+
+      {pane === "details" && (
+        <>
       {form.bookingType === "Blocked" && (
         <div style={{ marginBottom:16, padding:"10px 14px", background:"#f1f5f9", border:`1.5px solid #cbd5e1`, borderRadius:8, fontSize:12, color:T.textMid, lineHeight:1.5 }}>
           This marks the property as unavailable for the selected dates. It won't be treated as a guest booking, and will sync out to Airbnb as blocked.
         </div>
       )}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:16 }}>
-        <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:16, alignItems:"flex-start" }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:5, flex:"1 1 260px", minWidth:0 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Properties</span>
           <div style={{ display:"flex", gap:14, flexWrap:"wrap", padding:"10px 12px", background:T.bgInput, borderRadius:8, border:`1.5px solid ${T.border}` }}>
             {properties.map(function(p) {
@@ -4282,7 +4305,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             })}
           </div>
         </div>
-        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+        <label style={{ display:"flex", flexDirection:"column", gap:5, flex:"1 1 140px", minWidth:0 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Booking type</span>
           <select value={form.bookingType} onChange={function(e){
             var v = e.target.value;
@@ -4295,8 +4318,18 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             <option value="Blocked">Blocked (not available)</option>
           </select>
         </label>
+        <label style={{ display:"flex", flexDirection:"column", gap:5, flex:"1 1 140px", minWidth:0 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Source</span>
+          <select value={form.source} onChange={e=>upd("source", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
+            <option value="manual">Manual</option>
+            <option value="direct">Direct (online)</option>
+            <option value="airbnb">Airbnb</option>
+            <option value="contract">From wedding contract</option>
+            <option value="wedding">Wedding-linked</option>
+          </select>
+        </label>
         {(events && events.length > 0) && (
-          <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          <label style={{ display:"flex", flexDirection:"column", gap:5, flex:"1 1 200px", minWidth:0 }}>
             <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Link to farm event</span>
             <select value={form.linkedEventId || ""} onChange={function(e){ upd("linkedEventId", e.target.value ? Number(e.target.value) : null); }} style={{ ...selStyle, padding:"9px 11px" }}>
               <option value="">No event link</option>
@@ -4354,14 +4387,9 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           onUseFigure={function(v){ if (formStays.length === 1) updStay(0, "value", v); }}/>
       )}
 
-      {form.id && <SetupCleanToggle kind="accom" refId={form.id}/>}
-      {form.id && <ChangeoverRecordPanel kind="accom" refId={form.id}/>}
-
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:14, marginBottom:16 }}>
-        <LInput label="Guest name" value={form.guestName} onChange={v=>upd("guestName",v)} />
-        <LInput label="Email" value={form.email} onChange={v=>upd("email",v)} />
-        <LInput label="Phone" value={form.phone} onChange={v=>upd("phone",v)} />
-        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:"12px 14px", marginBottom:16 }}>
+        <div style={{ flex:"1 1 170px", minWidth:0 }}><LInput label="Guest name" value={form.guestName} onChange={v=>upd("guestName",v)} /></div>
+        <label style={{ display:"flex", flexDirection:"column", gap:5, flex:"0 1 140px", minWidth:120 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Status</span>
           <select value={form.status} onChange={e=>upd("status", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
             <option value="confirmed">Confirmed</option>
@@ -4370,6 +4398,8 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             <option value="cancelled">Cancelled</option>
           </select>
         </label>
+        <div style={{ flex:"2 1 210px", minWidth:0 }}><LInput label="Email" type="email" value={form.email} onChange={v=>upd("email",v)} /></div>
+        <div style={{ flex:"1 1 130px", minWidth:0 }}><LInput label="Phone" type="tel" value={form.phone} onChange={v=>upd("phone",v)} /></div>
       </div>
 
       {/* Per-property stays grid */}
@@ -4407,13 +4437,13 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
                 <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>
                   <div style={{ flex:"1 1 140px", minWidth:0 }}>
                     <span style={fieldLabel}>Check-in</span>
-                    <input type="date" value={s.checkIn||""} onChange={function(e){ updStay(idx,"checkIn",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                    <input type="date" value={s.checkIn||""} onChange={function(e){ updStay(idx,"checkIn",e.target.value); }} style={{ ...inlineInput, width:"100%", boxSizing:"border-box" }}/>
                     <StayTimeField booking={form} stay={s} prop={p} which="in"
                       onChange={function(v){ updStay(idx,"checkInTime",v); }}/>
                   </div>
                   <div style={{ flex:"1 1 140px", minWidth:0 }}>
                     <span style={fieldLabel}>Check-out</span>
-                    <input type="date" value={s.checkOut||""} onChange={function(e){ updStay(idx,"checkOut",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                    <input type="date" value={s.checkOut||""} onChange={function(e){ updStay(idx,"checkOut",e.target.value); }} style={{ ...inlineInput, width:"100%", boxSizing:"border-box" }}/>
                     <StayTimeField booking={form} stay={s} prop={p} which="out"
                       onChange={function(v){ updStay(idx,"checkOutTime",v); }}/>
                   </div>
@@ -4426,7 +4456,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
                   </div>
                   <div style={{ flex:"1 1 70px", minWidth:0 }}>
                     <span style={fieldLabel}>Guests</span>
-                    <input type="number" value={s.guestCount||""} placeholder="—" onChange={function(e){ updStay(idx,"guestCount",e.target.value); }} style={{ ...inlineInput, width:"100%" }}/>
+                    <input type="number" value={s.guestCount||""} placeholder="—" onChange={function(e){ updStay(idx,"guestCount",e.target.value); }} style={{ ...inlineInput, width:"100%", boxSizing:"border-box" }}/>
                   </div>
                   <div style={{ flex:"1 1 110px", minWidth:0 }}>
                     <span style={fieldLabel}>Price (£)</span>
@@ -4507,8 +4537,36 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         )}
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:8 }}>
-        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
+      {/* Housekeeping, then the checklists this letting started. */}
+      {form.id && (
+        <div style={{ marginBottom:16 }}>
+          <SetupCleanToggle kind="accom" refId={form.id}/>
+          <ChangeoverRecordPanel kind="accom" refId={form.id}/>
+          <RecordChecklistsPanel kind="accom" refId={form.id} noun="letting"/>
+        </div>
+      )}
+
+      <label style={{ display:"flex", flexDirection:"column", gap:5, marginBottom:18 }}>
+        <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Notes</span>
+        <GrowTextarea value={form.notes || ""} onChange={v=>upd("notes",v)} maxHeight="60vh"
+          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 11px", outline:"none", minHeight:76, width:"100%", boxSizing:"border-box" }} />
+      </label>
+
+      {form.termsAcceptedAt && (
+        <div style={{ fontSize:12, color:T.green, background:T.greenBg, border:"1px solid #bbf7d0", borderRadius:7,
+          padding:"8px 12px", marginBottom:14 }}>
+          Terms &amp; Conditions accepted at checkout on{" "}
+          {new Date(form.termsAcceptedAt).toLocaleString("en-GB", { day:"numeric", month:"long", year:"numeric", hour:"2-digit", minute:"2-digit" })}
+        </div>
+      )}
+
+        </>
+      )}
+
+      {pane === "money" && (
+        <>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:8 }}>
+        <label style={{ display:"flex", flexDirection:"column", gap:5, flex:"0 1 220px", minWidth:0 }}>
           <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Discount code</span>
           <input value={form.discountCode || ""} onChange={e => {
             const code = e.target.value.toUpperCase();
@@ -4532,37 +4590,29 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             return <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>Valid — {match.type === "pct" ? match.value+"% off" : fmtMoney(match.value)+" off"}</span>;
           })()}
         </label>
-        <label style={{ display:"flex", flexDirection:"column", gap:5 }}>
-          <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Source</span>
-          <select value={form.source} onChange={e=>upd("source", e.target.value)} style={{ ...selStyle, padding:"9px 11px" }}>
-            <option value="manual">Manual</option>
-            <option value="direct">Direct (online)</option>
-            <option value="airbnb">Airbnb</option>
-            <option value="contract">From wedding contract</option>
-            <option value="wedding">Wedding-linked</option>
-          </select>
-        </label>
       </div>
       {zeroValue && <div style={{ fontSize:12, color:T.textMid, background:T.amberBg, border:`1px solid #fcd34d`, borderRadius:7, padding:"8px 11px", marginBottom:16 }}>Zero value — this booking blocks the calendar but generates no payment schedule and is never chased.</div>}
 
       {/* Extras */}
       <div style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"14px 16px", marginBottom:16, background:T.bgInput }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: form.extras.length?10:0 }}>
+        <div style={{ display:"flex", flexWrap:"nowrap", justifyContent:"space-between", alignItems:"center", marginBottom: form.extras.length?10:0 }}>
           <span style={{ fontSize:13, fontWeight:700, color:T.text }}>Extras</span>
           <button onClick={addExtra} style={smallBtn}>+ Add extra</button>
         </div>
         {form.extras.map((e,i)=>(
-          <div key={i} style={{ display:"flex", gap:10, marginBottom:8 }}>
-            <input value={e.desc} placeholder="Description" onChange={ev=>updExtra(i,"desc",ev.target.value)} style={{ flex:1, ...inlineInput }} />
-            <input type="number" value={e.amount} placeholder="£" onChange={ev=>updExtra(i,"amount",ev.target.value)} style={{ width:110, ...inlineInput }} />
-            <button onClick={()=>rmExtra(i)} style={{ ...smallBtn, color:T.red, borderColor:"#fca5a5" }}>Remove</button>
+          <div key={i} style={{ display:"flex", flexWrap:"nowrap", gap:8, marginBottom:8, alignItems:"center" }}>
+            <input value={e.desc} placeholder="Description" onChange={ev=>updExtra(i,"desc",ev.target.value)} style={{ flex:"1 1 0", minWidth:0, ...inlineInput }} />
+            <input type="number" inputMode="decimal" value={e.amount} placeholder="£" onChange={ev=>updExtra(i,"amount",ev.target.value)} style={{ ...inlineInput, width:isMobile ? 78 : 110, flex:"none", boxSizing:"border-box" }} />
+            <button onClick={()=>rmExtra(i)} aria-label="Remove extra" title="Remove extra" style={{ ...smallBtn, color:T.red, borderColor:"#fca5a5", flex:"none", padding:"6px 10px" }}>{isMobile ? "\u00d7" : "Remove"}</button>
           </div>
         ))}
       </div>
 
       {/* Breakage */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16, alignItems:"end" }}>
-        <LInput label="Breakage deposit (£, refundable)" type="number" value={form.breakage} onChange={v=>upd("breakage",v)} />
+      <div style={{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:16, alignItems:"flex-end" }}>
+        <div style={{ flex:"0 1 240px", minWidth:0 }}>
+          <LInput label="Breakage deposit (£, refundable)" type="number" value={form.breakage} onChange={v=>upd("breakage",v)} />
+        </div>
         {Number(form.breakage)>0 && (
           <button onClick={()=>alert("Refund breakage via Stripe — wired to the Stripe refund function in phase 2 (uses the stored charge ID).")}
             style={{ ...smallBtn, padding:"9px 14px", fontSize:13 }}>Refund breakage from Stripe</button>
@@ -4596,14 +4646,23 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           <button onClick={regenSchedule} style={smallBtn} disabled={zeroValue}>Auto-build deposit + balance</button>
         </div>
         {!form.schedule.length && <div style={{ fontSize:12, color:T.textLight }}>No schedule. {zeroValue ? "Zero-value booking." : "Use auto-build, or leave blank if paid."}</div>}
+        {form.schedule.length > 0 && (
+          <div style={{ display:"flex", flexWrap:"nowrap", gap:6, fontSize:11, fontWeight:700, color:T.textLight, textTransform:"uppercase", letterSpacing:.5, marginBottom:4 }}>
+            <span style={{ flex:"1 1 0", minWidth:0 }}>Payment</span>
+            <span style={{ width:schedW.amount, flex:"none" }}>£</span>
+            <span style={{ width:schedW.date, flex:"none" }}>Due</span>
+            <span style={{ width:schedW.paid, flex:"none", textAlign:"center" }}>Paid</span>
+          </div>
+        )}
         {form.schedule.map((s,i)=>(
           <div key={i} style={{ marginBottom:8 }}>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 0.9fr 1.1fr auto", gap:10, alignItems:"center" }}>
-              <input value={s.label} onChange={e=>updSched(i,"label",e.target.value)} style={inlineInput} />
-              <input type="number" value={s.amount} onChange={e=>updSched(i,"amount",e.target.value)} style={inlineInput} />
-              <input type="date" value={s.dueDate||""} onChange={e=>updSched(i,"dueDate",e.target.value)} style={inlineInput} />
-              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>
-                <input type="checkbox" checked={!!s.paid} onChange={e=>updSched(i,"paid",e.target.checked)} style={{ width:15, height:15, accentColor:T.accent }} />paid
+            {/* One line on a phone too: name, amount, due date, paid. */}
+            <div style={{ display:"flex", flexWrap:"nowrap", gap:6, alignItems:"center" }}>
+              <input value={s.label} aria-label="Payment" onChange={e=>updSched(i,"label",e.target.value)} style={{ ...inlineInput, ...schedPad, flex:"1 1 0", minWidth:0 }} />
+              <input type="number" inputMode="decimal" aria-label="Amount" value={s.amount} onChange={e=>updSched(i,"amount",e.target.value)} style={{ ...inlineInput, ...schedPad, width:schedW.amount, flex:"none", boxSizing:"border-box" }} />
+              <input type="date" aria-label="Due date" value={s.dueDate||""} onChange={e=>updSched(i,"dueDate",e.target.value)} style={{ ...inlineInput, ...schedPad, width:schedW.date, flex:"none", boxSizing:"border-box" }} />
+              <label title="Paid" style={{ width:schedW.paid, flex:"none", display:"flex", justifyContent:"center", alignItems:"center", cursor:"pointer" }}>
+                <input type="checkbox" aria-label="Paid" checked={!!s.paid} onChange={e=>updSched(i,"paid",e.target.checked)} style={{ width:18, height:18, accentColor:T.accent, cursor:"pointer" }} />
               </label>
             </div>
             {/* Stripe ticks "paid" itself when the webhook fires; this line
@@ -4638,20 +4697,11 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
       </div>
       )}
 
-      <label style={{ display:"flex", flexDirection:"column", gap:5, marginBottom:18 }}>
-        <span style={{ fontSize:12, fontWeight:600, color:T.textMid }}>Notes</span>
-        <textarea value={form.notes} onChange={e=>upd("notes",e.target.value)} rows={3}
-          style={{ background:"#fff", border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:14, padding:"10px 11px", outline:"none", resize:"vertical" }} />
-      </label>
-
-      {form.termsAcceptedAt && (
-        <div style={{ fontSize:12, color:T.green, background:T.greenBg, border:"1px solid #bbf7d0", borderRadius:7,
-          padding:"8px 12px", marginBottom:14 }}>
-          Terms &amp; Conditions accepted at checkout on{" "}
-          {new Date(form.termsAcceptedAt).toLocaleString("en-GB", { day:"numeric", month:"long", year:"numeric", hour:"2-digit", minute:"2-digit" })}
-        </div>
+        </>
       )}
 
+      {pane === "emails" && (
+        <>
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:9, padding:"16px 18px", marginBottom:18 }}>
         {form.source === "airbnb" && form.id && (
           <AirbnbConversation threadId={(form.airbnb && form.airbnb.threadId) || null}
@@ -4665,6 +4715,11 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           onAutoSave={onSaveFiles} entityType="accom" entityId={form.id} emptyLabel="No emails for this booking yet."/>
       </div>
 
+        </>
+      )}
+
+      {pane === "files" && (
+        <>
       {/* Files: uploads, and attachments saved from the emails above. Written
           on their own (only the files field, on a fresh read), so they can be
           added while the rest of the booking is mid-edit. A new booking is
@@ -4675,6 +4730,9 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           ? <BookingFilesSection formData={form} update={upd} onAutoSave={onSaveFiles} entityId={form.id} entityType="accom"/>
           : <div style={{ fontSize:12.5, color:T.textLight }}>Save the booking first, then files can be added here.</div>}
       </div>
+
+        </>
+      )}
 
       {/* Save keeps the booking open so the schedule can be built, emails sent
           and figures adjusted in one sitting. Exit is deliberately separate. */}
@@ -6326,9 +6384,13 @@ function ChecklistsHomePanel({ admin, onOpen, onAll }) {
             return (
               <div key={n.item_id} style={{ display:"flex", flexWrap:"nowrap", gap:10, alignItems:"flex-start", padding:"7px 0", borderTop:`1px solid ${T.border}` }}>
                 <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ onOpen(n.run_id); }}>
-                  <div style={{ fontSize:13, color:T.text }}><b>{n.title}</b> <span style={{ color:T.textLight }}>· {n.run_title}{n.context ? " · " + n.context : ""}</span></div>
+                  <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:8, fontSize:13 }}>
+                    <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:T.text }}>
+                      <b>{n.title}</b> <span style={{ color:T.textLight }}>· {n.run_title}{n.context ? " · " + n.context : ""}</span>
+                    </span>
+                    <span style={{ fontSize:11.5, color:T.textLight, flexShrink:0, whiteSpace:"nowrap" }}>{n.by} · {chkWhen(n.at)}</span>
+                  </div>
                   <div style={{ fontSize:13, color:T.text, marginTop:2 }}>{n.state === "na" ? "Not applicable: " : ""}{n.comment}</div>
-                  <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>{n.by} · {chkWhen(n.at)}</div>
                 </div>
                 <button type="button" disabled={busy} onClick={function(){ seen([n.item_id], []); }}
                   style={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12, flexShrink:0 })}>Read</button>
@@ -6339,14 +6401,16 @@ function ChecklistsHomePanel({ admin, onOpen, onAll }) {
             return (
               <div key={c.run_id} style={{ display:"flex", flexWrap:"nowrap", gap:10, alignItems:"flex-start", padding:"7px 0", borderTop:`1px solid ${T.border}` }}>
                 <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ onOpen(c.run_id); }}>
-                  <div style={{ fontSize:13, color:T.text }}>
-                    <b>{c.title}</b> {c.status === "ignored" ? "was ignored" : "was not finished"}
-                    <span style={{ color:T.textLight }}>{c.context ? " · " + c.context : ""}</span>
+                  <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:8, fontSize:13 }}>
+                    <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:T.text }}>
+                      <b>{c.title}</b> {c.status === "ignored" ? "was ignored" : "was not finished"}
+                      <span style={{ color:T.textLight }}>{c.context ? " · " + c.context : ""}</span>
+                    </span>
+                    <span style={{ fontSize:11.5, color:T.textLight, flexShrink:0, whiteSpace:"nowrap" }}>{chkWhen(c.at)}</span>
                   </div>
                   <div style={{ fontSize:12.5, color:T.textMid, marginTop:2 }}>
                     {c.status === "ignored" ? (c.by || "Someone") + (c.reason ? ": " + c.reason : "") : c.left + " left undone — the next one has started"}
                   </div>
-                  <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>{chkWhen(c.at)}</div>
                 </div>
                 <button type="button" disabled={busy} onClick={function(){ seen([], [c.run_id]); }}
                   style={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12, flexShrink:0 })}>Read</button>
@@ -6404,25 +6468,193 @@ function ChecklistsPage({ role, focusRunId, clearFocus, onOpenLink, onSettings, 
           {pastErr && <ErrBanner text={pastErr}/>}
           {!past && !pastErr && <div style={quietText}>Loading…</div>}
           {past && !past.length && <div style={{ fontSize:14, color:T.textLight, padding:"18px 2px" }}>Nothing in the last 60 days.</div>}
-          {(past || []).map(function(r) {
-            const s = chkSummary(r, nowMs);
-            const meta = { done: ["Done", T.green, T.greenBg], ignored: ["Ignored", T.textMid, T.bgInput],
-                           missed: ["Not finished", T.red, T.redBg], cancelled: ["Cancelled", T.textLight, T.bgInput] }[r.status] || [r.status, T.textMid, T.bgInput];
-            return (
-              <button key={r.id} type="button" onClick={function(){ setOpenId(r.id); }}
-                style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, width:"100%", textAlign:"left", background:"#fff",
-                  border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 12px", marginBottom:7, cursor:"pointer", fontFamily:"inherit", color:T.text }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:14, fontWeight:700, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.title}</div>
-                  <div style={{ fontSize:12, color:T.textMid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.context || ""}</div>
-                  <div style={{ fontSize:11.5, color:T.textLight }}>{s.done} of {s.total} · {chkWhen(r.closed_at)}{r.closed_by ? " · " + r.closed_by : ""}</div>
-                </div>
-                <span style={{ fontSize:11, fontWeight:700, color:meta[1], background:meta[2], borderRadius:6, padding:"3px 8px", flexShrink:0 }}>{meta[0]}</span>
-              </button>
-            );
-          })}
+          {past && past.length > 0 && <ChecklistPastList runs={past} nowMs={nowMs} onOpen={setOpenId} onOpenLink={onOpenLink}/>}
         </div>
       )}
+    </div>
+  );
+}
+
+// What a list was for, worked out from its link and the context the worker
+// wrote (plan.js): "Hamlet · Emma Juner · in Sat 31 Oct 15:00" for a letting,
+// "Smith · Wedding · Sat 12:00" for an event, "Name · Grain Store · …" for a
+// ticketed one, "Viewing · Name · …" for a viewing. `name` is the record
+// ("Emma Juner letting"), or null when the context does not say (a clean);
+// `rest` is the context without it. Lists with no link (Start now, weekly,
+// monthly, once) have key "other".
+function chkRecordInfo(run) {
+  const link = run && run.link;
+  const ctx = String((run && run.context) || "");
+  const parts = ctx.split(" · ");
+  if (!link || !link.kind || link.id == null) return { key: "other", name: null, rest: ctx, link: null };
+  const key = link.kind + ":" + link.id;
+  let name = null, rest = ctx;
+  if (parts[0] === "Viewing" && parts.length >= 2) {
+    name = "Viewing with " + parts[1]; rest = parts.slice(2).join(" · ");
+  } else if (link.kind === "accom" && parts.length >= 3 && /^(in|out) /.test(parts[2])) {
+    name = parts[1] + " letting"; rest = parts[0] + " · " + parts.slice(2).join(" · ");
+  } else if (link.kind === "event" && parts.length >= 3) {
+    name = parts[0] + " " + parts[1].toLowerCase(); rest = parts.slice(2).join(" · ");
+  } else if (link.kind === "box" && parts.length >= 3) {
+    name = parts[0] + " (ticketed)"; rest = parts.slice(2).join(" · ");
+  }
+  return { key: key, name: name, rest: rest, link: link };
+}
+const CHK_RECORD_FALLBACK = { accom: "A letting", event: "An event", box: "A ticketed event", enquiry: "An enquiry" };
+
+// Lists grouped by the day they were for (the anchor, never the day they were
+// finished), then by the letting or event that started them.
+function chkPastGroups(runs) {
+  const days = {};
+  (runs || []).forEach(function(r) {
+    const day = r.anchor_at ? isoToLondonLocal(r.anchor_at).slice(0, 10) : "";
+    const info = chkRecordInfo(r);
+    const d = days[day] = days[day] || { day: day, groups: {}, order: [] };
+    let g = d.groups[info.key];
+    if (!g) { g = d.groups[info.key] = { key: info.key, name: null, link: info.link, runs: [], first: r.anchor_at || "" }; d.order.push(info.key); }
+    if (!g.name && info.name && !/^Viewing with /.test(info.name)) g.name = info.name;
+    if (!g.viewingName && info.name) g.viewingName = info.name;
+    if ((r.anchor_at || "") < g.first) g.first = r.anchor_at || "";
+    g.runs.push({ run: r, rest: info.rest });
+  });
+  return Object.keys(days).sort().reverse().map(function(k) {
+    const d = days[k];
+    const groups = d.order.map(function(gk) {
+      const g = d.groups[gk];
+      g.runs.sort(function(a, b) { return String(a.run.anchor_at || "").localeCompare(String(b.run.anchor_at || "")); });
+      g.label = g.key === "other" ? null
+        : (g.name || g.viewingName || CHK_RECORD_FALLBACK[g.link && g.link.kind] || "A booking");
+      return g;
+    }).sort(function(a, b) {
+      if (a.key === "other" && b.key !== "other") return 1;
+      if (b.key === "other" && a.key !== "other") return -1;
+      return String(a.first).localeCompare(String(b.first));
+    });
+    return { day: d.day, groups: groups };
+  });
+}
+function chkDayLabel(day) {
+  if (!day) return "No date";
+  const today = londonToday();
+  if (day === today) return "Today";
+  if (day === addDaysIso(today, -1)) return "Yesterday";
+  if (day === addDaysIso(today, 1)) return "Tomorrow";
+  return fmtDayShort(day);
+}
+// Done / Live / Overdue / Starts … for one list.
+function chkRunMeta(r, nowMs) {
+  if (r.status === "open") {
+    if (r.opens_at && Date.parse(r.opens_at) > nowMs) return ["Starts " + chkWhen(r.opens_at), T.textMid, T.bgInput];
+    return chkSummary(r, nowMs).overdue ? ["Overdue", "#fff", T.red] : ["Live", T.text, T.amberBg];
+  }
+  return ({ done: ["Done", T.green, T.greenBg], ignored: ["Ignored", T.textMid, T.bgInput],
+            missed: ["Not finished", T.red, T.redBg], cancelled: ["Cancelled", T.textLight, T.bgInput] }[r.status])
+    || [r.status, T.textMid, T.bgInput];
+}
+function chkRunLine(r, nowMs) {
+  const s = chkSummary(r, nowMs);
+  if (r.status === "open") return s.done + " of " + s.total + " done";
+  return s.done + " of " + s.total + (r.closed_at ? " · " + chkWhen(r.closed_at) : "") + (r.closed_by ? " · " + r.closed_by : "");
+}
+
+// One list as a row: the title, a line under it, the state on the right.
+function ChecklistRunRow({ run, line, nowMs, onOpen }) {
+  const meta = chkRunMeta(run, nowMs);
+  return (
+    <button type="button" onClick={function(){ onOpen(run.id); }} aria-label={"Open checklist: " + run.title}
+      style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, width:"100%", textAlign:"left", background:"#fff",
+        border:`1px solid ${T.border}`, borderRadius:9, padding:"9px 12px", marginBottom:6, cursor:"pointer", fontFamily:"inherit", color:T.text }}>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:14, fontWeight:700, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{run.title}</div>
+        {line && <div style={{ fontSize:12, color:T.textMid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{line}</div>}
+      </div>
+      <span style={{ fontSize:11, fontWeight:700, color:meta[1], background:meta[2], borderRadius:6, padding:"3px 8px", flexShrink:0, whiteSpace:"nowrap" }}>{meta[0]}</span>
+    </button>
+  );
+}
+
+// Checklists → Finished and past: by day, then by the letting or event.
+function ChecklistPastList({ runs, nowMs, onOpen, onOpenLink }) {
+  const days = chkPastGroups(runs);
+  return (
+    <div>
+      {days.map(function(d) {
+        return (
+          <div key={d.day} style={{ marginBottom:14 }}>
+            <div style={Object.assign({}, chkGroupHead, { margin:"10px 0 6px" })}>{chkDayLabel(d.day)}</div>
+            {d.groups.map(function(g) {
+              return (
+                <div key={g.key} style={g.label ? { borderLeft:`3px solid ${T.border}`, paddingLeft:10, marginBottom:10 } : { marginBottom:4 }}>
+                  {g.label && (
+                    <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:8, margin:"0 0 5px" }}>
+                      <span style={{ flex:1, minWidth:0, fontSize:13, fontWeight:700, color:T.midBlue, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>For the {g.label}</span>
+                      {onOpenLink && g.link && chkLinkLabel(g.link) && (
+                        <button type="button" onClick={function(){ onOpenLink(g.link); }}
+                          style={{ background:"none", border:"none", padding:0, color:T.midBlue, fontFamily:"inherit", fontSize:12, cursor:"pointer", flexShrink:0, whiteSpace:"nowrap" }}>Open &rarr;</button>
+                      )}
+                    </div>
+                  )}
+                  {g.runs.map(function(x) {
+                    const line = [x.rest, chkRunLine(x.run, nowMs)].filter(Boolean).join(" · ");
+                    return <ChecklistRunRow key={x.run.id} run={x.run} line={line} nowMs={nowMs} onOpen={onOpen}/>;
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// A list opened over the page it was found on (a letting or an event), so
+// nothing unsaved there is lost by going to the Checklists page and back.
+function ChecklistRunModal({ runId, onClose }) {
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(20,26,35,.5)", zIndex:1500, display:"flex",
+      alignItems:"flex-start", justifyContent:"center", padding:"4vh 10px", overflowY:"auto" }}>
+      <div onClick={function(e){ e.stopPropagation(); }} role="dialog" aria-modal="true" aria-label="Checklist"
+        style={{ background:T.bg, borderRadius:12, padding:"16px 16px 20px", width:"100%", maxWidth:720, boxShadow:"0 12px 40px rgba(0,0,0,.25)" }}>
+        <ChecklistRunView runId={runId} role="admin" onBack={onClose}/>
+      </div>
+    </div>
+  );
+}
+
+// The checklists a letting or an event started, live and finished, on its own
+// form. Reads chk_for_record (migration 2026-10-29u); says nothing at all
+// while that is missing.
+function RecordChecklistsPanel({ kind, refId, noun }) {
+  const [runs, setRuns] = useState(null);
+  const [err, setErr] = useState("");
+  const [missing, setMissing] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const load = useCallback(async function() {
+    if (refId == null || refId === "") return;
+    try {
+      const r = await sbRpcQuiet("chk_for_record", { p_kind: kind, p_id: String(refId) });
+      setRuns(r.runs || []); setErr(""); setMissing(false);
+    } catch (e) {
+      if (e && e.status === 404) setMissing(true); else setErr(chkErrText(e));
+    }
+  }, [kind, refId]);
+  useEffect(function() { load(); }, [load]);
+  if (refId == null || refId === "" || missing) return null;
+  const nowMs = Date.now();
+  const list = (runs || []).slice().sort(function(a, b) { return String(a.anchor_at || "").localeCompare(String(b.anchor_at || "")); });
+  // Nothing to show is shown as nothing: the forms are busy enough.
+  if (!err && !list.length) return null;
+  return (
+    <div style={{ marginTop:14 }}>
+      <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:8 }}>Checklists for this {noun || "booking"}</div>
+      {err && <div style={{ fontSize:12.5, color:T.red, marginBottom:6 }}>{err}</div>}
+      {list.map(function(r) {
+        const info = chkRecordInfo(r);
+        const line = [info.rest, chkRunLine(r, nowMs)].filter(Boolean).join(" · ");
+        return <ChecklistRunRow key={r.id} run={r} line={line} nowMs={nowMs} onOpen={setOpenId}/>;
+      })}
+      {openId && <ChecklistRunModal runId={openId} onClose={function(){ setOpenId(null); load(); }}/>}
     </div>
   );
 }
@@ -6841,7 +7073,8 @@ function ChecklistStartTimes() {
 // taller), for checklist items too long to read in a one-line input.
 // `oneLine` keeps it to a single paragraph: Enter does nothing and pasted
 // line breaks become spaces, because an item's title is shown as one line.
-function GrowTextarea({ value, onChange, oneLine, style, maxLength, placeholder }) {
+// `maxHeight` caps the growth; past it the box scrolls.
+function GrowTextarea({ value, onChange, oneLine, style, maxLength, placeholder, maxHeight }) {
   const ref = useRef(null);
   useEffect(function() {
     const el = ref.current;
@@ -6854,7 +7087,8 @@ function GrowTextarea({ value, onChange, oneLine, style, maxLength, placeholder 
       onChange={function(e){ onChange(oneLine ? e.target.value.replace(/[\r\n]+/g, " ") : e.target.value); }}
       onKeyDown={oneLine ? function(e){ if (e.key === "Enter") e.preventDefault(); } : undefined}
       maxLength={maxLength} placeholder={placeholder}
-      style={Object.assign({}, style, { resize:"vertical", overflow:"hidden", lineHeight:1.35, display:"block" })}/>
+      style={Object.assign({}, style, { resize:"vertical", overflowX:"hidden", overflowY: maxHeight ? "auto" : "hidden",
+        maxHeight: maxHeight || "none", lineHeight:1.35, display:"block" })}/>
   );
 }
 
@@ -9762,6 +9996,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   };
 
   const openNew  = () => { setForm(blankAccom(null, bookings)); setEditId(null); setTab("form"); };
+  const exitAccomForm = ()=>{ setTab("calendar"); setForm(null); setEditId(null); };
   const openNewBlock = () => { setForm(Object.assign({}, blankAccom(null, bookings), { bookingType:"Blocked", guestName:"Not available" })); setEditId(null); setTab("form"); };
   const openEdit = (b) => {
     var editStays;
@@ -10042,6 +10277,12 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
           onCancel={()=>setAskDeleteBooking(false)}
         />
       )}
+      {tab==="form" && form ? (
+        <PageHeader title={form.guestName || (editId ? accomGuestLabel(form) : "New booking")}
+          back="Lettings" onBack={exitAccomForm}
+          sub={accomFormSub(form, properties)}
+          actions={flash ? <span style={{ fontSize:12, fontWeight:600, color:T.green }}>{flash}</span> : null}/>
+      ) : (
       <PageHeader title="Lettings"
         sub={"Holiday lets across " + properties.map(p=>p.name).join(", ") + " · read-only alongside Bookalet"}
         actions={<>
@@ -10049,6 +10290,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
           <button onClick={openNewBlock} style={{ background:"#fff", color:T.textMid, border:`1.5px solid ${T.border}`, padding:"10px 16px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>+ Block dates</button>
           <button onClick={openNew} style={{ background:T.accent, color:"#fff", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>+ New booking</button>
         </>}/>
+      )}
 
       {tab!=="form" && !inSidebar && <TabStrip tabs={LETTINGS_TABS} value={tab} onChange={setTab}/>}
 
@@ -10096,8 +10338,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
       )}
       {tab==="form" && form && (
         <div>
-          <div style={{ fontSize:16, fontWeight:700, color:T.text, marginBottom:16 }}>{editId ? "Edit booking" : "New booking"}</div>
-          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={()=>{ setTab("calendar"); setForm(null); setEditId(null); }} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} onOpenEvent={onOpenEvent}
+          <AccomForm properties={properties} discountCodes={discountCodes} events={events||[]} form={form} setForm={setForm} onSave={handleSave} onExit={exitAccomForm} onDelete={editId ? ()=>setAskDeleteBooking(true) : null} onOpenEvent={onOpenEvent}
             onMarkAirbnbCancelled={markAirbnbCancelled} onDismissAirbnbPrompt={dismissAirbnbPrompt}
             onSaveFiles={editId ? function(rec) { return patchAccom(editId, function(b) { return Object.assign({}, b, { files: rec.files || [] }); }); } : null} />
         </div>
@@ -19978,6 +20219,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
             <div style={{ marginTop:22 }}>
               <div style={{ fontSize:11, letterSpacing:1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:8 }}>Housekeeping</div>
               <SetupCleanToggle kind="event" refId={formData.id}/>
+              <RecordChecklistsPanel kind="event" refId={formData.id} noun="event"/>
             </div>
           )}
 
@@ -29482,6 +29724,7 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
       )}
 
       <SetupCleanToggle kind="box" refId={eventId}/>
+      <RecordChecklistsPanel kind="box" refId={eventId} noun="event"/>
 
       <TabStrip tabs={panes} value={pane} onChange={setPane}/>
 

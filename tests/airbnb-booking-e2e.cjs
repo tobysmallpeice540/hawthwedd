@@ -69,6 +69,8 @@ const CONVO = { ok: true, reservation: { code: 'HMAAAA1111' }, payouts: [], mess
   check('B3 guests', body.includes('13 adults, 1 pet'))
   check('B4 stars', (await page.locator('[title="4 stars on Airbnb"]').count()) > 0)
 
+  // The conversation is on the letting's Emails tab (29 Oct).
+  await page.getByRole('tab', { name: 'Emails' }).click()
   await page.getByText('Booked. Can we bring a dog?').waitFor({ timeout: 8000 }).catch(() => {})
   const align = async (txt) => page.getByText(txt, { exact: true }).evaluate((el) => getComputedStyle(el.parentElement).alignItems)
   check('C1 the guest on the left', (await align('Is the barn free that weekend?')) === 'flex-start')
@@ -77,7 +79,8 @@ const CONVO = { ok: true, reservation: { code: 'HMAAAA1111' }, payouts: [], mess
   const convoCall = h.calls.find((c) => c.fn === 'airbnb_admin_conversation')
   check('C4 asked for this booking\'s code and thread', convoCall && convoCall.args.p_code === 'HMAAAA1111' && convoCall.args.p_thread === '1234567890', JSON.stringify(convoCall))
 
-  // Mark cancelled: two presses, only this booking changes.
+  // Mark cancelled: two presses, only this booking changes. (Back on Details.)
+  await page.getByRole('tab', { name: 'Details' }).click()
   const before = h.calls.filter((c) => c.fn === 'write:app_data').length
   await page.getByRole('button', { name: 'Mark cancelled (frees the dates)' }).click()
   check('X1 the first press only asks', h.calls.filter((c) => c.fn === 'write:app_data').length === before
