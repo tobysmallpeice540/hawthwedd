@@ -812,6 +812,25 @@ own header.
   amount, due, paid tick) under a header row; extras likewise. Notes grow
   with the text up to 60vh, then scroll (`GrowTextarea maxHeight`).
 
+### WhatsApp (29 Oct 2026, migration v)
+
+- **Send-only number: the 01825 VoIP landline**, directly on Meta's Cloud API
+  (no provider). Phone number id `1454490917738977`, account `970274439005564`
+  — in `whatsapp-send.js`, not secret. Secrets in Netlify only:
+  `WHATSAPP_TOKEN` (permanent system-user token), `WHATSAPP_APP_SECRET`,
+  `WHATSAPP_VERIFY_TOKEN`. The business mobile is untouched.
+- **Replies are allowed and read by email in office hours** (Toby): every
+  template's footer says so; there is no auto-reply and no Call button.
+  `whatsapp-webhook.js` keeps each inbound message in `wa_messages` (id =
+  Meta's message id), matches the number to a letting / event / enquiry
+  (`normaliseNumber`: UK numbers to 44…), and emails it to
+  hawthbushfarm@gmail.com. A failed email answers 500 so Meta redelivers;
+  `emailed_at` makes it once only. Pinned by `tests/whatsapp-webhook-test.cjs`.
+- `wa_messages`: RLS on, no policies, anon/authenticated revoked — functions
+  only. Media is not fetched yet.
+- Settings → WhatsApp (admin): token check and Send test (`hello_world`).
+  Still to build: real templates, opt-in, Send buttons, the booking panel.
+
 ## Working in this folder from a Claude session
 
 The repo is reached through a mount that does not allow deletion, and two
