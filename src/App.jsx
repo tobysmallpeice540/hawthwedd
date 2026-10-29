@@ -2790,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-29e";
+const APP_BUILD = "2026-10-29f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18948,6 +18948,65 @@ function EmailArchiveSettings() {
   );
 }
 
+// ─── WHATSAPP (the 01825 send-only number) ───────────────────────────────────
+// Admin only (whatsapp-send checks the session). For now: whether the token is
+// set, and a test send of Meta's "hello_world" template. Replies to the 01825
+// number are emailed to the farm inbox by whatsapp-webhook.
+async function whatsappCall(body) {
+  const res = await fetch("/.netlify/functions/whatsapp-send", {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()),
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(function() { return {}; });
+  if (!res.ok || data.ok === false) { const e = new Error(data.error || ("WhatsApp failed (" + res.status + ")")); e.status = res.status; throw e; }
+  return data;
+}
+
+function WhatsAppSettings() {
+  const [st, setSt] = useState(null);
+  const [state, setState] = useState("loading");
+  const [to, setTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  useEffect(function() {
+    whatsappCall({ action: "status" })
+      .then(function(d) { setSt(d); setState("ready"); })
+      .catch(function(e) { setState(e.status === 401 ? "hidden" : e.status === 404 ? "absent" : "error"); });
+  }, []);
+  if (state === "hidden") return null;
+  async function sendTest() {
+    setBusy(true); setNote(null);
+    try {
+      const d = await whatsappCall({ action: "test", to: to });
+      setNote({ kind:"ok", text: "Sent to +" + d.to + ". It should arrive in a few seconds — reply from that phone to test the email forwarding." });
+    } catch (e) { setNote({ kind:"error", text: e.message }); }
+    setBusy(false);
+  }
+  return (
+    <div>
+      <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
+        Messages go out from the 01825 number. Anything a guest sends back is emailed to hawthbushfarm@gmail.com,
+        to be read in office hours.
+      </div>
+      {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
+      {state === "absent" && <div style={{ fontSize:12.5, color:T.amber }}>Not deployed yet.</div>}
+      {state === "error" && <div style={{ fontSize:12.5, color:T.red }}>Could not check WhatsApp.</div>}
+      {state === "ready" && st && !st.configured && (
+        <div style={{ fontSize:12.5, color:T.amber }}>WHATSAPP_TOKEN is not set in Netlify yet (add it, then redeploy).</div>
+      )}
+      {state === "ready" && st && st.configured && (
+        <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
+          <input type="tel" value={to} onChange={function(e){ setTo(e.target.value); }} placeholder="Mobile number for a test"
+            style={{ flex:"1 1 auto", minWidth:0, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 10px", boxSizing:"border-box" }}/>
+          <button type="button" disabled={busy || !to.trim()} onClick={sendTest} style={smallBtn}>{busy ? "Sending…" : "Send test"}</button>
+        </div>
+      )}
+      {note && <div style={{ marginTop:9, fontSize:12, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
+    </div>
+  );
+}
+
 // ─── XERO LIVE INVOICES PANEL ────────────────────────────────────────────────
 // Mirrors what Xero says into wp_invoices, so the client portal can show a
 // couple their own invoices without any Xero credential existing on that side.
@@ -28163,6 +28222,12 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Email archive</div>
         <EmailArchiveSettings/>
+      </div>
+
+      {/* WhatsApp: the 01825 send-only number. */}
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>WhatsApp</div>
+        <WhatsAppSettings/>
       </div>
 
       {/* Integrations */}
