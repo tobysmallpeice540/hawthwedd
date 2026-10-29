@@ -2790,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-29b";
+const APP_BUILD = "2026-10-29c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6259,7 +6259,8 @@ function useChecklistsLive() {
   return { data: data, err: err, missing: missing, reload: load };
 }
 
-// One card per live list: title, what it is for, "8 of 9 done", yellow or red.
+// One card per live list, two rows: the title (with OVERDUE), then "8 of 9 done"
+// on the left and what it is for ("Started by Toby", the booking) on the right.
 function ChecklistCards({ runs, onOpen, nowMs }) {
   if (!runs || !runs.length) return null;
   return (
@@ -6277,10 +6278,12 @@ function ChecklistCards({ runs, onOpen, nowMs }) {
               <span style={{ fontSize:15, fontWeight:700, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.title}</span>
               {red && <span style={{ fontSize:10.5, fontWeight:800, color:"#fff", background:T.red, borderRadius:6, padding:"2px 7px", flexShrink:0 }}>OVERDUE</span>}
             </div>
-            {r.context && <div style={{ fontSize:12.5, color:T.textMid, marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.context}</div>}
-            <div style={{ fontSize:12.5, color:T.text, marginTop:5, fontWeight:600 }}>
-              {s.done} of {s.total} done
-              {s.mineLeft > 0 && <span style={{ fontWeight:500, color:T.textMid }}> · {s.mineLeft} for you</span>}
+            <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:10, marginTop:4, fontSize:12.5 }}>
+              <span style={{ color:T.text, fontWeight:600, flexShrink:0, whiteSpace:"nowrap" }}>
+                {s.done} of {s.total} done
+                {s.mineLeft > 0 && <span style={{ fontWeight:500, color:T.textMid }}> · {s.mineLeft} for you</span>}
+              </span>
+              {r.context && <span title={r.context} style={{ flex:1, minWidth:0, textAlign:"right", color:T.textMid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.context}</span>}
             </div>
           </button>
         );
