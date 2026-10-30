@@ -33,7 +33,13 @@ const RUNS = {
 ;(async () => {
   const fails = []
   const check = (name, ok, more) => { if (!ok) fails.push(name + (more ? ' — ' + more : '')); console.log((ok ? '  ok   ' : '  FAIL ') + name) }
-  const s = await openStaff({ distDir: DIST, appData: { hbf_accom_v1: ACCOM, hbf_properties_v1: PROPS, hbf_changeovers_v1: CHANGEOVERS, hbf_setup_cleans_v1: [] },
+  const EVENTS = [
+    { id: 1, couple: 'Smith', eventType: 'Wedding (Peak)', status: 'Confirmed', date: day(40) },
+    { id: 2, couple: 'Jones', eventType: 'Wedding (Off Peak)', status: 'Holding', date: day(41) },
+    { id: 3, couple: 'Brown', eventType: 'Wedding (Peak)', status: 'Confirmed', date: day(42), contract: { status: 'sent', sentAt: new Date().toISOString() } },
+    { id: 4, couple: 'Party', eventType: 'Party', status: 'Confirmed', date: day(43) }
+  ]
+  const s = await openStaff({ distDir: DIST, appData: { hbf_accom_v1: ACCOM, hbf_properties_v1: PROPS, hbf_changeovers_v1: CHANGEOVERS, hbf_setup_cleans_v1: [], hawthbush_bookings_v6: EVENTS },
     rpc: { chk_for_record: (a) => ({ ok: true, runs: RUNS[a.p_id] || [] }) } })
   const page = s.page
   const waCalls = []
@@ -57,6 +63,12 @@ const RUNS = {
     // Home page order: pipeline then brochure requests at the bottom; no email log.
     const order = await page.evaluate(() => { const t = document.body.innerText; return [t.indexOf('Accom Check-ins'), t.indexOf('Brochure Requests'), t.indexOf('Recent Automated Emails')] })
     check('brochure requests below the check-ins, no Recent Automated Emails', order[1] > order[0] && order[2] === -1, JSON.stringify(order))
+    // Wedding pipeline: Holding takes in confirmed weddings with no contract.
+    const pipe = await page.locator('[title^="Weddings to come"]').innerText()
+    const yr = String(new Date(day(40)).getFullYear())
+    const yrLine = (pipe.split('\n').join(' ').match(new RegExp(yr + '\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)')) || []).slice(1).join(',')
+    check('pipeline: Holding / Contract sent / Contract signed, no Confirmed column', /Holding/.test(pipe) && !/Confirmed/.test(pipe) && /Contract sent/.test(pipe), pipe.slice(0, 120))
+    check('pipeline: confirmed-no-contract counted as Holding (2), contract sent (1)', yrLine === '2,1,0', yrLine + ' | ' + pipe.replace(/\n/g, ' ').slice(0, 160))
     const box = await row('Emma Juner').locator('[aria-label="Arrival status"]').boundingBox()
     check('the markers stay compact (no more than two lines)', box && box.height < 44, JSON.stringify(box))
     // The letting form shows the answer too.

@@ -929,6 +929,12 @@ own header.
   the markers) … the wedding pipeline, then Brochure requests last. Recent
   automated emails moved to Settings → Email templates → Sent
   (`RecentAutomatedEmails`).
+- **Weddings are "Holding" until the contract is sent** (Toby, 30 Oct) — on
+  screen only: the wedding pipeline has Holding / Contract sent / Contract
+  signed (a Confirmed wedding with no contract counts as Holding), and
+  `BookingStatusBadge` shows a Confirmed wedding with no contract as Holding.
+  The event's stored `status` is unchanged and must stay **Confirmed** for a
+  real wedding: housekeeping, checklists and the reports skip Holding events.
 - **Every staff login may have a mobile** (`profiles.mobile`, international
   digits, written only by `user-admin.js` `users.create` / `users.setMobile`;
   edited in place on Settings → Staff, `MobileCell`). Optional for everyone:
