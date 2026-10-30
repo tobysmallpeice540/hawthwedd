@@ -175,7 +175,9 @@ async function bookingMessage(bookingId) {
   const settings = (await appData("hbf_whatsapp_settings_v1")) || {};
   const et = (await appData("hbf_email_templates_v1")) || [];
   const submitted = ((await appData(SUBMITTED_KEY)) || {}).pre_arrival || null;
-  const msg = P.arrivalMessage(b, day, props, settings.arrival || {}, T.hostedPacks(et, process.env.HBF_ADMIN_TOKEN));
+  let events = [];
+  if (b.linkedEventId) { try { events = (await appData("hawthbush_bookings_v6")) || []; } catch (e) { events = []; } }
+  const msg = P.arrivalMessage(b, day, props, settings.arrival || {}, T.hostedPacks(et, process.env.HBF_ADMIN_TOKEN), events);
   const order = T.sendOrder("pre_arrival", submitted);
   const text = msg.skip ? "" : T.render(submitted && submitted.body ? submitted.body : T.TEMPLATES.pre_arrival.body, msg.values);
   let status = "unknown";
@@ -244,9 +246,15 @@ exports.handler = async (event) => {
     try {
       const et = (await appData("hbf_email_templates_v1")) || [];
       const hp = T.hostedPacks(et, process.env.HBF_ADMIN_TOKEN);
-      out.hostedPacks = Object.keys(hp).map(function (id) {
+      // One row per hosted link: each arrival template's pack for everyone
+      // and its pack for each property / kind of event.
+      out.hostedPacks = [];
+      Object.keys(hp).forEach(function (id) {
         const t = et.filter(function (x) { return x && x.id === id; })[0] || {};
-        return { id: id, label: t.name || id, file: ((t.attachments || [])[0] || {}).name || "", url: hp[id] };
+        Object.keys(hp[id]).forEach(function (tag) {
+          const att = T.packAttachment(t, tag) || {};
+          out.hostedPacks.push({ id: id, tag: tag, label: t.name || id, file: att.name || "", url: hp[id][tag] });
+        });
       });
     } catch (e) { out.hostedPacksError = e.message; }
     out.catalogue = Object.keys(T.TEMPLATES).map(function (k) {

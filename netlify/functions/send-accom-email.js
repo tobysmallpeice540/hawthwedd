@@ -154,7 +154,9 @@ function buildStayDetailsText(booking) {
 }
 
 var WA_ARRIVAL = {};   // hbf_whatsapp_settings_v1.arrival, read once per run
-var WA_HOSTED = {};    // { arrival_general, arrival_event }: hosted pack links
+var WA_HOSTED = {};    // templates.js hostedPacks(): hosted pack links, per property / kind of event
+var WA_EVENTS = [];    // hawthbush_bookings_v6, only to tell a linked letting's kind of event
+var PACKS = require("./whatsapp-reminders/templates.js");
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -193,8 +195,9 @@ function buildTokens(booking, property, extra) {
   for (var i = 0; i < stays.length; i++) {
     if (packs[stays[i].propertyId]) { tokens.arrivalPack = String(packs[stays[i].propertyId]); break; }
   }
-  if (!tokens.arrivalPack) tokens.arrivalPack = (booking.bookingType === "Wedding" ? WA_HOSTED.arrival_event || WA_HOSTED.arrival_general
-    : WA_HOSTED.arrival_general || WA_HOSTED.arrival_event) || "";
+  // Else the hosted link to the pack on this booking's arrival email: the one
+  // marked for its kind of event or property, else the one for everyone.
+  if (!tokens.arrivalPack) tokens.arrivalPack = PACKS.pickHostedPack(WA_HOSTED, PACKS.usesEventTemplate(booking), PACKS.packTags(booking, WA_EVENTS));
   return Object.assign(tokens, extra || {});
 }
 
@@ -421,7 +424,8 @@ exports.handler = async function(event) {
     var templates = (await sbGet(TEMPLATES_KEY)) || DEFAULT_TEMPLATES;
     // The fixed links to the packs on the arrival emails, for {{arrivalPack}}
     // where a property has no link of its own (arrival-pack.js).
-    WA_HOSTED = require("./whatsapp-reminders/templates.js").hostedPacks(templates, process.env.HBF_ADMIN_TOKEN);
+    WA_HOSTED = PACKS.hostedPacks(templates, process.env.HBF_ADMIN_TOKEN);
+    try { WA_EVENTS = (await sbGet("hawthbush_bookings_v6")) || []; } catch (e) { WA_EVENTS = []; }
     var tmpl = templates.find(function(t) { return t.id === emailType; });
     if (!tmpl) return { statusCode: 400, body: JSON.stringify({ error: "Unknown email type: " + emailType }) };
 
@@ -499,7 +503,9 @@ exports.handler = async function(event) {
     var tokens = buildTokens(booking, property, extra);
     var subject = fillTemplate(tmpl.subject, tokens);
     var bodyText = fillTemplate(tmpl.body, tokens);
-    var attachments = (tmpl.attachments || []).map(function(a) {
+    // Only the attachments for this booking: those for everyone, and those
+    // marked for its properties or its kind of event (31 Oct).
+    var attachments = PACKS.attachmentsFor(tmpl, PACKS.packTags(booking, WA_EVENTS)).map(function(a) {
       var base64 = (a.dataUrl || "").split(",")[1] || "";
       return { filename: a.name, content: base64 };
     });

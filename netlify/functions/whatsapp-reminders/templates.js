@@ -182,23 +182,101 @@ function parseEtaPayload(payload) {
 }
 
 // The fixed link to the arrival pack attached to a lettings email template
-// (served by arrival-pack.js). The key is an HMAC of the template id with
-// HBF_ADMIN_TOKEN: unguessable, and unchanged until that token is rotated.
+// (served by arrival-pack.js). The key is an HMAC of the template id (and the
+// property, for a property's own pack) with HBF_ADMIN_TOKEN: unguessable, and
+// unchanged until that token is rotated.
+//   /pack/<template>/<key>             the pack for every property
+//   /pack/<template>/<key>/<property>  that property's pack (31 Oct, Toby:
+//                                      Hamlet, Amly and Glamping each have one)
 const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
-function packKey(templateId, secret) {
-  return require("crypto").createHmac("sha256", String(secret || "")).update("arrival-pack:" + templateId).digest("base64url").slice(0, 16);
+function packKey(templateId, secret, propertyId) {
+  const what = "arrival-pack:" + templateId + (propertyId ? "/" + propertyId : "");
+  return require("crypto").createHmac("sha256", String(secret || "")).update(what).digest("base64url").slice(0, 16);
 }
-function packUrl(templateId, secret) {
-  return SITE_ORIGIN + "/pack/" + encodeURIComponent(templateId) + "/" + packKey(templateId, secret);
+function packUrl(templateId, secret, propertyId) {
+  return SITE_ORIGIN + "/pack/" + encodeURIComponent(templateId) + "/" + packKey(templateId, secret, propertyId)
+    + (propertyId ? "/" + encodeURIComponent(propertyId) : "");
 }
-// The arrival email templates that carry a pack: { arrival_general: url, arrival_event: url }.
+
+// An email template's attachments can each be marked for one kind of booking
+// (`for`; blank = every booking): a property id ("hamlet", "amly",
+// "glamping"), or on the Wedding/Event template a kind of event
+// ("event-wedding", "event-party", "event-celebration", "event-other").
+// A booking gets the unmarked ones plus those marked for any of its tags.
+function attachmentsFor(tmpl, tags) {
+  const ids = (tags || []).map(String);
+  return ((tmpl && tmpl.attachments) || []).filter(function (a) {
+    return a && (!a.for || ids.indexOf(String(a.for)) >= 0);
+  });
+}
+// Which attachment a hosted link serves: the one marked for that tag, else
+// the first for everyone. With no tag: the first for everyone, else none.
+function packAttachment(tmpl, tag) {
+  const atts = ((tmpl && tmpl.attachments) || []).filter(Boolean);
+  const own = tag ? atts.filter(function (a) { return String(a.for || "") === String(tag); })[0] : null;
+  return own || atts.filter(function (a) { return !a.for; })[0] || null;
+}
+
+// The kinds of event, as the checklists group them (checklists/plan.js).
+const EVENT_KINDS = [["wedding", "Weddings"], ["party", "Parties"], ["celebration", "Celebrations of life"], ["other", "Other events"]];
+function eventKindOf(ev) {
+  const t = String((ev && ev.eventType) || "");
+  if (/wedding/i.test(t)) return "wedding";
+  if (/party/i.test(t)) return "party";
+  if (/wake|celebration|funeral|memorial/i.test(t)) return "celebration";
+  return "other";
+}
+// A letting gets the Wedding/Event arrival email when it is a Wedding booking
+// or linked to a farm event (the same test as the wedding check-in times).
+function usesEventTemplate(b) {
+  return !!(b && (b.bookingType === "Wedding" || b.linkedEventId));
+}
+// A booking's tags for choosing attachments and packs: its event's kind (the
+// linked farm event's type; a Wedding booking with no link is a wedding),
+// then its properties. `stays` defaults to every stay.
+function packTags(b, events, stays) {
+  const tags = [];
+  if (usesEventTemplate(b)) {
+    const ev = b.linkedEventId ? (events || []).filter(function (e) { return e && String(e.id) === String(b.linkedEventId); })[0] : null;
+    tags.push("event-" + (ev ? eventKindOf(ev) : "wedding"));
+  }
+  const ss = stays || ((b && b.stays && b.stays.length) ? b.stays : [b || {}]);
+  ss.forEach(function (s) { const p = s && s.propertyId; if (p && tags.indexOf(String(p)) < 0) tags.push(String(p)); });
+  return tags;
+}
+
+const ARRIVAL_TEMPLATES = ["arrival_general", "arrival_event"];
+// The hosted links for the two arrival email templates:
+//   { arrival_general: { "": url, hamlet: url, … }, arrival_event: { "": url } }
+// "" is there only when the template has a pack for every property.
 function hostedPacks(emailTemplates, secret) {
   const out = {};
   if (!secret) return out;
   (emailTemplates || []).forEach(function (t) {
-    if (t && (t.id === "arrival_general" || t.id === "arrival_event") && (t.attachments || []).length) out[t.id] = packUrl(t.id, secret);
+    if (!t || ARRIVAL_TEMPLATES.indexOf(t.id) < 0) return;
+    const links = {};
+    (t.attachments || []).forEach(function (a) {
+      if (!a) return;
+      const p = String(a.for || "");
+      if (!(p in links)) links[p] = packUrl(t.id, secret, p || undefined);
+    });
+    if (Object.keys(links).length) out[t.id] = links;
   });
   return out;
 }
+// The hosted pack for a booking: the arrival template that booking's email
+// uses (Wedding/Event for weddings and event-linked lets), its pack for the
+// first of the booking's tags that has one, else its pack for everyone; then
+// the other template likewise.
+function pickHostedPack(hosted, useEvent, tags) {
+  const order = useEvent ? ["arrival_event", "arrival_general"] : ["arrival_general", "arrival_event"];
+  for (let i = 0; i < order.length; i++) {
+    const links = (hosted || {})[order[i]];
+    if (!links) continue;
+    for (let j = 0; j < (tags || []).length; j++) if (links[tags[j]]) return links[tags[j]];
+    if (links[""]) return links[""];
+  }
+  return "";
+}
 
-module.exports = { TEMPLATES, FOOTER, buttonLabels, parseEtaPayload, packKey, packUrl, hostedPacks, checkBody, toNumbered, components, cleanParam, render, sendOrder };
+module.exports = { TEMPLATES, FOOTER, buttonLabels, parseEtaPayload, packKey, packUrl, hostedPacks, pickHostedPack, attachmentsFor, packAttachment, ARRIVAL_TEMPLATES, EVENT_KINDS, eventKindOf, usesEventTemplate, packTags, checkBody, toNumbered, components, cleanParam, render, sendOrder };

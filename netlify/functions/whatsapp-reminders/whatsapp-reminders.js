@@ -122,7 +122,10 @@ async function planNow(now) {
       const accom = (await appData("hbf_accom_v1")) || [];
       const properties = (await appData("hbf_properties_v1")) || [];
       const emailTemplates = (await appData("hbf_email_templates_v1")) || [];
-      const p = plan.planArrivals({ accom: accom, properties: properties, arrival: arrival, now: now,
+      // Only to tell which kind of event a linked letting is for (its pack).
+      let events = [];
+      try { events = (await appData("hawthbush_bookings_v6")) || []; } catch (e) { events = []; }
+      const p = plan.planArrivals({ accom: accom, properties: properties, arrival: arrival, now: now, events: events,
         hostedPacks: T.hostedPacks(emailTemplates, process.env.HBF_ADMIN_TOKEN) });
       all.push.apply(all, p.send); skipped.push.apply(skipped, p.skipped);
     }

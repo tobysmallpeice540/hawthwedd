@@ -121,7 +121,9 @@ function departureOf(booking) {
 }
 
 var WA_ARRIVAL = {};   // hbf_whatsapp_settings_v1.arrival, read once per run
-var WA_HOSTED = {};    // { arrival_general, arrival_event }: hosted pack links
+var WA_HOSTED = {};    // templates.js hostedPacks(): hosted pack links, per property / kind of event
+var WA_EVENTS = [];    // hawthbush_bookings_v6, only to tell a linked letting's kind of event
+var PACKS = require("./whatsapp-reminders/templates.js");
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -158,8 +160,9 @@ function buildTokens(booking, property, extra) {
   for (var i = 0; i < stays.length; i++) {
     if (packs[stays[i].propertyId]) { tokens.arrivalPack = String(packs[stays[i].propertyId]); break; }
   }
-  if (!tokens.arrivalPack) tokens.arrivalPack = (booking.bookingType === "Wedding" ? WA_HOSTED.arrival_event || WA_HOSTED.arrival_general
-    : WA_HOSTED.arrival_general || WA_HOSTED.arrival_event) || "";
+  // Else the hosted link to the pack on this booking's arrival email: the one
+  // marked for its kind of event or property, else the one for everyone.
+  if (!tokens.arrivalPack) tokens.arrivalPack = PACKS.pickHostedPack(WA_HOSTED, PACKS.usesEventTemplate(booking), PACKS.packTags(booking, WA_EVENTS));
   return Object.assign(tokens, extra || {});
 }
 
@@ -306,7 +309,7 @@ async function getTermsUrl() {
   return "";
 }
 
-async function sendViaResend(to, subject, bodyText, payLink, payLabel) {
+async function sendViaResend(to, subject, bodyText, payLink, payLabel, attachments) {
   if (!RESEND_KEY) return { ok: false, error: "RESEND_API_KEY not set" };
   var html = buildEmailHtml(bodyText, {
     termsUrl: await getTermsUrl(),
@@ -316,7 +319,8 @@ async function sendViaResend(to, subject, bodyText, payLink, payLabel) {
   var res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: FROM_HEADER, to: to, subject: subject, html: html }),
+    body: JSON.stringify({ from: FROM_HEADER, to: to, subject: subject, html: html,
+      attachments: (attachments && attachments.length) ? attachments : undefined }),
   });
   if (!res.ok) return { ok: false, error: "Resend failed: " + await res.text() };
   return { ok: true };
@@ -436,7 +440,8 @@ exports.handler = async function() {
     var templates  = (await sbGet(TEMPLATES_KEY)) || DEFAULT_TEMPLATES;
     // The fixed links to the packs on the arrival emails, for {{arrivalPack}}
     // where a property has no link of its own (arrival-pack.js).
-    WA_HOSTED = require("./whatsapp-reminders/templates.js").hostedPacks(templates, process.env.HBF_ADMIN_TOKEN);
+    WA_HOSTED = PACKS.hostedPacks(templates, process.env.HBF_ADMIN_TOKEN);
+    try { WA_EVENTS = (await sbGet("hawthbush_bookings_v6")) || []; } catch (e) { WA_EVENTS = []; }
 
     var live = function(b) { return b.status !== "cancelled" && b.bookingType !== "Blocked" && !!b.email; };
 
@@ -479,7 +484,12 @@ exports.handler = async function() {
         var tokens = buildTokens(booking, property, {});
         var subject = fillTemplate(tmpl.subject, tokens);
         var body = fillTemplate(tmpl.body, tokens);
-        var res = await sendViaResend(booking.email, subject, body);
+        // The template's attachments for this booking (its arrival pack): the
+        // automatic arrival email carried none until 31 Oct.
+        var atts = PACKS.attachmentsFor(tmpl, PACKS.packTags(booking, WA_EVENTS)).map(function(a) {
+          return { filename: a.name, content: String(a.dataUrl || "").split(",")[1] || "" };
+        }).filter(function(a) { return a.content; });
+        var res = await sendViaResend(booking.email, subject, body, null, null, atts);
         if (res.ok) {
           sent = true;
           sentCount++;
@@ -546,7 +556,9 @@ exports.handler = async function() {
         // field left three confirmed 2027 bookings with no arrival email.
         var checkIn = arrivalOf(booking);
         if (checkIn) {
-          var arrivalId = booking.bookingType === "Wedding" ? "arrival_event" : "arrival_general";
+          // Wedding bookings and lets linked to a farm event get the
+          // Wedding/Event email (as they get the wedding check-in times).
+          var arrivalId = PACKS.usesEventTemplate(booking) ? "arrival_event" : "arrival_general";
           var arrTmpl = getTmpl(templates, arrivalId);
           var daysToArrival = daysBetween(today, checkIn);
 

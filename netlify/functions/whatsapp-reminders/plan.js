@@ -23,7 +23,7 @@
 
 "use strict";
 
-const { cleanParam } = require("./templates.js");
+const { cleanParam, pickHostedPack, packTags, usesEventTemplate } = require("./templates.js");
 
 const TZ = "Europe/London";
 const CATCH_UP_H = 14;          // 10pm–8am is ten hours; fourteen leaves room
@@ -189,11 +189,11 @@ function arrivalPackFor(arrival, stays) {
 }
 
 // One pre-arrival message for one booking arriving on `day`, or { skip }.
-// hostedPacks: { arrival_general, arrival_event } — fixed links to the packs
-// attached to the two arrival email templates (arrival-pack.js); used when a
-// property has no pack link of its own, choosing the one that booking's
-// arrival email carries (weddings: the event template).
-function arrivalMessage(b, day, props, arrival, hostedPacks) {
+// hostedPacks: templates.js hostedPacks() — fixed links to the packs attached
+// to the two arrival email templates (arrival-pack.js), per property; used
+// when a property has no pack link of its own on the WhatsApp page, choosing
+// the one that booking's arrival email carries (weddings: the event template).
+function arrivalMessage(b, day, props, arrival, hostedPacks, events) {
   const stays = (b.stays && b.stays.length ? b.stays : [b]).filter(function (s) { return s && s.propertyId && validDate(s.checkIn); });
   const arriving = stays.filter(function (s) { return s.checkIn === day; });
   if (!arriving.length) return { skip: "not arriving that day" };
@@ -207,8 +207,7 @@ function arrivalMessage(b, day, props, arrival, hostedPacks) {
   const out = arriving.map(function (s) { return s.checkOut; }).filter(validDate).sort().pop() || first.checkOut;
   const nights = validDate(out) ? Math.round((new Date(out + "T12:00:00Z") - new Date(day + "T12:00:00Z")) / 864e5) : 0;
   const names = arriving.map(function (s) { const p = props[s.propertyId]; return (p && p.name) || s.propertyName || s.propertyId; });
-  const hp = hostedPacks || {};
-  const hosted = (b.bookingType === "Wedding" ? hp.arrival_event || hp.arrival_general : hp.arrival_general || hp.arrival_event) || "";
+  const hosted = pickHostedPack(hostedPacks, usesEventTemplate(b), packTags(b, events, arriving));
   return { template: "pre_arrival", key: key, to: to, toName: b.guestName || "",
     record: { kind: "accom", id: String(b.id), name: (b.guestName || "Guest") + " letting" },
     // What each tap-to-answer button sends back: the booking, the arrival
@@ -237,7 +236,7 @@ function planArrivals(input) {
   (input.accom || []).forEach(function (b) {
     if (!b || b.bookingType === "Blocked") return;
     if (b.status !== "confirmed" && b.status !== "completed") return;
-    const msg = arrivalMessage(b, day, props, arrival, input.hostedPacks);
+    const msg = arrivalMessage(b, day, props, arrival, input.hostedPacks, input.events);
     if (msg.skip === "not arriving that day") return;
     if (input.sent && input.sent.has(msg.key)) return;
     if (msg.skip) { skipped.push({ key: msg.key, why: msg.skip }); return; }

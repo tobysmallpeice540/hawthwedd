@@ -6,13 +6,18 @@
 // templates → Lettings) and this link serves the new file (Toby, 30 Oct).
 //
 //   https://hawthbushfarm.netlify.app/pack/<template id>/<key>
-//   (netlify.toml rewrites that to ?t=<template id>&k=<key>)
+//   https://hawthbushfarm.netlify.app/pack/<template id>/<key>/<tag>
+//   (netlify.toml rewrites those to ?t=<template id>&k=<key>[&p=<tag>])
+//
+// <tag> is a property ("hamlet") or a kind of event ("event-party"): each
+// attachment on the template can be marked for one (31 Oct, Toby). That link
+// serves the attachment marked for it, else the one for everyone.
 //
 // <key> is an HMAC of the template id with HBF_ADMIN_TOKEN, so the link can't
 // be guessed — packs carry gate codes and the like — but stays the same until
 // that token is rotated. whatsapp-send's status hands the page each link.
 //
-// Serves the template's FIRST attachment, inline, as stored (the app keeps
+// Serves the attachment inline, as stored (the app keeps
 // attachments as data URLs inside app_data hbf_email_templates_v1).
 //
 // Required env vars: SUPABASE_SERVICE_KEY, HBF_ADMIN_TOKEN
@@ -22,7 +27,7 @@
 const crypto = require("crypto");
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 
-const { packKey, packUrl } = require("./whatsapp-reminders/templates.js");
+const { packKey, packUrl, packAttachment } = require("./whatsapp-reminders/templates.js");
 function safeEqual(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
@@ -32,9 +37,10 @@ const notFound = { statusCode: 404, headers: { "Content-Type": "text/plain; char
 
 exports.handler = async function (event) {
   const q = (event && event.queryStringParameters) || {};
-  const t = String(q.t || ""), k = String(q.k || "");
+  const t = String(q.t || ""), k = String(q.k || ""), p = String(q.p || "");
   const secret = process.env.HBF_ADMIN_TOKEN;
-  if (!/^[a-z0-9_]{1,60}$/.test(t) || !secret || !safeEqual(k, packKey(t, secret))) return notFound;
+  if (!/^[a-z0-9_]{1,60}$/.test(t) || !/^[a-z0-9_-]{0,60}$/.test(p) || !secret
+    || !safeEqual(k, packKey(t, secret, p || undefined))) return notFound;
   const key = process.env.SUPABASE_SERVICE_KEY;
   const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq.hbf_email_templates_v1&select=value",
     { headers: { "apikey": key, "Authorization": "Bearer " + key } });
@@ -42,7 +48,7 @@ exports.handler = async function (event) {
   const rows = await res.json();
   const list = rows[0] && Array.isArray(rows[0].value) ? rows[0].value : [];
   const tpl = list.filter(function (x) { return x && x.id === t; })[0];
-  const att = tpl && (tpl.attachments || [])[0];
+  const att = tpl && packAttachment(tpl, p || undefined);
   const m = att && /^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/s.exec(String(att.dataUrl || ""));
   if (!m) return notFound;
   const name = String(att.name || "arrival-pack.pdf").replace(/[^\w .()-]/g, "_");

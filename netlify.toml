@@ -146,6 +146,12 @@
 # (arrival-pack.js). Above the /* catch-all, like every clean URL.
 #   https://hawthbushfarm.netlify.app/pack/arrival_general/<key>
 [[redirects]]
+  from = "/pack/:t/:k/:p"
+  to = "/.netlify/functions/arrival-pack?t=:t&k=:k&p=:p"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/pack/:t/:k"
   to = "/.netlify/functions/arrival-pack?t=:t&k=:k"
   status = 200

@@ -911,14 +911,30 @@ own header.
   change of their own. Unticking puts those stays back to the standard time.
   Shown on the home page line ("Early in 3pm", "Late out 12pm") and in the
   changeover summary.
-- **Hosted arrival packs** (`arrival-pack.js`, `/pack/<template id>/<key>`,
-  30 Oct): serves the FIRST attachment of a lettings email template (the
-  data URL in `hbf_email_templates_v1`) — so replacing the attachment
-  updates the link. Key = HMAC(template id, `HBF_ADMIN_TOKEN`), 16 chars
-  (`packKey` in templates.js); rotating the token changes every link.
-  `{{arrivalPack}}` = the property's own link if set, else the hosted pack of
-  the arrival email that booking gets (weddings `arrival_event`, else
-  `arrival_general`) — in the WhatsApp and the emails alike.
+- **Hosted arrival packs** (`arrival-pack.js`, 30 Oct): serves an
+  attachment of a lettings email template (the data URL in
+  `hbf_email_templates_v1`) — so replacing the attachment updates the link.
+  `/pack/<template id>/<key>` = the file for everyone;
+  `/pack/<template id>/<key>/<tag>` = the file marked for that tag, else the
+  one for everyone. Key = HMAC(template id [+ "/" + tag], `HBF_ADMIN_TOKEN`),
+  16 chars (`packKey` in templates.js); rotating the token changes every link.
+- **Attachments are marked per booking kind** (31 Oct, Toby): each attachment
+  on a lettings email template has `for` — blank (everyone), a property id
+  (`hamlet`, `amly`, `glamping`), or on the Wedding/Event template a kind of
+  event (`event-wedding`, `event-party`, `event-celebration`, `event-other`,
+  from the LINKED farm event's type; a Wedding booking with no link =
+  wedding). A booking's tags are `packTags()` (event kind, then its
+  properties); `attachmentsFor()` picks the files for everyone plus those for
+  its tags — in `send-accom-email` AND `send-accom-reminders` (whose automatic
+  arrival email attached nothing at all before 31 Oct). `{{arrivalPack}}` in
+  the WhatsApp and the emails = the property's own link on the WhatsApp page
+  if set, else `pickHostedPack()`: that booking's arrival template, its link
+  for the first matching tag, else its link for everyone, then the other
+  template. **Wedding bookings and lets linked to a farm event get
+  `arrival_event`** (`usesEventTemplate`, the same test as `isWeddingStay`'s
+  check-in times) — before 31 Oct only bookingType Wedding did. All shared
+  from `whatsapp-reminders/templates.js`; pinned by
+  `tests/arrival-packs-test.cjs`, the editor's choice by `whatsapp-page-e2e`.
 - **Send WhatsApp by hand** on a letting (`WaBookingSend`; `whatsapp-send`
   `bookingPreview` / `sendBooking`): the pre-arrival message for the next
   arrival, previewed as sent, refused without consent or a mobile, marked in

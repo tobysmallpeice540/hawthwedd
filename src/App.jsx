@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30m";
+const APP_BUILD = "2026-10-30n";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4938,7 +4938,7 @@ function ManualEmailSenders({ booking, onBuildSchedule }) {
   // that here rather than making the user choose.
   const resolveId = function(id) {
     if (id !== "arrival") return id;
-    return booking.bookingType === "Wedding" ? "arrival_event" : "arrival_general";
+    return isWeddingStay(booking) ? "arrival_event" : "arrival_general";
   };
 
   // Entering a value doesn't create a payment schedule — that only happens when
@@ -6100,11 +6100,28 @@ function TermsEditor() {
   );
 }
 
+// Who an email attachment goes to (`for` on the attachment; blank = every
+// booking). Mirrors netlify/functions/whatsapp-reminders/templates.js
+// (attachmentsFor / packTags): the Wedding/Event arrival email by kind of
+// event — the linked farm event's type — every other template by property.
+const ATTACHMENT_EVENT_KINDS = [["event-wedding", "Weddings"], ["event-party", "Parties"],
+  ["event-celebration", "Celebrations of life"], ["event-other", "Other events"]];
+function attachmentForOptions(templateId, properties) {
+  if (templateId === "arrival_event") return ATTACHMENT_EVENT_KINDS;
+  return (properties || []).filter(function(p) { return p && p.id; }).map(function(p) { return [String(p.id), p.name || p.id]; });
+}
+
 function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
   const [sel, setSel] = useState(0);
   const [flash, setFlash] = useState("");
   const [copying, setCopying] = useState(null);
+  const [properties, setProperties] = useState([]);
   const fileRef = useRef(null);
+  useEffect(function() {
+    let off = false;
+    sbGet(PROPERTIES_STORAGE).then(function(p) { if (!off && Array.isArray(p)) setProperties(p); }).catch(function() {});
+    return function() { off = true; };
+  }, []);
 
   const upd = function(key, val) {
     setTemplates(function(ts) {
@@ -6134,6 +6151,15 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
     };
     reader.readAsDataURL(file);
     e.target.value = "";
+  };
+
+  const setAttFor = function(idx, v) {
+    upd("attachments", (templates[sel].attachments || []).map(function(a, i) {
+      if (i !== idx) return a;
+      var n = Object.assign({}, a);
+      if (v) n.for = v; else delete n.for;
+      return n;
+    }));
   };
 
   const removeAtt = function(idx) {
@@ -6266,10 +6292,25 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
               {(tmpl.attachments || []).length === 0 && (
                 <div style={{ fontSize:12, color:T.textLight, marginBottom:8 }}>No files attached to this template.</div>
               )}
+              {(tmpl.attachments || []).length > 0 && (
+                <div style={{ fontSize:11.5, color:T.textMid, marginBottom:7, lineHeight:1.5 }}>
+                  {tmpl.id === "arrival_event"
+                    ? "Choose which kind of event each file goes to — taken from the farm event the letting is linked to (a Wedding booking with no link counts as a wedding). Files for everyone go to every booking."
+                    : "Choose which property each file goes to — a guest gets the files for everyone plus those for the properties they stay in."}
+                </div>
+              )}
               {(tmpl.attachments || []).map(function(att, i) {
+                const opts = attachmentForOptions(tmpl.id, properties);
+                const known = !att.for || opts.some(function(o) { return o[0] === att.for; });
                 return (
-                  <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 10px", background:T.bgInput, borderRadius:7, marginBottom:5, border:`1px solid ${T.border}` }}>
-                    <span style={{ fontSize:12, color:T.text, flex:1, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{att.name}</span>
+                  <div key={i} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, padding:"7px 10px", background:T.bgInput, borderRadius:7, marginBottom:5, border:`1px solid ${T.border}` }}>
+                    <span style={{ fontSize:12, color:T.text, flex:"1 1 0", minWidth:0, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{att.name}</span>
+                    <select aria-label={"Who gets " + att.name} value={att.for || ""} onChange={function(e) { setAttFor(i, e.target.value); }}
+                      style={{ fontSize:12, padding:"3px 6px", borderRadius:6, border:`1px solid ${T.border}`, background:"#fff", fontFamily:"inherit", color:T.text, flex:"0 1 auto", maxWidth:170 }}>
+                      <option value="">For everyone</option>
+                      {opts.map(function(o) { return <option key={o[0]} value={o[0]}>{"For " + o[1]}</option>; })}
+                      {!known && <option value={att.for}>{"For " + att.for}</option>}
+                    </select>
                     <span style={{ fontSize:11, color:T.textLight, flexShrink:0 }}>{Math.round(att.size/1024)} KB</span>
                     <button onClick={function() { removeAtt(i); }}
                       style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700, padding:"0 4px" }}>
@@ -19466,9 +19507,12 @@ function WaArrivalSettings({ arrival, busy, hosted, onSave }) {
         whatever is attached now — replace the file under Settings → Email templates → Lettings and the link follows.
         {(hosted || []).length === 0 && <span style={{ color:T.amber }}> No arrival email has a pack attached yet.</span>}
         {(hosted || []).map(function(h) {
-          return <div key={h.id}><strong>{h.label}</strong>{h.file ? " (" + h.file + ")" : ""}: <a href={h.url} target="_blank" rel="noreferrer" style={{ color:T.midBlue, wordBreak:"break-all" }}>{h.url}</a></div>;
+          const tagName = !h.tag ? "everyone"
+            : ((ATTACHMENT_EVENT_KINDS.find(function(k) { return k[0] === h.tag; }) || [])[1]
+              || ((props.find(function(p) { return String(p.id) === h.tag; }) || {}).name) || h.tag);
+          return <div key={h.id + "/" + (h.tag || "")}><strong>{h.label}</strong>{" — for " + tagName}{h.file ? " (" + h.file + ")" : ""}: <a href={h.url} target="_blank" rel="noreferrer" style={{ color:T.midBlue, wordBreak:"break-all" }}>{h.url}</a></div>;
         })}
-        <div>Weddings get the Wedding/Event one, everyone else the General one.</div>
+        <div>Weddings and lets linked to a farm event get the Wedding/Event pack for their kind of event, everyone else the General one for their property; each falls back to the file for everyone.</div>
       </div>
       <div><button type="button" disabled={busy} style={smallBtn}
         onClick={function(){

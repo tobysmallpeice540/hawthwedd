@@ -9,7 +9,10 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
 
 ;(async () => {
   const s = await openStaff({ distDir: DIST, appData: { hbf_whatsapp_settings_v1: { templates: { checklist_live: { on: false } } },
-    hbf_properties_v1: [{ id: 'hamlet', name: 'The Hamlet' }, { id: 'amly', name: 'Amly Barn' }] } })
+    hbf_properties_v1: [{ id: 'hamlet', name: 'The Hamlet' }, { id: 'amly', name: 'Amly Barn' }],
+    hbf_email_templates_v1: [
+      { id: 'arrival_general', name: 'Arrival Info (General)', subject: 's', body: 'b', attachments: [{ name: 'hamlet.pdf', size: 2048, type: 'application/pdf', dataUrl: 'data:application/pdf;base64,SA==' }] },
+      { id: 'arrival_event', name: 'Arrival Info (Wedding/Event)', subject: 's', body: 'b', attachments: [{ name: 'party.pdf', size: 2048, type: 'application/pdf', dataUrl: 'data:application/pdf;base64,UA==' }] }] } })
   const fnCalls = []
   let linked = false
   const catalogue = Object.keys(T.TEMPLATES).map((k) => ({ name: k, label: T.TEMPLATES[k].label, audience: T.TEMPLATES[k].audience,
@@ -107,6 +110,23 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
   await page.getByPlaceholder('Mobile (optional)').nth(1).fill('07000 000001')
   await page.getByPlaceholder('Mobile (optional)').nth(1).press('Enter')
   await page.getByText('Mobile saved.').waitFor({ timeout: 5000 })
+
+  // Settings → Email templates → Lettings: each attachment says who it goes to
+  // — a property on the General one, a kind of event on the Wedding/Event one.
+  await page.getByText('Email templates', { exact: true }).first().click()
+  await page.getByRole('button', { name: 'Arrival Info (General)' }).click()
+  const forG = page.getByLabel('Who gets hamlet.pdf')
+  await forG.waitFor({ timeout: 10000 })
+  assert.deepStrictEqual(await forG.locator('option').allInnerTexts(), ['For everyone', 'For The Hamlet', 'For Amly Barn'])
+  await forG.selectOption('hamlet')
+  await page.getByRole('button', { name: 'Arrival Info (Wedding/Event)' }).click()
+  const forE = page.getByLabel('Who gets party.pdf')
+  assert.deepStrictEqual(await forE.locator('option').allInnerTexts(), ['For everyone', 'For Weddings', 'For Parties', 'For Celebrations of life', 'For Other events'])
+  await forE.selectOption('event-party')
+  await page.getByRole('button', { name: /^Save/ }).first().click()
+  await page.waitForTimeout(600)
+  const tw = s.calls.filter((c) => c.fn === 'write:app_data' && /hbf_email_templates_v1/.test(c.args)).map((c) => c.args).pop() || ''
+  assert.ok(/"name":"hamlet.pdf"[^}]*"for":"hamlet"/.test(tw) && /"name":"party.pdf"[^}]*"for":"event-party"/.test(tw), tw.slice(0, 400))
 
   assert.deepStrictEqual(s.errors, [])
   await s.close()
