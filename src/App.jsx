@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30h";
+const APP_BUILD = "2026-10-30i";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -22685,6 +22685,8 @@ function enquiryForBrochure(enquiries, r) {
 // (eventContractStage — the same rule as the status badge), for this year and
 // the next two. Weddings only (Toby, 30 Oct — parties often have no contract).
 // Holding events are left out: they are not confirmed.
+// Exactly these two — not parties, wakes, celebrations of life or Other.
+const PIPELINE_TYPES = ["Wedding (Peak)", "Wedding (Off Peak)"];
 const PIPELINE_STAGES = [
   { key:"confirmed", label:"Confirmed",       bg:"#fef9c3", fg:"#854d0e" },
   { key:"sent",      label:"Contract sent",   bg:"#fed7aa", fg:"#9a3412" },
@@ -22695,7 +22697,7 @@ function contractPipeline(bookings, today) {
   const years = [y0, y0 + 1, y0 + 2].map(function(y) { return { year:y, confirmed:0, sent:0, signed:0 }; });
   (bookings || []).forEach(function(b) {
     if (!b || b.status !== "Confirmed" || !b.date || b.date < today) return;
-    if (!/^wedding/i.test(String(b.eventType || ""))) return;
+    if (PIPELINE_TYPES.indexOf(b.eventType) === -1) return;
     const row = years[Number(String(b.date).slice(0, 4)) - y0];
     if (!row) return;
     row[eventContractStage(b) || "confirmed"] += 1;
