@@ -215,7 +215,10 @@ exports.handler = async (event) => {
   try { req = JSON.parse(event.body || "{}"); } catch (e) { return json(400, { error: "Bad request" }); }
 
   if (req.action === "status") {
-    const out = { configured: !!WA_TOKEN, phoneNumberId: PHONE_NUMBER_ID, wabaId: WABA_ID };
+    // Whether the webhook's two secrets are set (never their values). Without
+    // the app secret the webhook refuses every incoming message.
+    const out = { configured: !!WA_TOKEN, phoneNumberId: PHONE_NUMBER_ID, wabaId: WABA_ID,
+      appSecretSet: !!process.env.WHATSAPP_APP_SECRET, verifyTokenSet: !!process.env.WHATSAPP_VERIFY_TOKEN };
     if (!WA_TOKEN) return json(200, out);
     // Each look-up is reported on its own: one failing must not hide the others.
     try {

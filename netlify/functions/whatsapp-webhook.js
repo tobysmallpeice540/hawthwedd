@@ -8,9 +8,12 @@
 //        we answer with the challenge only if the token matches
 //        WHATSAPP_VERIFY_TOKEN (a Netlify environment variable).
 // POST — every message a guest sends to the 01825 number, and the delivery
-//        receipts for what we send. Signed by Meta with the app secret: once
-//        WHATSAPP_APP_SECRET is set, anything whose X-Hub-Signature-256 does
-//        not match is refused.
+//        receipts for what we send. Signed by Meta with the app secret:
+//        anything whose X-Hub-Signature-256 does not match WHATSAPP_APP_SECRET
+//        is refused. With no secret set, EVERY post is refused (503, so Meta
+//        keeps delivering and nothing is lost once it is set) — the address
+//        is public, and an unchecked post could fake a guest's message or an
+//        arrival time (30 Oct review).
 //
 // A guest's message (Toby, 29 Oct 2026): replies are allowed and are read in
 // office hours by email. Each one is
@@ -350,7 +353,11 @@ exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method not allowed" };
 
   const body = rawBody(event);
-  if (APP_SECRET) {
+  if (!APP_SECRET) {
+    console.error("whatsapp-webhook: WHATSAPP_APP_SECRET is not set — refusing (Meta will deliver again)");
+    return { statusCode: 503, body: "Not configured" };
+  }
+  {
     const h = event.headers || {};
     const sig = String(h["x-hub-signature-256"] || h["X-Hub-Signature-256"] || "");
     const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(body).digest("hex");
@@ -371,8 +378,7 @@ exports.handler = async (event) => {
       for (const s of v.statuses || []) { statuses++; await setStatus(String(s.id), String(s.status || "")); }
     }
     const n = await handleInbound(changes);
-    console.log("whatsapp-webhook: " + n + " message(s), " + statuses + " status update(s)" +
-      (APP_SECRET ? "" : " (signature not checked: WHATSAPP_APP_SECRET not set)"));
+    console.log("whatsapp-webhook: " + n + " message(s), " + statuses + " status update(s)");
     return { statusCode: 200, body: "OK" };
   } catch (e) {
     // 500 makes Meta deliver again later; the row is kept, only the email is retried.

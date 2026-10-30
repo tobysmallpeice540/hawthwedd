@@ -164,3 +164,23 @@ const delivery = { entry: [{ changes: [{ value: {
   assert.ok(mails3[0].html.includes("saved on the booking"));
   console.log("whatsapp-webhook arrival times: all tests passed");
 })().catch(function (e) { console.error(e); process.exit(1); });
+
+// 30 Oct review: with no app secret set, every POST is refused — even a
+// harmless one — so an unchecked post can never fake a message or an arrival time.
+(async function () {
+  const assert = require("assert");
+  const path = require.resolve("../netlify/functions/whatsapp-webhook.js");
+  const keep = process.env.WHATSAPP_APP_SECRET;
+  delete require.cache[path];
+  delete process.env.WHATSAPP_APP_SECRET;
+  const fn4 = require(path);
+  process.env.WHATSAPP_APP_SECRET = keep;
+  let called = false;
+  const realFetch = global.fetch;
+  global.fetch = async function () { called = true; throw new Error("no fetch expected"); };
+  const r = await fn4.handler({ httpMethod: "POST", body: JSON.stringify({ entry: [] }), headers: {} });
+  global.fetch = realFetch;
+  assert.strictEqual(r.statusCode, 503, "refused without the secret");
+  assert.strictEqual(called, false, "nothing read or written");
+  console.log("whatsapp-webhook no secret: all tests passed");
+})().catch(function (e) { console.error(e); process.exit(1); });

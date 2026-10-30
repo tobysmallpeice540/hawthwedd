@@ -826,6 +826,9 @@ own header.
   (`normaliseNumber`: UK numbers to 44…), and emails it to
   hawthbushfarm@gmail.com. A failed email answers 500 so Meta redelivers;
   `emailed_at` makes it once only. Pinned by `tests/whatsapp-webhook-test.cjs`.
+  **No `WHATSAPP_APP_SECRET` = every POST refused** (503, Meta redelivers;
+  30 Oct review) — never fail open on a public address. Settings → WhatsApp →
+  Setup shows whether it is set (`appSecretSet` in `whatsapp-send` status).
 - `wa_messages`: RLS on, no policies, anon/authenticated revoked — functions
   only.
 - **Settings → WhatsApp is its own page** (`WhatsAppPage`, view `whatsapp`,

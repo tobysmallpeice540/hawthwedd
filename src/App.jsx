@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30n";
+const APP_BUILD = "2026-10-30o";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -19331,6 +19331,11 @@ function WhatsAppPage() {
                 ? <span style={muted}>Replies reach the app (linked: {st.linkedApps.join(", ")}).</span>
                 : <span style={{ color:T.red }}>Replies are not reaching the app — the WhatsApp account is not linked to it yet.{" "}
                     <button type="button" disabled={!!busy} onClick={function(){ act("link", function(){ return whatsappCall({ action:"subscribe" }); }, "Linked. Send the 01825 number a WhatsApp to check — it should arrive by email.", loadStatus); }} style={smallBtn}>{busy === "link" ? "Linking…" : "Link it now"}</button></span>}
+          </div>
+          <div style={{ ...line, marginTop:4 }}>
+            {st.appSecretSet
+              ? <span style={muted}>Incoming messages are checked as genuinely from Meta (app secret set{st.verifyTokenSet ? "" : "; WHATSAPP_VERIFY_TOKEN is not set"}).</span>
+              : <span style={{ color:T.red }}>WHATSAPP_APP_SECRET is not set in Netlify, so every incoming WhatsApp is refused (Meta keeps them and delivers again once it is set and the site redeployed).</span>}
           </div>
           <WhatsAppTestBox st={st}/>
         </div>
