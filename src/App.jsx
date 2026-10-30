@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30i";
+const APP_BUILD = "2026-10-30j";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -22684,30 +22684,31 @@ function enquiryForBrochure(enquiries, r) {
 // Confirmed events still to come, counted by the stage of their contract
 // (eventContractStage — the same rule as the status badge), for this year and
 // the next two. Weddings only (Toby, 30 Oct — parties often have no contract).
-// Holding events are left out: they are not confirmed.
+// Holding weddings are counted in their own column, before Confirmed.
 // Exactly these two — not parties, wakes, celebrations of life or Other.
 const PIPELINE_TYPES = ["Wedding (Peak)", "Wedding (Off Peak)"];
 const PIPELINE_STAGES = [
+  { key:"holding",   label:"Holding",         bg:null,      fg:null },
   { key:"confirmed", label:"Confirmed",       bg:"#fef9c3", fg:"#854d0e" },
   { key:"sent",      label:"Contract sent",   bg:"#fed7aa", fg:"#9a3412" },
   { key:"signed",    label:"Contract signed", bg:null,      fg:null },
 ];
 function contractPipeline(bookings, today) {
   const y0 = Number(String(today).slice(0, 4));
-  const years = [y0, y0 + 1, y0 + 2].map(function(y) { return { year:y, confirmed:0, sent:0, signed:0 }; });
+  const years = [y0, y0 + 1, y0 + 2].map(function(y) { return { year:y, holding:0, confirmed:0, sent:0, signed:0 }; });
   (bookings || []).forEach(function(b) {
-    if (!b || b.status !== "Confirmed" || !b.date || b.date < today) return;
+    if (!b || (b.status !== "Confirmed" && b.status !== "Holding") || !b.date || b.date < today) return;
     if (PIPELINE_TYPES.indexOf(b.eventType) === -1) return;
     const row = years[Number(String(b.date).slice(0, 4)) - y0];
     if (!row) return;
-    row[eventContractStage(b) || "confirmed"] += 1;
+    row[b.status === "Holding" ? "holding" : (eventContractStage(b) || "confirmed")] += 1;
   });
   return years;
 }
 function ContractPipeline({ bookings, today, onOpen }) {
   const rows = contractPipeline(bookings, today);
-  const tot = rows.reduce(function(a, r) { return { confirmed:a.confirmed + r.confirmed, sent:a.sent + r.sent, signed:a.signed + r.signed }; }, { confirmed:0, sent:0, signed:0 });
-  const colours = function(st) { return st.key === "signed" ? [T.greenBg, T.green] : [st.bg, st.fg]; };
+  const tot = rows.reduce(function(a, r) { return { holding:a.holding + r.holding, confirmed:a.confirmed + r.confirmed, sent:a.sent + r.sent, signed:a.signed + r.signed }; }, { holding:0, confirmed:0, sent:0, signed:0 });
+  const colours = function(st) { return st.key === "signed" ? [T.greenBg, T.green] : st.key === "holding" ? [T.tint, T.textMid] : [st.bg, st.fg]; };
   const cell = { flex:"1 1 0", minWidth:0, textAlign:"center" };
   const line = function(label, r, strong, key) {
     return (
@@ -22726,7 +22727,7 @@ function ContractPipeline({ bookings, today, onOpen }) {
     );
   };
   return (
-    <div onClick={onOpen} title="Confirmed weddings to come, by contract stage. Open the events list" style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px 12px", boxShadow:T.shadowCard, marginBottom:18, cursor: onOpen ? "pointer" : "default" }}>
+    <div onClick={onOpen} title="Weddings to come, holding and confirmed, by contract stage. Open the events list" style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px 12px", boxShadow:T.shadowCard, marginBottom:18, cursor: onOpen ? "pointer" : "default" }}>
       <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, marginBottom:6 }}>
         <h3 style={{ flex:"0 0 64px", margin:0, color:T.midBlue, fontWeight:700, fontSize:15, lineHeight:1.2 }}>Wedding pipeline</h3>
         {PIPELINE_STAGES.map(function(st) {
