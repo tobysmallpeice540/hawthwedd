@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30g";
+const APP_BUILD = "2026-10-30h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -22683,7 +22683,8 @@ function enquiryForBrochure(enquiries, r) {
 // ─── Contract pipeline (home, 30 Oct 2026) ───────────────────────────────────
 // Confirmed events still to come, counted by the stage of their contract
 // (eventContractStage — the same rule as the status badge), for this year and
-// the next two. Holding events are left out: they are not confirmed.
+// the next two. Weddings only (Toby, 30 Oct — parties often have no contract).
+// Holding events are left out: they are not confirmed.
 const PIPELINE_STAGES = [
   { key:"confirmed", label:"Confirmed",       bg:"#fef9c3", fg:"#854d0e" },
   { key:"sent",      label:"Contract sent",   bg:"#fed7aa", fg:"#9a3412" },
@@ -22694,6 +22695,7 @@ function contractPipeline(bookings, today) {
   const years = [y0, y0 + 1, y0 + 2].map(function(y) { return { year:y, confirmed:0, sent:0, signed:0 }; });
   (bookings || []).forEach(function(b) {
     if (!b || b.status !== "Confirmed" || !b.date || b.date < today) return;
+    if (!/^wedding/i.test(String(b.eventType || ""))) return;
     const row = years[Number(String(b.date).slice(0, 4)) - y0];
     if (!row) return;
     row[eventContractStage(b) || "confirmed"] += 1;
@@ -22722,9 +22724,9 @@ function ContractPipeline({ bookings, today, onOpen }) {
     );
   };
   return (
-    <div onClick={onOpen} title="Open the events list" style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px 12px", boxShadow:T.shadowCard, marginBottom:18, cursor: onOpen ? "pointer" : "default" }}>
+    <div onClick={onOpen} title="Confirmed weddings to come, by contract stage. Open the events list" style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px 12px", boxShadow:T.shadowCard, marginBottom:18, cursor: onOpen ? "pointer" : "default" }}>
       <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, marginBottom:6 }}>
-        <h3 style={{ flex:"0 0 64px", margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Pipeline</h3>
+        <h3 style={{ flex:"0 0 64px", margin:0, color:T.midBlue, fontWeight:700, fontSize:15, lineHeight:1.2 }}>Wedding pipeline</h3>
         {PIPELINE_STAGES.map(function(st) {
           return <div key={st.key} style={Object.assign({}, cell, { fontSize:11, fontWeight:600, color:T.textMid, lineHeight:1.25 })}>{st.label}</div>;
         })}
