@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30j";
+const APP_BUILD = "2026-10-30k";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -2880,7 +2880,8 @@ const EMAIL_TOKENS = [
   "{{checkIn}}", "{{checkOut}}", "{{nights}}",
   "{{checkInTime}}", "{{checkOutTime}}",
   "{{totalAmount}}", "{{depositAmount}}", "{{balanceAmount}}",
-  "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}", "{{paymentLink}}", "{{paymentLinkLine}}", "{{receiptUrl}}"
+  "{{depositDueDate}}", "{{balanceDueDate}}", "{{amountPaid}}", "{{paymentLink}}", "{{paymentLinkLine}}", "{{receiptUrl}}",
+  "{{gateCode}}", "{{arrivalPack}}"
 ];
 
 // ── Month timeline: one lane per property ────────────────────────────────────
@@ -4419,6 +4420,12 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             onChange={e=>upd("waConsent", e.target.checked)}/>
           <span>OK to contact the guest by WhatsApp — only with information about their stay, never for marketing.</span>
         </label>
+        {form.arrivalEta && form.arrivalEta.text && (
+          <div style={{ flex:"1 1 100%", fontSize:12.5, color:T.text }}>
+            <strong>Expected arrival:</strong> {form.arrivalEta.text}
+            <span style={{ color:T.textMid }}> — {form.arrivalEta.date ? "for " + fmtDayShort(form.arrivalEta.date) + ", " : ""}their answer on WhatsApp{form.arrivalEta.at ? ", " + new Date(form.arrivalEta.at).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : ""}</span>
+          </div>
+        )}
       </div>
 
       {/* Per-property stays grid */}
@@ -8851,8 +8858,10 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
       const tail = who + (guests ? " · " + guests : "");
       add(s.checkOut, { kind: "out", rank: propRank(s.propertyId), label: propName(s.propertyId),
         time: times.outTime || "", detail: tail, job: jobById[jobId] || null, noExit: noExitClean(setups, jobId) });
+      // The guest's own answer on WhatsApp (30 Oct), for this arrival only.
+      const eta = b.arrivalEta && b.arrivalEta.text && b.arrivalEta.date === s.checkIn ? " · arriving " + b.arrivalEta.text.toLowerCase() : "";
       add(s.checkIn,  { kind: "in",  rank: propRank(s.propertyId), label: propName(s.propertyId),
-        time: times.inTime || "", detail: tail, note: hkNote(setups, "accom", b.id) });
+        time: times.inTime || "", detail: tail + eta, note: hkNote(setups, "accom", b.id) });
     });
   });
 
@@ -10166,6 +10175,8 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
           var out = Object.assign({}, rec);
           if (b.airbnb !== undefined) out.airbnb = b.airbnb; else delete out.airbnb;
           if (b.airbnbMissingSince !== undefined) out.airbnbMissingSince = b.airbnbMissingSince; else delete out.airbnbMissingSince;
+          // The guest's tapped arrival time is written by whatsapp-webhook.
+          if (b.arrivalEta !== undefined) out.arrivalEta = b.arrivalEta; else delete out.arrivalEta;
           return out;
         });
         return seen ? next : next.concat([rec]);
@@ -19125,7 +19136,7 @@ function WhatsAppPage() {
 
   const tpls = (settings && settings.templates) || {};
   const summary = Object.assign({ day:0, hour:8, recipients:[] }, (settings && settings.summary) || {});
-  const arrival = Object.assign({ hour:9 }, (settings && settings.arrival) || {});
+  const arrival = Object.assign({ hour:9, daysBefore:0, gateCode:"", packs:{} }, (settings && settings.arrival) || {});
 
   return (
     <div style={{ paddingTop:28, maxWidth:820 }}>
@@ -19197,14 +19208,8 @@ function WhatsAppPage() {
 
           <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"16px 0 4px" }}>Guests — pre-arrival</div>
           {settings !== null && (
-            <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:13, color:T.text }}>
-              On the morning of arrival, from
-              <select value={arrival.hour} disabled={!!busy} style={sel}
-                onChange={function(e){ const v = Number(e.target.value); save(function(x){ x.arrival = Object.assign({}, arrival, x.arrival || {}, { hour: v }); return x; }); }}>
-                {[8,9,10,11,12].map(function(h){ return <option key={h} value={h}>{waHourLabel(h)}</option>; })}
-              </select>
-              <span style={{ fontSize:12, color:T.textMid }}>— only guests who agreed to WhatsApp on their booking (Airbnb guests only if ticked by hand).</span>
-            </div>
+            <WaArrivalSettings arrival={arrival} busy={!!busy}
+              onSave={function(patch, done){ return save(function(x){ x.arrival = Object.assign({}, arrival, x.arrival || {}, patch); return x; }, done); }}/>
           )}
 
           <div style={{ marginTop:16 }}><button type="button" disabled={!!busy} onClick={checkNow} style={smallBtn}>{busy === "check" ? "Checking…" : "Check now"}</button>
@@ -19277,7 +19282,9 @@ function WaTemplateCard({ t, conf, busy, onToggle, onSaveBody, onSubmit }) {
           <div style={{ whiteSpace:"pre-wrap", background:"#e7f7dd", borderRadius:8, padding:"10px 12px", fontSize:13.5, lineHeight:1.5, color:"#1f2d1a" }}>
             {waRender(body, t.fields)}
             <div style={{ fontSize:12, color:"#5b6b55", marginTop:6 }}>{t.footer}</div>
-            {t.button ? <div style={{ fontSize:12.5, color:"#2a6db0", marginTop:6, borderTop:"1px solid #cfe5c2", paddingTop:6, textAlign:"center" }}>{t.button}</div> : null}
+            {(t.buttons || (t.button ? [t.button] : [])).map(function(b) {
+              return <div key={b} style={{ fontSize:12.5, color:"#2a6db0", marginTop:6, borderTop:"1px solid #cfe5c2", paddingTop:6, textAlign:"center" }}>{b}</div>;
+            })}
           </div>
           <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
             <button type="button" disabled={!!busy || body === (conf.body || live || t.defaultBody)} onClick={function(){ onSaveBody(body); }} style={smallBtn}>Save wording</button>
@@ -19290,6 +19297,63 @@ function WaTemplateCard({ t, conf, busy, onToggle, onSaveBody, onSubmit }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// When the pre-arrival WhatsApp goes, the gate code and each property's
+// arrival pack link — the {{gateCode}} and {{arrivalPack}} merge fields (in
+// the arrival emails too). At module scope: it renders inputs.
+function WaArrivalSettings({ arrival, busy, onSave }) {
+  const [properties, setProperties] = useState([]);
+  const [err, setErr] = useState("");
+  useEffect(function() { sbGet(PROPERTIES_STORAGE).then(function(p) { setProperties(Array.isArray(p) ? p : []); }); }, []);
+  const [gate, setGate] = useState(arrival.gateCode || "");
+  const [packs, setPacks] = useState(Object.assign({}, arrival.packs || {}));
+  useEffect(function() { setGate(arrival.gateCode || ""); setPacks(Object.assign({}, arrival.packs || {})); }, [arrival.gateCode, JSON.stringify(arrival.packs || {})]);
+  const sel = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px" };
+  const inp = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", boxSizing:"border-box" };
+  const props = (properties || []).filter(function(p) { return p && !p.archived; });
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+      <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:13, color:T.text }}>
+        Send on
+        <select value={Number(arrival.daysBefore) === 1 ? 1 : 0} disabled={busy} style={sel}
+          onChange={function(e){ onSave({ daysBefore: Number(e.target.value) }); }}>
+          <option value={0}>the arrival day</option>
+          <option value={1}>the day before arrival</option>
+        </select>
+        from
+        <select value={arrival.hour} disabled={busy} style={sel} onChange={function(e){ onSave({ hour: Number(e.target.value) }); }}>
+          {[8,9,10,11,12,13,14,15,16,17,18,19,20].map(function(h){ return <option key={h} value={h}>{waHourLabel(h)}</option>; })}
+        </select>
+      </div>
+      {Number(arrival.daysBefore) === 1 && <div style={{ fontSize:12, color:T.amber }}>The standard wording says "later today" — change it on the Messages tab if it goes the day before.</div>}
+      <div style={{ fontSize:12, color:T.textMid }}>Only guests who agreed to WhatsApp on their booking (Airbnb guests only if ticked by hand).</div>
+      <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8 }}>
+        <span style={{ fontSize:13, color:T.text, flex:"0 0 140px" }}>Gate code</span>
+        <input value={gate} onChange={function(e){ setGate(e.target.value); }} placeholder="e.g. 1234" style={{ ...inp, flex:"1 1 auto", minWidth:0 }}/>
+      </div>
+      {props.map(function(p) {
+        return (
+          <div key={p.id} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:13, color:T.text, flex:"0 0 140px" }}>{p.name} pack</span>
+            <input type="url" value={packs[p.id] || ""} placeholder="https://… arrival pack link"
+              onChange={function(e){ const v = e.target.value; setPacks(function(x){ return Object.assign({}, x, { [p.id]: v }); }); }}
+              style={{ ...inp, flex:"1 1 auto", minWidth:0 }}/>
+          </div>
+        );
+      })}
+      <div><button type="button" disabled={busy} style={smallBtn}
+        onClick={function(){
+          const clean = {};
+          Object.keys(packs).forEach(function(k){ const v = String(packs[k] || "").trim(); if (v) clean[k] = v; });
+          const bad = Object.keys(clean).filter(function(k){ return !/^https:\/\/\S+$/i.test(clean[k]); });
+          if (bad.length) { setErr("Arrival pack links must be full web addresses starting https://"); return; }
+          setErr("");
+          onSave({ gateCode: gate.trim(), packs: clean }, "Gate code and arrival packs saved.");
+        }}>Save gate code and packs</button>
+        {err && <span style={{ fontSize:12, color:T.red, marginLeft:8 }}>{err}</span>}</div>
     </div>
   );
 }
@@ -22740,6 +22804,64 @@ function ContractPipeline({ bookings, today, onOpen }) {
   );
 }
 
+// ── Arrival badges (home page, 30 Oct) ──────────────────────────────────────
+// Three small markers on each coming arrival: is the place cleaned for them,
+// are their checklists done, and when did they say they'd arrive (their tap
+// on the pre-arrival WhatsApp).
+//
+// The clean that matters is the one before them at that property: their own
+// extra clean if one was asked for, otherwise the last clean due on or before
+// their check-in (the previous guests' check-out). No earlier booking there →
+// nothing to show.
+function arrivalCleanBadge(b, stay, jobs, recMap, today) {
+  const own = (jobs || []).filter(function(j) {
+    return j.kind === "setup" && j.setupOf === "accom" && String(j.refId) === String(b.id) && j.unitId === stay.propertyId;
+  })[0];
+  const prev = own || (jobs || []).filter(function(j) {
+    return j.unitId === stay.propertyId && j.kind !== "setup" && !(j.kind === "accom" && String(j.refId) === String(b.id)) && j.due <= stay.checkIn;
+  }).sort(function(a, z) { return a.due < z.due ? 1 : a.due > z.due ? -1 : 0; })[0];
+  if (!prev) return null;
+  if (recMap[prev.id]) return { tone: "green", text: "Clean ✓", title: "Cleaned " + fmtDoneAt(recMap[prev.id].doneAt) };
+  if (today >= prev.due) return { tone: "red", text: "To clean", title: "Not signed off yet" };
+  return { tone: "grey", text: "Clean due " + fmtDayShort(prev.due).replace(/ \d\d$/, ""), title: "The clean before them is due " + fmtDayShort(prev.due) };
+}
+function arrivalChecklistBadge(runs, nowMs) {
+  const list = (runs || []).filter(function(r) { return r && r.status !== "cancelled"; });
+  if (!list.length) return null;
+  let total = 0, done = 0, late = 0, notOpen = 0;
+  list.forEach(function(r) {
+    if (r.opens_at && Date.parse(r.opens_at) > nowMs) notOpen++;
+    (r.items || []).forEach(function(i) {
+      total++;
+      if (i.state !== "open") done++;
+      else if (r.status === "open" && i.due_at && Date.parse(i.due_at) < nowMs) late++;
+    });
+  });
+  const allClosed = list.every(function(r) { return r.status !== "open"; });
+  if (allClosed && done === total) return { tone: "green", text: "Checklist ✓", title: list.length + " list" + (list.length === 1 ? "" : "s") + " done" };
+  if (late) return { tone: "red", text: "Checklist late", title: late + " item" + (late === 1 ? "" : "s") + " overdue" };
+  if (notOpen === list.length) return { tone: "grey", text: "Checklist later", title: "Not open yet" };
+  return { tone: "amber", text: "Checklist " + done + "/" + total, title: done + " of " + total + " items done" };
+}
+function arrivalEtaBadge(b, stay) {
+  const e = b.arrivalEta;
+  if (!e || !e.text || e.date !== stay.checkIn) return null;
+  return { tone: "blue", text: e.text, title: "Their answer on WhatsApp" + (e.at ? ", " + new Date(e.at).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "") };
+}
+function ArrivalBadges({ badges }) {
+  const tones = { green:[T.greenBg, T.green], red:[T.redBg, T.red], amber:[T.amberBg, T.amber], grey:[T.bgInput, T.textMid], blue:[T.midBlueBg, T.midBlue] };
+  const list = (badges || []).filter(Boolean);
+  if (!list.length) return null;
+  return (
+    <div role="group" aria-label="Arrival status" style={{ display:"flex", flexWrap:"wrap", gap:4, marginTop:3 }}>
+      {list.map(function(x, i) {
+        const c = tones[x.tone] || tones.grey;
+        return <span key={i} title={x.title} style={{ fontSize:10.5, fontWeight:700, color:c[1], background:c[0], padding:"1px 7px", borderRadius:6, whiteSpace:"nowrap" }}>{x.text}</span>;
+      })}
+    </div>
+  );
+}
+
 function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent, enquiries, onOpenEnquiry, onOpenBoxEvent, onOpenViewingRequest, onOpenChecklist }) {
   // Each row opens its own record; the section list is the fallback only when
   // the handler is missing (an older caller) or the record cannot be found.
@@ -22767,6 +22889,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const [hkSetups, setHkSetups]           = useState([]);   // housekeeping requests (extra cleans, notes)
   const [hkSeen, setHkSeen]               = useState([]);
   const [hkSeenOk, setHkSeenOk]           = useState(false);   // housekeeping comments the office has read
+  const [arrivalRuns, setArrivalRuns]     = useState({});      // booking id → its checklists (arrival badges)
   const saveHkSeen = useMergedSave(CHANGEOVER_SEEN_STORAGE, hkSeen, setHkSeen);
   const [loaded, setLoaded]               = useState(false);
 
@@ -22850,6 +22973,23 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
     const zCI = (z.stays||[]).map(s=>s.checkIn||"").filter(d=>d>=today).sort()[0] || "9999";
     return aCI > zCI ? 1 : aCI < zCI ? -1 : 0;
   });
+  // Each coming arrival's checklists, for its badge. Quiet: a missing
+  // function or a failed read just leaves the badge off.
+  const arrivalIdsKey = upcomingCheckIns.map(function(b) { return b.id; }).join(",");
+  useEffect(function() {
+    let gone = false;
+    const ids = arrivalIdsKey ? arrivalIdsKey.split(",") : [];
+    Promise.all(ids.slice(0, 20).map(function(id) {
+      return sbRpcQuiet("chk_for_record", { p_kind: "accom", p_id: String(id) })
+        .then(function(r) { return [id, (r && r.runs) || []]; }).catch(function() { return [id, null]; });
+    })).then(function(pairs) {
+      if (gone) return;
+      const m = {};
+      pairs.forEach(function(p) { if (p[1]) m[p[0]] = p[1]; });
+      setArrivalRuns(m);
+    });
+    return function() { gone = true; };
+  }, [arrivalIdsKey]);
 
   // ── Overdue money ─────────────────────────────────────────────────────────
   // Two separate flows, deliberately kept apart:
@@ -22959,8 +23099,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
   const fmtDay = (d) => d ? new Date(d+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—";
 
   const coProps = (accomProperties && accomProperties.length) ? accomProperties : INITIAL_PROPERTIES;
-  const unitStatusList = unitStatuses(changeoverUnits(coProps), changeoverJobs(coProps, accomBookings, bookings, hkBox, hkSetups),
-    changeoverRecordMap(changeovers), londonToday());
+  const coJobs = changeoverJobs(coProps, accomBookings, bookings, hkBox, hkSetups);
+  const coRecMap = changeoverRecordMap(changeovers);
+  const unitStatusList = unitStatuses(changeoverUnits(coProps), coJobs, coRecMap, londonToday());
 
   return (
     <div style={UI_CLASSIC ? { maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" } : { maxWidth:1100 }}>
@@ -23050,12 +23191,15 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           })}
           {upcomingCheckIns.map(b=>{
             const nextStay = (b.stays||[]).filter(s=>s.checkIn&&s.checkIn>=today&&s.checkIn<=in7).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
+            const badges = nextStay ? [arrivalCleanBadge(b, nextStay, coJobs, coRecMap, today),
+              arrivalChecklistBadge(arrivalRuns[b.id], Date.now()), arrivalEtaBadge(b, nextStay)] : [];
             return (
               <div key={b.id} onClick={()=>openLet(b.id)} title={"Open " + (b.guestName || "this booking")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(nextStay&&nextStay.checkIn)}</span>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"}</div>
                   <div style={{ fontSize:11, color:T.textLight }}>{(b.stays||[]).map(s=>s.propertyName||s.propertyId).join(" + ")}</div>
+                  <ArrivalBadges badges={badges}/>
                 </div>
               </div>
             );

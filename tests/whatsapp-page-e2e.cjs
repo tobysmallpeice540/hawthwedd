@@ -8,12 +8,13 @@ const T = require('../netlify/functions/whatsapp-reminders/templates.js')
 const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
 
 ;(async () => {
-  const s = await openStaff({ distDir: DIST, appData: { hbf_whatsapp_settings_v1: { templates: { checklist_live: { on: false } } } } })
+  const s = await openStaff({ distDir: DIST, appData: { hbf_whatsapp_settings_v1: { templates: { checklist_live: { on: false } } },
+    hbf_properties_v1: [{ id: 'hamlet', name: 'The Hamlet' }, { id: 'amly', name: 'Amly Barn' }] } })
   const fnCalls = []
   let linked = false
   const catalogue = Object.keys(T.TEMPLATES).map((k) => ({ name: k, label: T.TEMPLATES[k].label, audience: T.TEMPLATES[k].audience,
     when: T.TEMPLATES[k].when, language: 'en_GB', fields: T.TEMPLATES[k].fields, defaultBody: T.TEMPLATES[k].body, footer: T.FOOTER,
-    button: T.TEMPLATES[k].button ? T.TEMPLATES[k].button.text : '', status: k === 'checklist_live' ? 'APPROVED' : 'not submitted', submitted: null }))
+    buttons: T.buttonLabels(k), status: k === 'checklist_live' ? 'APPROVED' : 'not submitted', submitted: null }))
   await s.page.route('**/.netlify/functions/**', async (route) => {
     const req = route.request(); const name = new URL(req.url()).pathname.split('/').pop()
     let body = {}; try { body = JSON.parse(req.postData() || '{}') } catch (e) {}
@@ -53,6 +54,22 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
   await page.getByText("Housekeepers' numbers saved.").waitFor({ timeout: 5000 })
   assert.ok(/"recipients":\[\{"name":"Edita","mobile":""\},\{"name":"Karina","mobile":"07111 222333"\}\]/.test(writes()), writes().slice(-300))
 
+  // Pre-arrival: day, gate code, a pack per property.
+  await page.locator('select').filter({ hasText: 'the arrival day' }).selectOption('1')
+  await page.getByText('Saved.').waitFor({ timeout: 5000 })
+  assert.ok(/"daysBefore":1/.test(writes()))
+  assert.ok(await page.getByText('change it on the Messages tab if it goes the day before').isVisible())
+  await page.getByPlaceholder('e.g. 1234').fill('4321')
+  const packs = page.getByPlaceholder('https://… arrival pack link')
+  assert.strictEqual(await packs.count(), 2, 'one pack link per property')
+  await packs.nth(0).fill('not a link')
+  await page.getByRole('button', { name: 'Save gate code and packs' }).click()
+  await page.getByText('must be full web addresses').waitFor({ timeout: 3000 })
+  await packs.nth(0).fill('https://example.com/hamlet.pdf')
+  await page.getByRole('button', { name: 'Save gate code and packs' }).click()
+  await page.getByText('Gate code and arrival packs saved.').waitFor({ timeout: 5000 })
+  assert.ok(/"gateCode":"4321","packs":\{"hamlet":"https:\/\/example.com\/hamlet.pdf"\}/.test(writes()), writes().slice(-300))
+
   // Messages
   await page.getByRole('tab', { name: 'Messages' }).click()
   await page.getByText('Pre-arrival (guests)').waitFor({ timeout: 5000 })
@@ -60,7 +77,8 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
   await card.getByRole('button', { name: 'Wording' }).click()
   const ta = card.locator('textarea')
   assert.strictEqual(await ta.inputValue(), T.TEMPLATES.pre_arrival.body)
-  assert.ok(await card.getByText('Hi Emma, we\'re looking forward to welcoming you to The Hamlet').isVisible(), 'preview fills examples')
+  assert.ok(await card.getByText(/Hi Emma, we're looking forward to seeing you at The Hamlet later today. The gate code is 1234/).isVisible(), 'preview fills examples')
+  for (const b of ['Before 6pm', '6pm to 9pm', 'After 9pm']) assert.ok(await card.getByText(b, { exact: true }).isVisible(), 'button ' + b)
   await ta.fill('Hi {{guestName}}, see you at {{property}} from {{checkInTime}} today. Safe travels.')
   await card.getByRole('button', { name: 'Submit to Meta' }).click()
   await page.getByText(/Sent to Meta/).waitFor({ timeout: 5000 })

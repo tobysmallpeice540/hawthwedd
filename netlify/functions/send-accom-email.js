@@ -153,6 +153,7 @@ function buildStayDetailsText(booking) {
   }).join("\n");
 }
 
+var WA_ARRIVAL = {};   // hbf_whatsapp_settings_v1.arrival, read once per run
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -182,6 +183,15 @@ function buildTokens(booking, property, extra) {
     paymentLink:    "",
     paymentLinkLine: "",
   };
+  // The gate code and the arrival pack, set on Settings → WhatsApp and shared
+  // with the pre-arrival WhatsApp (30 Oct): {{gateCode}}, {{arrivalPack}} —
+  // the first property of the stay that has a pack link.
+  tokens.gateCode = String(WA_ARRIVAL.gateCode || "");
+  tokens.arrivalPack = "";
+  var packs = WA_ARRIVAL.packs || {};
+  for (var i = 0; i < stays.length; i++) {
+    if (packs[stays[i].propertyId]) { tokens.arrivalPack = String(packs[stays[i].propertyId]); break; }
+  }
   return Object.assign(tokens, extra || {});
 }
 
@@ -399,6 +409,9 @@ exports.handler = async function(event) {
     if (!booking.email) return { statusCode: 400, body: JSON.stringify({ error: "Booking has no guest email" }) };
 
     var properties = (await sbGet(PROPS_KEY)) || [];
+    // Gate code and arrival packs for {{gateCode}} / {{arrivalPack}}; a failed
+    // read leaves them blank rather than stopping the emails.
+    try { WA_ARRIVAL = ((await sbGet("hbf_whatsapp_settings_v1")) || {}).arrival || {}; } catch (e) { WA_ARRIVAL = {}; }
     var primaryPropId = booking.propertyId || ((booking.stays || [])[0] || {}).propertyId;
     var property = properties.find(function(p) { return p.id === primaryPropId; });
 

@@ -72,19 +72,27 @@ const TEMPLATES = {
   pre_arrival: {
     label: "Pre-arrival (guests)",
     audience: "Lettings guests who agreed to WhatsApp",
-    when: "On the morning of arrival, at the hour set below.",
+    when: "On the day and at the hour set on the Setup tab (standard: 9am on the arrival day). The guest taps a button to say roughly when they will arrive; the answer is saved on the booking.",
     category: "UTILITY", language: "en_GB",
     fields: [
       { key: "guestName", label: "Guest's first name", example: "Emma" },
       { key: "property", label: "Where they are staying", example: "The Hamlet" },
+      { key: "gateCode", label: "Gate code (Setup tab)", example: "1234" },
+      { key: "arrivalPack", label: "Arrival pack link (Setup tab, per property)", example: "https://www.hawthbushfarm.co.uk/hamlet-arrival" },
       { key: "checkInTime", label: "Check-in time", example: "4:00pm" },
       { key: "checkOutDate", label: "Check-out day", example: "Monday 2 November" },
       { key: "checkOutTime", label: "Check-out time", example: "10:00am" },
       { key: "nights", label: "Nights", example: "3 nights" },
       { key: "bookingRef", label: "Booking reference", example: "A12345" }
     ],
-    body: "Hi {{guestName}}, we're looking forward to welcoming you to {{property}} at Hawthbush Farm today. Check-in is from {{checkInTime}}, and check-out is by {{checkOutTime}} on {{checkOutDate}}. Your booking reference is {{bookingRef}}. Have a safe journey.",
-    button: null
+    // Toby's wording, 30 Oct.
+    body: "Hi {{guestName}}, we're looking forward to seeing you at {{property}} later today. The gate code is {{gateCode}} — please give it to everyone in your group. Your arrival pack is here: {{arrivalPack}}\n\n" +
+      "It would be great if you could let us know roughly when the first of your party will arrive — just tap a button below.\n\nAll the best,\nRosanna",
+    button: null,
+    // Tap-to-answer buttons (at most 25 characters each). Their order is what
+    // the webhook reads back, so a change here is a change of meaning: add at
+    // the end, never reorder.
+    quickReplies: ["Before 6pm", "6pm to 9pm", "After 9pm"]
   }
 };
 
@@ -130,7 +138,10 @@ function components(name, body) {
   const bodyComp = { type: "BODY", text: toNumbered(body, chk.order) };
   if (examples.length) bodyComp.example = { body_text: [examples] };
   const out = [bodyComp, { type: "FOOTER", text: FOOTER }];
-  if (def.button) out.push({ type: "BUTTONS", buttons: [{ type: "URL", text: def.button.text, url: def.button.url }] });
+  const buttons = [];
+  if (def.button) buttons.push({ type: "URL", text: def.button.text, url: def.button.url });
+  (def.quickReplies || []).forEach(function (t) { buttons.push({ type: "QUICK_REPLY", text: t }); });
+  if (buttons.length) out.push({ type: "BUTTONS", buttons: buttons });
   return { components: out, order: chk.order };
 }
 
@@ -155,4 +166,19 @@ function sendOrder(name, submitted) {
   return chk.order || [];
 }
 
-module.exports = { TEMPLATES, FOOTER, checkBody, toNumbered, components, cleanParam, render, sendOrder };
+// The buttons as the guest sees them, for the page's preview.
+function buttonLabels(name) {
+  const def = TEMPLATES[name];
+  return (def.button ? [def.button.text] : []).concat(def.quickReplies || []);
+}
+
+// A tapped quick reply comes back with the payload we sent:
+// "eta|<booking id>@<arrival day>|<button index>".
+function parseEtaPayload(payload) {
+  const m = /^eta\|(.+)@(\d{4}-\d{2}-\d{2})\|(\d+)$/.exec(String(payload || ""));
+  if (!m) return null;
+  const label = (TEMPLATES.pre_arrival.quickReplies || [])[Number(m[3])];
+  return label ? { bookingId: m[1], date: m[2], index: Number(m[3]), label: label } : null;
+}
+
+module.exports = { TEMPLATES, FOOTER, buttonLabels, parseEtaPayload, checkBody, toNumbered, components, cleanParam, render, sendOrder };

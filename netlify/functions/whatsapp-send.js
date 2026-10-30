@@ -209,7 +209,7 @@ exports.handler = async (event) => {
       const on = (out.templates || []).filter(function (t) { return t.name === k; })[0];
       const sub = submitted[k] || null;
       return { name: k, label: def.label, audience: def.audience, when: def.when, language: def.language,
-        fields: def.fields, defaultBody: def.body, footer: T.FOOTER, button: def.button ? def.button.text : "",
+        fields: def.fields, defaultBody: def.body, footer: T.FOOTER, buttons: T.buttonLabels(k),
         status: on ? on.status : (out.templatesError ? "unknown" : "not submitted"),
         rejectedReason: on ? on.rejectedReason : "",
         submitted: sub ? { body: sub.body, at: sub.at, by: sub.by } : null };

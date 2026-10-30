@@ -74,10 +74,19 @@ async function loadChecklists(now) {
   return { runs: runs, items: items, people: people };
 }
 
-async function sendTemplate(name, to, order, values) {
+async function sendTemplate(name, to, order, values, payloads) {
   const params = order.map(function (k) { return { type: "text", text: T.cleanParam(values[k], 1000) }; });
   const template = { name: name, language: { code: T.TEMPLATES[name].language } };
-  if (params.length) template.components = [{ type: "body", parameters: params }];
+  const comps = [];
+  if (params.length) comps.push({ type: "body", parameters: params });
+  // Tap-to-answer buttons carry a payload of ours, so a tap names the booking.
+  // They follow any URL button in the template's button list.
+  const offset = T.TEMPLATES[name].button ? 1 : 0;
+  (T.TEMPLATES[name].quickReplies || []).forEach(function (label, i) {
+    if (payloads && payloads[i]) comps.push({ type: "button", sub_type: "quick_reply", index: String(i + offset),
+      parameters: [{ type: "payload", payload: payloads[i] }] });
+  });
+  if (comps.length) template.components = comps;
   const res = await fetch(GRAPH + "/" + PHONE_NUMBER_ID + "/messages", {
     method: "POST",
     headers: { "Authorization": "Bearer " + process.env.WHATSAPP_TOKEN, "Content-Type": "application/json" },
@@ -107,11 +116,12 @@ async function planNow(now) {
     all.push.apply(all, p.send); noMobile.push.apply(noMobile, p.noMobile);
   }
   if (isOn("pre_arrival")) {
-    const hour = settings.arrival && settings.arrival.hour != null ? Number(settings.arrival.hour) : 9;
+    const arrival = settings.arrival || {};
+    const hour = arrival.hour != null ? Number(arrival.hour) : 9;
     if (plan.londonHour(now) >= hour) {
       const accom = (await appData("hbf_accom_v1")) || [];
       const properties = (await appData("hbf_properties_v1")) || [];
-      const p = plan.planArrivals({ accom: accom, properties: properties, now: now });
+      const p = plan.planArrivals({ accom: accom, properties: properties, arrival: arrival, now: now });
       all.push.apply(all, p.send); skipped.push.apply(skipped, p.skipped);
     }
   }
@@ -162,7 +172,7 @@ async function runOnce(now) {
     const sub = submitted[m.template] || null;
     const order = T.sendOrder(m.template, sub);
     try {
-      const id = await sendTemplate(m.template, m.to, order, m.values);
+      const id = await sendTemplate(m.template, m.to, order, m.values, m.payloads);
       out.sent++;
       const text = T.render(sub && sub.body ? sub.body : T.TEMPLATES[m.template].body, m.values);
       await rest("wa_sent_marks?kind=eq." + encodeURIComponent(kind) + "&ref=eq." + encodeURIComponent(ref), {

@@ -189,6 +189,48 @@ async function setStatus(id, status) {
   });
 }
 
+// ── Arrival times ────────────────────────────────────────────────────────────
+// The pre-arrival WhatsApp has tap-to-answer buttons whose payload names the
+// booking and the arrival day ("eta|<id>@<day>|<n>", whatsapp-reminders). A
+// tap is saved on the letting as arrivalEta { text, date, at, via }. The
+// lettings array is shared, so this writes it the way the Airbnb reader does:
+// a fresh read, the one field changed, and a PATCH that only lands if nobody
+// wrote in between (updated_at unchanged) — tried again on a clash. The
+// lettings form keeps arrivalEta from the server copy when it saves.
+const ETA_RE = /^eta\|(.+)@(\d{4}-\d{2}-\d{2})\|(\d+)$/;
+const ETA_LABELS = ["Before 6pm", "6pm to 9pm", "After 9pm"];   // as templates.js pre_arrival.quickReplies
+
+function etaOf(m) {
+  if (m.type !== "button" || !m.button) return null;
+  const x = ETA_RE.exec(String(m.button.payload || ""));
+  if (!x) return null;
+  return { bookingId: x[1], date: x[2], text: m.button.text || ETA_LABELS[Number(x[3])] || "" };
+}
+
+async function saveEta(eta, at) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + KEYS.accom + "&select=value,updated_at", { headers: sbHeaders() });
+    if (!res.ok) throw new Error("read lettings " + res.status);
+    const rows = await res.json();
+    if (!rows[0] || !Array.isArray(rows[0].value)) return { saved: false, why: "no lettings" };
+    const list = rows[0].value;
+    const b = list.filter(function (x) { return x && String(x.id) === String(eta.bookingId); })[0];
+    if (!b) return { saved: false, why: "booking not found" };
+    const cur = b.arrivalEta || {};
+    if (cur.text === eta.text && cur.date === eta.date) return { saved: true, name: b.guestName || "" };
+    b.arrivalEta = { text: eta.text, date: eta.date, at: at, via: "whatsapp" };
+    const put = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + KEYS.accom + "&updated_at=eq." + encodeURIComponent(rows[0].updated_at), {
+      method: "PATCH", headers: sbHeaders({ "Prefer": "return=representation" }),
+      body: JSON.stringify({ value: list, updated_at: new Date().toISOString() })
+    });
+    if (!put.ok) throw new Error("save lettings " + put.status);
+    const done = await put.json();
+    if (Array.isArray(done) && done.length) return { saved: true, name: b.guestName || "" };
+    // Somebody saved in between: read again and retry.
+  }
+  return { saved: false, why: "the bookings kept changing" };
+}
+
 // ── The email ────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
@@ -198,11 +240,13 @@ function prettyNumber(n) {
   return n.startsWith("44") && n.length === 12 ? "0" + n.slice(2, 6) + " " + n.slice(6) : "+" + n;
 }
 
-function buildEmail(row, att) {
+function buildEmail(row, att, eta) {
   const who = row.record_name || row.profile_name || prettyNumber(row.number);
   const media = MEDIA_WORDS[row.msg_type];
-  const subject = "WhatsApp from " + who;
+  const subject = eta ? "Arrival time from " + who + ": " + (row.body || "") : "WhatsApp from " + who;
   const lines = [];
+  if (eta) lines.push("<p><em>" + (eta.saved ? "They tapped an arrival time on the pre-arrival WhatsApp — it is saved on the booking."
+    : "They tapped an arrival time on the pre-arrival WhatsApp, but it could not be saved on the booking (" + esc(eta.why || "error") + ") — please add it by hand.") + "</em></p>");
   if (media && att && att.filename) lines.push("<p><em>They sent " + media + " — it is attached (" + esc(att.filename) + ").</em></p>");
   else if (media && att && att.skipped) lines.push("<p><em>They sent " + media + ", but it could not be attached: " + esc(att.skipped) +
     ". Please get in touch with them if it matters.</em></p>");
@@ -219,9 +263,9 @@ function buildEmail(row, att) {
   return { subject: subject, html: '<div style="font-family:Helvetica,Arial,sans-serif;color:#2d2a25">' + lines.join("") + "</div>" };
 }
 
-async function sendEmail(row) {
+async function sendEmail(row, eta) {
   const att = row.media && row.media.id ? await fetchMedia(row.media) : null;
-  const e = buildEmail(row, att);
+  const e = buildEmail(row, att, eta);
   const msg = { from: FROM_HEADER, to: FORWARD_TO, subject: e.subject, html: e.html };
   if (att && att.filename) msg.attachments = [{ filename: att.filename, content: att.content }];
   const res = await fetch("https://api.resend.com/emails", {
@@ -252,8 +296,14 @@ async function handleInbound(changes) {
 
   const rows = msgs.map(function (x) {
     const number = normaliseNumber(x.m.from) || String(x.m.from || "");
-    const recs = findRecords(lists, number);
+    let recs = findRecords(lists, number);
     const text = messageText(x.m);
+    // A tapped arrival time names its booking exactly — better than a phone match.
+    const eta = etaOf(x.m);
+    if (eta) {
+      const b = (lists.accom || []).filter(function (r) { return r && String(r.id) === eta.bookingId; })[0];
+      if (b) recs = [{ kind: "accom", id: String(b.id), name: recordName("accom", b) }];
+    }
     return {
       id: String(x.m.id), direction: "in", number: number, profile_name: x.name,
       msg_type: String(x.m.type || "unknown"), body: text ? text.slice(0, 4000) : null,
@@ -267,8 +317,18 @@ async function handleInbound(changes) {
 
   // Whatever is not yet emailed — new rows, or ones a failed email left.
   const pending = await unemailed(rows.map(function (r) { return r.id; }));
+  const byId = {};
+  msgs.forEach(function (x) { byId[String(x.m.id)] = x.m; });
   for (const row of pending) {
-    await sendEmail(row);
+    // Save a tapped arrival time first; a failure is told in the email, never
+    // a failed delivery (Meta would deliver it again and again).
+    let etaNote = null;
+    const eta = byId[row.id] ? etaOf(byId[row.id]) : null;
+    if (eta) {
+      try { etaNote = await saveEta(eta, row.at); }
+      catch (e) { etaNote = { saved: false, why: "the save failed" }; console.error("whatsapp-webhook: eta " + e.message); }
+    }
+    await sendEmail(row, etaNote);
     await markEmailed(row.id);
   }
   return msgs.length;
@@ -321,4 +381,4 @@ exports.handler = async (event) => {
   }
 };
 
-exports._test = { normaliseNumber: normaliseNumber, findRecords: findRecords, messageText: messageText, buildEmail: buildEmail, mediaOf: mediaOf, fileName: fileName };
+exports._test = { normaliseNumber: normaliseNumber, findRecords: findRecords, messageText: messageText, buildEmail: buildEmail, mediaOf: mediaOf, fileName: fileName, etaOf: etaOf, saveEta: saveEta };

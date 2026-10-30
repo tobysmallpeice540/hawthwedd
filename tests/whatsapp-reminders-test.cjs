@@ -110,7 +110,26 @@ assert.deepStrictEqual(p.send.map(function (x) { return x.record.id; }).sort(), 
 const em = p.send.filter(function (x) { return x.record.id === "a12345"; })[0];
 assert.strictEqual(em.to, "447900683355");
 assert.strictEqual(em.key, "arrival|a12345|2026-10-31");
-assert.deepStrictEqual(em.values, { guestName: "Emma", property: "The Hamlet", checkInTime: "4:00pm", checkOutDate: "Monday 2 November", checkOutTime: "10:00am", nights: "2 nights", bookingRef: "A12345" });
+assert.deepStrictEqual(em.values, { guestName: "Emma", property: "The Hamlet", gateCode: "—", arrivalPack: "https://www.hawthbushfarm.co.uk",
+  checkInTime: "4:00pm", checkOutDate: "Monday 2 November", checkOutTime: "10:00am", nights: "2 nights", bookingRef: "A12345" });
+assert.deepStrictEqual(em.payloads, ["eta|a12345@2026-10-31|0", "eta|a12345@2026-10-31|1", "eta|a12345@2026-10-31|2"]);
+// Gate code and each property's pack link; the day-before option.
+const arrivalSet = { gateCode: "4321", packs: { amly: "https://example.com/amly.pdf", hamlet: "https://example.com/hamlet.pdf" } };
+let pa = P.planArrivals({ accom, properties, arrival: arrivalSet, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
+const em2 = pa.send.filter(function (x) { return x.record.id === "a12345"; })[0];
+assert.strictEqual(em2.values.gateCode, "4321");
+assert.strictEqual(em2.values.arrivalPack, "https://example.com/hamlet.pdf");
+assert.strictEqual(pa.send.filter(function (x) { return x.record.id === "a8"; })[0].values.arrivalPack, "https://example.com/hamlet.pdf", "first property with a pack");
+pa = P.planArrivals({ accom, properties, arrival: { daysBefore: 1 }, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
+assert.deepStrictEqual(pa.send.map(function (x) { return x.record.id; }), ["a7"], "the day before: tomorrow's arrivals");
+assert.strictEqual(pa.send[0].key, "arrival|a7|2026-11-01");
+// Payloads read back.
+assert.deepStrictEqual(T.parseEtaPayload("eta|a12345@2026-10-31|1"), { bookingId: "a12345", date: "2026-10-31", index: 1, label: "6pm to 9pm" });
+assert.strictEqual(T.parseEtaPayload("eta|a1|1"), null);
+assert.deepStrictEqual(T.buttonLabels("pre_arrival"), ["Before 6pm", "6pm to 9pm", "After 9pm"]);
+assert.ok(T.TEMPLATES.pre_arrival.quickReplies.every(function (q) { return q.length <= 25; }));
+const qr = T.components("pre_arrival", T.TEMPLATES.pre_arrival.body).components[2];
+assert.deepStrictEqual(qr.buttons.map(function (b) { return b.type; }), ["QUICK_REPLY", "QUICK_REPLY", "QUICK_REPLY"]);
 const wed = p.send.filter(function (x) { return x.record.id === "a5"; })[0];
 assert.strictEqual(wed.values.checkInTime, "3:00pm", "wedding times");
 const two = p.send.filter(function (x) { return x.record.id === "a8"; })[0];
@@ -222,6 +241,9 @@ console.log("whatsapp plans and templates: all tests passed");
   assert.strictEqual(arr.length, 3, "three arrivals today");
   const emma = arr.filter(function (b) { return b.to === "447900683355"; })[0];
   assert.deepStrictEqual(emma.template.components[0].parameters.map(function (x) { return x.text; }), ["Emma", "The Hamlet"], "filled in the SUBMITTED order");
+  assert.deepStrictEqual(emma.template.components.slice(1), [0, 1, 2].map(function (i) {
+    return { type: "button", sub_type: "quick_reply", index: String(i), parameters: [{ type: "payload", payload: "eta|a12345@2026-10-31|" + i }] };
+  }), "each button carries the booking");
   const emmaLog = logged.filter(function (l) { return l.number === "447900683355" && l.template === "pre_arrival"; })[0];
   assert.strictEqual(emmaLog.body, "Hello Emma, see you at The Hamlet today.", "the log keeps the text as read");
   assert.strictEqual(emmaLog.to_name, "Emma Juner");

@@ -881,6 +881,28 @@ own header.
   `media {type,id,mime,name}` and fetches it from Meta with `WHATSAPP_TOKEN`
   at email time, attached up to 10MB; bigger or failed = named in the email,
   never a failed delivery.
+- **Pre-arrival asks for an arrival time** (30 Oct): three tap-to-answer
+  buttons (`quickReplies` on `pre_arrival` — "Before 6pm", "6pm to 9pm",
+  "After 9pm"; their ORDER is their meaning: add at the end, never reorder).
+  Each button is sent with a payload `eta|<booking id>@<arrival day>|<n>`;
+  `whatsapp-webhook` (`etaOf` / `saveEta`) writes `arrivalEta {text, date, at,
+  via}` on the letting — fresh read, PATCH only if `updated_at` is unchanged,
+  retried on a clash — and the email says it was saved. The lettings form
+  keeps `arrivalEta` from the server copy on save (with `airbnb`). Shown on
+  the letting form ("Expected arrival"), on housekeeping Live's check-in row
+  and on the home page's arrivals — only when `date` is that stay's check-in.
+  `arrival` settings also hold `daysBefore` (0 / 1), `gateCode` and `packs
+  {<property id>: link}`, the `{{gateCode}}` / `{{arrivalPack}}` merge fields
+  of the WhatsApp AND the lettings emails (`send-accom-reminders`,
+  `send-accom-email` read them as `WA_ARRIVAL`).
+- **Home → Accom check-ins** carry three markers per coming arrival
+  (`ArrivalBadges`): the clean before them (their extra clean, else the last
+  clean due on or before check-in at that property: Clean ✓ / To clean /
+  Clean due), their checklists (`chk_for_record`, per booking: Checklist ✓ /
+  late / n of m / later) and their WhatsApp arrival time. Pinned by
+  `tests/arrival-badges-e2e.cjs`. **Migration u (`chk_for_record`) was only
+  applied to production on 30 Oct** — before then the letting/event
+  checklists panel was silently empty.
 - **Every staff login may have a mobile** (`profiles.mobile`, international
   digits, written only by `user-admin.js` `users.create` / `users.setMobile`;
   edited in place on Settings → Staff, `MobileCell`). Optional for everyone:
@@ -889,7 +911,8 @@ own header.
   `wa_sent_marks` (migration x); drop it when convenient.
 - Tests: `tests/whatsapp-reminders-test.cjs` (templates, plans, the run),
   `tests/whatsapp-webhook-test.cjs` (incl. media), `tests/whatsapp-page-e2e.cjs`,
-  the ticks in `tests/checklists-e2e.cjs`, consent in `tests/letting-form-e2e.cjs`.
+  the ticks in `tests/checklists-e2e.cjs`, consent in `tests/letting-form-e2e.cjs`,
+  arrival times in `tests/whatsapp-webhook-test.cjs` and `tests/arrival-badges-e2e.cjs`.
 - Still to build: Send buttons and a WhatsApp panel on records, couples'
   templates.
 

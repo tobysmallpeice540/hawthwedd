@@ -119,3 +119,48 @@ const delivery = { entry: [{ changes: [{ value: {
   assert.ok(mails[1].html.includes("too big to attach"));
   console.log("whatsapp-webhook media: all tests passed");
 })().catch(function (e) { console.error(e); process.exit(1); });
+
+
+// Arrival times: a tapped button is saved on the booking (30 Oct).
+(async function () {
+  await new Promise(function (r) { setTimeout(r, 600); });
+  delete require.cache[require.resolve("../netlify/functions/whatsapp-webhook.js")];
+  const fn3 = require("../netlify/functions/whatsapp-webhook.js");
+  assert.deepStrictEqual(fn3._test.etaOf({ type: "button", button: { payload: "eta|A1@2026-10-31|1", text: "6pm to 9pm" } }),
+    { bookingId: "A1", date: "2026-10-31", text: "6pm to 9pm" });
+  assert.strictEqual(fn3._test.etaOf({ type: "button", button: { payload: "something else", text: "x" } }), null);
+  let lettings = [{ id: "A1", guestName: "Emma Juner", phone: "", stays: [] }, { id: "A2", guestName: "Other" }];
+  let version = "2026-10-30T10:00:00Z", clashOnce = true;
+  const db3 = {}; const mails3 = [];
+  global.fetch = async function (url, opts) {
+    opts = opts || {};
+    const ok = function (b) { return { ok: true, status: 200, json: async () => b, text: async () => JSON.stringify(b) }; };
+    if (url.includes("/app_data?key=eq.hbf_accom_v1&select=value,updated_at")) return ok([{ value: JSON.parse(JSON.stringify(lettings)), updated_at: version }]);
+    if (url.includes("/app_data?key=eq.hbf_accom_v1&updated_at=eq.")) {
+      if (clashOnce) { clashOnce = false; version = "2026-10-30T10:00:01Z"; return ok([]); }   // someone saved in between
+      if (decodeURIComponent(url.split("updated_at=eq.")[1]) !== version) return ok([]);
+      lettings = JSON.parse(opts.body).value; version = "later"; return ok([{ key: "hbf_accom_v1" }]);
+    }
+    if (url.includes("/app_data?key=eq.hbf_accom_v1")) return ok([{ value: lettings }]);
+    if (url.includes("/app_data?key=eq.")) return ok([{ value: [] }]);
+    if (url.includes("/wa_messages?on_conflict=id")) { JSON.parse(opts.body).forEach(function (r) { if (!db3[r.id]) db3[r.id] = Object.assign({ emailed_at: null }, r); }); return ok(null); }
+    if (url.includes("/wa_messages?select=*")) return ok(Object.values(db3).filter(function (r) { return !r.emailed_at; }));
+    if (url.includes("/wa_messages?id=eq.")) { db3[decodeURIComponent(url.split("id=eq.")[1])].emailed_at = "now"; return ok(null); }
+    if (url.includes("api.resend.com")) { mails3.push(JSON.parse(opts.body)); return ok({}); }
+    throw new Error("unexpected " + url);
+  };
+  const crypto3 = require("crypto");
+  const tap = { entry: [{ changes: [{ value: { contacts: [{ wa_id: "447700900009", profile: { name: "Em" } }],
+    messages: [{ id: "wamid.t1", from: "447700900009", timestamp: "1761818000", type: "button", context: { id: "wamid.out1" },
+      button: { payload: "eta|A1@2026-10-31|1", text: "6pm to 9pm" } }] } }] }] };
+  const body = JSON.stringify(tap);
+  const r = await fn3.handler({ httpMethod: "POST", body: body, headers: { "x-hub-signature-256": "sha256=" + crypto3.createHmac("sha256", "sec").update(body).digest("hex") } });
+  assert.strictEqual(r.statusCode, 200);
+  const a1 = lettings.filter(function (x) { return x.id === "A1"; })[0];
+  assert.deepStrictEqual({ text: a1.arrivalEta.text, date: a1.arrivalEta.date, via: a1.arrivalEta.via }, { text: "6pm to 9pm", date: "2026-10-31", via: "whatsapp" }, "saved after one clash");
+  assert.strictEqual(lettings.filter(function (x) { return x.id === "A2"; })[0].arrivalEta, undefined, "no other booking touched");
+  assert.strictEqual(db3["wamid.t1"].record_id, "A1", "matched by the payload, not the phone");
+  assert.ok(/^Arrival time from Emma Juner letting: 6pm to 9pm$/.test(mails3[0].subject), mails3[0].subject);
+  assert.ok(mails3[0].html.includes("saved on the booking"));
+  console.log("whatsapp-webhook arrival times: all tests passed");
+})().catch(function (e) { console.error(e); process.exit(1); });

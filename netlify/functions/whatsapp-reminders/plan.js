@@ -174,8 +174,24 @@ function stayTimes(b, s, prop) {
   };
 }
 
+// arrival (from hbf_whatsapp_settings_v1.arrival):
+//   daysBefore 0 (the arrival day, standard) or 1 (the day before)
+//   gateCode   the estate gate code, for {{gateCode}}
+//   packs      { <property id>: arrival pack link }, for {{arrivalPack}}
+// The caller decides the hour; this decides who and what.
+function arrivalPackFor(arrival, stays) {
+  const packs = (arrival && arrival.packs) || {};
+  for (let i = 0; i < stays.length; i++) {
+    const u = String(packs[stays[i].propertyId] || "").trim();
+    if (u) return u;
+  }
+  return "";
+}
+
 function planArrivals(input) {
-  const today = londonDate(input.now);
+  const arrival = input.arrival || {};
+  const ahead = Number(arrival.daysBefore) === 1 ? 1 : 0;
+  const day = addDays(londonDate(input.now), ahead);       // the check-in day being announced
   const props = {};
   (input.properties || []).forEach(function (p) { if (p) props[p.id] = p; });
   const send = [], skipped = [];
@@ -183,9 +199,9 @@ function planArrivals(input) {
     if (!b || b.bookingType === "Blocked") return;
     if (b.status !== "confirmed" && b.status !== "completed") return;
     const stays = (b.stays && b.stays.length ? b.stays : [b]).filter(function (s) { return s && s.propertyId && validDate(s.checkIn); });
-    const arriving = stays.filter(function (s) { return s.checkIn === today; });
+    const arriving = stays.filter(function (s) { return s.checkIn === day; });
     if (!arriving.length) return;
-    const key = "arrival|" + b.id + "|" + today;
+    const key = "arrival|" + b.id + "|" + day;
     if (input.sent && input.sent.has(key)) return;
     const to = normaliseNumber(b.phone);
     if (!guestAgreed(b)) { skipped.push({ key: key, why: "not agreed" }); return; }
@@ -194,13 +210,18 @@ function planArrivals(input) {
     const prop = props[first.propertyId];
     const t = stayTimes(b, first, prop);
     const out = arriving.map(function (s) { return s.checkOut; }).filter(validDate).sort().pop() || first.checkOut;
-    const nights = validDate(out) ? Math.round((new Date(out + "T12:00:00Z") - new Date(today + "T12:00:00Z")) / 864e5) : 0;
+    const nights = validDate(out) ? Math.round((new Date(out + "T12:00:00Z") - new Date(day + "T12:00:00Z")) / 864e5) : 0;
     const names = arriving.map(function (s) { const p = props[s.propertyId]; return (p && p.name) || s.propertyName || s.propertyId; });
     send.push({ template: "pre_arrival", key: key, to: to, toName: b.guestName || "",
       record: { kind: "accom", id: String(b.id), name: (b.guestName || "Guest") + " letting" },
+      // What each tap-to-answer button sends back: the booking, the arrival
+      // day and which button (whatsapp-webhook saves it on the booking).
+      payloads: [0, 1, 2].map(function (i) { return "eta|" + b.id + "@" + day + "|" + i; }),
       values: {
         guestName: firstName(b.guestName || "there"),
         property: cleanParam(names.filter(function (n, i) { return names.indexOf(n) === i; }).join(" and "), 80),
+        gateCode: cleanParam(arrival.gateCode, 40),
+        arrivalPack: cleanParam(arrivalPackFor(arrival, arriving) || "https://www.hawthbushfarm.co.uk", 300),
         checkInTime: clock12(t.inTime) || "—",
         checkOutDate: validDate(out) ? dayLong(out) : "—",
         checkOutTime: clock12(t.outTime) || "—",
@@ -320,4 +341,4 @@ function planSummary(input) {
 }
 
 module.exports = { planChecklists, planArrivals, planSummary, summaryDays, dayCap, isQuiet, dueWords, itemsList,
-  normaliseNumber, guestAgreed, londonDate, londonHour, londonWeekday, clock12, CATCH_UP_H };
+  normaliseNumber, guestAgreed, arrivalPackFor, londonDate, londonHour, londonWeekday, clock12, CATCH_UP_H };

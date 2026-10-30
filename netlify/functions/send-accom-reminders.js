@@ -120,6 +120,7 @@ function departureOf(booking) {
   return outs.length ? outs[outs.length - 1] : (booking.checkOut || null);
 }
 
+var WA_ARRIVAL = {};   // hbf_whatsapp_settings_v1.arrival, read once per run
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -147,6 +148,15 @@ function buildTokens(booking, property, extra) {
     balanceDueDate: balanceEntry ? fmtDateNice(balanceEntry.dueDate) : "",
     paymentLink:    "",
   };
+  // The gate code and the arrival pack, set on Settings → WhatsApp and shared
+  // with the pre-arrival WhatsApp (30 Oct): {{gateCode}}, {{arrivalPack}} —
+  // the first property of the stay that has a pack link.
+  tokens.gateCode = String(WA_ARRIVAL.gateCode || "");
+  tokens.arrivalPack = "";
+  var packs = WA_ARRIVAL.packs || {};
+  for (var i = 0; i < stays.length; i++) {
+    if (packs[stays[i].propertyId]) { tokens.arrivalPack = String(packs[stays[i].propertyId]); break; }
+  }
   return Object.assign(tokens, extra || {});
 }
 
@@ -417,6 +427,9 @@ exports.handler = async function() {
     // This read only chooses who is due. Every send re-reads before acting.
     var bookings   = (await sbGet(ACCOM_KEY)) || [];
     var properties = (await sbGet(PROPS_KEY)) || [];
+    // Gate code and arrival packs for {{gateCode}} / {{arrivalPack}}; a failed
+    // read leaves them blank rather than stopping the emails.
+    try { WA_ARRIVAL = ((await sbGet("hbf_whatsapp_settings_v1")) || {}).arrival || {}; } catch (e) { WA_ARRIVAL = {}; }
     var templates  = (await sbGet(TEMPLATES_KEY)) || DEFAULT_TEMPLATES;
 
     var live = function(b) { return b.status !== "cancelled" && b.bookingType !== "Blocked" && !!b.email; };
