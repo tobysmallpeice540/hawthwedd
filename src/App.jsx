@@ -66,6 +66,14 @@ function MobileGlobalStyles() {
         }
         div:has(> table) { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
         table { min-width: 600px; }
+        /* The event form's sticky header: Back, the name, the arrows and
+           Actions all on one line left the name a sliver between them on a
+           phone ("Haral..."). Here the name takes the whole first line (two
+           lines if it needs them) and the buttons share the line under it. */
+        .hb-ev-head { flex-wrap: wrap !important; gap: 10px 8px !important; padding: 12px 14px !important; }
+        .hb-ev-head > .hb-ev-title { order: -1; flex: 1 1 100% !important; }
+        .hb-ev-head > .hb-ev-back { margin-right: auto; }
+        .hb-ev-name { white-space: normal !important; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
       }
     `}</style>
   );
@@ -2792,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30c";
+const APP_BUILD = "2026-10-30d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -20327,10 +20335,10 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
 
   return (
     <div style={{ paddingTop:28 }}>
-      <div style={{ position:"sticky", top:"var(--hb-sticky-top, 0px)", zIndex:30, background:UI_CLASSIC ? T.bg : "#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 18px", marginBottom:18, flexWrap:"nowrap", boxShadow:`0 2px 8px rgba(${T.shadowRgb},.10)`, display:"flex", alignItems:"center", gap:14 }}>
-        <button onClick={onCancel} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, cursor:"pointer", fontSize:13, fontFamily:"inherit", padding:"6px 14px", borderRadius:6, flexShrink:0 }}>← Back</button>
-        <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ fontWeight:UI_CLASSIC ? 700 : 600, fontSize:UI_CLASSIC ? 18 : 25, lineHeight:1.15, fontFamily:T.fontDisplay, color:T.midBlue, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+      <div className="hb-ev-head" style={{ position:"sticky", top:"var(--hb-sticky-top, 0px)", zIndex:30, background:UI_CLASSIC ? T.bg : "#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 18px", marginBottom:18, flexWrap:"nowrap", boxShadow:`0 2px 8px rgba(${T.shadowRgb},.10)`, display:"flex", alignItems:"center", gap:14 }}>
+        <button className="hb-ev-back" onClick={onCancel} style={{ background:"#fff", border:`1px solid ${T.border}`, color:T.textMid, cursor:"pointer", fontSize:13, fontFamily:"inherit", padding:"6px 14px", borderRadius:6, flexShrink:0 }}>← Back</button>
+        <div className="hb-ev-title" style={{ flex:1, minWidth:0 }}>
+          <div className="hb-ev-name" style={{ fontWeight:UI_CLASSIC ? 700 : 600, fontSize:UI_CLASSIC ? 18 : 25, lineHeight:1.15, fontFamily:T.fontDisplay, color:T.midBlue, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {formData.couple || (isEdit ? "Edit Booking" : "New Booking")}
           </div>
           {(formData.date || formData.eventType || isEdit) && (
