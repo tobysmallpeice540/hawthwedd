@@ -72,7 +72,7 @@ const inputWith = (page, v) => page.locator('input').evaluateAll((els, v) => els
   check('H1 an upcoming event opens its event form', await inputWith(page, 'Upcoming Couple'))
 
   await home(h)
-  await page.getByText('Michael and Sonia', { exact: true }).first().click()
+  await page.locator('[title="Open Michael and Sonia"]').first().click()
   await page.waitForTimeout(900)
   check('H2 a check-in opens that letting, not the calendar', await inputWith(page, 'Michael and Sonia'))
 
