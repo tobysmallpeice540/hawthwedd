@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30d";
+const APP_BUILD = "2026-10-30e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18172,7 +18172,7 @@ function ListView({ bookings, search, setSearch, onEdit, onDelete, onNew, staff,
             })}
           </div>
           <div style={{ fontSize:11, color:"#15803d", marginTop:6, lineHeight:1.6 }}>
-            Everybody has signed. Open the event\u2019s Contract tab and the signed copy files itself as the
+            Everybody has signed. Open the event&rsquo;s Contract tab and the signed copy files itself as the
             Event Booking Form, turning the EBF square green.
           </div>
         </div>
@@ -18257,12 +18257,32 @@ function AccomBadgeList({ accomBadges, onOpenAccom }) {
       });
 }
 
+// Where a confirmed event's SignWell contract has got to (30 Oct 2026, Toby):
+// "signed" once it has come back completed, "sent" while it is out, null
+// otherwise — never sent, a test, or declined / voided / expired (a dead
+// contract puts the event back to plain Confirmed). Display only: b.status
+// stays "Confirmed" in the record, so every filter and report is unchanged.
+function eventContractStage(b) {
+  const c = b && b.contract;
+  if (!c || c.testMode) return null;
+  const st = String(c.status || "").toLowerCase();
+  if (st === "completed") return "signed";
+  if (st === "declined" || st === "voided" || st === "expired") return null;
+  return c.sentAt ? "sent" : null;
+}
+
+// Holding (grey) -> Confirmed (yellow, no contract yet) -> Contract sent
+// (amber) -> Contract signed (green).
 function BookingStatusBadge({ b }) {
-  return b.status==="Holding"
-    ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:"#fef9c3", color:"#854d0e", fontWeight:600 }}>Holding</span>
-    : b.status==="Confirmed"
-      ? <span style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:T.greenBg, color:T.green, fontWeight:600 }}>Confirmed</span>
-      : <span style={{ color:T.textLight, fontSize:11 }}>—</span>;
+  const pill = function(label, bg, fg, title) {
+    return <span title={title} style={{ fontSize:11, padding:"3px 9px", borderRadius:12, background:bg, color:fg, fontWeight:600, whiteSpace:"nowrap" }}>{label}</span>;
+  };
+  if (b.status === "Holding") return pill("Holding", T.tint, T.textMid);
+  if (b.status !== "Confirmed") return <span style={{ color:T.textLight, fontSize:11 }}>—</span>;
+  const stage = eventContractStage(b);
+  if (stage === "signed") return pill("Contract signed", T.greenBg, T.green, "Confirmed — the contract has come back signed");
+  if (stage === "sent") return pill("Contract sent", "#fed7aa", "#9a3412", "Confirmed — contract sent" + (b.contract && b.contract.sentAt ? " " + fmtDate(String(b.contract.sentAt).slice(0, 10)) : "") + ", not signed yet");
+  return pill("Confirmed", "#fef9c3", "#854d0e", "Confirmed — no contract sent yet");
 }
 
 function BookingPaymentBadge({ payment }) {
