@@ -623,7 +623,10 @@ own header.
   comments, lostProperty, at }`) — the cleaners' records are never written
   from the office (bar retiring a deleted event's, above). A sign-off whose comments or lost property change later
   comes back. Read with `sbGetStrict`; if that read fails the panel is hidden
-  rather than listing everything.
+  rather than listing everything. Each line reads "<unit> · after <guests> (before
+  <guests> for an extra clean) · signed off by <housekeepers who logged hours>
+  · ready …" (`changeoverFeedbackWho`, 30 Oct) — `who` is the stay, never the
+  author, and the sign-off stores no author beyond the hours.
 - **The House** (28 Oct): Karina also cleans Toby's own house, paid by the
   hour. The housekeeping **House** tab (it replaced Hours) is her Mon–Fri
   timesheet (`hbf_house_hours_v1`, one record a week, id `karina:<monday>`):

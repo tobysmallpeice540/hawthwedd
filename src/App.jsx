@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30p";
+const APP_BUILD = "2026-10-30q";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8897,6 +8897,23 @@ function changeoverFeedbackUnread(recs, seen) {
     return x < y ? 1 : x > y ? -1 : 0;
   });
 }
+// The middle of a "From housekeeping" line (30 Oct, Toby): the stored `who` is
+// the guests or event the clean was FOR, not who wrote the comment — "Henry
+// Verall" read as the author. So: "after Henry Verall" (or "before …" for an
+// extra clean), then the housekeepers who logged hours on the sign-off, the
+// only record of who signed it off.
+function changeoverFeedbackWho(r) {
+  const raw = String((r && r.who) || "");
+  const extra = /^(Setup|Extra clean) · /.test(raw);
+  const name = raw.replace(/^(Setup|Extra clean) · /, "").trim();
+  const by = CHANGEOVER_CLEANERS.filter(function(c) {
+    return r && r.hours && Number(r.hours[c.key]) > 0;
+  }).map(function(c) { return c.label; }).join(" & ");
+  const parts = [];
+  if (name) parts.push((extra ? "before " : "after ") + name);
+  if (by) parts.push("signed off by " + by);
+  return parts.join(" · ") || "Housekeeping";
+}
 function HousekeepingFeedback({ recs, seen, onRead, onOpen }) {
   const [busy, setBusy] = useState("");
   const [err, setErr]   = useState("");
@@ -8917,7 +8934,7 @@ function HousekeepingFeedback({ recs, seen, onRead, onOpen }) {
             <div onClick={function() { onOpen(r); }} style={{ flex:1, minWidth:0, cursor:"pointer", fontSize:13, lineHeight:1.5, color:T.text }}>
               <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                 <strong>{unit}</strong>
-                <span style={{ color:T.textMid }}> · {String(r.who || "").replace(/^(Setup|Extra clean) · /, "")} · ready {fmtDoneAt(r.doneAt)}</span>
+                <span style={{ color:T.textMid }}> · {changeoverFeedbackWho(r)} · ready {fmtDoneAt(r.doneAt)}</span>
               </div>
               {r.comments && <div style={{ whiteSpace:"pre-wrap" }}>{r.comments}</div>}
               {r.lostProperty && <div style={{ color:T.red, fontWeight:700 }}>Lost property: <span style={{ fontWeight:600 }}>{r.lostProperty}</span></div>}
