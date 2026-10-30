@@ -121,7 +121,9 @@ async function planNow(now) {
     if (plan.londonHour(now) >= hour) {
       const accom = (await appData("hbf_accom_v1")) || [];
       const properties = (await appData("hbf_properties_v1")) || [];
-      const p = plan.planArrivals({ accom: accom, properties: properties, arrival: arrival, now: now });
+      const emailTemplates = (await appData("hbf_email_templates_v1")) || [];
+      const p = plan.planArrivals({ accom: accom, properties: properties, arrival: arrival, now: now,
+        hostedPacks: T.hostedPacks(emailTemplates, process.env.HBF_ADMIN_TOKEN) });
       all.push.apply(all, p.send); skipped.push.apply(skipped, p.skipped);
     }
   }

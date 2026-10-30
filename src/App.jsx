@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30k";
+const APP_BUILD = "2026-10-30l";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4204,6 +4204,117 @@ function StayTimeField({ booking, stay, prop, which, onChange }) {
   );
 }
 
+// ── Send the pre-arrival WhatsApp by hand (30 Oct) ──────────────────────────
+// On a letting: preview the pre-arrival WhatsApp for this booking (its next
+// arrival) exactly as the guest would read it, and send it. Useful when the
+// automatic one is switched off, or to send it early. It shares the automatic
+// one's "sent" record, so that one won't send it again; a second send asks
+// first. Admins only (whatsapp-send checks) — hidden for anyone else.
+function WaBookingSend({ bookingId }) {
+  const [open, setOpen] = useState(false);
+  const [prev, setPrev] = useState(null);
+  const [state, setState] = useState("idle");
+  const [note, setNote] = useState(null);
+  async function load() {
+    setState("loading"); setNote(null);
+    try { setPrev(await whatsappCall({ action: "bookingPreview", bookingId: bookingId })); setState("ready"); }
+    catch (e) { if (e.status === 401) setState("hidden"); else { setNote({ kind:"error", text: e.message }); setState("error"); } }
+  }
+  async function send(force) {
+    setState("sending"); setNote(null);
+    try { await whatsappCall({ action: "sendBooking", bookingId: bookingId, force: !!force }); await load(); setNote({ kind:"ok", text: "Sent. It's in Settings → WhatsApp → Sent." }); }
+    catch (e) { setNote({ kind:"error", text: e.message }); setState("ready"); }
+  }
+  if (state === "hidden") return null;
+  return (
+    <div style={{ flex:"1 1 100%" }}>
+      {!open ? (
+        <button type="button" onClick={function(){ setOpen(true); load(); }} style={{ ...smallBtn, fontWeight:600 }}>WhatsApp: pre-arrival message…</button>
+      ) : (
+        <div style={{ border:`1px solid ${T.border}`, borderRadius:9, padding:"12px 14px", background:"#fff" }}>
+          <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, marginBottom:8 }}>
+            <strong style={{ flex:"1 1 auto", fontSize:13, color:T.text }}>Pre-arrival WhatsApp</strong>
+            <button type="button" onClick={function(){ setOpen(false); }} style={{ ...smallBtn, padding:"3px 9px" }}>Close</button>
+          </div>
+          {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
+          {prev && prev.skip && <div style={{ fontSize:12.5, color:T.amber }}>{prev.skip === "not agreed" ? "This guest hasn't agreed to WhatsApp — tick the box above (and save) if they have." : prev.skip === "no mobile" ? "Add a mobile number (and save) first." : prev.skip}</div>}
+          {prev && !prev.skip && (<>
+            <div style={{ fontSize:12, color:T.textMid, marginBottom:6 }}>
+              To {prettyMobile(prev.to)} · for their arrival on {fmtDayShort(prev.day)}
+              {prev.templateStatus !== "APPROVED" ? <span style={{ color:T.amber }}> · Meta: {WA_STATUS_WORDS[prev.templateStatus] || String(prev.templateStatus).toLowerCase()} — it can't be sent until approved</span> : null}
+            </div>
+            <div style={{ whiteSpace:"pre-wrap", background:"#e7f7dd", borderRadius:8, padding:"10px 12px", fontSize:13.5, lineHeight:1.5, color:"#1f2d1a" }}>
+              {prev.text}
+              {(prev.buttons || []).map(function(b) { return <div key={b} style={{ fontSize:12.5, color:"#2a6db0", marginTop:6, borderTop:"1px solid #cfe5c2", paddingTop:6, textAlign:"center" }}>{b}</div>; })}
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center", marginTop:8 }}>
+              {prev.alreadySent
+                ? <><span style={{ fontSize:12, color:T.textMid }}>Already sent {new Date(prev.alreadySent).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}.</span>
+                    <button type="button" disabled={state === "sending" || prev.templateStatus !== "APPROVED"} onClick={function(){ send(true); }} style={smallBtn}>{state === "sending" ? "Sending…" : "Send again"}</button></>
+                : <button type="button" disabled={state === "sending" || prev.templateStatus !== "APPROVED"} onClick={function(){ send(false); }} style={smallBtn}>{state === "sending" ? "Sending…" : "Send now"}</button>}
+            </div>
+          </>)}
+          {note && <div style={{ marginTop:8, fontSize:12, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Early check-in / late check-out (30 Oct) ────────────────────────────────
+// Two ticks on a letting, each with a time: early check-in (standard 3pm) and
+// late check-out (standard midday). Kept on the booking as earlyCheckIn /
+// lateCheckOut ("HH:MM") AND written into the stays' own times — the first
+// arrival's checkInTime, the last departure's checkOutTime — so everything
+// that already reads stay times (housekeeping windows, checklists, the
+// pre-arrival WhatsApp) follows without knowing about the ticks. Unticking
+// puts those stays back to the standard time.
+const EARLY_CHECK_IN_DEFAULT = "15:00";
+const LATE_CHECK_OUT_DEFAULT = "12:00";
+function applyEarlyLate(f, which, time) {
+  const stays = (f.stays && f.stays.length) ? f.stays : [];
+  const field = which === "early" ? "checkInTime" : "checkOutTime";
+  const dateKey = which === "early" ? "checkIn" : "checkOut";
+  const dates = stays.map(function(s) { return s[dateKey]; }).filter(isValidEventDate).sort();
+  const target = which === "early" ? dates[0] : dates[dates.length - 1];
+  const next = stays.map(function(s) {
+    if (!target || s[dateKey] !== target) return s;
+    return Object.assign({}, s, { [field]: time || "" });
+  });
+  const out = Object.assign({}, f, { stays: next });
+  const flag = which === "early" ? "earlyCheckIn" : "lateCheckOut";
+  if (time) out[flag] = time; else delete out[flag];
+  return out;
+}
+// "15:00" → "3pm", "12:30" → "12:30pm"
+function shortClock(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm || ""));
+  if (!m) return "";
+  const h = Number(m[1]);
+  return ((h % 12) || 12) + (m[2] === "00" ? "" : ":" + m[2]) + (h < 12 ? "am" : "pm");
+}
+function EarlyLateToggles({ form, setForm }) {
+  const row = function(which, label, flag, def) {
+    const on = !!form[flag];
+    return (
+      <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, fontSize:13, color:T.text, cursor:"pointer" }}>
+        <input type="checkbox" checked={on}
+          onChange={function(e){ const v = e.target.checked; setForm(function(f){ return applyEarlyLate(f, which, v ? (f[flag] || def) : null); }); }}/>
+        <span style={{ flex:"0 0 auto" }}>{label}</span>
+        {on && <input type="time" step="900" value={form[flag]} aria-label={label + " time"}
+          onChange={function(e){ const v = e.target.value; if (v) setForm(function(f){ return applyEarlyLate(f, which, v); }); }}
+          style={{ ...inlineInput, padding:"4px 6px", fontSize:13, width:96 }}/>}
+      </label>
+    );
+  };
+  return (
+    <div style={{ display:"flex", flexWrap:"wrap", gap:"8px 22px", marginBottom:16 }}>
+      {row("early", "Allow early check-in", "earlyCheckIn", EARLY_CHECK_IN_DEFAULT)}
+      {row("late", "Allow late check-out", "lateCheckOut", LATE_CHECK_OUT_DEFAULT)}
+    </div>
+  );
+}
+
 function AccomForm({ properties, discountCodes, events, form, setForm, onSave, onExit, onDelete, onOpenEvent, onMarkAirbnbCancelled, onDismissAirbnbPrompt, onSaveFiles }) {
   const isMobile = useIsMobile();
   const [pane, setPane] = useState("details");
@@ -4426,6 +4537,7 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
             <span style={{ color:T.textMid }}> — {form.arrivalEta.date ? "for " + fmtDayShort(form.arrivalEta.date) + ", " : ""}their answer on WhatsApp{form.arrivalEta.at ? ", " + new Date(form.arrivalEta.at).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : ""}</span>
           </div>
         )}
+        {form.id && form.bookingType !== "Blocked" && <WaBookingSend bookingId={form.id}/>}
       </div>
 
       {/* Per-property stays grid */}
@@ -4562,6 +4674,8 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
           </div>
         )}
       </div>
+
+      <EarlyLateToggles form={form} setForm={setForm}/>
 
       {/* Housekeeping, then the checklists this letting started. */}
       {form.id && (
@@ -19208,7 +19322,7 @@ function WhatsAppPage() {
 
           <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"16px 0 4px" }}>Guests — pre-arrival</div>
           {settings !== null && (
-            <WaArrivalSettings arrival={arrival} busy={!!busy}
+            <WaArrivalSettings arrival={arrival} busy={!!busy} hosted={st.hostedPacks || []}
               onSave={function(patch, done){ return save(function(x){ x.arrival = Object.assign({}, arrival, x.arrival || {}, patch); return x; }, done); }}/>
           )}
 
@@ -19304,7 +19418,7 @@ function WaTemplateCard({ t, conf, busy, onToggle, onSaveBody, onSubmit }) {
 // When the pre-arrival WhatsApp goes, the gate code and each property's
 // arrival pack link — the {{gateCode}} and {{arrivalPack}} merge fields (in
 // the arrival emails too). At module scope: it renders inputs.
-function WaArrivalSettings({ arrival, busy, onSave }) {
+function WaArrivalSettings({ arrival, busy, hosted, onSave }) {
   const [properties, setProperties] = useState([]);
   const [err, setErr] = useState("");
   useEffect(function() { sbGet(PROPERTIES_STORAGE).then(function(p) { setProperties(Array.isArray(p) ? p : []); }); }, []);
@@ -19338,12 +19452,21 @@ function WaArrivalSettings({ arrival, busy, onSave }) {
         return (
           <div key={p.id} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:13, color:T.text, flex:"0 0 140px" }}>{p.name} pack</span>
-            <input type="url" value={packs[p.id] || ""} placeholder="https://… arrival pack link"
+            <input type="url" value={packs[p.id] || ""} placeholder="(optional) own link — else the arrival email's pack"
               onChange={function(e){ const v = e.target.value; setPacks(function(x){ return Object.assign({}, x, { [p.id]: v }); }); }}
               style={{ ...inp, flex:"1 1 auto", minWidth:0 }}/>
           </div>
         );
       })}
+      <div style={{ fontSize:12, color:T.textMid, lineHeight:1.6 }}>
+        A property with no link of its own uses the pack attached to its arrival email, at a fixed link that always shows
+        whatever is attached now — replace the file under Settings → Email templates → Lettings and the link follows.
+        {(hosted || []).length === 0 && <span style={{ color:T.amber }}> No arrival email has a pack attached yet.</span>}
+        {(hosted || []).map(function(h) {
+          return <div key={h.id}><strong>{h.label}</strong>{h.file ? " (" + h.file + ")" : ""}: <a href={h.url} target="_blank" rel="noreferrer" style={{ color:T.midBlue, wordBreak:"break-all" }}>{h.url}</a></div>;
+        })}
+        <div>Weddings get the Wedding/Event one, everyone else the General one.</div>
+      </div>
       <div><button type="button" disabled={busy} style={smallBtn}
         onClick={function(){
           const clean = {};
@@ -22823,7 +22946,7 @@ function arrivalCleanBadge(b, stay, jobs, recMap, today) {
   if (!prev) return null;
   if (recMap[prev.id]) return { tone: "green", text: "Clean ✓", title: "Cleaned " + fmtDoneAt(recMap[prev.id].doneAt) };
   if (today >= prev.due) return { tone: "red", text: "To clean", title: "Not signed off yet" };
-  return { tone: "grey", text: "Clean due " + fmtDayShort(prev.due).replace(/ \d\d$/, ""), title: "The clean before them is due " + fmtDayShort(prev.due) };
+  return { tone: "grey", text: "Clean " + fmtDayShort(prev.due).replace(/ \d+ \w+ \d\d$/, ""), title: "The clean before them is due " + fmtDayShort(prev.due) };
 }
 function arrivalChecklistBadge(runs, nowMs) {
   const list = (runs || []).filter(function(r) { return r && r.status !== "cancelled"; });
@@ -22838,22 +22961,32 @@ function arrivalChecklistBadge(runs, nowMs) {
     });
   });
   const allClosed = list.every(function(r) { return r.status !== "open"; });
-  if (allClosed && done === total) return { tone: "green", text: "Checklist ✓", title: list.length + " list" + (list.length === 1 ? "" : "s") + " done" };
-  if (late) return { tone: "red", text: "Checklist late", title: late + " item" + (late === 1 ? "" : "s") + " overdue" };
-  if (notOpen === list.length) return { tone: "grey", text: "Checklist later", title: "Not open yet" };
-  return { tone: "amber", text: "Checklist " + done + "/" + total, title: done + " of " + total + " items done" };
+  if (allClosed && done === total) return { tone: "green", text: "Checks ✓", title: list.length + " list" + (list.length === 1 ? "" : "s") + " done" };
+  if (late) return { tone: "red", text: "Checks late", title: late + " item" + (late === 1 ? "" : "s") + " overdue" };
+  if (notOpen === list.length) return { tone: "grey", text: "Checks later", title: "Checklist not open yet" };
+  return { tone: "amber", text: "Checks " + done + "/" + total, title: done + " of " + total + " items done" };
 }
+// Short forms of the three arrival-time buttons, for a narrow line.
+const ETA_SHORT = { "Before 6pm": "before 6pm", "6pm to 9pm": "6–9pm", "After 9pm": "after 9pm" };
 function arrivalEtaBadge(b, stay) {
   const e = b.arrivalEta;
   if (!e || !e.text || e.date !== stay.checkIn) return null;
-  return { tone: "blue", text: e.text, title: "Their answer on WhatsApp" + (e.at ? ", " + new Date(e.at).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "") };
+  return { tone: "blue", text: "ETA " + (ETA_SHORT[e.text] || e.text), title: "Arriving " + e.text.toLowerCase() + " — their answer on WhatsApp" + (e.at ? ", " + new Date(e.at).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "") };
 }
-function ArrivalBadges({ badges }) {
-  const tones = { green:[T.greenBg, T.green], red:[T.redBg, T.red], amber:[T.amberBg, T.amber], grey:[T.bgInput, T.textMid], blue:[T.midBlueBg, T.midBlue] };
+// Early check-in / late check-out, when allowed on the booking.
+function arrivalTimeBadges(b) {
+  return [
+    b.earlyCheckIn ? { tone: "purple", text: "Early in " + shortClock(b.earlyCheckIn), title: "Early check-in allowed from " + shortClock(b.earlyCheckIn) } : null,
+    b.lateCheckOut ? { tone: "purple", text: "Late out " + shortClock(b.lateCheckOut), title: "Late check-out allowed until " + shortClock(b.lateCheckOut) } : null
+  ];
+}
+function ArrivalBadges({ badges, lead }) {
+  const tones = { green:[T.greenBg, T.green], red:[T.redBg, T.red], amber:[T.amberBg, T.amber], grey:[T.bgInput, T.textMid], blue:[T.midBlueBg, T.midBlue], purple:["#f3e8ff", "#6b21a8"] };
   const list = (badges || []).filter(Boolean);
-  if (!list.length) return null;
+  if (!list.length && !lead) return null;
   return (
-    <div role="group" aria-label="Arrival status" style={{ display:"flex", flexWrap:"wrap", gap:4, marginTop:3 }}>
+    <div role="group" aria-label="Arrival status" style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:4, marginTop:2 }}>
+      {lead ? <span style={{ fontSize:11, color:T.textLight, marginRight:2 }}>{lead}</span> : null}
       {list.map(function(x, i) {
         const c = tones[x.tone] || tones.grey;
         return <span key={i} title={x.title} style={{ fontSize:10.5, fontWeight:700, color:c[1], background:c[0], padding:"1px 7px", borderRadius:6, whiteSpace:"nowrap" }}>{x.text}</span>;
@@ -23148,8 +23281,6 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           near the top with the other things waiting on someone. */}
       <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom} onOpen={openLet}/>
 
-      {/* Confirmed events by contract stage, this year and the next two. */}
-      <ContractPipeline bookings={bookings} today={today} onOpen={function(){ setView("list"); }}/>
 
       {/* Overdue money used to be said twice: a red banner here, and a panel in
           the grid below repeating the accommodation half of it. It is now one
@@ -23191,14 +23322,17 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           })}
           {upcomingCheckIns.map(b=>{
             const nextStay = (b.stays||[]).filter(s=>s.checkIn&&s.checkIn>=today&&s.checkIn<=in7).sort((a,z)=>a.checkIn>z.checkIn?1:-1)[0];
+            // One line under the name: where, then clean · checks · ETA · early / late.
             const badges = nextStay ? [arrivalCleanBadge(b, nextStay, coJobs, coRecMap, today),
-              arrivalChecklistBadge(arrivalRuns[b.id], Date.now()), arrivalEtaBadge(b, nextStay)] : [];
+              arrivalChecklistBadge(arrivalRuns[b.id], Date.now()), arrivalEtaBadge(b, nextStay)].concat(arrivalTimeBadges(b)) : [];
             return (
               <div key={b.id} onClick={()=>openLet(b.id)} title={"Open " + (b.guestName || "this booking")} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
                 <span style={{ fontSize:11, fontWeight:700, color:T.green, background:T.greenBg, padding:"2px 8px", borderRadius:6, flexShrink:0 }}>{fmtDay(nextStay&&nextStay.checkIn)}</span>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{b.guestName||"(no name)"}</div>
-                  <div style={{ fontSize:11, color:T.textLight }}>{(b.stays||[]).map(s=>s.propertyName||s.propertyId).join(" + ")}</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {b.guestName||"(no name)"}
+                    <span style={{ fontWeight:400, color:T.textLight, fontSize:12 }}> · {(b.stays||[]).map(s=>shortPropLabel(coProps.find(p=>p.id===s.propertyId)) || s.propertyName || s.propertyId).join(" + ")}</span>
+                  </div>
                   <ArrivalBadges badges={badges}/>
                 </div>
               </div>
@@ -23222,42 +23356,6 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           {pendingViewings.length>6 && <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("viewings")}>+ {pendingViewings.length-6} more</div>}
         </div>
 
-        {/* Brochure requests — next to the viewing requests, because the two
-            are the same thing from the same website: somebody has just put
-            their hand up. Nothing here needs confirming; the brochure has
-            already gone. */}
-        <div style={sectionStyle}>
-          {secHead("Brochure Requests", brochureReqs.length || null, recentBrochure.length ? T.accent : null)}
-          {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
-          {loaded && recentBrochure.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No brochure requests yet.</div>}
-          {recentBrochure.map(function(r, i) {
-            const when = r.submittedAt ? new Date(r.submittedAt) : null;
-            return (
-              <div key={r.id||i} onClick={()=>openBrochure(r)} title={"Open " + (r.name || r.email || "this enquiry")}
-                style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
-                <span title={r.emailSent === false ? "The brochure email did not go out — see Recent Automated Emails" : "Brochure emailed"}
-                  style={{ fontSize:11, fontWeight:700, flexShrink:0, padding:"2px 8px", borderRadius:6,
-                    color: r.emailSent === false ? T.red : "#6b21a8",
-                    background: r.emailSent === false ? T.redBg : "#f3e8ff" }}>
-                  {r.emailSent === false ? "Not sent" : (when ? fmtDay(when.toISOString().slice(0,10)) : "Sent")}
-                </span>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {r.name || r.email || "(no name)"}
-                  </div>
-                  <div style={{ fontSize:11, color:T.textLight, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {[r.guestsLabel, (r.years||[]).join(", "), (r.typeLabels||[]).join(", ")].filter(Boolean).join(" · ")}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          {brochureReqs.length > 3 && (
-            <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("enquiries")}>
-              {brochureReqs.length} in total — see Enquiries
-            </div>
-          )}
-        </div>
       </div>
 
       {/* ── Overdue ───────────────────────────────────────────────────────
@@ -23379,23 +23477,44 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
       <NewLettings bookings={accomBookings} properties={accomProperties} onOpen={onOpenAccom}
         events={bookings} onOpenEvent={onOpenEvent}/>
 
-      {/* Email log */}
-      <div style={sectionStyle}>
-        {secHead("Recent Automated Emails", emailLog.length||null)}
-        {emailLog.length===0 && (
-          <div style={{ color:T.textLight, fontSize:13 }}>No emails logged yet. When the system sends automated emails (phase 2), they will appear here.</div>
-        )}
-        {emailLog.slice().reverse().slice(0,10).map(e=>(
-          <div key={e.id} onClick={()=>setViewEmail(e)} title="Click to read the full email"
-            style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:`1px solid ${T.bg}`, fontSize:13, cursor:"pointer" }}>
-            <span style={{ color:T.textLight, fontSize:11, flexShrink:0 }}>{e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : "—"}</span>
-            <span style={{ fontWeight:600, color:T.text, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.subject||"(no subject)"}</span>
-            <span style={{ color:T.textLight, fontSize:11 }}>{e.to||""}</span>
-            {e.opened && <span style={{ fontSize:10, fontWeight:700, color:T.green, background:T.greenBg, padding:"1px 6px", borderRadius:6 }}>Opened</span>}
-          </div>
-        ))}
-        <EmailViewerModal email={viewEmail} onClose={()=>setViewEmail(null)}/>
-      </div>
+      {/* Recent automated emails moved to Settings → Email templates → Sent (30 Oct). */}
+
+      {/* The wedding pipeline, then brochure requests, at the bottom (Toby, 30 Oct). */}
+      <ContractPipeline bookings={bookings} today={today} onOpen={function(){ setView("list"); }}/>
+        {/* Brochure requests — last on the page (Toby, 30 Oct). Nothing here
+            needs confirming; the brochure has already gone. */}
+        <div style={sectionStyle}>
+          {secHead("Brochure Requests", brochureReqs.length || null, recentBrochure.length ? T.accent : null)}
+          {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
+          {loaded && recentBrochure.length===0 && <div style={{ color:T.textLight, fontSize:13 }}>No brochure requests yet.</div>}
+          {recentBrochure.map(function(r, i) {
+            const when = r.submittedAt ? new Date(r.submittedAt) : null;
+            return (
+              <div key={r.id||i} onClick={()=>openBrochure(r)} title={"Open " + (r.name || r.email || "this enquiry")}
+                style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.bg}`, cursor:"pointer" }}>
+                <span title={r.emailSent === false ? "The brochure email did not go out — see Settings → Email templates → Sent" : "Brochure emailed"}
+                  style={{ fontSize:11, fontWeight:700, flexShrink:0, padding:"2px 8px", borderRadius:6,
+                    color: r.emailSent === false ? T.red : "#6b21a8",
+                    background: r.emailSent === false ? T.redBg : "#f3e8ff" }}>
+                  {r.emailSent === false ? "Not sent" : (when ? fmtDay(when.toISOString().slice(0,10)) : "Sent")}
+                </span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {r.name || r.email || "(no name)"}
+                  </div>
+                  <div style={{ fontSize:11, color:T.textLight, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {[r.guestsLabel, (r.years||[]).join(", "), (r.typeLabels||[]).join(", ")].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {brochureReqs.length > 3 && (
+            <div style={{ fontSize:12, color:T.accent, marginTop:8, cursor:"pointer" }} onClick={()=>setView("enquiries")}>
+              {brochureReqs.length} in total — see Enquiries
+            </div>
+          )}
+        </div>
 
     </div>
   );
@@ -28525,7 +28644,36 @@ function AutomationsPanel() {
   );
 }
 
-const EMAIL_PAGES = [["lettings","Lettings"],["portal","Client portal"],["boxoffice","Box office"],["brochure","Brochure request"],["automations","Follow-ups"]];
+const EMAIL_PAGES = [["lettings","Lettings"],["portal","Client portal"],["boxoffice","Box office"],["brochure","Brochure request"],["automations","Follow-ups"],["sent","Sent"]];
+
+// Every email the app has sent on its own (hbf_email_log_v1, the last 500),
+// newest first — moved here from the home page (Toby, 30 Oct).
+function RecentAutomatedEmails() {
+  const [log, setLog] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const [n, setN] = useState(50);
+  useEffect(function() { sbGet(EMAIL_LOG_STORAGE).then(function(l) { setLog(Array.isArray(l) ? l : []); }).catch(function() { setLog([]); }); }, []);
+  const list = (log || []).slice().reverse();
+  return (
+    <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 22px", boxShadow:T.shadowCard }}>
+      {log === null && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
+      {log && !list.length && <div style={{ color:T.textLight, fontSize:13 }}>No automated emails logged yet.</div>}
+      {list.slice(0, n).map(function(e) {
+        return (
+          <div key={e.id} onClick={function(){ setViewing(e); }} title="Click to read the full email"
+            style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:12, padding:"8px 0", borderBottom:`1px solid ${T.bg}`, fontSize:13, cursor:"pointer" }}>
+            <span style={{ color:T.textLight, fontSize:11, flexShrink:0 }}>{e.sentAt ? new Date(e.sentAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : "—"}</span>
+            <span style={{ fontWeight:600, color:T.text, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.subject||"(no subject)"}</span>
+            <span style={{ color:T.textLight, fontSize:11, flexShrink:0 }}>{e.to||""}</span>
+            {e.opened && <span style={{ fontSize:10, fontWeight:700, color:T.green, background:T.greenBg, padding:"1px 6px", borderRadius:6 }}>Opened</span>}
+          </div>
+        );
+      })}
+      {list.length > n && <button type="button" onClick={function(){ setN(n + 100); }} style={{ ...smallBtn, marginTop:10 }}>More</button>}
+      <EmailViewerModal email={viewing} onClose={function(){ setViewing(null); }}/>
+    </div>
+  );
+}
 
 function EmailsView() {
   const [tab, setTab] = useState("lettings");
@@ -28537,6 +28685,7 @@ function EmailsView() {
       {tab === "portal"    && <PortalEmailTemplatesPanel/>}
       {tab === "boxoffice" && <div style={{ maxWidth:880 }}><BoxEmailTemplatesCard/></div>}
       {tab === "automations" && <AutomationsPanel/>}
+      {tab === "sent"      && <RecentAutomatedEmails/>}
       {tab === "brochure"  && (
         <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard }}>
           <BrochureSettingsPanel/>

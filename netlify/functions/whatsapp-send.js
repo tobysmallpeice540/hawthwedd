@@ -28,6 +28,14 @@
 //                            and its field order, is kept in app_data
 //                            hbf_whatsapp_submitted_v1 — the order messages
 //                            are filled in until Meta has a newer version.
+//   { action: "bookingPreview", bookingId }
+//   { action: "sendBooking", bookingId, force? }
+//                          — the pre-arrival WhatsApp for one letting, by hand
+//                            (the booking's Send WhatsApp button): what it
+//                            would say, and sending it. It marks the same
+//                            "sent" record the automatic one uses, so that
+//                            one won't send it again; sending a second time
+//                            takes force.
 //   { action: "log", number? }
 //                          — the WhatsApps sent (and received), newest first,
 //                            and who they went to, for the Sent list.
@@ -46,6 +54,7 @@ const PHONE_NUMBER_ID = "1454490917738977";   // the 01825 number
 const WABA_ID = "970274439005564";            // Hawthbush Farm WhatsApp account (templates)
 
 const T = require("./whatsapp-reminders/templates.js");
+const P = require("./whatsapp-reminders/plan.js");
 const SUBMITTED_KEY = "hbf_whatsapp_submitted_v1";
 
 const json = (status, obj) => ({ statusCode: status, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) });
@@ -150,6 +159,34 @@ async function recordOut(row) {
   return res.ok;
 }
 
+// The pre-arrival message for one letting, for its next arrival (or its
+// first, if all are past): { msg, text, order, day, status } or { error }.
+async function bookingMessage(bookingId) {
+  const accom = (await appData("hbf_accom_v1")) || [];
+  const b = accom.filter(function (x) { return x && String(x.id) === bookingId; })[0];
+  if (!b) return { error: "Booking not found — save it first." };
+  const stays = (b.stays && b.stays.length ? b.stays : [b]).filter(function (s) { return s && /^\d{4}-\d{2}-\d{2}$/.test(String(s.checkIn || "")); });
+  if (!stays.length) return { error: "The booking has no check-in date." };
+  const today = P.londonDate(new Date());
+  const ins = stays.map(function (s) { return s.checkIn; }).sort();
+  const day = ins.filter(function (d) { return d >= today; })[0] || ins[0];
+  const props = {};
+  ((await appData("hbf_properties_v1")) || []).forEach(function (p) { if (p) props[p.id] = p; });
+  const settings = (await appData("hbf_whatsapp_settings_v1")) || {};
+  const et = (await appData("hbf_email_templates_v1")) || [];
+  const submitted = ((await appData(SUBMITTED_KEY)) || {}).pre_arrival || null;
+  const msg = P.arrivalMessage(b, day, props, settings.arrival || {}, T.hostedPacks(et, process.env.HBF_ADMIN_TOKEN));
+  const order = T.sendOrder("pre_arrival", submitted);
+  const text = msg.skip ? "" : T.render(submitted && submitted.body ? submitted.body : T.TEMPLATES.pre_arrival.body, msg.values);
+  let status = "unknown";
+  try {
+    const t = await graphGet("/" + WABA_ID + "/message_templates?name=pre_arrival&fields=name,status");
+    const hit = (t.data || []).filter(function (x) { return x.name === "pre_arrival"; })[0];
+    status = hit ? hit.status : "not submitted";
+  } catch (e) { /* the preview still shows */ }
+  return { msg: msg, text: text, order: order, day: day, status: status };
+}
+
 async function appData(key) {
   const r = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + encodeURIComponent(key) + "&select=value",
     { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
@@ -204,6 +241,14 @@ exports.handler = async (event) => {
     } catch (e) { out.templatesError = e.message; }
     let submitted = {};
     try { submitted = (await appData(SUBMITTED_KEY)) || {}; } catch (e) { out.submittedError = e.message; }
+    try {
+      const et = (await appData("hbf_email_templates_v1")) || [];
+      const hp = T.hostedPacks(et, process.env.HBF_ADMIN_TOKEN);
+      out.hostedPacks = Object.keys(hp).map(function (id) {
+        const t = et.filter(function (x) { return x && x.id === id; })[0] || {};
+        return { id: id, label: t.name || id, file: ((t.attachments || [])[0] || {}).name || "", url: hp[id] };
+      });
+    } catch (e) { out.hostedPacksError = e.message; }
     out.catalogue = Object.keys(T.TEMPLATES).map(function (k) {
       const def = T.TEMPLATES[k];
       const on = (out.templates || []).filter(function (t) { return t.name === k; })[0];
@@ -291,6 +336,56 @@ exports.handler = async (event) => {
       return json(500, { error: "Meta has it, but the app could not record what was submitted (" + e.message + "). Submit it once more tomorrow." });
     }
     return json(200, { ok: true, edited: !!existing, status: d.status || "PENDING" });
+  }
+
+  if (req.action === "bookingPreview" || req.action === "sendBooking") {
+    let built;
+    try { built = await bookingMessage(String(req.bookingId || "")); } catch (e) { return json(500, { error: e.message }); }
+    if (built.error) return json(400, { error: built.error });
+    const msg = built.msg;
+    const ref = msg.key ? msg.key.slice("arrival|".length) : "";
+    let already = null;
+    if (ref) {
+      const r = await fetch(SUPABASE_URL + "/rest/v1/wa_sent_marks?kind=eq.arrival&ref=eq." + encodeURIComponent(ref) + "&select=sent_at",
+        { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+      if (r.ok) { const rows = await r.json(); if (rows[0]) already = rows[0].sent_at; }
+    }
+    if (req.action === "bookingPreview") {
+      return json(200, { ok: true, skip: msg.skip || null, to: msg.to || "", text: msg.skip ? "" : built.text,
+        day: built.day, alreadySent: already, templateStatus: built.status, buttons: T.buttonLabels("pre_arrival") });
+    }
+    if (!WA_TOKEN) return json(500, { error: "WHATSAPP_TOKEN is not set in Netlify." });
+    if (msg.skip) return json(400, { error: msg.skip === "not agreed" ? "This guest hasn't agreed to WhatsApp (see the tick on the booking)." :
+      msg.skip === "no mobile" ? "There's no mobile number on this booking." : "Nothing to send: " + msg.skip });
+    if (already && !req.force) return json(409, { error: "Already sent " + new Date(already).toLocaleString("en-GB", { timeZone: "Europe/London" }) + ".", alreadySent: already });
+    // Mark (or re-mark) before sending, as the automatic run does.
+    await fetch(SUPABASE_URL + "/rest/v1/wa_sent_marks?on_conflict=kind,ref", {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify([{ kind: "arrival", ref: ref, sent_at: new Date().toISOString(), wa_id: null }])
+    });
+    const params = built.order.map(function (k) { return { type: "text", text: T.cleanParam(msg.values[k], 1000) }; });
+    const comps = [];
+    if (params.length) comps.push({ type: "body", parameters: params });
+    (T.TEMPLATES.pre_arrival.quickReplies || []).forEach(function (label, i) {
+      comps.push({ type: "button", sub_type: "quick_reply", index: String(i), parameters: [{ type: "payload", payload: msg.payloads[i] }] });
+    });
+    try {
+      const id = await sendTemplate(msg.to, "pre_arrival", T.TEMPLATES.pre_arrival.language, comps);
+      await fetch(SUPABASE_URL + "/rest/v1/wa_sent_marks?kind=eq.arrival&ref=eq." + encodeURIComponent(ref), {
+        method: "PATCH", headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json", "Prefer": "return=minimal" },
+        body: JSON.stringify({ wa_id: id }) });
+      await recordOut({ id: id, direction: "out", number: msg.to, to_name: msg.toName || null, template: "pre_arrival", msg_type: "template",
+        body: (built.text + "\n(sent by hand by " + (me.who || "the office") + ")").slice(0, 4000), at: new Date().toISOString(), status: "accepted",
+        record_kind: "accom", record_id: msg.record.id, record_name: msg.record.name });
+      return json(200, { ok: true, id: id });
+    } catch (e) {
+      // Not sent: free the mark so the automatic one (or another try) can go.
+      if (!already) await fetch(SUPABASE_URL + "/rest/v1/wa_sent_marks?kind=eq.arrival&ref=eq." + encodeURIComponent(ref),
+        { method: "DELETE", headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+      const hint = /132001|does not exist/i.test(e.message) ? " — the pre-arrival message isn't approved by Meta yet (Settings → WhatsApp → Messages)." : "";
+      return json(502, { error: e.message + hint });
+    }
   }
 
   if (req.action === "log") {

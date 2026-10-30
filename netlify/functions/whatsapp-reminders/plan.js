@@ -188,6 +188,45 @@ function arrivalPackFor(arrival, stays) {
   return "";
 }
 
+// One pre-arrival message for one booking arriving on `day`, or { skip }.
+// hostedPacks: { arrival_general, arrival_event } — fixed links to the packs
+// attached to the two arrival email templates (arrival-pack.js); used when a
+// property has no pack link of its own, choosing the one that booking's
+// arrival email carries (weddings: the event template).
+function arrivalMessage(b, day, props, arrival, hostedPacks) {
+  const stays = (b.stays && b.stays.length ? b.stays : [b]).filter(function (s) { return s && s.propertyId && validDate(s.checkIn); });
+  const arriving = stays.filter(function (s) { return s.checkIn === day; });
+  if (!arriving.length) return { skip: "not arriving that day" };
+  const key = "arrival|" + b.id + "|" + day;
+  const to = normaliseNumber(b.phone);
+  if (!guestAgreed(b)) return { skip: "not agreed", key: key };
+  if (!to) return { skip: "no mobile", key: key };
+  const first = arriving[0];
+  const prop = props[first.propertyId];
+  const t = stayTimes(b, first, prop);
+  const out = arriving.map(function (s) { return s.checkOut; }).filter(validDate).sort().pop() || first.checkOut;
+  const nights = validDate(out) ? Math.round((new Date(out + "T12:00:00Z") - new Date(day + "T12:00:00Z")) / 864e5) : 0;
+  const names = arriving.map(function (s) { const p = props[s.propertyId]; return (p && p.name) || s.propertyName || s.propertyId; });
+  const hp = hostedPacks || {};
+  const hosted = (b.bookingType === "Wedding" ? hp.arrival_event || hp.arrival_general : hp.arrival_general || hp.arrival_event) || "";
+  return { template: "pre_arrival", key: key, to: to, toName: b.guestName || "",
+    record: { kind: "accom", id: String(b.id), name: (b.guestName || "Guest") + " letting" },
+    // What each tap-to-answer button sends back: the booking, the arrival
+    // day and which button (whatsapp-webhook saves it on the booking).
+    payloads: [0, 1, 2].map(function (i) { return "eta|" + b.id + "@" + day + "|" + i; }),
+    values: {
+      guestName: firstName(b.guestName || "there"),
+      property: cleanParam(names.filter(function (n, i) { return names.indexOf(n) === i; }).join(" and "), 80),
+      gateCode: cleanParam((arrival || {}).gateCode, 40),
+      arrivalPack: cleanParam(arrivalPackFor(arrival, arriving) || hosted || "https://www.hawthbushfarm.co.uk", 300),
+      checkInTime: clock12(t.inTime) || "—",
+      checkOutDate: validDate(out) ? dayLong(out) : "—",
+      checkOutTime: clock12(t.outTime) || "—",
+      nights: nights === 1 ? "1 night" : nights + " nights",
+      bookingRef: String(b.id || "").toUpperCase() || "—"
+    } };
+}
+
 function planArrivals(input) {
   const arrival = input.arrival || {};
   const ahead = Number(arrival.daysBefore) === 1 ? 1 : 0;
@@ -198,36 +237,11 @@ function planArrivals(input) {
   (input.accom || []).forEach(function (b) {
     if (!b || b.bookingType === "Blocked") return;
     if (b.status !== "confirmed" && b.status !== "completed") return;
-    const stays = (b.stays && b.stays.length ? b.stays : [b]).filter(function (s) { return s && s.propertyId && validDate(s.checkIn); });
-    const arriving = stays.filter(function (s) { return s.checkIn === day; });
-    if (!arriving.length) return;
-    const key = "arrival|" + b.id + "|" + day;
-    if (input.sent && input.sent.has(key)) return;
-    const to = normaliseNumber(b.phone);
-    if (!guestAgreed(b)) { skipped.push({ key: key, why: "not agreed" }); return; }
-    if (!to) { skipped.push({ key: key, why: "no mobile" }); return; }
-    const first = arriving[0];
-    const prop = props[first.propertyId];
-    const t = stayTimes(b, first, prop);
-    const out = arriving.map(function (s) { return s.checkOut; }).filter(validDate).sort().pop() || first.checkOut;
-    const nights = validDate(out) ? Math.round((new Date(out + "T12:00:00Z") - new Date(day + "T12:00:00Z")) / 864e5) : 0;
-    const names = arriving.map(function (s) { const p = props[s.propertyId]; return (p && p.name) || s.propertyName || s.propertyId; });
-    send.push({ template: "pre_arrival", key: key, to: to, toName: b.guestName || "",
-      record: { kind: "accom", id: String(b.id), name: (b.guestName || "Guest") + " letting" },
-      // What each tap-to-answer button sends back: the booking, the arrival
-      // day and which button (whatsapp-webhook saves it on the booking).
-      payloads: [0, 1, 2].map(function (i) { return "eta|" + b.id + "@" + day + "|" + i; }),
-      values: {
-        guestName: firstName(b.guestName || "there"),
-        property: cleanParam(names.filter(function (n, i) { return names.indexOf(n) === i; }).join(" and "), 80),
-        gateCode: cleanParam(arrival.gateCode, 40),
-        arrivalPack: cleanParam(arrivalPackFor(arrival, arriving) || "https://www.hawthbushfarm.co.uk", 300),
-        checkInTime: clock12(t.inTime) || "—",
-        checkOutDate: validDate(out) ? dayLong(out) : "—",
-        checkOutTime: clock12(t.outTime) || "—",
-        nights: nights === 1 ? "1 night" : nights + " nights",
-        bookingRef: String(b.id || "").toUpperCase() || "—"
-      } });
+    const msg = arrivalMessage(b, day, props, arrival, input.hostedPacks);
+    if (msg.skip === "not arriving that day") return;
+    if (input.sent && input.sent.has(msg.key)) return;
+    if (msg.skip) { skipped.push({ key: msg.key, why: msg.skip }); return; }
+    send.push(msg);
   });
   return { send: send, skipped: skipped };
 }
@@ -249,6 +263,13 @@ function hkNote(setups, kind, refId) {
 function shortName(p) {
   const n = String((p && p.name) || "").replace(/^The\s+/i, "");
   return n.split(/\s+/)[0] || (p && p.id) || "";
+}
+// "15:00" → "3pm", "12:30" → "12:30pm"
+function shortTime(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm || ""));
+  if (!m) return "";
+  const h = Number(m[1]);
+  return ((h % 12) || 12) + (m[2] === "00" ? "" : ":" + m[2]) + (h < 12 ? "am" : "pm");
 }
 // "Emma Juner" → "Juner"; "Jones (Wed)" → "Jones" (wedding-cottage names).
 function surname(s) {
@@ -276,9 +297,12 @@ function summaryDays(input, from, days, cap) {
         if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
         (b.stays && b.stays.length ? b.stays : [b]).forEach(function (s) {
           if (!s || s.propertyId !== p.id) return;
-          if (s.checkOut === day) bits.push(hk(setups, "noexit", "accom", b.id) ? "out (no clean)" : "out");
+          // Early check-in / late check-out allowed on the booking (30 Oct).
+          if (s.checkOut === day) bits.push((b.lateCheckOut && s.checkOutTime === b.lateCheckOut ? "out late " + shortTime(b.lateCheckOut) : "out") +
+            (hk(setups, "noexit", "accom", b.id) ? " (no clean)" : ""));
           if (s.checkIn === day) {
-            let t = "in " + surname(b.guestName || (b.source === "airbnb" ? "Airbnb" : "guest"));
+            let t = "in " + surname(b.guestName || (b.source === "airbnb" ? "Airbnb" : "guest")) +
+              (b.earlyCheckIn && s.checkInTime === b.earlyCheckIn ? " early " + shortTime(b.earlyCheckIn) : "");
             const extra = hk(setups, "setup", "accom", b.id) ? "extra clean" : "";
             const note = hkNote(setups, "accom", b.id);
             const paren = [extra, note].filter(Boolean).join(": ");
@@ -340,5 +364,5 @@ function planSummary(input) {
   return { send: send, skipped: skipped };
 }
 
-module.exports = { planChecklists, planArrivals, planSummary, summaryDays, dayCap, isQuiet, dueWords, itemsList,
+module.exports = { planChecklists, planArrivals, arrivalMessage, planSummary, summaryDays, dayCap, isQuiet, dueWords, itemsList,
   normaliseNumber, guestAgreed, arrivalPackFor, londonDate, londonHour, londonWeekday, clock12, CATCH_UP_H };

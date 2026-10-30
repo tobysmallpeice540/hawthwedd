@@ -121,6 +121,7 @@ function departureOf(booking) {
 }
 
 var WA_ARRIVAL = {};   // hbf_whatsapp_settings_v1.arrival, read once per run
+var WA_HOSTED = {};    // { arrival_general, arrival_event }: hosted pack links
 function buildTokens(booking, property, extra) {
   var stays = (booking.stays && booking.stays.length) ? booking.stays : [booking];
   var propNames = stays.map(function(s) { return s.propertyName || s.propertyId; }).join(" + ");
@@ -157,6 +158,8 @@ function buildTokens(booking, property, extra) {
   for (var i = 0; i < stays.length; i++) {
     if (packs[stays[i].propertyId]) { tokens.arrivalPack = String(packs[stays[i].propertyId]); break; }
   }
+  if (!tokens.arrivalPack) tokens.arrivalPack = (booking.bookingType === "Wedding" ? WA_HOSTED.arrival_event || WA_HOSTED.arrival_general
+    : WA_HOSTED.arrival_general || WA_HOSTED.arrival_event) || "";
   return Object.assign(tokens, extra || {});
 }
 
@@ -431,6 +434,9 @@ exports.handler = async function() {
     // read leaves them blank rather than stopping the emails.
     try { WA_ARRIVAL = ((await sbGet("hbf_whatsapp_settings_v1")) || {}).arrival || {}; } catch (e) { WA_ARRIVAL = {}; }
     var templates  = (await sbGet(TEMPLATES_KEY)) || DEFAULT_TEMPLATES;
+    // The fixed links to the packs on the arrival emails, for {{arrivalPack}}
+    // where a property has no link of its own (arrival-pack.js).
+    WA_HOSTED = require("./whatsapp-reminders/templates.js").hostedPacks(templates, process.env.HBF_ADMIN_TOKEN);
 
     var live = function(b) { return b.status !== "cancelled" && b.bookingType !== "Blocked" && !!b.email; };
 

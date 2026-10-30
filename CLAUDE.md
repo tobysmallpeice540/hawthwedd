@@ -903,6 +903,32 @@ own header.
   `tests/arrival-badges-e2e.cjs`. **Migration u (`chk_for_record`) was only
   applied to production on 30 Oct** — before then the letting/event
   checklists panel was silently empty.
+- **Early check-in / late check-out** (30 Oct): two ticks with times on the
+  letting form (`EarlyLateToggles`; 3pm and midday unless changed), kept as
+  `earlyCheckIn` / `lateCheckOut` AND written into the first arrival's
+  `checkInTime` / the last departure's `checkOutTime` (`applyEarlyLate`), so
+  housekeeping windows, checklists and the pre-arrival WhatsApp follow with no
+  change of their own. Unticking puts those stays back to the standard time.
+  Shown on the home page line ("Early in 3pm", "Late out 12pm") and in the
+  changeover summary.
+- **Hosted arrival packs** (`arrival-pack.js`, `/pack/<template id>/<key>`,
+  30 Oct): serves the FIRST attachment of a lettings email template (the
+  data URL in `hbf_email_templates_v1`) — so replacing the attachment
+  updates the link. Key = HMAC(template id, `HBF_ADMIN_TOKEN`), 16 chars
+  (`packKey` in templates.js); rotating the token changes every link.
+  `{{arrivalPack}}` = the property's own link if set, else the hosted pack of
+  the arrival email that booking gets (weddings `arrival_event`, else
+  `arrival_general`) — in the WhatsApp and the emails alike.
+- **Send WhatsApp by hand** on a letting (`WaBookingSend`; `whatsapp-send`
+  `bookingPreview` / `sendBooking`): the pre-arrival message for the next
+  arrival, previewed as sent, refused without consent or a mobile, marked in
+  `wa_sent_marks` as `arrival|<id>|<day>` so the automatic one won't repeat
+  it; a second send needs `force` ("Send again"). Pinned by
+  `tests/whatsapp-send-booking-test.cjs`.
+- Home page order (Toby, 30 Oct): … Accom check-ins (name · property, then
+  the markers) … the wedding pipeline, then Brochure requests last. Recent
+  automated emails moved to Settings → Email templates → Sent
+  (`RecentAutomatedEmails`).
 - **Every staff login may have a mobile** (`profiles.mobile`, international
   digits, written only by `user-admin.js` `users.create` / `users.setMobile`;
   edited in place on Settings → Staff, `MobileCell`). Optional for everyone:

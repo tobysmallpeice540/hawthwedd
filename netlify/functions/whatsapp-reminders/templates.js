@@ -181,4 +181,24 @@ function parseEtaPayload(payload) {
   return label ? { bookingId: m[1], date: m[2], index: Number(m[3]), label: label } : null;
 }
 
-module.exports = { TEMPLATES, FOOTER, buttonLabels, parseEtaPayload, checkBody, toNumbered, components, cleanParam, render, sendOrder };
+// The fixed link to the arrival pack attached to a lettings email template
+// (served by arrival-pack.js). The key is an HMAC of the template id with
+// HBF_ADMIN_TOKEN: unguessable, and unchanged until that token is rotated.
+const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
+function packKey(templateId, secret) {
+  return require("crypto").createHmac("sha256", String(secret || "")).update("arrival-pack:" + templateId).digest("base64url").slice(0, 16);
+}
+function packUrl(templateId, secret) {
+  return SITE_ORIGIN + "/pack/" + encodeURIComponent(templateId) + "/" + packKey(templateId, secret);
+}
+// The arrival email templates that carry a pack: { arrival_general: url, arrival_event: url }.
+function hostedPacks(emailTemplates, secret) {
+  const out = {};
+  if (!secret) return out;
+  (emailTemplates || []).forEach(function (t) {
+    if (t && (t.id === "arrival_general" || t.id === "arrival_event") && (t.attachments || []).length) out[t.id] = packUrl(t.id, secret);
+  });
+  return out;
+}
+
+module.exports = { TEMPLATES, FOOTER, buttonLabels, parseEtaPayload, packKey, packUrl, hostedPacks, checkBody, toNumbered, components, cleanParam, render, sendOrder };

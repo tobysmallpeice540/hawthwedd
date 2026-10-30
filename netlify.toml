@@ -142,6 +142,15 @@
   status = 200
   force = true
 
+# The arrival pack attached to a lettings email template, at a fixed link
+# (arrival-pack.js). Above the /* catch-all, like every clean URL.
+#   https://hawthbushfarm.netlify.app/pack/arrival_general/<key>
+[[redirects]]
+  from = "/pack/:t/:k"
+  to = "/.netlify/functions/arrival-pack?t=:t&k=:k"
+  status = 200
+  force = true
+
 # Clean URL for the hosted iCalendar feed (events + viewings)
 [[redirects]]
   from = "/calendar.ics"

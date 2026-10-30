@@ -161,6 +161,14 @@ assert.ok(days[3].indexOf("Supper club 7:30pm") !== -1 && days[3].indexOf("Draft
 assert.strictEqual(days[9], "Mon 9 Nov: nothing booked");
 assert.strictEqual(P.summaryDays({ accom: [{ id: "w", guestName: "Jones (Wed)", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] }], properties }, "2026-10-31", 1)[0],
   "Sat 31 Oct: Amly in Jones", "wedding-cottage names lose the (Wed)");
+// Early check-in / late check-out on the booking show in the summary.
+const el = P.summaryDays({ accom: [{ id: "e", guestName: "Kim Early", status: "confirmed", earlyCheckIn: "15:00", lateCheckOut: "12:00",
+  stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01", checkInTime: "15:00", checkOutTime: "12:00" }] }], properties }, "2026-10-31", 2);
+assert.deepStrictEqual(el, ["Sat 31 Oct: Amly in Early early 3pm", "Sun 1 Nov: Amly out late 12pm"]);
+// The pre-arrival WhatsApp picks up the early time from the stay.
+const ea = P.planArrivals({ accom: [{ id: "e", guestName: "Kim Early", phone: "07700900111", status: "confirmed", earlyCheckIn: "15:00",
+  stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01", checkInTime: "15:00" }] }], properties, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
+assert.strictEqual(ea.send[0].values.checkInTime, "3:00pm");
 assert.ok(days.every(function (d) { return d.length <= 88 && !/[\n\t]/.test(d); }));
 const sumIn = { accom, properties, events, boxEvents, setups, settings: { day: 0, hour: 8, recipients: [{ name: "Karina", mobile: "07111 222333" }, { name: "Edita", mobile: "" }] } };
 p = P.planSummary(Object.assign({ now: at("2026-11-01T07:30:00Z") }, sumIn));   // Sunday 7:30am
@@ -200,6 +208,7 @@ console.log("whatsapp plans and templates: all tests passed");
     if (key === "hbf_whatsapp_submitted_v1") return ok([{ value: submitted }]);
     if (key === "hbf_accom_v1") return ok([{ value: accom }]);
     if (key === "hbf_properties_v1") return ok([{ value: properties }]);
+    if (key === "hbf_email_templates_v1") return ok([{ value: [] }]);
     if (url.includes("/chk_runs?")) return ok([runs[0]]);
     if (url.includes("/chk_run_items?")) return ok(items.filter(function (i) { return i.run_id === "run1"; }));
     if (url.includes("/profiles?")) return ok(Object.keys(people).map(function (id) { return Object.assign({ id: id }, people[id]); }));
