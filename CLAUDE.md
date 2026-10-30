@@ -828,8 +828,12 @@ own header.
   `emailed_at` makes it once only. Pinned by `tests/whatsapp-webhook-test.cjs`.
 - `wa_messages`: RLS on, no policies, anon/authenticated revoked — functions
   only. Media is not fetched yet.
-- Settings → WhatsApp (admin): token check and Send test (`hello_world`).
-  Still to build: real templates, opt-in, Send buttons, the booking panel.
+- Settings → WhatsApp (admin): the sending number and its name review, the
+  templates on the account, and two tests — an approved template with no
+  variables, or plain text (only within 24h of that person messaging the
+  01825 number). **Meta's sample `hello_world` is not on this account** (error
+  132001, 30 Oct) — never assume it. Still to build: real templates, opt-in,
+  Send buttons, the booking panel.
 
 ## Working in this folder from a Claude session
 

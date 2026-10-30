@@ -3,9 +3,19 @@
 // Admin only: the caller's Supabase session must belong to an active admin.
 //
 // Actions (POST JSON):
-//   { action: "status" }          — is the token set? (never returns it)
-//   { action: "test", to }        — Meta's ready-approved "hello_world"
-//                                   template to one number, to prove the chain.
+//   { action: "status" }   — is the token set (never returns it); which number
+//                            we send from and its name review; the templates
+//                            the WhatsApp account holds and their approval.
+//   { action: "test", to, template, language }
+//                          — one approved template with no variables.
+//   { action: "test", to, text: true }
+//                          — a plain text message. WhatsApp only delivers it
+//                            within 24 hours of that person messaging the
+//                            01825 number (the customer service window).
+//
+// Meta's sample "hello_world" is NOT on every new account (30 Oct 2026: error
+// 132001 "Template name does not exist in the translation"), so the test no
+// longer assumes it.
 //
 // Templates for guests, couples and cleaners come next, once Meta has
 // approved them. Every message sent is kept in wa_messages (direction "out");
@@ -75,6 +85,42 @@ async function sendTemplate(to, name, lang, components) {
   return data.messages[0].id;
 }
 
+async function graphGet(path) {
+  const res = await fetch(GRAPH + path, { headers: { "Authorization": "Bearer " + WA_TOKEN } });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* not JSON */ }
+  if (!res.ok) {
+    const err = data && data.error ? (data.error.error_user_msg || data.error.message || "") : "";
+    throw new Error("Meta said " + res.status + (err ? ": " + err : ""));
+  }
+  return data || {};
+}
+
+// A template needs values filled in if any of its parts carries {{1}}, or it
+// has a header picture/video/document (which must be supplied each send).
+function needsValues(t) {
+  return (t.components || []).some(function (c) {
+    if (c.type === "HEADER" && c.format && c.format !== "TEXT") return true;
+    if (/\{\{\s*\w+\s*\}\}/.test(c.text || "")) return true;
+    return (c.buttons || []).some(function (b) { return /\{\{/.test(b.url || ""); });
+  });
+}
+
+async function sendText(to, body) {
+  const res = await fetch(GRAPH + "/" + PHONE_NUMBER_ID + "/messages", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + WA_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify({ messaging_product: "whatsapp", to: to, type: "text", text: { body: body } })
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* not JSON */ }
+  if (!res.ok || !data || !data.messages || !data.messages[0]) {
+    const err = data && data.error ? (data.error.error_user_msg || data.error.message || "") : "";
+    throw new Error("WhatsApp refused it (" + res.status + ")" + (err ? ": " + err : ""));
+  }
+  return data.messages[0].id;
+}
+
 async function recordOut(row) {
   const res = await fetch(SUPABASE_URL + "/rest/v1/wa_messages", {
     method: "POST",
@@ -94,19 +140,53 @@ exports.handler = async (event) => {
   let req;
   try { req = JSON.parse(event.body || "{}"); } catch (e) { return json(400, { error: "Bad request" }); }
 
-  if (req.action === "status") return json(200, { configured: !!WA_TOKEN, phoneNumberId: PHONE_NUMBER_ID, wabaId: WABA_ID });
+  if (req.action === "status") {
+    const out = { configured: !!WA_TOKEN, phoneNumberId: PHONE_NUMBER_ID, wabaId: WABA_ID };
+    if (!WA_TOKEN) return json(200, out);
+    // Each look-up is reported on its own: one failing must not hide the others.
+    try {
+      const n = await graphGet("/" + PHONE_NUMBER_ID + "?fields=display_phone_number,verified_name,name_status,quality_rating");
+      out.number = { display: n.display_phone_number || "", name: n.verified_name || "", nameStatus: n.name_status || "", quality: n.quality_rating || "" };
+    } catch (e) { out.numberError = e.message; }
+    try {
+      const p = await graphGet("/" + WABA_ID + "/phone_numbers?fields=id,display_phone_number");
+      out.numberOnAccount = (p.data || []).some(function (x) { return String(x.id) === PHONE_NUMBER_ID; });
+      out.accountNumbers = (p.data || []).map(function (x) { return { id: String(x.id), display: x.display_phone_number || "" }; });
+    } catch (e) { out.accountError = e.message; }
+    try {
+      const t = await graphGet("/" + WABA_ID + "/message_templates?fields=name,language,status,category,components&limit=100");
+      out.templates = (t.data || []).map(function (x) {
+        return { name: x.name, language: x.language, status: x.status, category: x.category, needsValues: needsValues(x) };
+      });
+    } catch (e) { out.templatesError = e.message; }
+    return json(200, out);
+  }
 
   if (req.action === "test") {
     if (!WA_TOKEN) return json(500, { error: "WHATSAPP_TOKEN is not set in Netlify (and the site redeployed)." });
     const to = normaliseNumber(req.to);
     if (!to) return json(400, { error: "That doesn't look like a phone number." });
     try {
-      const id = await sendTemplate(to, "hello_world", "en_US");
-      const kept = await recordOut({ id: id, direction: "out", number: to, msg_type: "template",
-        body: "hello_world (test, sent by " + me.who + ")", at: new Date().toISOString(), status: "accepted" });
+      let id, body, type;
+      if (req.text) {
+        body = "Test message from Hawthbush Farm, sent from the app by " + (me.who || "the office") + ". Replies go to our email, read in office hours.";
+        id = await sendText(to, body); type = "text";
+      } else {
+        const name = String(req.template || "").trim();
+        const lang = String(req.language || "").trim();
+        if (!/^[a-z0-9_]{1,512}$/.test(name) || !/^[A-Za-z_]{2,10}$/.test(lang)) return json(400, { error: "Choose a template to test with." });
+        id = await sendTemplate(to, name, lang);
+        body = name + " (test, sent by " + me.who + ")"; type = "template";
+      }
+      const kept = await recordOut({ id: id, direction: "out", number: to, msg_type: type,
+        body: body, at: new Date().toISOString(), status: "accepted" });
       return json(200, { ok: true, id: id, to: to, recorded: kept });
     } catch (e) {
-      return json(502, { error: e.message });
+      // 131047: more than 24 hours since they last messaged us — text needs a template.
+      const hint = /131047|24 hours|re-engagement/i.test(e.message)
+        ? " A plain message only goes to someone who has messaged the 01825 number in the last 24 hours — send it a WhatsApp from that phone first."
+        : "";
+      return json(502, { error: e.message + hint });
     }
   }
 

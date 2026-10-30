@@ -2790,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-29f";
+const APP_BUILD = "2026-10-30a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18967,22 +18967,31 @@ function WhatsAppSettings() {
   const [st, setSt] = useState(null);
   const [state, setState] = useState("loading");
   const [to, setTo] = useState("");
+  const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
-  useEffect(function() {
+  function load() {
+    setState("loading");
     whatsappCall({ action: "status" })
       .then(function(d) { setSt(d); setState("ready"); })
       .catch(function(e) { setState(e.status === 401 ? "hidden" : e.status === 404 ? "absent" : "error"); });
-  }, []);
+  }
+  useEffect(load, []);
   if (state === "hidden") return null;
-  async function sendTest() {
+  const usable = ((st && st.templates) || []).filter(function(t) { return t.status === "APPROVED" && !t.needsValues; });
+  const chosen = usable.find(function(t) { return t.name + "|" + t.language === pick; }) || usable[0] || null;
+  async function send(asText) {
     setBusy(true); setNote(null);
     try {
-      const d = await whatsappCall({ action: "test", to: to });
+      const body = asText ? { action: "test", to: to, text: true }
+        : { action: "test", to: to, template: chosen.name, language: chosen.language };
+      const d = await whatsappCall(body);
       setNote({ kind:"ok", text: "Sent to +" + d.to + ". It should arrive in a few seconds — reply from that phone to test the email forwarding." });
     } catch (e) { setNote({ kind:"error", text: e.message }); }
     setBusy(false);
   }
+  const line = { fontSize:12.5, color:T.text, lineHeight:1.7 };
+  const muted = { color:T.textMid };
   return (
     <div>
       <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
@@ -18996,10 +19005,48 @@ function WhatsAppSettings() {
         <div style={{ fontSize:12.5, color:T.amber }}>WHATSAPP_TOKEN is not set in Netlify yet (add it, then redeploy).</div>
       )}
       {state === "ready" && st && st.configured && (
-        <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
+        <div style={{ marginBottom:12 }}>
+          <div style={line}>
+            {st.number
+              ? <>Sending from <strong>{st.number.display}</strong>{st.number.name ? <> as <strong>{st.number.name}</strong></> : null}
+                  {st.number.nameStatus ? <span style={muted}> · name {String(st.number.nameStatus).toLowerCase().replace(/_/g, " ")}</span> : null}</>
+              : <span style={{ color:T.red }}>Could not read the sending number: {st.numberError}</span>}
+          </div>
+          {st.numberOnAccount === false && (
+            <div style={{ ...line, color:T.red }}>
+              That number is not on the WhatsApp account the app uses. Numbers on the account: {(st.accountNumbers || []).map(function(n){ return n.display + " (" + n.id + ")"; }).join(", ") || "none"}.
+            </div>
+          )}
+          {st.accountError && <div style={{ ...line, color:T.red }}>Could not read the account's numbers: {st.accountError}</div>}
+          <div style={line}>
+            {st.templatesError
+              ? <span style={{ color:T.red }}>Could not read the templates: {st.templatesError}</span>
+              : (st.templates || []).length === 0
+                ? <span style={muted}>No message templates on the account yet.</span>
+                : <span style={muted}>Templates: {(st.templates || []).map(function(t){ return t.name + " (" + t.language + ", " + String(t.status).toLowerCase() + ")"; }).join(" · ")}</span>}
+          </div>
+        </div>
+      )}
+      {state === "ready" && st && st.configured && (
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
           <input type="tel" value={to} onChange={function(e){ setTo(e.target.value); }} placeholder="Mobile number for a test"
-            style={{ flex:"1 1 auto", minWidth:0, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 10px", boxSizing:"border-box" }}/>
-          <button type="button" disabled={busy || !to.trim()} onClick={sendTest} style={smallBtn}>{busy ? "Sending…" : "Send test"}</button>
+            style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 10px", boxSizing:"border-box" }}/>
+          {usable.length > 0 && (
+            <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
+              <select value={chosen ? chosen.name + "|" + chosen.language : ""} onChange={function(e){ setPick(e.target.value); }}
+                style={{ flex:"1 1 auto", minWidth:0, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 8px" }}>
+                {usable.map(function(t){ return <option key={t.name + "|" + t.language} value={t.name + "|" + t.language}>{t.name} ({t.language})</option>; })}
+              </select>
+              <button type="button" disabled={busy || !to.trim()} onClick={function(){ send(false); }} style={smallBtn}>{busy ? "Sending…" : "Send template"}</button>
+            </div>
+          )}
+          <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
+            <div style={{ flex:"1 1 auto", minWidth:0, fontSize:12, color:T.textMid, lineHeight:1.5 }}>
+              A plain message only reaches someone who has messaged the 01825 number in the last 24 hours.
+            </div>
+            <button type="button" disabled={busy || !to.trim()} onClick={function(){ send(true); }} style={smallBtn}>{busy ? "Sending…" : "Send plain test"}</button>
+          </div>
+          <div><button type="button" disabled={busy} onClick={load} style={{ ...smallBtn, fontWeight:500 }}>Check again</button></div>
         </div>
       )}
       {note && <div style={{ marginTop:9, fontSize:12, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
