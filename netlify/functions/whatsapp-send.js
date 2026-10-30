@@ -20,12 +20,21 @@
 //   { action: "subscribe" } — link the WhatsApp account to this app so Meta
 //                            passes incoming messages to whatsapp-webhook. A
 //                            verified callback URL is NOT enough on its own.
-//   { action: "createTemplate", name }
-//                          — submit one of TEMPLATES below to Meta for review.
+//   { action: "submit", name, body }
+//                          — send a template's wording (named merge fields)
+//                            to Meta for review: a new template is created, an
+//                            existing one is edited (Meta reviews it again and
+//                            allows about one edit a day). What was submitted,
+//                            and its field order, is kept in app_data
+//                            hbf_whatsapp_submitted_v1 — the order messages
+//                            are filled in until Meta has a newer version.
+//   { action: "log", number? }
+//                          — the WhatsApps sent (and received), newest first,
+//                            and who they went to, for the Sent list.
 //
-// Templates for guests, couples and cleaners come next, once Meta has
-// approved them. Every message sent is kept in wa_messages (direction "out");
-// the webhook moves its status on as receipts arrive.
+// The templates themselves live in whatsapp-reminders/templates.js, shared
+// with the sender. Every message sent is kept in wa_messages (direction
+// "out"); the webhook moves its status on as receipts arrive.
 //
 // Env: WHATSAPP_TOKEN (permanent system-user token — secret), SUPABASE_SERVICE_KEY.
 // The phone number id and account id are not secret and live here.
@@ -36,24 +45,8 @@ const GRAPH = "https://graph.facebook.com/v23.0";
 const PHONE_NUMBER_ID = "1454490917738977";   // the 01825 number
 const WABA_ID = "970274439005564";            // Hawthbush Farm WhatsApp account (templates)
 
-// The templates the app uses, exactly as they are submitted to Meta. Changing
-// the wording of one Meta has approved means submitting it again under a new
-// name — an approved template cannot be edited into something else here.
-// Footer (Toby, 29 Oct): replies are read by email in office hours.
-const FOOTER = "Replies go to our email, read in office hours";
-const TEMPLATES = {
-  checklist_reminder: {
-    label: "Checklist reminder (staff)",
-    language: "en_GB", category: "UTILITY",
-    components: [
-      { type: "BODY",
-        text: "Hi {{1}}, a reminder from Hawthbush Farm: you have {{2}} on the {{3}} checklist, due by {{4}}: {{5}}. Please tick them off in the app.",
-        example: { body_text: [["Rosanna", "2 items", "Arrival – Emma Juner letting", "3:00pm today", "Welcome hamper · Heating on"]] } },
-      { type: "FOOTER", text: FOOTER },
-      { type: "BUTTONS", buttons: [{ type: "URL", text: "Open the app", url: "https://hawthbushfarm.netlify.app/" }] }
-    ]
-  }
-};
+const T = require("./whatsapp-reminders/templates.js");
+const SUBMITTED_KEY = "hbf_whatsapp_submitted_v1";
 
 const json = (status, obj) => ({ statusCode: status, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) });
 
@@ -157,6 +150,23 @@ async function recordOut(row) {
   return res.ok;
 }
 
+async function appData(key) {
+  const r = await fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq." + encodeURIComponent(key) + "&select=value",
+    { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+  if (!r.ok) throw new Error("read " + key + " " + r.status);
+  const rows = await r.json();
+  return rows[0] ? rows[0].value : null;
+}
+async function putAppData(key, value) {
+  const r = await fetch(SUPABASE_URL + "/rest/v1/app_data?on_conflict=key", {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([{ key: key, value: value, updated_at: new Date().toISOString() }])
+  });
+  if (!r.ok) throw new Error("write " + key + " " + r.status);
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "POST only" });
   const me = await resolveStaff(event, ["admin"]);
@@ -186,14 +196,23 @@ exports.handler = async (event) => {
       });
     } catch (e) { out.linkedAppsError = e.message; }
     try {
-      const t = await graphGet("/" + WABA_ID + "/message_templates?fields=name,language,status,category,components&limit=100");
+      const t = await graphGet("/" + WABA_ID + "/message_templates?fields=id,name,language,status,category,components,rejected_reason&limit=100");
       out.templates = (t.data || []).map(function (x) {
-        return { name: x.name, language: x.language, status: x.status, category: x.category, needsValues: needsValues(x) };
+        return { id: x.id, name: x.name, language: x.language, status: x.status, category: x.category,
+          rejectedReason: x.rejected_reason && x.rejected_reason !== "NONE" ? x.rejected_reason : "", needsValues: needsValues(x) };
       });
     } catch (e) { out.templatesError = e.message; }
-    out.catalogue = Object.keys(TEMPLATES).map(function (k) {
+    let submitted = {};
+    try { submitted = (await appData(SUBMITTED_KEY)) || {}; } catch (e) { out.submittedError = e.message; }
+    out.catalogue = Object.keys(T.TEMPLATES).map(function (k) {
+      const def = T.TEMPLATES[k];
       const on = (out.templates || []).filter(function (t) { return t.name === k; })[0];
-      return { name: k, label: TEMPLATES[k].label, language: TEMPLATES[k].language, status: on ? on.status : (out.templatesError ? "unknown" : "not submitted") };
+      const sub = submitted[k] || null;
+      return { name: k, label: def.label, audience: def.audience, when: def.when, language: def.language,
+        fields: def.fields, defaultBody: def.body, footer: T.FOOTER, button: def.button ? def.button.text : "",
+        status: on ? on.status : (out.templatesError ? "unknown" : "not submitted"),
+        rejectedReason: on ? on.rejectedReason : "",
+        submitted: sub ? { body: sub.body, at: sub.at, by: sub.by } : null };
     });
     // Who would get reminders: active office logins and whether each has a mobile.
     try {
@@ -241,18 +260,56 @@ exports.handler = async (event) => {
     return json(200, { ok: true });
   }
 
-  if (req.action === "createTemplate") {
+  if (req.action === "submit") {
     if (!WA_TOKEN) return json(500, { error: "WHATSAPP_TOKEN is not set in Netlify." });
-    const def = TEMPLATES[String(req.name || "")];
+    const name = String(req.name || "");
+    const def = T.TEMPLATES[name];
     if (!def) return json(400, { error: "Unknown template." });
-    const res = await fetch(GRAPH + "/" + WABA_ID + "/message_templates", {
-      method: "POST",
-      headers: { "Authorization": "Bearer " + WA_TOKEN, "Content-Type": "application/json" },
-      body: JSON.stringify({ name: req.name, language: def.language, category: def.category, components: def.components })
-    });
+    const body = String(req.body || def.body);
+    let built;
+    try { built = T.components(name, body); } catch (e) { return json(400, { error: e.message }); }
+    // Is it on Meta already? Then this is an edit of that template.
+    let existing = null;
+    try {
+      const t = await graphGet("/" + WABA_ID + "/message_templates?name=" + encodeURIComponent(name) + "&fields=id,name,status,language");
+      existing = (t.data || []).filter(function (x) { return x.name === name && x.language === def.language; })[0] || null;
+    } catch (e) { return json(502, { error: e.message }); }
+    if (existing && existing.status === "PENDING") return json(409, { error: "Meta is still reviewing the last version — wait for its answer before changing it." });
+    const url = existing ? GRAPH + "/" + existing.id : GRAPH + "/" + WABA_ID + "/message_templates";
+    const payload = existing ? { category: def.category, components: built.components }
+      : { name: name, language: def.language, category: def.category, components: built.components };
+    const res = await fetch(url, { method: "POST", headers: { "Authorization": "Bearer " + WA_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const d = await res.json().catch(function () { return {}; });
     if (!res.ok) return json(502, { error: "Meta said " + res.status + (d.error ? ": " + (d.error.error_user_msg || d.error.message) : "") });
-    return json(200, { ok: true, status: d.status || "PENDING", category: d.category || def.category });
+    // Record what Meta now has, so messages are filled in its order. Re-read
+    // first: only this template's entry changes.
+    try {
+      const all = (await appData(SUBMITTED_KEY)) || {};
+      all[name] = { body: body, order: built.order, at: new Date().toISOString(), by: me.who || "" };
+      await putAppData(SUBMITTED_KEY, all);
+    } catch (e) {
+      return json(500, { error: "Meta has it, but the app could not record what was submitted (" + e.message + "). Submit it once more tomorrow." });
+    }
+    return json(200, { ok: true, edited: !!existing, status: d.status || "PENDING" });
+  }
+
+  if (req.action === "log") {
+    const num = normaliseNumber(req.number);
+    const q = "wa_messages?select=id,direction,number,to_name,template,msg_type,body,at,status,record_kind,record_name,media" +
+      (num ? "&number=eq." + num : "") + "&order=at.desc&limit=300";
+    const r = await fetch(SUPABASE_URL + "/rest/v1/" + q, { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+    if (!r.ok) return json(500, { error: "Could not read the log (" + r.status + ")" });
+    const rows = await r.json();
+    // Everyone ever messaged, for the filter: number → the best name we have.
+    const pr = await fetch(SUPABASE_URL + "/rest/v1/wa_messages?select=number,to_name,record_name,direction&order=at.desc&limit=2000",
+      { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+    const people = {};
+    if (pr.ok) (await pr.json()).forEach(function (x) {
+      const p = people[x.number] = people[x.number] || { number: x.number, name: "", count: 0 };
+      p.count++;
+      if (!p.name) p.name = x.to_name || (x.direction === "in" ? x.record_name : "") || "";
+    });
+    return json(200, { ok: true, messages: rows, people: Object.values(people).sort(function (a, b) { return (a.name || "~").localeCompare(b.name || "~"); }) });
   }
 
   return json(400, { error: "Unknown action" });

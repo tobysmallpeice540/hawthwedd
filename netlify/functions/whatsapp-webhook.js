@@ -26,8 +26,10 @@
 // Delivery receipts update the status on our own outbound rows.
 //
 // Nothing a guest writes is logged to Netlify's function log. Counts only.
-// Photos, voice notes and files are not fetched yet: the email says one came
-// and asks the office to get in touch (the WhatsApp itself is on no phone).
+// Photos, voice notes, videos and files (30 Oct) are fetched from Meta with
+// WHATSAPP_TOKEN and attached to the email, up to MAX_ATTACH bytes; anything
+// bigger, or that cannot be fetched, is named in the email instead. A failed
+// fetch never fails the delivery — the text still goes.
 const crypto = require("crypto");
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
@@ -36,6 +38,9 @@ const RESEND_KEY = process.env.RESEND_API_KEY;
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || "";
 const APP_SECRET = process.env.WHATSAPP_APP_SECRET || "";
 
+const WA_TOKEN = process.env.WHATSAPP_TOKEN || "";
+const GRAPH = "https://graph.facebook.com/v23.0";
+const MAX_ATTACH = 10 * 1024 * 1024;
 const FORWARD_TO = "hawthbushfarm@gmail.com";
 const FROM_HEADER = "Hawthbush Farm <hello@hawthbushfarm.co.uk>";
 const KEYS = { accom: "hbf_accom_v1", event: "hawthbush_bookings_v6", enquiry: "hbf_enquiries_v1" };
@@ -99,6 +104,43 @@ function messageText(m) {
   return (media && media.caption) || "";
 }
 
+// The attachment on a message, as kept on its row: Meta's media id, type,
+// file name and mime type.
+function mediaOf(m) {
+  const kinds = ["image", "audio", "video", "document", "sticker"];
+  if (kinds.indexOf(m.type) === -1 || !m[m.type] || !m[m.type].id) return null;
+  const x = m[m.type];
+  return { type: m.type, id: String(x.id), mime: x.mime_type || "", name: x.filename || "" };
+}
+
+const EXT = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "audio/ogg": "ogg", "audio/mpeg": "mp3",
+  "audio/mp4": "m4a", "audio/aac": "aac", "video/mp4": "mp4", "video/3gpp": "3gp", "application/pdf": "pdf" };
+function fileName(media) {
+  if (media.name) return media.name.replace(/[\\/\r\n"]/g, "_").slice(0, 120);
+  const base = { image: "whatsapp-photo", audio: "whatsapp-voice-note", video: "whatsapp-video", sticker: "whatsapp-sticker", document: "whatsapp-file" }[media.type] || "whatsapp-file";
+  const ext = EXT[String(media.mime).split(";")[0].trim()] || "bin";
+  return base + "." + ext;
+}
+
+// Fetch one attachment from Meta. Returns { filename, content (base64) } or
+// { skipped: reason }.
+async function fetchMedia(media) {
+  if (!WA_TOKEN) return { skipped: "the app has no WhatsApp token" };
+  try {
+    const metaRes = await fetch(GRAPH + "/" + encodeURIComponent(media.id), { headers: { "Authorization": "Bearer " + WA_TOKEN } });
+    if (!metaRes.ok) return { skipped: "Meta would not give it to us (" + metaRes.status + ")" };
+    const info = await metaRes.json();
+    if (info.file_size && Number(info.file_size) > MAX_ATTACH) return { skipped: "it is too big to attach (" + Math.round(info.file_size / 1048576) + "MB)" };
+    const fileRes = await fetch(info.url, { headers: { "Authorization": "Bearer " + WA_TOKEN } });
+    if (!fileRes.ok) return { skipped: "the download failed (" + fileRes.status + ")" };
+    const buf = Buffer.from(await fileRes.arrayBuffer());
+    if (buf.length > MAX_ATTACH) return { skipped: "it is too big to attach" };
+    return { filename: fileName(Object.assign({}, media, { mime: media.mime || info.mime_type || "" })), content: buf.toString("base64") };
+  } catch (e) {
+    return { skipped: "the download failed" };
+  }
+}
+
 const MEDIA_WORDS = { image: "a photo", audio: "a voice note", video: "a video", document: "a file",
   sticker: "a sticker", location: "a location", contacts: "a contact card" };
 
@@ -156,13 +198,15 @@ function prettyNumber(n) {
   return n.startsWith("44") && n.length === 12 ? "0" + n.slice(2, 6) + " " + n.slice(6) : "+" + n;
 }
 
-function buildEmail(row) {
+function buildEmail(row, att) {
   const who = row.record_name || row.profile_name || prettyNumber(row.number);
   const media = MEDIA_WORDS[row.msg_type];
   const subject = "WhatsApp from " + who;
   const lines = [];
-  if (media) lines.push("<p><em>They sent " + media + ". Photos, voice notes and files can't be passed on yet — " +
-    "please get in touch with them if it matters.</em></p>");
+  if (media && att && att.filename) lines.push("<p><em>They sent " + media + " — it is attached (" + esc(att.filename) + ").</em></p>");
+  else if (media && att && att.skipped) lines.push("<p><em>They sent " + media + ", but it could not be attached: " + esc(att.skipped) +
+    ". Please get in touch with them if it matters.</em></p>");
+  else if (media) lines.push("<p><em>They sent " + media + ".</em></p>");
   if (row.body) lines.push('<p style="font-size:16px;line-height:1.5;border-left:3px solid #b8a88a;padding-left:12px">' +
     esc(row.body) + "</p>");
   else if (!media) lines.push("<p><em>(A " + esc(row.msg_type) + " message with no text.)</em></p>");
@@ -176,11 +220,14 @@ function buildEmail(row) {
 }
 
 async function sendEmail(row) {
-  const e = buildEmail(row);
+  const att = row.media && row.media.id ? await fetchMedia(row.media) : null;
+  const e = buildEmail(row, att);
+  const msg = { from: FROM_HEADER, to: FORWARD_TO, subject: e.subject, html: e.html };
+  if (att && att.filename) msg.attachments = [{ filename: att.filename, content: att.content }];
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: FROM_HEADER, to: FORWARD_TO, subject: e.subject, html: e.html })
+    body: JSON.stringify(msg)
   });
   if (!res.ok) throw new Error("email failed: " + res.status);
 }
@@ -211,6 +258,7 @@ async function handleInbound(changes) {
       id: String(x.m.id), direction: "in", number: number, profile_name: x.name,
       msg_type: String(x.m.type || "unknown"), body: text ? text.slice(0, 4000) : null,
       at: new Date(Number(x.m.timestamp || 0) * 1000 || Date.now()).toISOString(),
+      media: mediaOf(x.m),
       record_kind: recs[0] ? recs[0].kind : null, record_id: recs[0] ? recs[0].id : null,
       record_name: recs.length ? recs.map(function (r) { return r.name; }).join(" / ") : null
     };
@@ -273,4 +321,4 @@ exports.handler = async (event) => {
   }
 };
 
-exports._test = { normaliseNumber: normaliseNumber, findRecords: findRecords, messageText: messageText, buildEmail: buildEmail };
+exports._test = { normaliseNumber: normaliseNumber, findRecords: findRecords, messageText: messageText, buildEmail: buildEmail, mediaOf: mediaOf, fileName: fileName };

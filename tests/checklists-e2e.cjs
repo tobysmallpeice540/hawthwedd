@@ -169,8 +169,17 @@ const called = (s, fn) => s.calls.filter((c) => c.fn === fn)
     check('settings: Enter adds no line break to an item', !/\n/.test(await itemBox.inputValue()))
     await itemBox.fill('Cash up the till')
     await page.locator('select').filter({ has: page.locator('option[value="role:bar"]') }).first().selectOption('role:bar')
+    // The list's two WhatsApp ticks (30 Oct): on unless unticked, saved with
+    // the WhatsApp settings under the id the save returns — not on the template.
+    const waLive = page.getByLabel('Send a WhatsApp reminder when this checklist becomes active')
+    const waLate = page.getByLabel('Send a WhatsApp reminder when items are overdue')
+    check('whatsapp ticks start ticked', (await waLive.isChecked()) && (await waLate.isChecked()))
+    await waLate.uncheck()
     await page.getByRole('button', { name: 'Save checklist' }).click()
     await page.waitForTimeout(400)
+    const waWrite = s.calls.filter((c) => c.fn === 'write:app_data').map((c) => c.args).join('\n')
+    check('whatsapp ticks saved by the new id', /hbf_whatsapp_settings_v1/.test(waWrite) && /"T1":\{"live":true,"overdue":false\}/.test(waWrite), waWrite.slice(-200))
+    check('…and not sent to the template save', !('wa' in (st.saved || {})) && !('live' in (st.saved || {})))
     const saved = st.saved || {}
     check('template saved with its trigger', saved.title === 'Bar closing' && saved.trig && saved.trig.kind === 'event' && saved.trig.event_type === 'paybar', JSON.stringify(saved.trig))
     check('…and its item for the bar', saved.items && saved.items.length === 1 && saved.items[0].who === 'role:bar' && saved.items[0].title === 'Cash up the till', JSON.stringify(saved.items))

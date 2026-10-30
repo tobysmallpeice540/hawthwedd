@@ -108,10 +108,11 @@
 [functions."checklists-cron"]
   schedule = "2,17,32,47 * * * *"
 
-# WhatsApp checklist reminders (whatsapp-reminders/): one WhatsApp per named
-# person per list, before their first item is due — never after. OFF until
-# switched on in Settings → WhatsApp. Five minutes after the checklist run, so
-# a list that has just opened is already there. Schedule on the shim (see
+# Scheduled WhatsApps (whatsapp-reminders/): checklist live / overdue to named
+# staff, pre-arrival to guests, the weekly changeover summary to housekeepers.
+# Each template is OFF until switched on in Settings → WhatsApp, and nothing
+# goes between 10pm and 8am. Five minutes after the checklist run, so a list
+# that has just opened is already there. Schedule on the shim (see
 # brevo-sync-cron for why).
 [functions."whatsapp-reminders-cron"]
   schedule = "7,22,37,52 * * * *"

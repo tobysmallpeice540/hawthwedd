@@ -137,9 +137,7 @@ exports.handler = async function(event) {
         if (password.length < 10) return bad("Use a password of at least 10 characters.");
         var mobile = normaliseMobile(body.mobile);
         if (mobile === null) return bad("That mobile number doesn't look right.");
-        // Office logins get WhatsApp reminders, so their mobile is required.
-        // Bar and housekeeping logins are shared — no one person's phone.
-        if (role === "admin" && !mobile) return bad("Add a mobile number for an administrator — it's where their WhatsApp reminders go.");
+        // Every login may have a mobile; blank means no WhatsApps (Toby, 30 Oct).
 
         // email_confirm so the person can sign in straight away — these are
         // accounts you are handing out, not strangers signing themselves up.

@@ -312,7 +312,7 @@ var S = {
   cart: [],               // [{propertyId, propertyName, checkIn, checkOut, nights, value}]
   view: "calendar",       // "calendar" | "summary"
   // guest details
-  guestName: "", email: "", phone: "", guestCount: 2, notes: "",
+  guestName: "", email: "", phone: "", guestCount: 2, notes: "", waConsent: true,
   termsText: "",          // set at load; empty means no T&C published, so no tickbox
   termsAccepted: false,
   submitting: false, error: ""
@@ -1124,6 +1124,12 @@ function renderSummaryView() {
   html += '<div class="form-field full"><label>Notes / special requirements</label><textarea id="f-notes" rows="3" oninput="S.notes=this.value" placeholder="Any special requirements or questions...">' + escHtml(S.notes) + '</textarea></div>';
   html += '</div>';
 
+  // WhatsApp consent, ticked by default (30 Oct): stay information only.
+  html += '<label class="terms-accept' + (S.waConsent ? " on" : "") + '" style="margin-bottom:10px">';
+  html += '<input type="checkbox" ' + (S.waConsent ? "checked" : "") + ' onchange="S.waConsent=this.checked;this.parentNode.classList.toggle(\'on\',this.checked)">';
+  html += '<span>You can contact me by WhatsApp. Only with information about my stay &mdash; never for marketing.</span>';
+  html += '</label>';
+
   // Acceptance is required before paying, and the tick is recorded on the
   // booking with a timestamp — the point of asking is being able to show later
   // that the guest was shown them.
@@ -1187,6 +1193,7 @@ function submitBooking() {
       guestName: S.guestName.trim(),
       email: S.email.trim(),
       phone: S.phone.trim(),
+      waConsent: !!S.waConsent,
       guestCount: S.guestCount,
       notes: S.notes.trim()
     })

@@ -78,3 +78,44 @@ const delivery = { entry: [{ changes: [{ value: {
   assert.strictEqual(r.statusCode, 401);
   console.log("whatsapp-webhook: all tests passed");
 })().catch(function (e) { console.error(e); process.exit(1); });
+
+// Photos and files: fetched from Meta and attached to the email (30 Oct).
+(async function () {
+  await new Promise(function (r) { setTimeout(r, 200); });
+  process.env.WHATSAPP_TOKEN = "tok";
+  delete require.cache[require.resolve("../netlify/functions/whatsapp-webhook.js")];
+  const fn2 = require("../netlify/functions/whatsapp-webhook.js");
+  assert.deepStrictEqual(fn2._test.mediaOf({ type: "image", image: { id: "m1", mime_type: "image/jpeg" } }), { type: "image", id: "m1", mime: "image/jpeg", name: "" });
+  assert.strictEqual(fn2._test.mediaOf({ type: "text", text: { body: "x" } }), null);
+  assert.strictEqual(fn2._test.fileName({ type: "audio", mime: "audio/ogg; codecs=opus" }), "whatsapp-voice-note.ogg");
+  assert.strictEqual(fn2._test.fileName({ type: "document", name: 'menu "v2"/final.pdf' }), "menu _v2__final.pdf");
+  const db2 = {}; const mails = []; let big = false;
+  global.fetch = async function (url, opts) {
+    opts = opts || {};
+    const ok = function (b) { return { ok: true, status: 200, json: async () => b, text: async () => JSON.stringify(b) }; };
+    if (url.includes("/app_data?key=eq.")) return ok([{ value: [] }]);
+    if (url.includes("/wa_messages?on_conflict=id")) { JSON.parse(opts.body).forEach(function (r) { if (!db2[r.id]) db2[r.id] = Object.assign({ emailed_at: null }, r); }); return ok(null); }
+    if (url.includes("/wa_messages?select=*")) return ok(Object.values(db2).filter(function (r) { return !r.emailed_at; }));
+    if (url.includes("/wa_messages?id=eq.")) { db2[decodeURIComponent(url.split("id=eq.")[1])].emailed_at = "now"; return ok(null); }
+    if (url === "https://graph.facebook.com/v23.0/media1") return ok({ url: "https://lookaside.example/media1", mime_type: "image/jpeg", file_size: big ? 50 * 1048576 : 3 });
+    if (url === "https://lookaside.example/media1") return { ok: true, status: 200, arrayBuffer: async () => Buffer.from("abc") };
+    if (url.includes("api.resend.com")) { mails.push(JSON.parse(opts.body)); return ok({}); }
+    throw new Error("unexpected " + url);
+  };
+  const photo = function (id) { return { entry: [{ changes: [{ value: { contacts: [{ wa_id: "447700900001", profile: { name: "Sam" } }],
+    messages: [{ id: id, from: "447700900001", timestamp: "1761760000", type: "image", image: { id: "media1", mime_type: "image/jpeg", caption: "the gate" } }] } }] }] }; };
+  const crypto2 = require("crypto");
+  const post2 = function (payload) {
+    const body = JSON.stringify(payload);
+    return fn2.handler({ httpMethod: "POST", body: body, headers: { "x-hub-signature-256": "sha256=" + crypto2.createHmac("sha256", "sec").update(body).digest("hex") } });
+  };
+  assert.strictEqual((await post2(photo("wamid.p1"))).statusCode, 200);
+  assert.strictEqual(mails.length, 1);
+  assert.deepStrictEqual(mails[0].attachments, [{ filename: "whatsapp-photo.jpg", content: Buffer.from("abc").toString("base64") }]);
+  assert.ok(mails[0].html.includes("it is attached") && mails[0].html.includes("the gate"));
+  big = true;
+  assert.strictEqual((await post2(photo("wamid.p2"))).statusCode, 200, "a photo too big still delivers the email");
+  assert.strictEqual(mails[1].attachments, undefined);
+  assert.ok(mails[1].html.includes("too big to attach"));
+  console.log("whatsapp-webhook media: all tests passed");
+})().catch(function (e) { console.error(e); process.exit(1); });

@@ -1,109 +1,237 @@
-// WhatsApp checklist reminders: the plan (who, when, what it says).
+// WhatsApp: templates, the plans (who, when, what), and the sending run.
 // node tests/whatsapp-reminders-test.cjs
 const assert = require("assert");
-const { planReminders, cleanParam, dueWords } = require("../netlify/functions/whatsapp-reminders/plan.js");
-
-const T = "2450dade-861f-4cba-af54-391282894028", R = "df4f70ec-1a92-4476-abfc-4db71954452d", L = "116492da-d0ab-4528-99b0-fdf28311deed";
-const people = { [T]: { name: "Toby", mobile: "447900683355", active: true },
-                 [R]: { name: "Rosanna Greenwood", mobile: "447000000001", active: true },
-                 [L]: { name: "Lisa", mobile: null, active: true } };
-const due = "2026-10-30T15:00:00Z";          // 3pm London (GMT from 25 Oct)
-const runs = [{ id: "run1", title: "Arrival", context: "Emma Juner letting", status: "open" },
-              { id: "run2", title: "Closed one", status: "done" }];
-const items = [
-  { run_id: "run1", title: "Heating on", who: "person:" + T, due_at: due, position: 2, state: "open" },
-  { run_id: "run1", title: "Welcome hamper", who: "person:" + T, due_at: "2026-10-30T14:00:00Z", position: 1, state: "open" },
-  { run_id: "run1", title: "Done already", who: "person:" + T, due_at: "2026-10-30T13:00:00Z", position: 0, state: "done" },
-  { run_id: "run1", title: "Bar float", who: "role:bar", due_at: due, position: 3, state: "open" },
-  { run_id: "run1", title: "Anyone thing", who: "anyone", due_at: due, position: 4, state: "open" },
-  { run_id: "run1", title: "Rosanna's", who: "person:" + R, due_at: due, position: 5, state: "open" },
-  { run_id: "run1", title: "Lisa's", who: "person:" + L, due_at: due, position: 6, state: "open" },
-  { run_id: "run2", title: "On a done list", who: "person:" + T, due_at: due, position: 0, state: "open" }
-];
+const T = require("../netlify/functions/whatsapp-reminders/templates.js");
+const P = require("../netlify/functions/whatsapp-reminders/plan.js");
 const at = function (iso) { return new Date(iso); };
-const plan = function (now, extra) { return planReminders(Object.assign({ runs, items, people, sent: new Set(), settings: { leadMin: 60 }, now: at(now) }, extra || {})); };
 
-// Toby's first open item is due 14:00 (2pm). 60 minutes lead: from 13:00 until 14:00.
-let p = plan("2026-10-30T12:50:00Z");
-assert.strictEqual(p.send.filter(function (x) { return x.person === T; }).length, 0, "not yet");
-p = plan("2026-10-30T13:05:00Z");
-const toby = p.send.filter(function (x) { return x.person === T; });
-assert.strictEqual(toby.length, 1, "one per person per list");
-assert.deepStrictEqual(toby[0].params, ["Toby", "2 items", "Arrival – Emma Juner letting", "2:00pm today", "Welcome hamper · Heating on"]);
-assert.strictEqual(toby[0].to, "447900683355");
-// Never after the first item is due.
-p = plan("2026-10-30T14:00:00Z");
-assert.strictEqual(p.send.filter(function (x) { return x.person === T; }).length, 0, "never after it is due");
-// Role / anyone items never; a done list never.
-p = plan("2026-10-30T14:30:00Z");
-assert.ok(p.send.every(function (x) { return x.person !== T; }));
-assert.ok(p.send.every(function (x) { return x.run_id === "run1"; }));
-// Rosanna: first name only. Lisa: no mobile, reported.
-const ros = p.send.filter(function (x) { return x.person === R; })[0];
-assert.strictEqual(ros.params[0], "Rosanna");
-assert.strictEqual(ros.params[1], "1 item");
+// ── Templates ────────────────────────────────────────────────────────────────
+Object.keys(T.TEMPLATES).forEach(function (n) {
+  const c = T.checkBody(n, T.TEMPLATES[n].body);
+  assert.ok(c.ok, n + ": standard wording must pass Meta's rules: " + c.error);
+  const built = T.components(n, T.TEMPLATES[n].body);
+  assert.ok(built.components[0].text.indexOf("{{1}}") !== -1 || !c.order.length);
+  assert.strictEqual(built.components[1].text, T.FOOTER);
+  assert.ok(T.FOOTER.length <= 60);
+  if (c.order.length) assert.strictEqual(built.components[0].example.body_text[0].length, c.order.length);
+});
+assert.strictEqual(T.checkBody("pre_arrival", "{{guestName}} hello there").ok, false, "may not start with a field");
+assert.strictEqual(T.checkBody("pre_arrival", "Hello {{guestName}}").ok, false, "may not end with a field");
+assert.strictEqual(T.checkBody("pre_arrival", "Hello {{guestName}}.").ok, false, "a full stop after it still ends with it");
+assert.strictEqual(T.checkBody("pre_arrival", "Hello {{nobody}} there").ok, false, "unknown field");
+assert.strictEqual(T.checkBody("pre_arrival", "Hi {{guestName}} {{property}} ok").ok, false, "side by side");
+assert.strictEqual(T.checkBody("pre_arrival", "x".repeat(1025)).ok, false, "too long");
+// Named → numbered in first-appearance order; repeats share a number.
+const c1 = T.checkBody("pre_arrival", "Hi {{property}} and {{guestName}}, see {{property}} soon");
+assert.deepStrictEqual(c1.order, ["property", "guestName"]);
+assert.strictEqual(T.toNumbered("Hi {{property}} and {{guestName}}, see {{property}} soon", c1.order), "Hi {{1}} and {{2}}, see {{1}} soon");
+// Sending follows the SUBMITTED order, not the standard wording's.
+assert.deepStrictEqual(T.sendOrder("pre_arrival", { order: ["property", "guestName"] }), ["property", "guestName"]);
+assert.deepStrictEqual(T.sendOrder("pre_arrival", null).slice(0, 2), ["guestName", "property"]);
+assert.strictEqual(T.render("Hi {{guestName}}!", { guestName: "Emma" }), "Hi Emma!");
+assert.strictEqual(T.cleanParam("a\nb\t c     d"), "a b c d");
+assert.strictEqual(T.cleanParam(""), "—");
+
+// ── Quiet hours: nothing 10pm–8am, London time ───────────────────────────────
+assert.strictEqual(P.isQuiet(at("2026-10-30T21:59:00Z")), false);   // 9:59pm GMT
+assert.strictEqual(P.isQuiet(at("2026-10-30T22:00:00Z")), true);
+assert.strictEqual(P.isQuiet(at("2026-10-31T07:59:00Z")), true);
+assert.strictEqual(P.isQuiet(at("2026-10-31T08:00:00Z")), false);
+assert.strictEqual(P.isQuiet(at("2026-07-01T07:30:00Z")), false, "8:30am BST");
+
+// ── Checklists ───────────────────────────────────────────────────────────────
+const TOBY = "2450dade-861f-4cba-af54-391282894028", ROS = "df4f70ec-1a92-4476-abfc-4db71954452d", LISA = "116492da-d0ab-4528-99b0-fdf28311deed";
+const people = { [TOBY]: { name: "Toby", mobile: "447900683355" }, [ROS]: { name: "Rosanna Greenwood", mobile: "447000000001" }, [LISA]: { name: "Lisa", mobile: null } };
+const runs = [{ id: "run1", template_id: "tplA", title: "Arrival", context: "Emma Juner letting", status: "open", opens_at: "2026-10-30T09:00:00Z" },
+              { id: "run2", template_id: "tplB", title: "Closed", status: "done", opens_at: "2026-10-30T09:00:00Z" }];
+const items = [
+  { run_id: "run1", title: "Heating on", who: "person:" + TOBY, due_at: "2026-10-30T15:00:00Z", position: 2, state: "open" },
+  { run_id: "run1", title: "Welcome hamper", who: "person:" + TOBY, due_at: "2026-10-30T14:00:00Z", position: 1, state: "open" },
+  { run_id: "run1", title: "Done one", who: "person:" + TOBY, due_at: "2026-10-30T10:00:00Z", position: 0, state: "done" },
+  { run_id: "run1", title: "Bar float", who: "role:bar", due_at: "2026-10-30T14:00:00Z", position: 3, state: "open" },
+  { run_id: "run1", title: "Anyone thing", who: "anyone", due_at: "2026-10-30T14:00:00Z", position: 4, state: "open" },
+  { run_id: "run1", title: "Rosanna's", who: "person:" + ROS, due_at: "2026-10-30T16:00:00Z", position: 5, state: "open" },
+  { run_id: "run1", title: "Lisa's", who: "person:" + LISA, due_at: "2026-10-30T16:00:00Z", position: 6, state: "open" },
+  { run_id: "run2", title: "On a done list", who: "person:" + TOBY, due_at: "2026-10-30T14:00:00Z", position: 0, state: "open" }
+];
+const ck = function (now, extra) {
+  return P.planChecklists(Object.assign({ runs, items, people, ticks: {}, on: { live: true, overdue: true }, sent: new Set(), now: at(now) }, extra || {}));
+};
+let p = ck("2026-10-30T09:05:00Z");
+let live = p.send.filter(function (x) { return x.template === "checklist_live"; });
+assert.deepStrictEqual(live.map(function (x) { return x.toName; }).sort(), ["Rosanna Greenwood", "Toby"], "named people only; Lisa has no mobile");
+const tl = live.filter(function (x) { return x.toName === "Toby"; })[0];
+assert.deepStrictEqual(tl.values, { list: "Arrival – Emma Juner letting", count: "2 items", due: "2:00pm today", items: "Welcome hamper · Heating on", name: "Toby" });
+assert.strictEqual(tl.key, "live|run1|" + TOBY);
+assert.strictEqual(live.filter(function (x) { return x.toName === "Rosanna Greenwood"; })[0].values.name, "Rosanna");
 assert.deepStrictEqual(p.noMobile.map(function (x) { return x.name; }), ["Lisa"]);
-// Already sent: nothing.
-p = plan("2026-10-30T13:05:00Z", { sent: new Set(["run1|" + T]) });
-assert.strictEqual(p.send.filter(function (x) { return x.person === T; }).length, 0);
-// Lead under 15 minutes is treated as 15 (the job runs every 15 minutes).
-p = plan("2026-10-30T13:50:00Z", { settings: { leadMin: 0 } });
-assert.strictEqual(p.send.filter(function (x) { return x.person === T; }).length, 1);
-// A switched-off login gets nothing.
-p = planReminders({ runs, items, people: Object.assign({}, people, { [T]: { name: "Toby", mobile: "44", active: false } }),
-  sent: new Set(), settings: { leadMin: 60 }, now: at("2026-10-30T13:05:00Z") });
-assert.strictEqual(p.send.filter(function (x) { return x.person === T; }).length, 0);
+assert.strictEqual(p.send.filter(function (x) { return x.template === "checklist_overdue"; }).length, 0, "nothing overdue yet");
+// Overdue: Toby's hamper (2pm) has passed; only the overdue ones listed.
+p = ck("2026-10-30T14:20:00Z");
+const od = p.send.filter(function (x) { return x.template === "checklist_overdue"; });
+assert.strictEqual(od.length, 1);
+assert.deepStrictEqual(od[0].values, { list: "Arrival – Emma Juner letting", count: "1 item", items: "Welcome hamper", name: "Toby" });
+// Already sent: not again.
+p = ck("2026-10-30T14:35:00Z", { sent: new Set(["overdue|run1|" + TOBY, "live|run1|" + TOBY, "live|run1|" + ROS]) });
+assert.strictEqual(p.send.length, 0);
+// The list's ticks suppress each one.
+p = ck("2026-10-30T14:20:00Z", { ticks: { tplA: { live: false, overdue: false } } });
+assert.strictEqual(p.send.length, 0);
+p = ck("2026-10-30T14:20:00Z", { ticks: { tplA: { live: false } } });
+assert.deepStrictEqual(p.send.map(function (x) { return x.template; }), ["checklist_overdue"]);
+// The template switches.
+p = ck("2026-10-30T14:20:00Z", { on: { live: true, overdue: false } });
+assert.ok(p.send.every(function (x) { return x.template === "checklist_live"; }));
+// A list that opened in the night is still announced at 8am; one that opened
+// more than 14 hours ago is not (no backlog when switched on).
+p = P.planChecklists({ runs: [Object.assign({}, runs[0], { opens_at: "2026-10-30T02:00:00Z" })], items, people, on: { live: true }, sent: new Set(), now: at("2026-10-30T08:00:00Z") });
+assert.strictEqual(p.send.length, 2);
+p = P.planChecklists({ runs: [Object.assign({}, runs[0], { opens_at: "2026-10-29T17:00:00Z" })], items, people, on: { live: true }, sent: new Set(), now: at("2026-10-30T08:00:00Z") });
+assert.strictEqual(p.send.length, 0);
+// Switched-off login: nothing.
+p = ck("2026-10-30T09:05:00Z", { people: Object.assign({}, people, { [TOBY]: { name: "Toby", mobile: "447900683355", active: false } }) });
+assert.ok(p.send.every(function (x) { return x.toName !== "Toby"; }));
 
-// Values WhatsApp would refuse are cleaned.
-assert.strictEqual(cleanParam("a\nb\t c     d"), "a b c d");
-assert.strictEqual(cleanParam(""), "—");
-// Due words, London time (BST before 25 Oct).
-assert.strictEqual(dueWords(at("2026-10-31T09:30:00Z"), at("2026-10-30T13:00:00Z")), "9:30am tomorrow");
-assert.strictEqual(dueWords(at("2026-11-03T15:00:00Z"), at("2026-10-30T13:00:00Z")), "3:00pm Tue 3 Nov");
-assert.strictEqual(dueWords(at("2026-10-20T14:00:00Z"), at("2026-10-20T08:00:00Z")), "3:00pm today");
-// A long list is cut with "and N more".
-const many = Array.from({ length: 40 }, function (_, i) { return { run_id: "run1", title: "Task number " + i + " with words", who: "person:" + R, due_at: due, position: i, state: "open" }; });
-p = planReminders({ runs, items: many, people, sent: new Set(), settings: { leadMin: 60 }, now: at("2026-10-30T14:30:00Z") });
-assert.ok(/and \d+ more$/.test(p.send[0].params[4]) && p.send[0].params[4].length <= 520, p.send[0].params[4]);
-console.log("whatsapp-reminders plan: all tests passed");
+// ── Pre-arrival ──────────────────────────────────────────────────────────────
+const properties = [{ id: "hamlet", name: "The Hamlet", checkInFrom: "16:00", checkOutBy: "10:00" },
+                    { id: "amly", name: "Amly Barn", checkInFrom: "16:00", checkOutBy: "10:00", checkInFromWedding: "15:00", checkOutByWedding: "11:00" }];
+const accom = [
+  { id: "a12345", guestName: "Emma Juner", phone: "07900 683355", status: "confirmed", source: "direct", stays: [{ propertyId: "hamlet", checkIn: "2026-10-31", checkOut: "2026-11-02" }] },
+  { id: "a2", guestName: "No Phone", phone: "", status: "confirmed", source: "direct", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] },
+  { id: "a3", guestName: "Said No", phone: "07000000003", waConsent: false, status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] },
+  { id: "a4", guestName: "Airbnb Guest", phone: "07000000004", source: "airbnb", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] },
+  { id: "a5", guestName: "Airbnb Ticked", phone: "07000000005", source: "airbnb", waConsent: true, status: "confirmed", bookingType: "Wedding", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] },
+  { id: "a6", guestName: "Cancelled", phone: "07000000006", status: "cancelled", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] },
+  { id: "a7", guestName: "Tomorrow", phone: "07000000007", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-11-01", checkOut: "2026-11-02" }] },
+  { id: "a8", guestName: "Two Places", phone: "07000000008", status: "confirmed", stays: [{ propertyId: "hamlet", checkIn: "2026-10-31", checkOut: "2026-11-01" }, { propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-03", checkInTime: "14:00" }] }
+];
+p = P.planArrivals({ accom, properties, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
+assert.deepStrictEqual(p.send.map(function (x) { return x.record.id; }).sort(), ["a12345", "a5", "a8"]);
+const em = p.send.filter(function (x) { return x.record.id === "a12345"; })[0];
+assert.strictEqual(em.to, "447900683355");
+assert.strictEqual(em.key, "arrival|a12345|2026-10-31");
+assert.deepStrictEqual(em.values, { guestName: "Emma", property: "The Hamlet", checkInTime: "4:00pm", checkOutDate: "Monday 2 November", checkOutTime: "10:00am", nights: "2 nights", bookingRef: "A12345" });
+const wed = p.send.filter(function (x) { return x.record.id === "a5"; })[0];
+assert.strictEqual(wed.values.checkInTime, "3:00pm", "wedding times");
+const two = p.send.filter(function (x) { return x.record.id === "a8"; })[0];
+assert.strictEqual(two.values.property, "The Hamlet and Amly Barn");
+assert.strictEqual(two.values.checkOutDate, "Tuesday 3 November", "the last check-out");
+assert.deepStrictEqual(p.skipped.map(function (x) { return x.why; }).sort(), ["no mobile", "not agreed", "not agreed"]);
+p = P.planArrivals({ accom, properties, now: at("2026-10-31T09:05:00Z"), sent: new Set(["arrival|a12345|2026-10-31"]) });
+assert.ok(p.send.every(function (x) { return x.record.id !== "a12345"; }), "once per booking per arrival");
 
-// The run, fetch faked: marks before sending, unmarks on refusal, stops on 132001.
+// ── Changeover summary ───────────────────────────────────────────────────────
+const setups = [
+  { id: "note:accom:a12345", kind: "note", of: "accom", refId: "a12345", text: "Cot\nplease" },
+  { id: "setup:accom:a8", kind: "accom", refId: "a8" },
+  { id: "noexit:accom:a7", kind: "noexit", of: "accom", refId: "a7" },
+  { id: "note:event:7", kind: "note", of: "event", refId: 7, text: "Chairs out" }
+];
+const events = [{ id: 7, couple: "Smith", eventType: "Wedding (Peak)", date: "2026-11-01", endDate: "2026-11-02", status: "Confirmed" },
+                { id: 8, couple: "Maybe", eventType: "Party", date: "2026-11-01", status: "Holding" }];
+const boxEvents = [{ id: "bx1", name: "Supper club", status: "published", starts_at: "2026-11-03T19:30:00Z" },
+                   { id: "bx2", name: "Draft one", status: "draft", starts_at: "2026-11-03T19:30:00Z" }];
+const days = P.summaryDays({ accom, properties, events, boxEvents, setups }, "2026-10-31", 10);
+assert.strictEqual(days.length, 10);
+assert.ok(days[0].startsWith("Sat 31 Oct: Hamlet in Juner (Cot please), in Places (extra clean) · Amly in "), days[0]);
+assert.ok(days[0].endsWith("…") && days[0].length === 88, "a busy day is cut to fit");
+assert.ok(/^Sun 1 Nov: Hamlet out .*Grain St Smith wedding \(Chairs out\)/.test(days[1]) || days[1].length === 88, days[1]);
+assert.ok(days[1].indexOf("Maybe") === -1, "holding events left out");
+assert.ok(/^Mon 2 Nov: .*out \(no clean\)|^Mon 2 Nov:/.test(days[2]));
+assert.ok(days[3].indexOf("Supper club 7:30pm") !== -1 && days[3].indexOf("Draft") === -1, days[3]);
+assert.strictEqual(days[9], "Mon 9 Nov: nothing booked");
+assert.strictEqual(P.summaryDays({ accom: [{ id: "w", guestName: "Jones (Wed)", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] }], properties }, "2026-10-31", 1)[0],
+  "Sat 31 Oct: Amly in Jones", "wedding-cottage names lose the (Wed)");
+assert.ok(days.every(function (d) { return d.length <= 88 && !/[\n\t]/.test(d); }));
+const sumIn = { accom, properties, events, boxEvents, setups, settings: { day: 0, hour: 8, recipients: [{ name: "Karina", mobile: "07111 222333" }, { name: "Edita", mobile: "" }] } };
+p = P.planSummary(Object.assign({ now: at("2026-11-01T07:30:00Z") }, sumIn));   // Sunday 7:30am
+assert.strictEqual(p.send.length, 0, "before the hour");
+p = P.planSummary(Object.assign({ now: at("2026-11-01T08:15:00Z") }, sumIn));
+assert.strictEqual(p.send.length, 1);
+assert.strictEqual(p.send[0].to, "447111222333");
+assert.strictEqual(p.send[0].values.name, "Karina");
+assert.ok(/^Sun 1 Nov:/.test(p.send[0].values.day1) && /^Tue 10 Nov:/.test(p.send[0].values.day10));
+assert.deepStrictEqual(p.skipped, [{ name: "Edita", why: "no mobile" }]);
+p = P.planSummary(Object.assign({ now: at("2026-11-02T08:15:00Z") }, sumIn));    // Monday
+assert.strictEqual(p.send.length, 0, "only on the chosen day");
+// The whole body stays inside WhatsApp's 1,024 characters at full length.
+const fixed = T.TEMPLATES.changeover_summary.body.replace(/\{\{[^}]*\}\}/g, "").length;
+const cap = P.dayCap(fixed);
+const longBody = T.render(T.TEMPLATES.changeover_summary.body, Object.assign({ name: "x".repeat(40) },
+  Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (n) { return ["day" + n, "x".repeat(cap)]; }))));
+assert.ok(longBody.length <= 1024, "summary body " + longBody.length + " with days of " + cap);
+assert.ok(cap >= 80, "room enough to read: " + cap);
+// Longer wording leaves less room per day, never too little.
+assert.ok(P.dayCap(900) === 40);
+
+console.log("whatsapp plans and templates: all tests passed");
+
+// ── The sending run, fetch faked ─────────────────────────────────────────────
 (async function () {
   process.env.SUPABASE_SERVICE_KEY = "svc"; process.env.WHATSAPP_TOKEN = "tok";
   const { _test } = require("../netlify/functions/whatsapp-reminders/whatsapp-reminders.js");
-  const marks = new Set(); let refuse = false; const sentTo = [];
+  const marks = new Set(); let refuse = false; const sent = []; const logged = [];
+  let settings = { templates: { checklist_live: { on: true }, checklist_overdue: { on: true }, pre_arrival: { on: true }, changeover_summary: { on: false } } };
+  const submitted = { pre_arrival: { body: "Hello {{guestName}}, see you at {{property}} today.", order: ["guestName", "property"] } };
   global.fetch = async function (url, o) {
     o = o || {};
     const ok = function (b) { return { ok: true, status: 200, json: async () => b, text: async () => JSON.stringify(b) }; };
-    if (url.includes("app_data?key=eq.hbf_whatsapp_settings_v1")) return ok([{ value: { checklistReminders: { on: true, leadMin: 60 } } }]);
+    const key = (/app_data\?key=eq\.([^&]+)/.exec(url) || [])[1];
+    if (key === "hbf_whatsapp_settings_v1") return ok([{ value: settings }]);
+    if (key === "hbf_whatsapp_submitted_v1") return ok([{ value: submitted }]);
+    if (key === "hbf_accom_v1") return ok([{ value: accom }]);
+    if (key === "hbf_properties_v1") return ok([{ value: properties }]);
     if (url.includes("/chk_runs?")) return ok([runs[0]]);
     if (url.includes("/chk_run_items?")) return ok(items.filter(function (i) { return i.run_id === "run1"; }));
-    if (url.includes("/wa_reminders_sent?kind=eq.checklist&run_id=in.")) return ok([...marks].map(function (k) { const p = k.split("|"); return { run_id: p[0], person: p[1] }; }));
     if (url.includes("/profiles?")) return ok(Object.keys(people).map(function (id) { return Object.assign({ id: id }, people[id]); }));
-    if (url.includes("/wa_reminders_sent?on_conflict")) {
-      const r = JSON.parse(o.body)[0]; const k = r.run_id + "|" + r.person;
+    if (url.includes("/wa_sent_marks?kind=eq.") && (!o.method || o.method === "GET")) {
+      const kind = decodeURIComponent(/kind=eq\.([^&]+)/.exec(url)[1]);
+      return ok([...marks].filter(function (m) { return m.startsWith(kind + "|"); }).map(function (m) { return { ref: m.slice(kind.length + 1) }; }));
+    }
+    if (url.includes("/wa_sent_marks?on_conflict")) {
+      const r = JSON.parse(o.body)[0]; const k = r.kind + "|" + r.ref;
       if (marks.has(k)) return ok([]); marks.add(k); return ok([r]);
     }
-    if (url.includes("/wa_reminders_sent?kind=eq.checklist&run_id=eq.")) {
-      if (o.method === "DELETE") { const m = /run_id=eq\.([^&]+)&person=eq\.(.+)$/.exec(url); marks.delete(m[1] + "|" + m[2]); }
+    if (url.includes("/wa_sent_marks?kind=eq.")) {
+      if (o.method === "DELETE") { const m = /kind=eq\.([^&]+)&ref=eq\.(.+)$/.exec(url); marks.delete(decodeURIComponent(m[1]) + "|" + decodeURIComponent(m[2])); }
       return ok(null);
     }
-    if (url.includes("/wa_messages")) return ok(null);
+    if (url.includes("/wa_messages")) { logged.push(JSON.parse(o.body)); return ok(null); }
     if (url.includes("graph.facebook.com")) {
-      if (refuse) return { ok: false, status: 404, json: async () => ({ error: { code: 132001, message: "(#132001) Template name does not exist" } }) };
-      sentTo.push(JSON.parse(o.body).to); return ok({ messages: [{ id: "wamid." + sentTo.length }] });
+      const b = JSON.parse(o.body);
+      if (refuse && b.template.name === "pre_arrival") return { ok: false, status: 404, json: async () => ({ error: { code: 132001, message: "(#132001) Template name does not exist" } }) };
+      sent.push(b); return ok({ messages: [{ id: "wamid." + sent.length }] });
     }
     throw new Error("unexpected " + url);
   };
+  // Quiet hours: nothing at all.
+  let r = await _test.runOnce(at("2026-10-31T23:00:00Z"));
+  assert.ok(r.quiet && sent.length === 0);
+  // 9:05am Saturday: checklist live (opened 09:00 the day before is >14h? no — move it), arrivals.
+  runs[0].opens_at = "2026-10-31T09:00:00Z";
+  items.forEach(function (i) { if (i.due_at) i.due_at = i.due_at.replace("2026-10-30", "2026-10-31"); });
   refuse = true;
-  let r = await _test.runOnce(at("2026-10-30T13:05:00Z"));
-  assert.ok(r.templateMissing && r.sent === 0 && marks.size === 0, "refused: unmarked, stopped");
+  r = await _test.runOnce(at("2026-10-31T09:05:00Z"));
+  assert.deepStrictEqual(r.notApproved, ["pre_arrival"], "an unapproved template stops only itself");
+  assert.ok(sent.every(function (b) { return b.template.name !== "pre_arrival"; }));
+  assert.strictEqual(sent.filter(function (b) { return b.template.name === "checklist_live"; }).length, 2);
+  assert.ok([...marks].every(function (m) { return !m.startsWith("arrival|"); }), "refused: unmarked");
   refuse = false;
-  r = await _test.runOnce(at("2026-10-30T13:05:00Z"));
-  assert.strictEqual(r.sent, 1); assert.deepStrictEqual(sentTo, ["447900683355"]);
-  r = await _test.runOnce(at("2026-10-30T13:20:00Z"));
-  assert.strictEqual(r.sent, 0, "never twice");
-  r = await _test.runOnce(at("2026-10-30T14:30:00Z"));
-  assert.strictEqual(r.sent, 1); assert.deepStrictEqual(r.noMobile, ["Lisa"]);
-  console.log("whatsapp-reminders run: all tests passed");
+  r = await _test.runOnce(at("2026-10-31T09:20:00Z"));
+  const arr = sent.filter(function (b) { return b.template.name === "pre_arrival"; });
+  assert.strictEqual(arr.length, 3, "three arrivals today");
+  const emma = arr.filter(function (b) { return b.to === "447900683355"; })[0];
+  assert.deepStrictEqual(emma.template.components[0].parameters.map(function (x) { return x.text; }), ["Emma", "The Hamlet"], "filled in the SUBMITTED order");
+  const emmaLog = logged.filter(function (l) { return l.number === "447900683355" && l.template === "pre_arrival"; })[0];
+  assert.strictEqual(emmaLog.body, "Hello Emma, see you at The Hamlet today.", "the log keeps the text as read");
+  assert.strictEqual(emmaLog.to_name, "Emma Juner");
+  const before = sent.length;
+  r = await _test.runOnce(at("2026-10-31T09:35:00Z"));
+  assert.strictEqual(sent.length, before, "nothing twice");
+  // Switched off: nothing.
+  settings = { templates: {} };
+  marks.clear();
+  r = await _test.runOnce(at("2026-10-31T09:50:00Z"));
+  assert.strictEqual(sent.length, before);
+  console.log("whatsapp sending run: all tests passed");
 })().catch(function (e) { console.error(e); process.exit(1); });

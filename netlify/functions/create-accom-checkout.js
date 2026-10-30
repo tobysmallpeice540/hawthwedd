@@ -287,6 +287,9 @@ exports.handler = async function(event) {
       // When the guest ticked the T&C box at checkout. Recorded so there is a
       // record of acceptance if it is ever queried.
       termsAcceptedAt: body.termsAcceptedAt || null,
+      // Whether the guest agreed to WhatsApp about their stay (ticked by
+      // default on the booking page). Only a plain true counts.
+      waConsent:       body.waConsent === true,
       stripeSessionId: session.id
     };
 

@@ -73,6 +73,9 @@ const PAST = L1_RUNS.concat([
     const labelTop = (txt) => page.getByText(txt, { exact: true }).first().evaluate((el) => Math.round(el.getBoundingClientRect().top))
     const [nameTop, statusTop, emailTop, phoneTop] = await Promise.all(['Guest name', 'Status', 'Email', 'Phone'].map(labelTop))
     check('P1 guest, status, email and phone in two rows on a phone', nameTop === statusTop && emailTop === phoneTop && emailTop > nameTop, [nameTop, statusTop, emailTop, phoneTop].join())
+    // WhatsApp consent (30 Oct): an older direct booking with no answer shows ticked.
+    const consent = page.getByLabel(/OK to contact the guest by WhatsApp/)
+    check('P1b WhatsApp consent ticked by default, stay information only', (await consent.count()) === 1 && (await consent.isChecked()))
     const notes = page.locator('label', { has: page.getByText('Notes', { exact: true }) }).locator('textarea').first()
     const n = await notes.evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight, oy: getComputedStyle(el).overflowY }))
     check('P2 the notes box grows to its text', n.ch >= n.sh - 4 || n.oy === 'auto', JSON.stringify(n))

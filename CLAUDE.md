@@ -827,35 +827,71 @@ own header.
   hawthbushfarm@gmail.com. A failed email answers 500 so Meta redelivers;
   `emailed_at` makes it once only. Pinned by `tests/whatsapp-webhook-test.cjs`.
 - `wa_messages`: RLS on, no policies, anon/authenticated revoked — functions
-  only. Media is not fetched yet.
+  only.
 - **Settings → WhatsApp is its own page** (`WhatsAppPage`, view `whatsapp`,
-  30 Oct): the sending number and its name review; whether the WhatsApp
-  account is linked to the app (`/{WABA}/subscribed_apps` — a verified
-  callback URL alone does NOT bring messages in; "Link it now" posts the
-  subscription); the templates the app uses (`TEMPLATES` in
-  `whatsapp-send.js`, submitted from the page, status read back from Meta);
-  a test box (an approved template with no variables, or plain text — only
-  within 24h of that person messaging the 01825 number). **Meta's sample
-  `hello_world` is not on this account** (error 132001) — never assume it.
-- **Checklist reminders by WhatsApp** (migration w,
-  `netlify/functions/whatsapp-reminders/`, every 15 min at 7/22/37/52 via
-  `whatsapp-reminders-cron.js`): only items set to a NAMED person
-  (`person:<uuid>`) — never role or Anyone (Toby); ONE message per person per
-  list (`wa_reminders_sent`, marked before sending, unmarked on refusal),
-  listing all their open items in it; sent `leadMin` (≥15) before their first
-  item is due and **never after** (most are due at check-in). Off until ticked
-  on the page (`app_data` `hbf_whatsapp_settings_v1.checklistReminders`
-  `{on, leadMin}`). Template `checklist_reminder` (en_GB, utility, 5 body
-  values — no line breaks allowed in a value, so items are joined with " · ").
-  A 132001 stops the run (template not approved). `plan.js` is pure, pinned
-  by `tests/whatsapp-reminders-test.cjs`; the page by
-  `tests/whatsapp-page-e2e.cjs`.
-- **Every office login has a mobile** (`profiles.mobile`, international
-  digits, written only by `user-admin.js` — `users.create` requires it for an
-  administrator, `users.setMobile` edits it; Settings → Staff edits it in
-  place, `MobileCell`). Shared bar / housekeeping logins have none.
-- Still to build: guest templates, opt-in on booking forms, Send buttons,
-  the booking panel, media in forwarded replies.
+  tabs Setup / Messages / Sent, 30 Oct). Setup: the sending number and its
+  name review; whether the WhatsApp account is linked to the app
+  (`/{WABA}/subscribed_apps` — a verified callback URL alone does NOT bring
+  messages in; "Link it now"); a test box; who gets what (staff mobiles, the
+  housekeepers' summary numbers, summary day/hour, arrival hour); Check now.
+  Messages: every template — on/off, its wording, Meta's status, Submit /
+  Resubmit. Sent: `wa_messages` newest first, filter by number.
+- **Templates live in `netlify/functions/whatsapp-reminders/templates.js`**
+  (shared by `whatsapp-send.js` and the sender): `checklist_live`,
+  `checklist_overdue`, `changeover_summary`, `pre_arrival`. Wording uses NAMED
+  merge fields (`{{guestName}}`); on submission they are numbered in
+  first-appearance order and the body + order are stored in `app_data`
+  `hbf_whatsapp_submitted_v1` (written only by `whatsapp-send` submit).
+  **Sending fills values in the SUBMITTED order** (`sendOrder`), never the
+  order of wording edited since. An existing template is edited in place
+  (`POST /{template id}`), refused while Meta's review is PENDING. Meta's
+  rules enforced by `checkBody`: ≤1,024 chars, no field at the very start or
+  end, no two fields side by side, known fields only. Values may hold no line
+  break (`cleanParam`). **Meta's sample `hello_world` is not on this account**
+  (error 132001) — never assume it.
+- **Settings object** `app_data` `hbf_whatsapp_settings_v1`: `templates[name]
+  {on, body}`, `checklists[<chk template id>] {live, overdue}` (the two ticks
+  on each checklist — kept HERE, not on `chk_templates`, because changing a
+  template's trigger moves when it fires), `summary {day, hour, recipients
+  [{name, mobile}]}` (default Sunday 8am, Edita + Karina), `arrival {hour}`
+  (default 9). Every writer re-reads and changes only its part
+  (`saveWaSettings`).
+- **The sender** (`whatsapp-reminders/`, every 15 min at 7/22/37/52 via
+  `whatsapp-reminders-cron.js`; `plan.js` pure): **nothing 10pm–8am**
+  (`isQuiet`); something due in the night goes at 8am — every rule has a
+  14-hour catch-up window and no more, so switching a message on sends no
+  backlog. Checklist messages go only to items set to a NAMED person, one per
+  person per list each (live: when the list opens; overdue: once their first
+  item passes due, listing the overdue ones). Pre-arrival: from the arrival
+  hour on the check-in day, confirmed/completed lettings, consenting guests,
+  one per booking per day. Summary: the chosen weekday from the chosen hour,
+  the next 10 days per property (out / in + surname + extra clean / note /
+  no exit clean) and the Grain Store (confirmed diary events, published box
+  office events, their notes); each day's line is sized from the wording in
+  use so the body fits 1,024 (`dayCap`). Every send is marked in
+  `wa_sent_marks (kind, ref)` BEFORE sending and unmarked on refusal; a
+  132000/132001 stops that template for the run (not approved). The log row
+  keeps the text exactly as read (`render`), `to_name`, `template`.
+- **Guest consent** (`waConsent` on a letting): ticked by default on the
+  letting form and the public booking page ("information about your stay
+  only, never marketing"); `create-accom-checkout` stores only a plain true.
+  A booking with no answer counts as yes — **except Airbnb**, never asked
+  (`guestAgreed`).
+- **Replies** keep their photo / voice note / video / file: the webhook stores
+  `media {type,id,mime,name}` and fetches it from Meta with `WHATSAPP_TOKEN`
+  at email time, attached up to 10MB; bigger or failed = named in the email,
+  never a failed delivery.
+- **Every staff login may have a mobile** (`profiles.mobile`, international
+  digits, written only by `user-admin.js` `users.create` / `users.setMobile`;
+  edited in place on Settings → Staff, `MobileCell`). Optional for everyone:
+  blank = no WhatsApps.
+- `wa_reminders_sent` (migration w) is unused and empty — replaced by
+  `wa_sent_marks` (migration x); drop it when convenient.
+- Tests: `tests/whatsapp-reminders-test.cjs` (templates, plans, the run),
+  `tests/whatsapp-webhook-test.cjs` (incl. media), `tests/whatsapp-page-e2e.cjs`,
+  the ticks in `tests/checklists-e2e.cjs`, consent in `tests/letting-form-e2e.cjs`.
+- Still to build: Send buttons and a WhatsApp panel on records, couples'
+  templates.
 
 ## Working in this folder from a Claude session
 

@@ -2756,6 +2756,8 @@ function blankAccom(propId, existingBookings) {
     extras:[], breakage:0, breakageStripeId:"",
     discountCode:"", discountAmount:0,
     schedule:[], notes:"", createdAt: new Date().toISOString().slice(0,10),
+    // Ticked by default (Toby, 30 Oct): WhatsApp about their stay only.
+    waConsent: true,
     stays:[{ propertyId:pid, propertyName:"", checkIn:"", checkOut:"", nights:null, guestCount:"", value:0 }],
   };
 }
@@ -2790,7 +2792,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30b";
+const APP_BUILD = "2026-10-30c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -4400,6 +4402,15 @@ function AccomForm({ properties, discountCodes, events, form, setForm, onSave, o
         </label>
         <div style={{ flex:"2 1 210px", minWidth:0 }}><LInput label="Email" type="email" value={form.email} onChange={v=>upd("email",v)} /></div>
         <div style={{ flex:"1 1 130px", minWidth:0 }}><LInput label="Phone" type="tel" value={form.phone} onChange={v=>upd("phone",v)} /></div>
+        {/* WhatsApp consent (30 Oct). A booking from before the tick counts as
+            yes, except an Airbnb one — that guest was never asked, so it shows
+            unticked until somebody ticks it. */}
+        <label style={{ flex:"1 1 100%", display:"flex", alignItems:"flex-start", gap:8, fontSize:12.5, color:T.textMid, cursor:"pointer" }}>
+          <input type="checkbox" style={{ marginTop:2 }}
+            checked={form.waConsent === true || (form.waConsent == null && form.source !== "airbnb")}
+            onChange={e=>upd("waConsent", e.target.checked)}/>
+          <span>OK to contact the guest by WhatsApp — only with information about their stay, never for marketing.</span>
+        </label>
       </div>
 
       {/* Per-property stays grid */}
@@ -6946,9 +6957,20 @@ function ChecklistSettings({ onOpenRun }) {
     sbGet(PROPERTIES_STORAGE).then(function(p) { setProps(Array.isArray(p) ? p : []); }).catch(function() {});
   }, []);
 
-  async function save(t) {
+  async function save(t, wa) {
     const r = await sbRpc("chk_template_save", { p: t });
-    setEdit(null); setNote("Saved “" + t.title + "”."); await load();
+    const id = (r && r.id) || t.id;
+    let waErr = "";
+    if (id && wa) {
+      try {
+        await saveWaSettings(function(x) {
+          x.checklists = x.checklists || {};
+          x.checklists[id] = { live: wa.live !== false, overdue: wa.overdue !== false };
+          return x;
+        });
+      } catch (e) { waErr = " — but its WhatsApp ticks did not save (" + e.message + ")"; }
+    }
+    setEdit(null); setNote("Saved “" + t.title + "”" + waErr + "."); await load();
     return r;
   }
   async function setActive(t, on) {
@@ -7096,6 +7118,18 @@ function ChecklistTemplateEditor({ tpl, people, props, onCancel, onSave }) {
   const [d, setD] = useState(function() {
     return Object.assign({}, tpl, { trig: Object.assign({}, tpl.trig), items: (tpl.items || []).map(function(i) { return Object.assign({}, i); }) });
   });
+  // This list's two WhatsApp ticks (30 Oct), kept with the WhatsApp settings
+  // (hbf_whatsapp_settings_v1.checklists[<id>]), not on the template — a
+  // change to the template's trigger moves when it next fires, and these must
+  // not. Both on unless switched off.
+  const [wa, setWa] = useState({ live: true, overdue: true });
+  useEffect(function() {
+    if (!tpl.id) return;
+    sbGet(WA_SETTINGS_KEY).then(function(v) {
+      const t = v && v.checklists && v.checklists[tpl.id];
+      if (t) setWa({ live: t.live !== false, overdue: t.overdue !== false });
+    });
+  }, [tpl.id]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const k = d.trig.kind;
@@ -7129,7 +7163,7 @@ function ChecklistTemplateEditor({ tpl, people, props, onCancel, onSave }) {
   async function save() {
     setBusy(true); setErr("");
     const items = d.items.filter(function(i) { return String(i.title || "").trim(); });
-    try { await onSave(Object.assign({}, d, { items: items })); }
+    try { await onSave(Object.assign({}, d, { items: items }), wa); }
     catch (e) { setErr(chkErrText(e)); }
     setBusy(false);
   }
@@ -7153,6 +7187,15 @@ function ChecklistTemplateEditor({ tpl, people, props, onCancel, onSave }) {
           <input type="checkbox" checked={d.active !== false} onChange={function(e){ const v = e.target.checked; setD(function(x){ return Object.assign({}, x, { active: v }); }); }}/>
           Switched on
         </label>
+        <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, color:T.textMid, marginTop:8, cursor:"pointer" }}>
+          <input type="checkbox" checked={wa.live} onChange={function(e){ const v = e.target.checked; setWa(function(x){ return Object.assign({}, x, { live: v }); }); }}/>
+          Send a WhatsApp reminder when this checklist becomes active
+        </label>
+        <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, color:T.textMid, marginTop:6, cursor:"pointer" }}>
+          <input type="checkbox" checked={wa.overdue} onChange={function(e){ const v = e.target.checked; setWa(function(x){ return Object.assign({}, x, { overdue: v }); }); }}/>
+          Send a WhatsApp reminder when items are overdue
+        </label>
+        <div style={{ fontSize:11.5, color:T.textLight, marginTop:4 }}>Only to people named on an item, never Office, Bar, Housekeeping or Anyone. Settings → WhatsApp switches each message on for everyone.</div>
       </div>
 
       <div style={chkCard}>
@@ -18968,11 +19011,36 @@ async function whatsappCall(body) {
 const WA_SETTINGS_KEY = "hbf_whatsapp_settings_v1";
 const WA_STATUS_WORDS = { APPROVED:"approved", PENDING:"waiting for Meta", REJECTED:"rejected by Meta", PAUSED:"paused by Meta",
   DISABLED:"disabled by Meta", "not submitted":"not submitted yet", unknown:"unknown" };
+const WA_DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
-// Settings → WhatsApp (30 Oct 2026): its own page. The sending number and
-// whether Meta passes replies on to us; the templates the app uses, each
-// submitted to Meta from here; and the reminders that go by WhatsApp.
+// The WhatsApp settings are one object (app_data hbf_whatsapp_settings_v1):
+//   templates:  { <name>: { on, body } } — switched on, and wording being edited
+//   checklists: { <checklist template id>: { live, overdue } } — per-list ticks
+//   summary:    { day, hour, recipients: [{ name, mobile }] }
+//   arrival:    { hour }
+// Every save re-reads it and changes only its own part.
+async function saveWaSettings(mutate) {
+  const prev = (await sbGetStrict(WA_SETTINGS_KEY)) || {};
+  const next = mutate(JSON.parse(JSON.stringify(prev))) || prev;
+  await sbSet(WA_SETTINGS_KEY, next);
+  return next;
+}
+function waHourLabel(h) { return ((h % 12) || 12) + (h < 12 ? "am" : "pm"); }
+function waRender(body, fields) {
+  return String(body || "").replace(/\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g, function(all, k) {
+    const f = (fields || []).filter(function(x) { return x.key === k; })[0];
+    return f ? f.example : all;
+  });
+}
+
+// Settings → WhatsApp (30 Oct 2026): its own page, three tabs.
+//   Setup     the number, whether replies reach us, a test, and the sending
+//             details (summary day/hour and housekeepers' numbers, arrival hour)
+//   Messages  every template: on/off, its wording (editable, with merge
+//             fields), its standing with Meta, Submit / Resubmit
+//   Sent      every WhatsApp sent and received, filtered by person
 function WhatsAppPage() {
+  const [tab, setTab] = useState("setup");
   const [st, setSt] = useState(null);
   const [state, setState] = useState("loading");
   const [settings, setSettings] = useState(null);
@@ -18982,29 +19050,28 @@ function WhatsAppPage() {
   const head = { fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 };
   const line = { fontSize:12.5, color:T.text, lineHeight:1.7 };
   const muted = { color:T.textMid };
+  const sel = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px" };
 
-  function load() {
-    setState("loading");
+  function loadStatus() {
     whatsappCall({ action: "status" })
       .then(function(d) { setSt(d); setState("ready"); })
       .catch(function(e) { setState(e.status === 401 ? "hidden" : e.status === 404 ? "absent" : "error"); });
+  }
+  function load() {
+    setState("loading");
+    loadStatus();
     sbGet(WA_SETTINGS_KEY).then(function(v) { setSettings(v || {}); });
   }
   useEffect(load, []);
 
-  async function act(label, fn, done, noReload) {
+  async function act(label, fn, done, after) {
     setBusy(label); setNote(null);
-    try { const r = await fn(); setNote({ kind:"ok", text: typeof done === "function" ? done(r) : done }); if (!noReload) load(); }
+    try { const r = await fn(); setNote({ kind:"ok", text: typeof done === "function" ? done(r) : done }); if (after) after(r); }
     catch (e) { setNote({ kind:"error", text: e.message }); }
     setBusy("");
   }
-  async function saveReminders(patch) {
-    await act("save", async function() {
-      const prev = (await sbGetStrict(WA_SETTINGS_KEY)) || {};
-      const next = Object.assign({}, prev, { checklistReminders: Object.assign({ on:false, leadMin:60 }, prev.checklistReminders || {}, patch) });
-      await sbSet(WA_SETTINGS_KEY, next);
-      setSettings(next);
-    }, "Saved.", true);
+  function save(mutate, done) {
+    return act("save", function() { return saveWaSettings(mutate); }, done || "Saved.", function(next) { setSettings(next); });
   }
   async function checkNow() {
     await act("check", async function() {
@@ -19014,20 +19081,22 @@ function WhatsAppPage() {
       if (!res.ok) throw new Error(d.error || ("Check failed (" + res.status + ")"));
       return d;
     }, function(d) {
-      if (d.off) return "Checklist reminders are off.";
-      if (d.templateMissing) return "Nothing sent: the checklist reminder template isn't approved by Meta yet.";
-      return d.sent + " reminder" + (d.sent === 1 ? "" : "s") + " sent" +
+      if (d.quiet) return "It's between 10pm and 8am — nothing goes out until 8am.";
+      return (d.sent || 0) + " WhatsApp" + (d.sent === 1 ? "" : "s") + " sent" +
+        (d.notApproved && d.notApproved.length ? " · not approved by Meta yet: " + d.notApproved.join(", ") : "") +
         (d.noMobile && d.noMobile.length ? " · no mobile for " + d.noMobile.join(", ") : "") +
         (d.failed && d.failed.length ? " · failed: " + d.failed.join("; ") : "") + ".";
     });
   }
 
-  const rem = Object.assign({ on:false, leadMin:60 }, (settings && settings.checklistReminders) || {});
-  const tpl = st && (st.catalogue || []).filter(function(t){ return t.name === "checklist_reminder"; })[0];
+  const tpls = (settings && settings.templates) || {};
+  const summary = Object.assign({ day:0, hour:8, recipients:[] }, (settings && settings.summary) || {});
+  const arrival = Object.assign({ hour:9 }, (settings && settings.arrival) || {});
 
   return (
     <div style={{ paddingTop:28, maxWidth:820 }}>
-      <PageHeader title="WhatsApp" sub="Messages from the 01825 number. Replies are emailed to hawthbushfarm@gmail.com, read in office hours."/>
+      <PageHeader title="WhatsApp" sub="Messages from the 01825 number. Replies are emailed to hawthbushfarm@gmail.com, read in office hours. Nothing is sent between 10pm and 8am."/>
+      <TabStrip tabs={[["setup","Setup"],["messages","Messages"],["sent","Sent"]]} value={tab} onChange={setTab} style={{ marginBottom:16 }}/>
       {state === "hidden" && <div style={{ fontSize:13, color:T.textMid }}>Only administrators can see this page.</div>}
       {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
       {state === "absent" && <div style={{ fontSize:12.5, color:T.amber }}>Not deployed yet.</div>}
@@ -19038,7 +19107,7 @@ function WhatsAppPage() {
         <div style={card}><div style={{ fontSize:12.5, color:T.amber }}>WHATSAPP_TOKEN is not set in Netlify yet (add it, then redeploy).</div></div>
       )}
 
-      {state === "ready" && st && st.configured && (<>
+      {state === "ready" && st && st.configured && tab === "setup" && (<>
         <div style={card}>
           <div style={head}>The number</div>
           <div style={line}>
@@ -19058,72 +19127,211 @@ function WhatsAppPage() {
               : (st.linkedApps || []).length
                 ? <span style={muted}>Replies reach the app (linked: {st.linkedApps.join(", ")}).</span>
                 : <span style={{ color:T.red }}>Replies are not reaching the app — the WhatsApp account is not linked to it yet.{" "}
-                    <button type="button" disabled={!!busy} onClick={function(){ act("link", function(){ return whatsappCall({ action:"subscribe" }); }, "Linked. Send the 01825 number a WhatsApp to check — it should arrive by email."); }} style={smallBtn}>{busy === "link" ? "Linking…" : "Link it now"}</button></span>}
+                    <button type="button" disabled={!!busy} onClick={function(){ act("link", function(){ return whatsappCall({ action:"subscribe" }); }, "Linked. Send the 01825 number a WhatsApp to check — it should arrive by email.", loadStatus); }} style={smallBtn}>{busy === "link" ? "Linking…" : "Link it now"}</button></span>}
           </div>
           <WhatsAppTestBox st={st}/>
         </div>
 
         <div style={card}>
-          <div style={head}>Message templates</div>
-          <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
-            Anything the app sends first has to use wording Meta has approved. Submit each one here; Meta usually decides within a day.
+          <div style={head}>Who gets what</div>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Staff — checklist messages</div>
+          <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:12 }}>
+            {st.staffError ? <span style={{ color:T.red }}>Could not read the office logins.</span>
+              : (st.staff || []).map(function(p, i) {
+                  return <span key={i}>{i ? " · " : ""}{p.name} {p.hasMobile ? <span style={{ color:T.green }}>✓ mobile</span> : <span style={{ color:T.amber }}>no mobile</span>}</span>;
+                })}
+            <span> — set under Settings → Staff. Each checklist has its own two ticks for these messages.</span>
           </div>
-          {(st.catalogue || []).map(function(t) {
-            const approved = t.status === "APPROVED";
-            return (
-              <div key={t.name} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, padding:"8px 0", borderTop:`1px solid ${T.border}` }}>
-                <div style={{ flex:"1 1 auto", minWidth:0, fontSize:13, color:T.text }}>
-                  {t.label} <span style={{ fontSize:12, color: approved ? T.green : t.status === "REJECTED" ? T.red : T.textMid }}>· {WA_STATUS_WORDS[t.status] || String(t.status).toLowerCase()}</span>
-                </div>
-                {t.status === "not submitted" && (
-                  <button type="button" disabled={!!busy} style={smallBtn}
-                    onClick={function(){ act("tpl", function(){ return whatsappCall({ action:"createTemplate", name:t.name }); }, function(r){ return "Submitted to Meta (" + String(r.status || "pending").toLowerCase() + ")."; }); }}>
-                    {busy === "tpl" ? "Submitting…" : "Submit to Meta"}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          {st.templatesError && <div style={{ ...line, color:T.red }}>Could not read the templates: {st.templatesError}</div>}
-        </div>
 
-        <div style={card}>
-          <div style={head}>Reminders by WhatsApp</div>
-          <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Checklist reminders</div>
-          <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
-            For items set to a named person only — never Office, Bar, Housekeeping or Anyone. One WhatsApp per person per list,
-            listing all their open items in it, sent before their first item is due and never after.
-          </div>
-          {settings === null ? <div style={{ fontSize:12, color:T.textLight }}>Loading…</div> : (
-            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, fontSize:13, color:T.text }}>
-                <input type="checkbox" checked={!!rem.on} disabled={!!busy} onChange={function(e){ saveReminders({ on: e.target.checked }); }}/>
-                Send checklist reminders
-              </label>
-              <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, fontSize:13, color:T.text }}>
-                Send
-                <select value={rem.leadMin} disabled={!!busy} onChange={function(e){ saveReminders({ leadMin: Number(e.target.value) }); }}
-                  style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px" }}>
-                  {[15, 30, 60, 90, 120, 180, 240].map(function(m){ return <option key={m} value={m}>{m < 60 ? m + " minutes" : (m / 60) + (m === 60 ? " hour" : " hours")}</option>; })}
-                </select>
-                before the first item is due
-              </label>
-              {rem.on && tpl && tpl.status !== "APPROVED" && (
-                <div style={{ fontSize:12.5, color:T.amber }}>Nothing will go until Meta approves the checklist reminder template (above).</div>
-              )}
-              <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6 }}>
-                {st.staffError ? <span style={{ color:T.red }}>Could not read the office logins.</span>
-                  : (st.staff || []).map(function(p, i) {
-                      return <span key={i}>{i ? " · " : ""}{p.name} {p.hasMobile ? <span style={{ color:T.green }}>✓ mobile</span> : <span style={{ color:T.amber }}>no mobile</span>}</span>;
-                    })}
-                <span> — mobiles are set under Settings → Staff.</span>
-              </div>
-              <div><button type="button" disabled={!!busy} onClick={checkNow} style={smallBtn}>{busy === "check" ? "Checking…" : "Check now"}</button>
-                <span style={{ fontSize:12, color:T.textLight, marginLeft:8 }}>It also checks by itself every 15 minutes.</span></div>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Housekeepers — weekly changeover summary</div>
+          {settings === null ? <div style={{ fontSize:12, color:T.textLight }}>Loading…</div> : (<>
+            <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:13, color:T.text, marginBottom:8 }}>
+              Send on
+              <select value={summary.day} disabled={!!busy} style={sel}
+                onChange={function(e){ const v = Number(e.target.value); save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, { day: v }); return x; }); }}>
+                {WA_DAYS.map(function(d, i){ return <option key={i} value={i}>{d}</option>; })}
+              </select>
+              from
+              <select value={summary.hour} disabled={!!busy} style={sel}
+                onChange={function(e){ const v = Number(e.target.value); save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, { hour: v }); return x; }); }}>
+                {[8,9,10,11,12,13,14,15,16,17,18,19,20,21].map(function(h){ return <option key={h} value={h}>{waHourLabel(h)}</option>; })}
+              </select>
+            </div>
+            <WaRecipients list={summary.recipients} busy={!!busy}
+              onSave={function(list){ return save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, { recipients: list }); return x; }, "Housekeepers' numbers saved."); }}/>
+          </>)}
+
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"16px 0 4px" }}>Guests — pre-arrival</div>
+          {settings !== null && (
+            <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:13, color:T.text }}>
+              On the morning of arrival, from
+              <select value={arrival.hour} disabled={!!busy} style={sel}
+                onChange={function(e){ const v = Number(e.target.value); save(function(x){ x.arrival = Object.assign({}, arrival, x.arrival || {}, { hour: v }); return x; }); }}>
+                {[8,9,10,11,12].map(function(h){ return <option key={h} value={h}>{waHourLabel(h)}</option>; })}
+              </select>
+              <span style={{ fontSize:12, color:T.textMid }}>— only guests who agreed to WhatsApp on their booking (Airbnb guests only if ticked by hand).</span>
             </div>
           )}
+
+          <div style={{ marginTop:16 }}><button type="button" disabled={!!busy} onClick={checkNow} style={smallBtn}>{busy === "check" ? "Checking…" : "Check now"}</button>
+            <span style={{ fontSize:12, color:T.textLight, marginLeft:8 }}>It also checks by itself every 15 minutes.</span></div>
         </div>
       </>)}
+
+      {state === "ready" && st && st.configured && tab === "messages" && (<>
+        <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:14 }}>
+          Anything the app sends first has to be wording Meta has approved. Edit a message here, then <strong>Submit to Meta</strong> — Meta
+          usually answers within a day, and allows about one change a day. Until it approves a change, the version it last approved is the one sent.
+        </div>
+        {(st.catalogue || []).map(function(t) {
+          return <WaTemplateCard key={t.name} t={t} conf={tpls[t.name] || {}} busy={busy}
+            onToggle={function(on){ save(function(x){ x.templates = x.templates || {}; x.templates[t.name] = Object.assign({}, x.templates[t.name], { on: on }); return x; }, on ? "Switched on." : "Switched off."); }}
+            onSaveBody={function(body){ return save(function(x){ x.templates = x.templates || {}; x.templates[t.name] = Object.assign({}, x.templates[t.name], { body: body }); return x; }, "Wording saved (not yet sent to Meta)."); }}
+            onSubmit={function(body){ return act("submit:" + t.name, async function() {
+                await saveWaSettings(function(x){ x.templates = x.templates || {}; x.templates[t.name] = Object.assign({}, x.templates[t.name], { body: body }); return x; });
+                return whatsappCall({ action:"submit", name: t.name, body: body });
+              }, function(r){ return (r.edited ? "Changed wording sent to Meta" : "Sent to Meta") + " — " + String(r.status || "pending").toLowerCase() + "."; }, load); }}/>;
+        })}
+        {st.templatesError && <div style={{ ...line, color:T.red }}>Could not read the templates from Meta: {st.templatesError}</div>}
+      </>)}
+
+      {state === "ready" && st && st.configured && tab === "sent" && <WaSentLog/>}
+    </div>
+  );
+}
+
+// One template on the Messages tab. At module scope: it renders a textarea.
+function WaTemplateCard({ t, conf, busy, onToggle, onSaveBody, onSubmit }) {
+  const live = (t.submitted && t.submitted.body) || "";
+  const start = conf.body || live || t.defaultBody;
+  const [body, setBody] = useState(start);
+  const [open, setOpen] = useState(false);
+  useEffect(function() { setBody(conf.body || live || t.defaultBody); }, [conf.body, live, t.defaultBody]);
+  const approved = t.status === "APPROVED";
+  const changed = live ? body !== live : true;
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", boxShadow:T.shadowCard, marginBottom:16 };
+  const statusColour = approved ? T.green : t.status === "REJECTED" ? T.red : T.textMid;
+  return (
+    <div style={card}>
+      <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"flex-start", gap:10 }}>
+        <div style={{ flex:"1 1 auto", minWidth:0 }}>
+          <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{t.label}</div>
+          <div style={{ fontSize:12, color:T.textMid, lineHeight:1.5 }}>{t.audience}. {t.when}</div>
+          <div style={{ fontSize:12, color:statusColour, marginTop:3 }}>
+            Meta: {WA_STATUS_WORDS[t.status] || String(t.status).toLowerCase()}{t.rejectedReason ? " (" + String(t.rejectedReason).toLowerCase().replace(/_/g, " ") + ")" : ""}
+            {t.submitted && t.submitted.at ? <span style={{ color:T.textLight }}> · last sent to Meta {new Date(t.submitted.at).toLocaleDateString("en-GB", { day:"numeric", month:"short" })}</span> : null}
+          </div>
+        </div>
+        <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:6, fontSize:13, color:T.text, whiteSpace:"nowrap" }}>
+          <input type="checkbox" checked={!!conf.on} disabled={!!busy} onChange={function(e){ onToggle(e.target.checked); }}/> Send
+        </label>
+      </div>
+      {conf.on && !approved && <div style={{ fontSize:12, color:T.amber, marginTop:6 }}>Switched on, but nothing goes until Meta approves it.</div>}
+      <div style={{ marginTop:10 }}>
+        <button type="button" onClick={function(){ setOpen(!open); }} style={{ ...smallBtn, fontWeight:500 }}>{open ? "Hide wording" : "Wording"}</button>
+      </div>
+      {open && (
+        <div style={{ marginTop:10, display:"flex", flexDirection:"column", gap:8 }}>
+          <textarea value={body} onChange={function(e){ setBody(e.target.value); }} rows={Math.min(14, Math.max(4, body.split("\n").length + 2))}
+            style={{ width:"100%", boxSizing:"border-box", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:7, color:T.text, fontFamily:"inherit", fontSize:13.5, lineHeight:1.5, padding:"9px 11px" }}/>
+          <div style={{ fontSize:12, color:T.textMid, lineHeight:1.7 }}>
+            Merge fields: {t.fields.filter(function(f){ return !/^day\d+$/.test(f.key) || f.key === "day1"; }).map(function(f){
+              return <code key={f.key} style={{ background:T.bgInput, borderRadius:4, padding:"1px 5px", marginRight:6 }} title={"e.g. " + f.example}>{"{{" + f.key + "}}"}{/^day\d+$/.test(f.key) ? "…day10" : ""}</code>;
+            })}
+          </div>
+          <div style={{ fontSize:12, color:T.textMid }}>Preview, with example values:</div>
+          <div style={{ whiteSpace:"pre-wrap", background:"#e7f7dd", borderRadius:8, padding:"10px 12px", fontSize:13.5, lineHeight:1.5, color:"#1f2d1a" }}>
+            {waRender(body, t.fields)}
+            <div style={{ fontSize:12, color:"#5b6b55", marginTop:6 }}>{t.footer}</div>
+            {t.button ? <div style={{ fontSize:12.5, color:"#2a6db0", marginTop:6, borderTop:"1px solid #cfe5c2", paddingTop:6, textAlign:"center" }}>{t.button}</div> : null}
+          </div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
+            <button type="button" disabled={!!busy || body === (conf.body || live || t.defaultBody)} onClick={function(){ onSaveBody(body); }} style={smallBtn}>Save wording</button>
+            <button type="button" disabled={!!busy || (!changed && t.status !== "not submitted") || t.status === "PENDING"} onClick={function(){ onSubmit(body); }} style={smallBtn}>
+              {busy === "submit:" + t.name ? "Sending to Meta…" : t.status === "not submitted" ? "Submit to Meta" : "Resubmit to Meta"}
+            </button>
+            {body !== t.defaultBody && <button type="button" disabled={!!busy} onClick={function(){ setBody(t.defaultBody); }} style={{ ...smallBtn, fontWeight:500 }}>Standard wording</button>}
+            {live && changed && <span style={{ fontSize:12, color:T.amber }}>Changed since it was last sent to Meta.</span>}
+            {t.status === "PENDING" && <span style={{ fontSize:12, color:T.textMid }}>Meta is reviewing it — changes wait for its answer.</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The housekeepers who get the weekly summary: name + mobile rows. At module
+// scope: it renders inputs.
+function WaRecipients({ list, busy, onSave }) {
+  const fresh = function() {
+    const l = (list || []).map(function(r){ return { name: r.name || "", mobile: r.mobile || "" }; });
+    return l.length ? l : CHANGEOVER_CLEANERS.map(function(c){ return { name: c.label, mobile: "" }; });
+  };
+  const [rows, setRows] = useState(fresh);
+  useEffect(function() { setRows(fresh()); }, [JSON.stringify(list || [])]);
+  const inp = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", boxSizing:"border-box" };
+  const set = function(i, k, v) { setRows(rows.map(function(r, j){ return j === i ? Object.assign({}, r, { [k]: v }) : r; })); };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+      {rows.map(function(r, i) {
+        return (
+          <div key={i} style={{ display:"flex", flexWrap:"nowrap", gap:6, alignItems:"center" }}>
+            <input value={r.name} placeholder="Name" onChange={function(e){ set(i, "name", e.target.value); }} style={{ ...inp, flex:"1 1 40%", minWidth:0 }}/>
+            <input type="tel" value={r.mobile} placeholder="Mobile" onChange={function(e){ set(i, "mobile", e.target.value); }} style={{ ...inp, flex:"1 1 45%", minWidth:0, borderColor: r.mobile ? undefined : T.amber }}/>
+            <button type="button" title="Remove" onClick={function(){ setRows(rows.filter(function(_, j){ return j !== i; })); }} style={{ ...smallBtn, padding:"5px 9px" }}>×</button>
+          </div>
+        );
+      })}
+      <div style={{ display:"flex", gap:8 }}>
+        <button type="button" onClick={function(){ setRows(rows.concat([{ name:"", mobile:"" }])); }} style={{ ...smallBtn, fontWeight:500 }}>+ Add</button>
+        <button type="button" disabled={busy} onClick={function(){ onSave(rows.filter(function(r){ return r.name.trim() || r.mobile.trim(); }).map(function(r){ return { name: r.name.trim(), mobile: r.mobile.trim() }; })); }} style={smallBtn}>Save numbers</button>
+      </div>
+    </div>
+  );
+}
+
+// Every WhatsApp sent and received, newest first, filtered by person. At
+// module scope: it renders a select.
+function WaSentLog() {
+  const [who, setWho] = useState("");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(function() {
+    setErr("");
+    whatsappCall({ action: "log", number: who }).then(setData).catch(function(e){ setErr(e.message); });
+  }, [who]);
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", boxShadow:T.shadowCard, marginBottom:20 };
+  const label = function(p) { return (p.name || "") + (p.name ? " · " : "") + prettyMobile(p.number); };
+  return (
+    <div style={card}>
+      <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center", marginBottom:12 }}>
+        <span style={{ fontSize:13, color:T.text }}>Show</span>
+        <select value={who} onChange={function(e){ setWho(e.target.value); }}
+          style={{ flex:"1 1 auto", minWidth:0, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 8px" }}>
+          <option value="">Everyone</option>
+          {((data && data.people) || []).map(function(p){ return <option key={p.number} value={p.number}>{label(p)} ({p.count})</option>; })}
+        </select>
+      </div>
+      {err && <div style={{ fontSize:12.5, color:T.red }}>{err}</div>}
+      {!data && !err && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
+      {data && !data.messages.length && <div style={{ fontSize:12.5, color:T.textMid }}>Nothing yet.</div>}
+      {data && data.messages.map(function(m) {
+        const out = m.direction === "out";
+        return (
+          <div key={m.id} style={{ borderTop:`1px solid ${T.border}`, padding:"10px 0" }}>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:"2px 10px", fontSize:12, color:T.textMid }}>
+              <strong style={{ color:T.text }}>{out ? "To " : "From "}{m.to_name || (out ? "" : m.record_name) || prettyMobile(m.number)}</strong>
+              {(m.to_name || (!out && m.record_name)) ? <span>{prettyMobile(m.number)}</span> : null}
+              <span>{new Date(m.at).toLocaleString("en-GB", { weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}</span>
+              {m.template ? <span>· {m.template.replace(/_/g, " ")}</span> : null}
+              {out && m.status ? <span style={{ color: m.status === "failed" ? T.red : m.status === "read" ? T.green : T.textMid }}>· {m.status}</span> : null}
+              {!out && m.media ? <span>· sent {m.media.type}</span> : null}
+            </div>
+            <div style={{ whiteSpace:"pre-wrap", fontSize:13, color:T.text, lineHeight:1.5, marginTop:4,
+              background: out ? "#e7f7dd" : T.bgInput, borderRadius:8, padding:"8px 10px" }}>{m.body || <em style={{ color:T.textLight }}>(no text)</em>}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -32349,13 +32557,13 @@ function MobileCell({ user, onSaved, onError }) {
     catch (e) { onError(e.message); setV(prettyMobile(user.mobile)); }
     setBusy(false);
   }
-  const missing = user.role === "admin" && !user.mobile;
+  // Optional for everybody: blank means no WhatsApps (Toby, 30 Oct).
   return (
-    <input type="tel" value={v} disabled={busy} placeholder={missing ? "Add mobile" : "Mobile"}
-      title="Where this person's WhatsApp reminders go"
+    <input type="tel" value={v} disabled={busy} placeholder="Mobile (optional)"
+      title="Where this person's WhatsApps go. Blank: none."
       onChange={function(e){ setV(e.target.value); }} onBlur={save}
       onKeyDown={function(e){ if (e.key === "Enter") e.target.blur(); }}
-      style={Object.assign({}, boxInput, { width:140, borderColor: missing ? T.amber : undefined })}/>
+      style={Object.assign({}, boxInput, { width:150 })}/>
   );
 }
 
@@ -32455,8 +32663,7 @@ function StaffLogins() {
                 <BoxBtn tone="ghost" onClick={suggestPassword}>Suggest</BoxBtn>
               </div>
             </BoxField>
-            <BoxField label={form.role === "admin" ? "Mobile (required)" : "Mobile"}
-              hint={form.role === "admin" ? "Where their WhatsApp reminders go." : "Not needed for a shared bar or housekeeping login."}>
+            <BoxField label="Mobile" hint="Where their WhatsApps go. Leave blank to send them none.">
               <BoxInput type="tel" value={form.mobile} onChange={v=>setForm(Object.assign({}, form, { mobile:v }))} placeholder="07700 900123"/>
             </BoxField>
           </div>
@@ -32491,7 +32698,7 @@ function StaffLogins() {
               ? <BoxPill bg={T.redBg} fg={T.red}>Switched off</BoxPill>
               : <BoxPill bg={r.bg} fg={r.fg}>{r.label}</BoxPill>}
 
-            {u.role === "admin" && u.active !== false && (
+            {u.active !== false && u.role !== "client" && (
               <MobileCell user={u} onSaved={function(){ flash("Mobile saved."); load(); }} onError={setErr}/>
             )}
 

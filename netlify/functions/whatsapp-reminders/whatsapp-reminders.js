@@ -1,29 +1,32 @@
 // netlify/functions/whatsapp-reminders/whatsapp-reminders.js
 //
-// Sends WhatsApp checklist reminders to named staff (rules in plan.js).
+// Sends the scheduled WhatsApps (rules in plan.js, wording in templates.js):
+// checklist live / overdue, pre-arrival, and the weekly changeover summary.
 //
 //   POST, x-admin-token: HBF_ADMIN_TOKEN     the 15-minute shim (whatsapp-reminders-cron.js)
 //   POST, Authorization: Bearer <admin JWT>  Settings → WhatsApp → "Check now"
 //
-// Does nothing unless Settings → WhatsApp → Checklist reminders is on
-// (app_data hbf_whatsapp_settings_v1). Each (list, person) is marked in
-// wa_reminders_sent BEFORE the send — a run cut short can miss someone, never
-// message them twice — and the mark is removed if WhatsApp refuses, so the
-// next run (if still before the due time) tries again. Every message sent is
-// kept in wa_messages as direction "out".
+// Nothing between 10pm and 8am. Each template sends only while it is switched
+// on in Settings → WhatsApp (app_data hbf_whatsapp_settings_v1). Values are
+// filled in the order of the version Meta approved (hbf_whatsapp_submitted_v1).
+// Each message is marked in wa_sent_marks BEFORE it is sent — a run cut short
+// can miss someone, never message them twice — and the mark is removed if
+// WhatsApp refuses, so the next run tries again. Every message sent is kept in
+// wa_messages with the text exactly as the recipient reads it.
 //
 // Required env vars: SUPABASE_SERVICE_KEY, HBF_ADMIN_TOKEN, WHATSAPP_TOKEN
 
 "use strict";
 
 const crypto = require("crypto");
-const { planReminders } = require("./plan.js");
+const plan = require("./plan.js");
+const T = require("./templates.js");
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const GRAPH = "https://graph.facebook.com/v23.0";
 const PHONE_NUMBER_ID = "1454490917738977";   // the 01825 number (as in whatsapp-send.js)
-const TEMPLATE = { name: "checklist_reminder", language: "en_GB" };
 const SETTINGS_KEY = "hbf_whatsapp_settings_v1";
+const SUBMITTED_KEY = "hbf_whatsapp_submitted_v1";
 const STOP_AFTER_MS = 7500;                    // Netlify's limit is 10s
 
 function json(statusCode, body) {
@@ -40,36 +43,45 @@ async function rest(path, opts) {
   if (!res.ok) throw new Error(path.split("?")[0] + " " + res.status + " " + text.slice(0, 200));
   return text ? JSON.parse(text) : null;
 }
+async function appData(key) {
+  const rows = await rest("app_data?key=eq." + encodeURIComponent(key) + "&select=value");
+  return rows && rows[0] ? rows[0].value : null;
+}
 function inList(ids) { return "(" + ids.map(function (i) { return '"' + String(i).replace(/"/g, "") + '"'; }).join(",") + ")"; }
 
-async function loadData(now) {
-  const rows = await rest("app_data?key=eq." + SETTINGS_KEY + "&select=value");
-  const settings = (rows && rows[0] && rows[0].value && rows[0].value.checklistReminders) || {};
-  if (!settings.on) return { off: true };
+async function sentKeys(keys) {
+  if (!keys.length) return new Set();
+  const out = new Set();
+  // Marks are (kind, ref); a key is "kind|ref".
+  const byKind = {};
+  keys.forEach(function (k) { const i = k.indexOf("|"); (byKind[k.slice(0, i)] = byKind[k.slice(0, i)] || []).push(k.slice(i + 1)); });
+  for (const kind of Object.keys(byKind)) {
+    const rows = await rest("wa_sent_marks?kind=eq." + encodeURIComponent(kind) + "&ref=in." + encodeURIComponent(inList(byKind[kind])) + "&select=ref");
+    rows.forEach(function (r) { out.add(kind + "|" + r.ref); });
+  }
+  return out;
+}
 
+async function loadChecklists(now) {
   const runs = await rest("chk_runs?status=eq.open&opens_at=lte." + encodeURIComponent(now.toISOString()) +
-    "&select=id,title,context,status");
-  if (!runs.length) return { settings: settings, runs: [], items: [], people: {}, sent: new Set() };
-  const ids = runs.map(function (r) { return r.id; });
-  const items = await rest("chk_run_items?state=eq.open&who=like.person:*&run_id=in." + encodeURIComponent(inList(ids)) +
-    "&select=run_id,title,who,due_at,position,state");
-  const sentRows = await rest("wa_reminders_sent?kind=eq.checklist&run_id=in." + encodeURIComponent(inList(ids)) + "&select=run_id,person");
+    "&select=id,template_id,title,context,status,opens_at");
+  if (!runs.length) return { runs: [], items: [], people: {} };
+  const items = await rest("chk_run_items?state=eq.open&who=like.person:*&run_id=in." +
+    encodeURIComponent(inList(runs.map(function (r) { return r.id; }))) + "&select=run_id,title,who,due_at,position,state");
   const profiles = await rest("profiles?select=id,name,mobile,active");
   const people = {};
   profiles.forEach(function (p) { people[String(p.id).toLowerCase()] = { name: p.name, mobile: p.mobile, active: p.active }; });
-  const sent = new Set(sentRows.map(function (r) { return r.run_id + "|" + String(r.person).toLowerCase(); }));
-  return { settings: settings, runs: runs, items: items, people: people, sent: sent };
+  return { runs: runs, items: items, people: people };
 }
 
-async function sendTemplate(to, params) {
+async function sendTemplate(name, to, order, values) {
+  const params = order.map(function (k) { return { type: "text", text: T.cleanParam(values[k], 1000) }; });
+  const template = { name: name, language: { code: T.TEMPLATES[name].language } };
+  if (params.length) template.components = [{ type: "body", parameters: params }];
   const res = await fetch(GRAPH + "/" + PHONE_NUMBER_ID + "/messages", {
     method: "POST",
     headers: { "Authorization": "Bearer " + process.env.WHATSAPP_TOKEN, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messaging_product: "whatsapp", to: to, type: "template",
-      template: { name: TEMPLATE.name, language: { code: TEMPLATE.language },
-        components: [{ type: "body", parameters: params.map(function (t) { return { type: "text", text: t }; }) }] }
-    })
+    body: JSON.stringify({ messaging_product: "whatsapp", to: to, type: "template", template: template })
   });
   const d = await res.json().catch(function () { return null; });
   if (!res.ok || !d || !d.messages || !d.messages[0]) {
@@ -80,38 +92,95 @@ async function sendTemplate(to, params) {
   return d.messages[0].id;
 }
 
+// Work out everything due now. Exposed for the page's preview and the tests.
+async function planNow(now) {
+  if (plan.isQuiet(now)) return { quiet: true, send: [], noMobile: [], skipped: [] };
+  const settings = (await appData(SETTINGS_KEY)) || {};
+  const tpl = settings.templates || {};
+  const isOn = function (n) { return !!(tpl[n] && tpl[n].on); };
+  const all = [], noMobile = [], skipped = [];
+
+  if (isOn("checklist_live") || isOn("checklist_overdue")) {
+    const c = await loadChecklists(now);
+    const p = plan.planChecklists({ runs: c.runs, items: c.items, people: c.people, ticks: settings.checklists || {},
+      on: { live: isOn("checklist_live"), overdue: isOn("checklist_overdue") }, now: now });
+    all.push.apply(all, p.send); noMobile.push.apply(noMobile, p.noMobile);
+  }
+  if (isOn("pre_arrival")) {
+    const hour = settings.arrival && settings.arrival.hour != null ? Number(settings.arrival.hour) : 9;
+    if (plan.londonHour(now) >= hour) {
+      const accom = (await appData("hbf_accom_v1")) || [];
+      const properties = (await appData("hbf_properties_v1")) || [];
+      const p = plan.planArrivals({ accom: accom, properties: properties, now: now });
+      all.push.apply(all, p.send); skipped.push.apply(skipped, p.skipped);
+    }
+  }
+  if (isOn("changeover_summary")) {
+    const s = settings.summary || {};
+    const day = s.day == null ? 0 : Number(s.day), hour = s.hour == null ? 8 : Number(s.hour);
+    if (plan.londonWeekday(now) === day && plan.londonHour(now) >= hour) {
+      const today = plan.londonDate(now);
+      const until = new Date(now.getTime() + 11 * 864e5).toISOString();
+      const data = {
+        accom: (await appData("hbf_accom_v1")) || [],
+        properties: (await appData("hbf_properties_v1")) || [],
+        events: (await appData("hawthbush_bookings_v6")) || [],
+        setups: (await appData("hbf_setup_cleans_v1")) || [],
+        boxEvents: await rest("box_events?status=neq.draft&starts_at=gte." + today + "&starts_at=lte." + encodeURIComponent(until) +
+          "&select=id,name,status,starts_at,ends_at")
+      };
+      // The wording in use decides how much room each day gets.
+      const sub = ((await appData(SUBMITTED_KEY)) || {}).changeover_summary;
+      const words = sub && sub.body ? sub.body : T.TEMPLATES.changeover_summary.body;
+      const fixedLen = words.replace(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}/g, "").length;
+      const p = plan.planSummary(Object.assign({ settings: s, now: now, fixedLen: fixedLen }, data));
+      all.push.apply(all, p.send); skipped.push.apply(skipped, p.skipped);
+    }
+  }
+  const sent = await sentKeys(all.map(function (x) { return x.key; }));
+  return { send: all.filter(function (x) { return !sent.has(x.key); }), noMobile: noMobile, skipped: skipped };
+}
+
 async function runOnce(now) {
   const started = Date.now();
-  const data = await loadData(now);
-  if (data.off) return { off: true, sent: 0 };
+  const p = await planNow(now);
+  if (p.quiet) return { quiet: true, sent: 0 };
+  if (!p.send.length) return { sent: 0, noMobile: p.noMobile.map(function (x) { return x.name; }) };
   if (!process.env.WHATSAPP_TOKEN) return { error: "WHATSAPP_TOKEN is not set", sent: 0 };
-  const plan = planReminders({ runs: data.runs, items: data.items, people: data.people, sent: data.sent,
-    settings: data.settings, now: now });
-
-  const out = { sent: 0, failed: [], noMobile: plan.noMobile.map(function (x) { return x.name; }) };
-  for (const r of plan.send) {
+  const submitted = (await appData(SUBMITTED_KEY)) || {};
+  const out = { sent: 0, failed: [], notApproved: [], noMobile: p.noMobile.map(function (x) { return x.name; }) };
+  const dead = {};   // templates Meta refused as missing / unapproved this run
+  for (const m of p.send) {
     if (Date.now() - started > STOP_AFTER_MS) { out.stoppedEarly = true; break; }
-    // Mark first. An empty answer means another run got there: skip.
-    const mark = await rest("wa_reminders_sent?on_conflict=kind,run_id,person", {
+    if (dead[m.template]) continue;
+    const i = m.key.indexOf("|"), kind = m.key.slice(0, i), ref = m.key.slice(i + 1);
+    const mark = await rest("wa_sent_marks?on_conflict=kind,ref", {
       method: "POST", headers: { "Prefer": "resolution=ignore-duplicates,return=representation" },
-      body: JSON.stringify([{ kind: "checklist", run_id: r.run_id, person: r.person }])
+      body: JSON.stringify([{ kind: kind, ref: ref }])
     });
-    if (!mark || !mark.length) continue;
+    if (!mark || !mark.length) continue;            // another run got there first
+    const sub = submitted[m.template] || null;
+    const order = T.sendOrder(m.template, sub);
     try {
-      const id = await sendTemplate(r.to, r.params);
+      const id = await sendTemplate(m.template, m.to, order, m.values);
       out.sent++;
-      await rest("wa_reminders_sent?kind=eq.checklist&run_id=eq." + r.run_id + "&person=eq." + r.person, {
+      const text = T.render(sub && sub.body ? sub.body : T.TEMPLATES[m.template].body, m.values);
+      await rest("wa_sent_marks?kind=eq." + encodeURIComponent(kind) + "&ref=eq." + encodeURIComponent(ref), {
         method: "PATCH", headers: { "Prefer": "return=minimal" }, body: JSON.stringify({ wa_id: id }) }).catch(function () {});
       await rest("wa_messages", { method: "POST", headers: { "Prefer": "return=minimal" }, body: JSON.stringify({
-        id: id, direction: "out", number: r.to, msg_type: "template",
-        body: "Checklist reminder: " + r.params.slice(1).join(" | "), at: new Date().toISOString(), status: "accepted",
-        record_kind: "checklist", record_id: r.run_id, record_name: r.params[2] }) }).catch(function () {});
+        id: id, direction: "out", number: m.to, to_name: m.toName || null, template: m.template, msg_type: "template",
+        body: text.slice(0, 4000), at: new Date().toISOString(), status: "accepted",
+        record_kind: m.record.kind, record_id: m.record.id, record_name: m.record.name }) }).catch(function () {});
     } catch (e) {
-      out.failed.push(e.message);
-      await rest("wa_reminders_sent?kind=eq.checklist&run_id=eq." + r.run_id + "&person=eq." + r.person,
+      await rest("wa_sent_marks?kind=eq." + encodeURIComponent(kind) + "&ref=eq." + encodeURIComponent(ref),
         { method: "DELETE", headers: { "Prefer": "return=minimal" } }).catch(function () {});
-      // 132001: the template is not approved (or not submitted) yet — stop, the rest would fail the same way.
-      if (e.code === 132001 || /132001/.test(e.message)) { out.templateMissing = true; break; }
+      // 132001 / 132000-range: template missing, unapproved or its values
+      // don't fit — the rest of this template would fail the same way.
+      if (e.code === 132001 || e.code === 132000 || /13200[01]/.test(e.message)) {
+        dead[m.template] = true; out.notApproved.push(m.template);
+      } else {
+        out.failed.push(m.template + ": " + e.message);
+      }
     }
   }
   return out;
@@ -158,4 +227,4 @@ exports.handler = async function (event) {
   }
 };
 
-exports._test = { runOnce: runOnce };
+exports._test = { runOnce: runOnce, planNow: planNow };
