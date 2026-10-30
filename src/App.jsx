@@ -2790,7 +2790,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30a";
+const APP_BUILD = "2026-10-30b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -11527,6 +11527,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="checklists" && <ChecklistsPage role="admin" focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}
           onOpenLink={openChecklistLink} onSettings={function(){ setView("chkSettings"); }}/>}
         {view==="chkSettings" && <ChecklistSettings onOpenRun={goToChecklist}/>}
+        {view==="whatsapp" && <WhatsAppPage/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
@@ -16774,7 +16775,7 @@ const REPORT_TYPES = [
 ];
 const HIDDEN_REPORT_TYPES = ["calendar"];
 // The pages under Settings in the sidebar.
-const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails", "chkSettings"];
+const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails", "chkSettings", "whatsapp"];
 function openAccomReport(setView) { navClick("lettings", "report"); setView("lettings"); }
 
 // The sidebar's contents, worked out from where the app is. Each entry's `go`
@@ -16845,6 +16846,7 @@ function buildSidebarNav(o) {
         { label:"Activity", on: view === "activity", go: function() { setView("activity"); } },
         { label:"Email templates", on: view === "emails", go: function() { setView("emails"); } },
         { label:"Checklists", on: view === "chkSettings", go: function() { setView("chkSettings"); } },
+        { label:"WhatsApp", on: view === "whatsapp", go: function() { setView("whatsapp"); } },
       ] },
   ];
 }
@@ -18963,49 +18965,82 @@ async function whatsappCall(body) {
   return data;
 }
 
-function WhatsAppSettings() {
+const WA_SETTINGS_KEY = "hbf_whatsapp_settings_v1";
+const WA_STATUS_WORDS = { APPROVED:"approved", PENDING:"waiting for Meta", REJECTED:"rejected by Meta", PAUSED:"paused by Meta",
+  DISABLED:"disabled by Meta", "not submitted":"not submitted yet", unknown:"unknown" };
+
+// Settings → WhatsApp (30 Oct 2026): its own page. The sending number and
+// whether Meta passes replies on to us; the templates the app uses, each
+// submitted to Meta from here; and the reminders that go by WhatsApp.
+function WhatsAppPage() {
   const [st, setSt] = useState(null);
   const [state, setState] = useState("loading");
-  const [to, setTo] = useState("");
-  const [pick, setPick] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [settings, setSettings] = useState(null);
   const [note, setNote] = useState(null);
+  const [busy, setBusy] = useState("");
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"22px 24px", boxShadow:T.shadowCard, marginBottom:20 };
+  const head = { fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 };
+  const line = { fontSize:12.5, color:T.text, lineHeight:1.7 };
+  const muted = { color:T.textMid };
+
   function load() {
     setState("loading");
     whatsappCall({ action: "status" })
       .then(function(d) { setSt(d); setState("ready"); })
       .catch(function(e) { setState(e.status === 401 ? "hidden" : e.status === 404 ? "absent" : "error"); });
+    sbGet(WA_SETTINGS_KEY).then(function(v) { setSettings(v || {}); });
   }
   useEffect(load, []);
-  if (state === "hidden") return null;
-  const usable = ((st && st.templates) || []).filter(function(t) { return t.status === "APPROVED" && !t.needsValues; });
-  const chosen = usable.find(function(t) { return t.name + "|" + t.language === pick; }) || usable[0] || null;
-  async function send(asText) {
-    setBusy(true); setNote(null);
-    try {
-      const body = asText ? { action: "test", to: to, text: true }
-        : { action: "test", to: to, template: chosen.name, language: chosen.language };
-      const d = await whatsappCall(body);
-      setNote({ kind:"ok", text: "Sent to +" + d.to + ". It should arrive in a few seconds — reply from that phone to test the email forwarding." });
-    } catch (e) { setNote({ kind:"error", text: e.message }); }
-    setBusy(false);
+
+  async function act(label, fn, done, noReload) {
+    setBusy(label); setNote(null);
+    try { const r = await fn(); setNote({ kind:"ok", text: typeof done === "function" ? done(r) : done }); if (!noReload) load(); }
+    catch (e) { setNote({ kind:"error", text: e.message }); }
+    setBusy("");
   }
-  const line = { fontSize:12.5, color:T.text, lineHeight:1.7 };
-  const muted = { color:T.textMid };
+  async function saveReminders(patch) {
+    await act("save", async function() {
+      const prev = (await sbGetStrict(WA_SETTINGS_KEY)) || {};
+      const next = Object.assign({}, prev, { checklistReminders: Object.assign({ on:false, leadMin:60 }, prev.checklistReminders || {}, patch) });
+      await sbSet(WA_SETTINGS_KEY, next);
+      setSettings(next);
+    }, "Saved.", true);
+  }
+  async function checkNow() {
+    await act("check", async function() {
+      const res = await fetch("/.netlify/functions/whatsapp-reminders", { method:"POST",
+        headers: Object.assign({ "Content-Type":"application/json" }, sbAuthHeaders()) });
+      const d = await res.json().catch(function(){ return {}; });
+      if (!res.ok) throw new Error(d.error || ("Check failed (" + res.status + ")"));
+      return d;
+    }, function(d) {
+      if (d.off) return "Checklist reminders are off.";
+      if (d.templateMissing) return "Nothing sent: the checklist reminder template isn't approved by Meta yet.";
+      return d.sent + " reminder" + (d.sent === 1 ? "" : "s") + " sent" +
+        (d.noMobile && d.noMobile.length ? " · no mobile for " + d.noMobile.join(", ") : "") +
+        (d.failed && d.failed.length ? " · failed: " + d.failed.join("; ") : "") + ".";
+    });
+  }
+
+  const rem = Object.assign({ on:false, leadMin:60 }, (settings && settings.checklistReminders) || {});
+  const tpl = st && (st.catalogue || []).filter(function(t){ return t.name === "checklist_reminder"; })[0];
+
   return (
-    <div>
-      <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
-        Messages go out from the 01825 number. Anything a guest sends back is emailed to hawthbushfarm@gmail.com,
-        to be read in office hours.
-      </div>
+    <div style={{ paddingTop:28, maxWidth:820 }}>
+      <PageHeader title="WhatsApp" sub="Messages from the 01825 number. Replies are emailed to hawthbushfarm@gmail.com, read in office hours."/>
+      {state === "hidden" && <div style={{ fontSize:13, color:T.textMid }}>Only administrators can see this page.</div>}
       {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
       {state === "absent" && <div style={{ fontSize:12.5, color:T.amber }}>Not deployed yet.</div>}
-      {state === "error" && <div style={{ fontSize:12.5, color:T.red }}>Could not check WhatsApp.</div>}
+      {state === "error" && <div style={{ fontSize:12.5, color:T.red }}>Could not check WhatsApp. <button type="button" onClick={load} style={smallBtn}>Try again</button></div>}
+      {note && <div style={{ marginBottom:14, fontSize:12.5, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
+
       {state === "ready" && st && !st.configured && (
-        <div style={{ fontSize:12.5, color:T.amber }}>WHATSAPP_TOKEN is not set in Netlify yet (add it, then redeploy).</div>
+        <div style={card}><div style={{ fontSize:12.5, color:T.amber }}>WHATSAPP_TOKEN is not set in Netlify yet (add it, then redeploy).</div></div>
       )}
-      {state === "ready" && st && st.configured && (
-        <div style={{ marginBottom:12 }}>
+
+      {state === "ready" && st && st.configured && (<>
+        <div style={card}>
+          <div style={head}>The number</div>
           <div style={line}>
             {st.number
               ? <>Sending from <strong>{st.number.display}</strong>{st.number.name ? <> as <strong>{st.number.name}</strong></> : null}
@@ -19017,39 +19052,121 @@ function WhatsAppSettings() {
               That number is not on the WhatsApp account the app uses. Numbers on the account: {(st.accountNumbers || []).map(function(n){ return n.display + " (" + n.id + ")"; }).join(", ") || "none"}.
             </div>
           )}
-          {st.accountError && <div style={{ ...line, color:T.red }}>Could not read the account's numbers: {st.accountError}</div>}
-          <div style={line}>
-            {st.templatesError
-              ? <span style={{ color:T.red }}>Could not read the templates: {st.templatesError}</span>
-              : (st.templates || []).length === 0
-                ? <span style={muted}>No message templates on the account yet.</span>
-                : <span style={muted}>Templates: {(st.templates || []).map(function(t){ return t.name + " (" + t.language + ", " + String(t.status).toLowerCase() + ")"; }).join(" · ")}</span>}
+          <div style={{ ...line, marginTop:4 }}>
+            {st.linkedAppsError
+              ? <span style={{ color:T.red }}>Could not check whether replies reach the app: {st.linkedAppsError}</span>
+              : (st.linkedApps || []).length
+                ? <span style={muted}>Replies reach the app (linked: {st.linkedApps.join(", ")}).</span>
+                : <span style={{ color:T.red }}>Replies are not reaching the app — the WhatsApp account is not linked to it yet.{" "}
+                    <button type="button" disabled={!!busy} onClick={function(){ act("link", function(){ return whatsappCall({ action:"subscribe" }); }, "Linked. Send the 01825 number a WhatsApp to check — it should arrive by email."); }} style={smallBtn}>{busy === "link" ? "Linking…" : "Link it now"}</button></span>}
           </div>
+          <WhatsAppTestBox st={st}/>
         </div>
-      )}
-      {state === "ready" && st && st.configured && (
-        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-          <input type="tel" value={to} onChange={function(e){ setTo(e.target.value); }} placeholder="Mobile number for a test"
-            style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 10px", boxSizing:"border-box" }}/>
-          {usable.length > 0 && (
-            <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
-              <select value={chosen ? chosen.name + "|" + chosen.language : ""} onChange={function(e){ setPick(e.target.value); }}
-                style={{ flex:"1 1 auto", minWidth:0, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 8px" }}>
-                {usable.map(function(t){ return <option key={t.name + "|" + t.language} value={t.name + "|" + t.language}>{t.name} ({t.language})</option>; })}
-              </select>
-              <button type="button" disabled={busy || !to.trim()} onClick={function(){ send(false); }} style={smallBtn}>{busy ? "Sending…" : "Send template"}</button>
+
+        <div style={card}>
+          <div style={head}>Message templates</div>
+          <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
+            Anything the app sends first has to use wording Meta has approved. Submit each one here; Meta usually decides within a day.
+          </div>
+          {(st.catalogue || []).map(function(t) {
+            const approved = t.status === "APPROVED";
+            return (
+              <div key={t.name} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, padding:"8px 0", borderTop:`1px solid ${T.border}` }}>
+                <div style={{ flex:"1 1 auto", minWidth:0, fontSize:13, color:T.text }}>
+                  {t.label} <span style={{ fontSize:12, color: approved ? T.green : t.status === "REJECTED" ? T.red : T.textMid }}>· {WA_STATUS_WORDS[t.status] || String(t.status).toLowerCase()}</span>
+                </div>
+                {t.status === "not submitted" && (
+                  <button type="button" disabled={!!busy} style={smallBtn}
+                    onClick={function(){ act("tpl", function(){ return whatsappCall({ action:"createTemplate", name:t.name }); }, function(r){ return "Submitted to Meta (" + String(r.status || "pending").toLowerCase() + ")."; }); }}>
+                    {busy === "tpl" ? "Submitting…" : "Submit to Meta"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {st.templatesError && <div style={{ ...line, color:T.red }}>Could not read the templates: {st.templatesError}</div>}
+        </div>
+
+        <div style={card}>
+          <div style={head}>Reminders by WhatsApp</div>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Checklist reminders</div>
+          <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginBottom:10 }}>
+            For items set to a named person only — never Office, Bar, Housekeeping or Anyone. One WhatsApp per person per list,
+            listing all their open items in it, sent before their first item is due and never after.
+          </div>
+          {settings === null ? <div style={{ fontSize:12, color:T.textLight }}>Loading…</div> : (
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, fontSize:13, color:T.text }}>
+                <input type="checkbox" checked={!!rem.on} disabled={!!busy} onChange={function(e){ saveReminders({ on: e.target.checked }); }}/>
+                Send checklist reminders
+              </label>
+              <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, fontSize:13, color:T.text }}>
+                Send
+                <select value={rem.leadMin} disabled={!!busy} onChange={function(e){ saveReminders({ leadMin: Number(e.target.value) }); }}
+                  style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px" }}>
+                  {[15, 30, 60, 90, 120, 180, 240].map(function(m){ return <option key={m} value={m}>{m < 60 ? m + " minutes" : (m / 60) + (m === 60 ? " hour" : " hours")}</option>; })}
+                </select>
+                before the first item is due
+              </label>
+              {rem.on && tpl && tpl.status !== "APPROVED" && (
+                <div style={{ fontSize:12.5, color:T.amber }}>Nothing will go until Meta approves the checklist reminder template (above).</div>
+              )}
+              <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6 }}>
+                {st.staffError ? <span style={{ color:T.red }}>Could not read the office logins.</span>
+                  : (st.staff || []).map(function(p, i) {
+                      return <span key={i}>{i ? " · " : ""}{p.name} {p.hasMobile ? <span style={{ color:T.green }}>✓ mobile</span> : <span style={{ color:T.amber }}>no mobile</span>}</span>;
+                    })}
+                <span> — mobiles are set under Settings → Staff.</span>
+              </div>
+              <div><button type="button" disabled={!!busy} onClick={checkNow} style={smallBtn}>{busy === "check" ? "Checking…" : "Check now"}</button>
+                <span style={{ fontSize:12, color:T.textLight, marginLeft:8 }}>It also checks by itself every 15 minutes.</span></div>
             </div>
           )}
-          <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
-            <div style={{ flex:"1 1 auto", minWidth:0, fontSize:12, color:T.textMid, lineHeight:1.5 }}>
-              A plain message only reaches someone who has messaged the 01825 number in the last 24 hours.
-            </div>
-            <button type="button" disabled={busy || !to.trim()} onClick={function(){ send(true); }} style={smallBtn}>{busy ? "Sending…" : "Send plain test"}</button>
-          </div>
-          <div><button type="button" disabled={busy} onClick={load} style={{ ...smallBtn, fontWeight:500 }}>Check again</button></div>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+// The test send, on the WhatsApp page. At module scope (it renders inputs).
+function WhatsAppTestBox({ st }) {
+  const [to, setTo] = useState("");
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const usable = ((st && st.templates) || []).filter(function(t) { return t.status === "APPROVED" && !t.needsValues; });
+  const chosen = usable.find(function(t) { return t.name + "|" + t.language === pick; }) || usable[0] || null;
+  async function send(asText) {
+    setBusy(true); setNote(null);
+    try {
+      const body = asText ? { action: "test", to: to, text: true }
+        : { action: "test", to: to, template: chosen.name, language: chosen.language };
+      const d = await whatsappCall(body);
+      setNote({ kind:"ok", text: "Sent to +" + d.to + ". It should arrive in a few seconds." });
+    } catch (e) { setNote({ kind:"error", text: e.message }); }
+    setBusy(false);
+  }
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:14, paddingTop:12, borderTop:`1px solid ${T.border}` }}>
+      <div style={{ fontSize:13, fontWeight:700, color:T.text }}>Send a test</div>
+      <input type="tel" value={to} onChange={function(e){ setTo(e.target.value); }} placeholder="Mobile number"
+        style={{ width:"100%", background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:14, padding:"7px 10px", boxSizing:"border-box" }}/>
+      {usable.length > 0 && (
+        <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
+          <select value={chosen ? chosen.name + "|" + chosen.language : ""} onChange={function(e){ setPick(e.target.value); }}
+            style={{ flex:"1 1 auto", minWidth:0, background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 8px" }}>
+            {usable.map(function(t){ return <option key={t.name + "|" + t.language} value={t.name + "|" + t.language}>{t.name} ({t.language})</option>; })}
+          </select>
+          <button type="button" disabled={busy || !to.trim()} onClick={function(){ send(false); }} style={smallBtn}>{busy ? "Sending…" : "Send template"}</button>
         </div>
       )}
-      {note && <div style={{ marginTop:9, fontSize:12, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
+      <div style={{ display:"flex", flexWrap:"nowrap", gap:8, alignItems:"center" }}>
+        <div style={{ flex:"1 1 auto", minWidth:0, fontSize:12, color:T.textMid, lineHeight:1.5 }}>
+          A plain message only reaches someone who has messaged the 01825 number in the last 24 hours.
+        </div>
+        <button type="button" disabled={busy || !to.trim()} onClick={function(){ send(true); }} style={smallBtn}>{busy ? "Sending…" : "Send plain test"}</button>
+      </div>
+      {note && <div style={{ fontSize:12, color: note.kind === "error" ? T.red : T.green }}>{note.text}</div>}
     </div>
   );
 }
@@ -28206,7 +28323,7 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
           they get the same pages as a row here. */}
       {!inSidebar && setView && (
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:18 }}>
-          {[["staff","Staff"],["activity","Activity"],["emails","Email templates"],["chkSettings","Checklists"]].map(function(x){
+          {[["staff","Staff"],["activity","Activity"],["emails","Email templates"],["chkSettings","Checklists"],["whatsapp","WhatsApp"]].map(function(x){
             return <button key={x[0]} onClick={function(){ setView(x[0]); }}
               style={{ background:"#fff", border:`1.5px solid ${T.border}`, color:T.midBlue, padding:"8px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>{x[1]} →</button>;
           })}
@@ -28269,12 +28386,6 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
       <div style={card}>
         <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>Email archive</div>
         <EmailArchiveSettings/>
-      </div>
-
-      {/* WhatsApp: the 01825 send-only number. */}
-      <div style={card}>
-        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:8 }}>WhatsApp</div>
-        <WhatsAppSettings/>
       </div>
 
       {/* Integrations */}
@@ -32216,6 +32327,38 @@ const ROLE_LABEL = {
   cleaner: { label: "Housekeeping",  note: "Changeovers",                      bg: T.greenBg,     fg: T.green },
 };
 
+// A stored mobile (international digits, 447415740704) as people write it.
+function prettyMobile(d) {
+  const s = String(d || "");
+  if (/^44\d{10}$/.test(s)) return "0" + s.slice(2, 6) + " " + s.slice(6);
+  return s ? "+" + s : "";
+}
+
+// One login's mobile, edited in place and saved on blur (user-admin
+// users.setMobile normalises and checks it). At module scope: it renders an
+// input, and a component defined inside StaffLogins would lose focus on every
+// keystroke.
+function MobileCell({ user, onSaved, onError }) {
+  const [v, setV] = useState(prettyMobile(user.mobile));
+  const [busy, setBusy] = useState(false);
+  useEffect(function() { setV(prettyMobile(user.mobile)); }, [user.mobile]);
+  async function save() {
+    if (v.trim() === prettyMobile(user.mobile)) return;
+    setBusy(true);
+    try { await userAdmin("users.setMobile", { id: user.id, mobile: v }); onSaved(); }
+    catch (e) { onError(e.message); setV(prettyMobile(user.mobile)); }
+    setBusy(false);
+  }
+  const missing = user.role === "admin" && !user.mobile;
+  return (
+    <input type="tel" value={v} disabled={busy} placeholder={missing ? "Add mobile" : "Mobile"}
+      title="Where this person's WhatsApp reminders go"
+      onChange={function(e){ setV(e.target.value); }} onBlur={save}
+      onKeyDown={function(e){ if (e.key === "Enter") e.target.blur(); }}
+      style={Object.assign({}, boxInput, { width:140, borderColor: missing ? T.amber : undefined })}/>
+  );
+}
+
 function StaffLogins() {
   const [users, setUsers]   = useState(null);
   const [meId, setMeId]     = useState(null);
@@ -32223,7 +32366,7 @@ function StaffLogins() {
   const [msg, setMsg]       = useState("");
   const [busy, setBusy]     = useState(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm]     = useState({ name:"", email:"", role:"bar", password:"" });
+  const [form, setForm]     = useState({ name:"", email:"", role:"bar", password:"", mobile:"" });
   const [confirmOff, setConfirmOff] = useState(null);
 
   async function load() {
@@ -32247,7 +32390,7 @@ function StaffLogins() {
     try {
       await userAdmin("users.create", form);
       flash(form.email + " can now sign in.");
-      setForm({ name:"", email:"", role:"bar", password:"" });
+      setForm({ name:"", email:"", role:"bar", password:"", mobile:"" });
       setAdding(false);
       await load();
     } catch (e) { setErr(e.message); }
@@ -32312,6 +32455,10 @@ function StaffLogins() {
                 <BoxBtn tone="ghost" onClick={suggestPassword}>Suggest</BoxBtn>
               </div>
             </BoxField>
+            <BoxField label={form.role === "admin" ? "Mobile (required)" : "Mobile"}
+              hint={form.role === "admin" ? "Where their WhatsApp reminders go." : "Not needed for a shared bar or housekeeping login."}>
+              <BoxInput type="tel" value={form.mobile} onChange={v=>setForm(Object.assign({}, form, { mobile:v }))} placeholder="07700 900123"/>
+            </BoxField>
           </div>
           <div style={{ display:"flex", gap:9 }}>
             <BoxBtn onClick={create} disabled={busy === "new"}>{busy === "new" ? "Creating…" : "Create login"}</BoxBtn>
@@ -32343,6 +32490,10 @@ function StaffLogins() {
             {u.active === false
               ? <BoxPill bg={T.redBg} fg={T.red}>Switched off</BoxPill>
               : <BoxPill bg={r.bg} fg={r.fg}>{r.label}</BoxPill>}
+
+            {u.role === "admin" && u.active !== false && (
+              <MobileCell user={u} onSaved={function(){ flash("Mobile saved."); load(); }} onError={setErr}/>
+            )}
 
             <select value={u.role} disabled={busy === u.id || u.active === false}
               onChange={e=>act(u.id, function() { return userAdmin("users.setRole", { id: u.id, role: e.target.value }); }, "Role updated.")}

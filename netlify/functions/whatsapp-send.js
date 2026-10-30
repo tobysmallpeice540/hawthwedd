@@ -17,6 +17,12 @@
 // 132001 "Template name does not exist in the translation"), so the test no
 // longer assumes it.
 //
+//   { action: "subscribe" } — link the WhatsApp account to this app so Meta
+//                            passes incoming messages to whatsapp-webhook. A
+//                            verified callback URL is NOT enough on its own.
+//   { action: "createTemplate", name }
+//                          — submit one of TEMPLATES below to Meta for review.
+//
 // Templates for guests, couples and cleaners come next, once Meta has
 // approved them. Every message sent is kept in wa_messages (direction "out");
 // the webhook moves its status on as receipts arrive.
@@ -29,6 +35,25 @@ const WA_TOKEN = process.env.WHATSAPP_TOKEN || "";
 const GRAPH = "https://graph.facebook.com/v23.0";
 const PHONE_NUMBER_ID = "1454490917738977";   // the 01825 number
 const WABA_ID = "970274439005564";            // Hawthbush Farm WhatsApp account (templates)
+
+// The templates the app uses, exactly as they are submitted to Meta. Changing
+// the wording of one Meta has approved means submitting it again under a new
+// name — an approved template cannot be edited into something else here.
+// Footer (Toby, 29 Oct): replies are read by email in office hours.
+const FOOTER = "Replies go to our email, read in office hours";
+const TEMPLATES = {
+  checklist_reminder: {
+    label: "Checklist reminder (staff)",
+    language: "en_GB", category: "UTILITY",
+    components: [
+      { type: "BODY",
+        text: "Hi {{1}}, a reminder from Hawthbush Farm: you have {{2}} on the {{3}} checklist, due by {{4}}: {{5}}. Please tick them off in the app.",
+        example: { body_text: [["Rosanna", "2 items", "Arrival – Emma Juner letting", "3:00pm today", "Welcome hamper · Heating on"]] } },
+      { type: "FOOTER", text: FOOTER },
+      { type: "BUTTONS", buttons: [{ type: "URL", text: "Open the app", url: "https://hawthbushfarm.netlify.app/" }] }
+    ]
+  }
+};
 
 const json = (status, obj) => ({ statusCode: status, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) });
 
@@ -154,11 +179,29 @@ exports.handler = async (event) => {
       out.accountNumbers = (p.data || []).map(function (x) { return { id: String(x.id), display: x.display_phone_number || "" }; });
     } catch (e) { out.accountError = e.message; }
     try {
+      const a = await graphGet("/" + WABA_ID + "/subscribed_apps");
+      out.linkedApps = (a.data || []).map(function (x) {
+        const d = x.whatsapp_business_api_data || {};
+        return d.name || d.id || "an app";
+      });
+    } catch (e) { out.linkedAppsError = e.message; }
+    try {
       const t = await graphGet("/" + WABA_ID + "/message_templates?fields=name,language,status,category,components&limit=100");
       out.templates = (t.data || []).map(function (x) {
         return { name: x.name, language: x.language, status: x.status, category: x.category, needsValues: needsValues(x) };
       });
     } catch (e) { out.templatesError = e.message; }
+    out.catalogue = Object.keys(TEMPLATES).map(function (k) {
+      const on = (out.templates || []).filter(function (t) { return t.name === k; })[0];
+      return { name: k, label: TEMPLATES[k].label, language: TEMPLATES[k].language, status: on ? on.status : (out.templatesError ? "unknown" : "not submitted") };
+    });
+    // Who would get reminders: active office logins and whether each has a mobile.
+    try {
+      const r = await fetch(SUPABASE_URL + "/rest/v1/profiles?role=eq.admin&active=eq.true&select=id,name,email,mobile&order=name.asc",
+        { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+      if (!r.ok) throw new Error("profiles " + r.status);
+      out.staff = (await r.json()).map(function (p) { return { name: p.name || p.email, hasMobile: !!p.mobile }; });
+    } catch (e) { out.staffError = e.message; }
     return json(200, out);
   }
 
@@ -188,6 +231,28 @@ exports.handler = async (event) => {
         : "";
       return json(502, { error: e.message + hint });
     }
+  }
+
+  if (req.action === "subscribe") {
+    if (!WA_TOKEN) return json(500, { error: "WHATSAPP_TOKEN is not set in Netlify." });
+    const res = await fetch(GRAPH + "/" + WABA_ID + "/subscribed_apps", { method: "POST", headers: { "Authorization": "Bearer " + WA_TOKEN } });
+    const d = await res.json().catch(function () { return {}; });
+    if (!res.ok || !d.success) return json(502, { error: "Meta said " + res.status + (d.error ? ": " + (d.error.error_user_msg || d.error.message) : "") });
+    return json(200, { ok: true });
+  }
+
+  if (req.action === "createTemplate") {
+    if (!WA_TOKEN) return json(500, { error: "WHATSAPP_TOKEN is not set in Netlify." });
+    const def = TEMPLATES[String(req.name || "")];
+    if (!def) return json(400, { error: "Unknown template." });
+    const res = await fetch(GRAPH + "/" + WABA_ID + "/message_templates", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + WA_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: req.name, language: def.language, category: def.category, components: def.components })
+    });
+    const d = await res.json().catch(function () { return {}; });
+    if (!res.ok) return json(502, { error: "Meta said " + res.status + (d.error ? ": " + (d.error.error_user_msg || d.error.message) : "") });
+    return json(200, { ok: true, status: d.status || "PENDING", category: d.category || def.category });
   }
 
   return json(400, { error: "Unknown action" });

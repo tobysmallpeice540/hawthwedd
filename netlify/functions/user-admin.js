@@ -82,6 +82,19 @@ async function resolveAdmin(event) {
   return { id: user.id, role: p.role, who: p.name || p.email || "admin" };
 }
 
+// A mobile number as international digits (447415740704): UK numbers typed
+// with a leading 0 or without it become 44…; "" clears it. Used for WhatsApp
+// reminders (30 Oct 2026). Returns null when it is not a number at all.
+function normaliseMobile(s) {
+  var raw = String(s == null ? "" : s).trim();
+  if (!raw) return "";
+  var d = raw.replace(/\D/g, "");
+  if (d.indexOf("00") === 0) d = d.slice(2);
+  if (d.length === 11 && d.charAt(0) === "0") d = "44" + d.slice(1);
+  else if (d.length === 10 && d.charAt(0) === "7") d = "44" + d;
+  return d.length >= 10 && d.length <= 15 ? d : null;
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== "POST") return bad("Method not allowed", 405);
   if (!SERVICE_KEY) return bad("Not configured — SUPABASE_SERVICE_KEY is missing", 500);
@@ -122,6 +135,11 @@ exports.handler = async function(event) {
         var role = ROLES.indexOf(body.role) !== -1 ? body.role : "bar";
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return bad("That doesn't look like an email address.");
         if (password.length < 10) return bad("Use a password of at least 10 characters.");
+        var mobile = normaliseMobile(body.mobile);
+        if (mobile === null) return bad("That mobile number doesn't look right.");
+        // Office logins get WhatsApp reminders, so their mobile is required.
+        // Bar and housekeeping logins are shared — no one person's phone.
+        if (role === "admin" && !mobile) return bad("Add a mobile number for an administrator — it's where their WhatsApp reminders go.");
 
         // email_confirm so the person can sign in straight away — these are
         // accounts you are handing out, not strangers signing themselves up.
@@ -144,7 +162,7 @@ exports.handler = async function(event) {
         // case this project's trigger predates the metadata handling.
         await sbRest("profiles?id=eq." + made.body.id, {
           method: "PATCH", prefer: "return=minimal",
-          body: { role: role, name: String(body.name || "").trim(), email: email }
+          body: { role: role, name: String(body.name || "").trim(), email: email, mobile: mobile || null }
         });
         return ok({ id: made.body.id, email: email, role: role });
       }
@@ -158,6 +176,16 @@ exports.handler = async function(event) {
         }
         var upd = await sbRest("profiles?id=eq." + body.id, { method: "PATCH", body: { role: body.role } });
         return ok({ user: upd && upd[0] });
+      }
+
+      case "users.setMobile": {
+        var m = normaliseMobile(body.mobile);
+        if (m === null) return bad("That mobile number doesn't look right.");
+        var um = await sbRest("profiles?id=eq." + encodeURIComponent(String(body.id || "")), {
+          method: "PATCH", body: { mobile: m || null }
+        });
+        if (!um || !um[0]) return bad("No such login.", 404);
+        return ok({ id: body.id, mobile: um[0].mobile });
       }
 
       case "users.setActive": {

@@ -108,6 +108,14 @@
 [functions."checklists-cron"]
   schedule = "2,17,32,47 * * * *"
 
+# WhatsApp checklist reminders (whatsapp-reminders/): one WhatsApp per named
+# person per list, before their first item is due — never after. OFF until
+# switched on in Settings → WhatsApp. Five minutes after the checklist run, so
+# a list that has just opened is already there. Schedule on the shim (see
+# brevo-sync-cron for why).
+[functions."whatsapp-reminders-cron"]
+  schedule = "7,22,37,52 * * * *"
+
 # Proxy Xero connections endpoint
 [[redirects]]
   from = "/api/xero-connections"

@@ -828,12 +828,34 @@ own header.
   `emailed_at` makes it once only. Pinned by `tests/whatsapp-webhook-test.cjs`.
 - `wa_messages`: RLS on, no policies, anon/authenticated revoked — functions
   only. Media is not fetched yet.
-- Settings → WhatsApp (admin): the sending number and its name review, the
-  templates on the account, and two tests — an approved template with no
-  variables, or plain text (only within 24h of that person messaging the
-  01825 number). **Meta's sample `hello_world` is not on this account** (error
-  132001, 30 Oct) — never assume it. Still to build: real templates, opt-in,
-  Send buttons, the booking panel.
+- **Settings → WhatsApp is its own page** (`WhatsAppPage`, view `whatsapp`,
+  30 Oct): the sending number and its name review; whether the WhatsApp
+  account is linked to the app (`/{WABA}/subscribed_apps` — a verified
+  callback URL alone does NOT bring messages in; "Link it now" posts the
+  subscription); the templates the app uses (`TEMPLATES` in
+  `whatsapp-send.js`, submitted from the page, status read back from Meta);
+  a test box (an approved template with no variables, or plain text — only
+  within 24h of that person messaging the 01825 number). **Meta's sample
+  `hello_world` is not on this account** (error 132001) — never assume it.
+- **Checklist reminders by WhatsApp** (migration w,
+  `netlify/functions/whatsapp-reminders/`, every 15 min at 7/22/37/52 via
+  `whatsapp-reminders-cron.js`): only items set to a NAMED person
+  (`person:<uuid>`) — never role or Anyone (Toby); ONE message per person per
+  list (`wa_reminders_sent`, marked before sending, unmarked on refusal),
+  listing all their open items in it; sent `leadMin` (≥15) before their first
+  item is due and **never after** (most are due at check-in). Off until ticked
+  on the page (`app_data` `hbf_whatsapp_settings_v1.checklistReminders`
+  `{on, leadMin}`). Template `checklist_reminder` (en_GB, utility, 5 body
+  values — no line breaks allowed in a value, so items are joined with " · ").
+  A 132001 stops the run (template not approved). `plan.js` is pure, pinned
+  by `tests/whatsapp-reminders-test.cjs`; the page by
+  `tests/whatsapp-page-e2e.cjs`.
+- **Every office login has a mobile** (`profiles.mobile`, international
+  digits, written only by `user-admin.js` — `users.create` requires it for an
+  administrator, `users.setMobile` edits it; Settings → Staff edits it in
+  place, `MobileCell`). Shared bar / housekeeping logins have none.
+- Still to build: guest templates, opt-in on booking forms, Send buttons,
+  the booking panel, media in forwarded replies.
 
 ## Working in this folder from a Claude session
 
