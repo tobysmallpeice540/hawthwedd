@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30f";
+const APP_BUILD = "2026-10-30g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18262,11 +18262,17 @@ function AccomBadgeList({ accomBadges, onOpenAccom }) {
 // otherwise — never sent, a test, or declined / voided / expired (a dead
 // contract puts the event back to plain Confirmed). Display only: b.status
 // stays "Confirmed" in the record, so every filter and report is unchanged.
+//
+// A contract signed outside the app counts as signed once its Event Booking
+// Form is uploaded to the event's files (Toby, 30 Oct) — the same file the EBF
+// tick on the events list reads.
 function eventContractStage(b) {
+  const hasEbf = !!(b && (b.files || []).some(function(f) { return f && f.docType === "Event Booking Form"; }));
   const c = b && b.contract;
+  if (c && !c.testMode && String(c.status || "").toLowerCase() === "completed") return "signed";
+  if (hasEbf) return "signed";
   if (!c || c.testMode) return null;
   const st = String(c.status || "").toLowerCase();
-  if (st === "completed") return "signed";
   if (st === "declined" || st === "voided" || st === "expired") return null;
   return c.sentAt ? "sent" : null;
 }
@@ -18280,7 +18286,7 @@ function BookingStatusBadge({ b }) {
   if (b.status === "Holding") return pill("Holding", T.tint, T.textMid);
   if (b.status !== "Confirmed") return <span style={{ color:T.textLight, fontSize:11 }}>—</span>;
   const stage = eventContractStage(b);
-  if (stage === "signed") return pill("Contract signed", T.greenBg, T.green, "Confirmed — the contract has come back signed");
+  if (stage === "signed") return pill("Contract signed", T.greenBg, T.green, "Confirmed — signed contract or Event Booking Form on file");
   if (stage === "sent") return pill("Contract sent", "#fed7aa", "#9a3412", "Confirmed — contract sent" + (b.contract && b.contract.sentAt ? " " + fmtDate(String(b.contract.sentAt).slice(0, 10)) : "") + ", not signed yet");
   return pill("Confirmed", "#fef9c3", "#854d0e", "Confirmed — no contract sent yet");
 }
