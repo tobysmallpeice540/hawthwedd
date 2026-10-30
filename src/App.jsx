@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30q";
+const APP_BUILD = "2026-10-30r";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -32532,6 +32532,7 @@ function BoxSettingsScreen() {
 
       <BoxEmailTemplatesCard/>
 
+      <BoxTicketTermsEditor/>
 
       <BoxCard title="What runs on its own">
         <div style={{ fontSize:13, color:T.textMid, lineHeight:1.85 }}>
@@ -32870,9 +32871,8 @@ function BoxOfficeDashboardCard({ setView, onOpenEvent }) {
 }
 
 // ── Ticket terms and conditions ──────────────────────────────────────────────
-// Still to be written at handover, and the checkout is honest about it: until
-// there is something here the buyer sees a one-line statement rather than a
-// link to the cottage terms, which cover something else entirely.
+// The checkout always links here (30 Oct, Toby). Until something is written the
+// page says the terms aren't published yet and gives the email address.
 function BoxTicketTermsEditor() {
   const [text, setText] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -32904,9 +32904,9 @@ function BoxTicketTermsEditor() {
     }>
       {empty && (
         <div style={{ background:T.amberBg, border:"1px solid #fcd34d", color:"#92400e", borderRadius:8, padding:"11px 14px", fontSize:12.5, marginBottom:12, lineHeight:1.65 }}>
-          <strong>Not written yet.</strong> Until something is here, the checkout shows a single line rather than a
-          link, and nothing links buyers to the cottage terms. Worth writing before the first Christmas booking —
-          it needs to say plainly whether a deposit comes back if a table cancels.
+          <strong>Not written yet.</strong> The checkout links buyers here, and until something is saved the page
+          only says the terms aren't published and gives the email address. It needs to say plainly whether a
+          deposit comes back if a table cancels.
         </div>
       )}
       <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 10px", lineHeight:1.6 }}>

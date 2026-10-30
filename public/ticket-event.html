@@ -219,7 +219,6 @@
   var termsOk = false;
   var optIn = false;             // marketing consent — unticked unless they tick it
   var waitlistDone = false;
-  var ticketTerms = false;       // whether ticket terms have been published
 
   var app = document.getElementById("app");
   var heroEl = document.getElementById("hero");
@@ -590,17 +589,12 @@
       notesHtml() +
       '<label class="terms-accept' + (termsOk ? " on" : "") + '" id="terms-box">' +
         '<input type="checkbox" id="d-terms"' + (termsOk ? " checked" : "") + ">" +
-        // Linked only once ticket terms have actually been written. Until then
-        // the box still has to be ticked, but it doesn't send anyone off to
-        // the cottage terms, which are not these terms.
+        // Always the link to the ticket terms (Toby, 30 Oct) — never the
+        // cottage terms, and no one-line summary of our own in its place.
         (sellerName()
           // A chef event: the contract is with the chef, and the box says so.
-          ? (ticketTerms
-              ? "<span>I understand these tickets are sold by " + esc(sellerName()) + ", and I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>"
-              : "<span>I understand these tickets are sold by " + esc(sellerName()) + ", that they are non-transferable, and that refunds are at the seller's discretion.</span>")
-          : (ticketTerms
-              ? "<span>I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>"
-              : "<span>I accept that tickets are non-transferable and that refunds are at Hawthbush Farm's discretion.</span>")) +
+          ? "<span>I understand these tickets are sold by " + esc(sellerName()) + ", and I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>"
+          : "<span>I accept the <a href=\"/terms.html?tickets=1\" target=\"_blank\">ticket terms and conditions</a>.</span>") +
       "</label>" +
       // Marketing consent, chef-run events only. Those buyers are the chef's
       // customers, so Hawthbush may add them to its list only if they say yes
@@ -868,17 +862,6 @@
 
   // ── Load ───────────────────────────────────────────────────────────────────
   function load(keepStep) {
-    // Cheap and non-blocking: the checkout links to the ticket terms only if
-    // somebody has written them.
-    fetch(SUPABASE_URL + "/rest/v1/app_data?key=eq.hbf_ticket_terms_v1&select=value", {
-      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
-    }).then(function (r) { return r.json(); })
-      .then(function (rows) {
-        var v = rows && rows[0] && rows[0].value;
-        ticketTerms = !!(v && String(v.text || "").trim());
-      })
-      .catch(function () {});
-
     // notes_enabled / notes_label / notes_required arrive on each ticket type
     // from box_public_event, alongside price and remaining. A page served
     // before the migration has run simply gets undefined for all three and
