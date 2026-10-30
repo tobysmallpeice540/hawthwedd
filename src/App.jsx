@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30o";
+const APP_BUILD = "2026-10-30p";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6111,6 +6111,15 @@ function attachmentForOptions(templateId, properties) {
   return (properties || []).filter(function(p) { return p && p.id; }).map(function(p) { return [String(p.id), p.name || p.id]; });
 }
 
+// Lettings email attachments double as the hosted arrival packs
+// (arrival-pack.js serves them inline from the app's own address), so only
+// PDFs and pictures may be attached (Toby, 30 Oct review).
+const EMAIL_ATTACH_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"];
+const EMAIL_ATTACH_ACCEPT = EMAIL_ATTACH_TYPES.concat([".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif"]).join(",");
+function emailAttachAllowed(file) {
+  return !!file && EMAIL_ATTACH_TYPES.indexOf(String(file.type || "").toLowerCase()) !== -1;
+}
+
 function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
   const [sel, setSel] = useState(0);
   const [flash, setFlash] = useState("");
@@ -6138,6 +6147,11 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
   const handleFile = function(e) {
     var file = e.target.files[0];
     if (!file) return;
+    if (!emailAttachAllowed(file)) {
+      alert("Only a PDF or a picture (JPEG, PNG, WebP or GIF) can be attached.");
+      e.target.value = "";
+      return;
+    }
     if (file.size > 2 * 1024 * 1024) {
       alert("File is over 2 MB — please compress it before attaching.");
       e.target.value = "";
@@ -6319,13 +6333,13 @@ function EmailTemplatesEditor({ templates, setTemplates, onSave }) {
                   </div>
                 );
               })}
-              <input ref={fileRef} type="file" onChange={handleFile} style={{ display:"none" }} />
+              <input ref={fileRef} type="file" accept={EMAIL_ATTACH_ACCEPT} onChange={handleFile} style={{ display:"none" }} />
               <button onClick={function() { if (fileRef.current) fileRef.current.click(); }}
                 style={{ background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:7, padding:"8px 16px", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, color:T.text, marginTop:4 }}>
                 + Attach file
               </button>
               <div style={{ fontSize:11, color:T.textLight, marginTop:5 }}>
-                Files are stored with the template. For large files (brochures, maps) consider linking to a URL in the body instead.
+                PDF or picture only, up to 2 MB. Files are stored with the template. For large files (brochures, maps) consider linking to a URL in the body instead.
               </div>
             </div>
           </div>

@@ -921,6 +921,10 @@ own header.
   `/pack/<template id>/<key>/<tag>` = the file marked for that tag, else the
   one for everyone. Key = HMAC(template id [+ "/" + tag], `HBF_ADMIN_TOKEN`),
   16 chars (`packKey` in templates.js); rotating the token changes every link.
+  **Only a PDF or a picture** (30 Oct review): the lettings template editor
+  refuses anything else at upload (`EMAIL_ATTACH_TYPES`, 2 MB cap), and
+  `arrival-pack.js` serves only those types (`SERVABLE`, the data URL's own
+  type, `nosniff`) — it is served inline from the app's own address.
 - **Attachments are marked per booking kind** (31 Oct, Toby): each attachment
   on a lettings email template has `for` — blank (everyone), a property id
   (`hamlet`, `amly`, `glamping`), or on the Wedding/Event template a kind of

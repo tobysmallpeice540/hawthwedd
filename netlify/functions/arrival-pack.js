@@ -33,6 +33,11 @@ function safeEqual(a, b) {
   return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
 }
 
+// Served inline from the app's own address, so only a PDF or a picture —
+// never HTML or anything a browser might run (30 Oct review). The type is the
+// data URL's own, and must agree with the attachment's.
+const SERVABLE = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"];
+
 const notFound = { statusCode: 404, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "This arrival pack link isn't available. Please contact Hawthbush Farm." };
 
 exports.handler = async function (event) {
@@ -51,11 +56,14 @@ exports.handler = async function (event) {
   const att = tpl && packAttachment(tpl, p || undefined);
   const m = att && /^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/s.exec(String(att.dataUrl || ""));
   if (!m) return notFound;
+  const type = String(m[1] || "").toLowerCase();
+  if (SERVABLE.indexOf(type) === -1 || (att.type && String(att.type).toLowerCase() !== type)) return notFound;
   const name = String(att.name || "arrival-pack.pdf").replace(/[^\w .()-]/g, "_");
   return {
     statusCode: 200,
     headers: {
-      "Content-Type": att.type || m[1] || "application/octet-stream",
+      "Content-Type": type,
+      "X-Content-Type-Options": "nosniff",
       "Content-Disposition": "inline; filename=\"" + name + "\"",
       // Short, so a replaced pack shows within minutes.
       "Cache-Control": "public, max-age=300",

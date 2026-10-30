@@ -101,6 +101,15 @@ function fakeNet(store) {
   r = await get("arrival_general", "AMLY/../x"); ok("an odd tag is refused", r.statusCode === 404);
   // A pack marked for a property that the link then loses: falls back to everyone's.
   r = await get("arrival_general", "barn"); ok("a property with no pack of its own gets the one for everyone", body(r) === "GENERAL");
+  r = await get("arrival_general", "amly"); ok("served as a PDF, never sniffed", r.headers["Content-Type"] === "application/pdf" && r.headers["X-Content-Type-Options"] === "nosniff");
+  // 30 Oct review: only a PDF or a picture is ever served from our address.
+  fakeNet({ hbf_email_templates_v1: [{ id: "arrival_general", attachments: [
+    { name: "x.html", for: "hamlet", type: "text/html", dataUrl: "data:text/html;base64," + Buffer.from("<script>1</script>").toString("base64") },
+    { name: "y.pdf", for: "amly", type: "text/html", dataUrl: b64("SNEAKY") },
+    { name: "z.png", for: "glamping", type: "image/png", dataUrl: "data:image/png;base64," + Buffer.from("PNG").toString("base64") }] }] });
+  r = await get("arrival_general", "hamlet"); ok("an HTML attachment is refused", r.statusCode === 404);
+  r = await get("arrival_general", "amly"); ok("a type that disagrees with the file is refused", r.statusCode === 404);
+  r = await get("arrival_general", "glamping"); ok("a picture is served", r.statusCode === 200 && r.headers["Content-Type"] === "image/png");
 
   console.log("— the automatic arrival email attaches only the right pack —");
   delete require.cache[require.resolve("../netlify/functions/send-accom-reminders.js")];
