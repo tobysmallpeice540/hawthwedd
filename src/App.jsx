@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-30e";
+const APP_BUILD = "2026-10-30f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -22674,6 +22674,61 @@ function enquiryForBrochure(enquiries, r) {
   return list.find(function(e) { return e && String(e.email || "").trim().toLowerCase() === em; }) || null;
 }
 
+// ─── Contract pipeline (home, 30 Oct 2026) ───────────────────────────────────
+// Confirmed events still to come, counted by the stage of their contract
+// (eventContractStage — the same rule as the status badge), for this year and
+// the next two. Holding events are left out: they are not confirmed.
+const PIPELINE_STAGES = [
+  { key:"confirmed", label:"Confirmed",       bg:"#fef9c3", fg:"#854d0e" },
+  { key:"sent",      label:"Contract sent",   bg:"#fed7aa", fg:"#9a3412" },
+  { key:"signed",    label:"Contract signed", bg:null,      fg:null },
+];
+function contractPipeline(bookings, today) {
+  const y0 = Number(String(today).slice(0, 4));
+  const years = [y0, y0 + 1, y0 + 2].map(function(y) { return { year:y, confirmed:0, sent:0, signed:0 }; });
+  (bookings || []).forEach(function(b) {
+    if (!b || b.status !== "Confirmed" || !b.date || b.date < today) return;
+    const row = years[Number(String(b.date).slice(0, 4)) - y0];
+    if (!row) return;
+    row[eventContractStage(b) || "confirmed"] += 1;
+  });
+  return years;
+}
+function ContractPipeline({ bookings, today, onOpen }) {
+  const rows = contractPipeline(bookings, today);
+  const tot = rows.reduce(function(a, r) { return { confirmed:a.confirmed + r.confirmed, sent:a.sent + r.sent, signed:a.signed + r.signed }; }, { confirmed:0, sent:0, signed:0 });
+  const colours = function(st) { return st.key === "signed" ? [T.greenBg, T.green] : [st.bg, st.fg]; };
+  const cell = { flex:"1 1 0", minWidth:0, textAlign:"center" };
+  const line = function(label, r, strong, key) {
+    return (
+      <div key={key} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, padding:"7px 0", borderTop:`1px solid ${T.bg}` }}>
+        <div style={{ flex:"0 0 64px", fontSize:13, fontWeight: strong ? 700 : 600, color:T.text }}>{label}</div>
+        {PIPELINE_STAGES.map(function(st) {
+          const c = colours(st), n = r[st.key];
+          return (
+            <div key={st.key} style={cell}>
+              <span style={{ display:"inline-block", minWidth:34, padding:"3px 9px", borderRadius:12, fontSize:13, fontWeight:700,
+                fontVariantNumeric:"tabular-nums", background: n ? c[0] : "transparent", color: n ? c[1] : T.textLight }}>{n}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+  return (
+    <div onClick={onOpen} title="Open the events list" style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:12, padding:"18px 22px 12px", boxShadow:T.shadowCard, marginBottom:18, cursor: onOpen ? "pointer" : "default" }}>
+      <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, marginBottom:6 }}>
+        <h3 style={{ flex:"0 0 64px", margin:0, color:T.midBlue, fontWeight:700, fontSize:15 }}>Pipeline</h3>
+        {PIPELINE_STAGES.map(function(st) {
+          return <div key={st.key} style={Object.assign({}, cell, { fontSize:11, fontWeight:600, color:T.textMid, lineHeight:1.25 })}>{st.label}</div>;
+        })}
+      </div>
+      {rows.map(function(r) { return line(String(r.year), r, false, r.year); })}
+      {line("Total", tot, true, "total")}
+    </div>
+  );
+}
+
 function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent, enquiries, onOpenEnquiry, onOpenBoxEvent, onOpenViewingRequest, onOpenChecklist }) {
   // Each row opens its own record; the section list is the fallback only when
   // the handler is missing (an older caller) or the record cannot be found.
@@ -22940,6 +22995,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
       {/* Booked online but not yet paid — these need chasing, so they stay
           near the top with the other things waiting on someone. */}
       <UnpaidOnlineBookings bookings={accomBookings} onDelete={onDeleteAccom} onOpen={openLet}/>
+
+      {/* Confirmed events by contract stage, this year and the next two. */}
+      <ContractPipeline bookings={bookings} today={today} onOpen={function(){ setView("list"); }}/>
 
       {/* Overdue money used to be said twice: a red banner here, and a panel in
           the grid below repeating the accommodation half of it. It is now one
