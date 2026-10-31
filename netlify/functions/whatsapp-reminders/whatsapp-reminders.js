@@ -74,11 +74,18 @@ async function loadChecklists(now) {
   return { runs: runs, items: items, people: people };
 }
 
-async function sendTemplate(name, to, order, values, payloads) {
+async function sendTemplate(name, to, order, values, payloads, urlSuffix) {
   const params = order.map(function (k) { return { type: "text", text: T.cleanParam(values[k], 1000) }; });
   const template = { name: name, language: { code: T.TEMPLATES[name].language } };
   const comps = [];
   if (params.length) comps.push({ type: "body", parameters: params });
+  // A URL button ending in {{1}} (the changeover summary's plan link) needs
+  // its end of the link each send; without one the send would be refused.
+  const btn = T.TEMPLATES[name].button;
+  if (btn && /\{\{1\}\}/.test(btn.url || "")) {
+    if (!urlSuffix) throw new Error("No link for the " + name + " button.");
+    comps.push({ type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: String(urlSuffix) }] });
+  }
   // Tap-to-answer buttons carry a payload of ours, so a tap names the booking.
   // They follow any URL button in the template's button list.
   const offset = T.TEMPLATES[name].button ? 1 : 0;
@@ -135,7 +142,7 @@ async function planNow(now) {
     const day = s.day == null ? 0 : Number(s.day), hour = s.hour == null ? 8 : Number(s.hour);
     if (plan.londonWeekday(now) === day && plan.londonHour(now) >= hour) {
       const today = plan.londonDate(now);
-      const until = new Date(now.getTime() + 11 * 864e5).toISOString();
+      const until = new Date(now.getTime() + (plan.SUMMARY_DAYS + 1) * 864e5).toISOString();
       const data = {
         accom: (await appData("hbf_accom_v1")) || [],
         properties: (await appData("hbf_properties_v1")) || [],
@@ -148,7 +155,9 @@ async function planNow(now) {
       const sub = ((await appData(SUBMITTED_KEY)) || {}).changeover_summary;
       const words = sub && sub.body ? sub.body : T.TEMPLATES.changeover_summary.body;
       const fixedLen = words.replace(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}/g, "").length;
-      const p = plan.planSummary(Object.assign({ settings: s, now: now, fixedLen: fixedLen }, data));
+      const secret = process.env.HBF_ADMIN_TOKEN;
+      const p = plan.planSummary(Object.assign({ settings: s, now: now, fixedLen: fixedLen,
+        planSuffix: secret ? function (from) { return T.planSuffix(from, secret); } : null }, data));
       all.push.apply(all, p.send); skipped.push.apply(skipped, p.skipped);
     }
   }
@@ -177,9 +186,10 @@ async function runOnce(now) {
     const sub = submitted[m.template] || null;
     const order = T.sendOrder(m.template, sub);
     try {
-      const id = await sendTemplate(m.template, m.to, order, m.values, m.payloads);
+      const id = await sendTemplate(m.template, m.to, order, m.values, m.payloads, m.urlSuffix);
       out.sent++;
-      const text = T.render(sub && sub.body ? sub.body : T.TEMPLATES[m.template].body, m.values);
+      const text = T.render(sub && sub.body ? sub.body : T.TEMPLATES[m.template].body, m.values) +
+        (m.urlSuffix ? "\n[" + T.TEMPLATES[m.template].button.text + ": " + T.TEMPLATES[m.template].button.url.replace("{{1}}", m.urlSuffix) + "]" : "");
       await rest("wa_sent_marks?kind=eq." + encodeURIComponent(kind) + "&ref=eq." + encodeURIComponent(ref), {
         method: "PATCH", headers: { "Prefer": "return=minimal" }, body: JSON.stringify({ wa_id: id }) }).catch(function () {});
       await rest("wa_messages", { method: "POST", headers: { "Prefer": "return=minimal" }, body: JSON.stringify({
@@ -242,4 +252,4 @@ exports.handler = async function (event) {
   }
 };
 
-exports._test = { runOnce: runOnce, planNow: planNow };
+exports._test = { runOnce: runOnce, planNow: planNow, sendTemplate: sendTemplate };

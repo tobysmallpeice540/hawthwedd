@@ -11,8 +11,8 @@ Object.keys(T.TEMPLATES).forEach(function (n) {
   assert.ok(c.ok, n + ": standard wording must pass Meta's rules: " + c.error);
   const built = T.components(n, T.TEMPLATES[n].body);
   assert.ok(built.components[0].text.indexOf("{{1}}") !== -1 || !c.order.length);
-  assert.strictEqual(built.components[1].text, T.FOOTER);
-  assert.ok(T.FOOTER.length <= 60);
+  assert.strictEqual(built.components[1].text, T.footerOf(n));
+  assert.ok(T.footerOf(n).length <= 60);
   if (c.order.length) assert.strictEqual(built.components[0].example.body_text[0].length, c.order.length);
 });
 assert.strictEqual(T.checkBody("pre_arrival", "{{guestName}} hello there").ok, false, "may not start with a field");
@@ -150,48 +150,83 @@ const events = [{ id: 7, couple: "Smith", eventType: "Wedding (Peak)", date: "20
                 { id: 8, couple: "Maybe", eventType: "Party", date: "2026-11-01", status: "Holding" }];
 const boxEvents = [{ id: "bx1", name: "Supper club", status: "published", starts_at: "2026-11-03T19:30:00Z" },
                    { id: "bx2", name: "Draft one", status: "draft", starts_at: "2026-11-03T19:30:00Z" }];
-const days = P.summaryDays({ accom, properties, events, boxEvents, setups }, "2026-10-31", 10);
-assert.strictEqual(days.length, 10);
-assert.ok(days[0].startsWith("Sat 31 Oct: Juner into Hamlet (Cot please) · Places into Hamlet (extra clean) · "), days[0]);
-assert.ok(days[0].endsWith("…") && days[0].length === 88, "a busy day is cut to fit");
-assert.ok(/^Sun 1 Nov: \w+ out of Hamlet .*Grain Store: Smith wedding \(Chairs out\)/.test(days[1]) || days[1].length === 88, days[1]);
-assert.ok(days[1].indexOf("Maybe") === -1, "holding events left out");
-assert.ok(/^Mon 2 Nov: .*out of \w+ \(no clean\)|^Mon 2 Nov:/.test(days[2]));
-// Check-outs before check-ins, whatever order the bookings are in.
-assert.ok(!/into .* out of /.test(days[1].replace(/Grain Store:.*/, "")), days[1]);
-assert.ok(days[3].indexOf("Supper club 7:30pm") !== -1 && days[3].indexOf("Draft") === -1, days[3]);
-assert.strictEqual(days[9], "Mon 9 Nov: nothing booked");
-assert.strictEqual(P.summaryDays({ accom: [{ id: "w", guestName: "Jones (Wed)", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] }], properties }, "2026-10-31", 1)[0],
-  "Sat 31 Oct: Jones into Amly", "wedding-cottage names lose the (Wed)");
+const wk = P.summaryItems({ accom, properties, events, boxEvents, setups }, "2026-10-31", 7);
+assert.strictEqual(wk.length, 7, "seven days (31 Oct, Toby)");
+const words = function (d) { return d.items.map(P.itemWords); };
+assert.strictEqual(words(wk[0])[0], "Juner into Hamlet (Cot\nplease)", "the note as written; weekText takes out the line break");
+assert.ok(words(wk[0]).indexOf("Places into Hamlet (extra clean)") !== -1, words(wk[0]).join(" / "));
+assert.ok(words(wk[1]).some(function (w) { return /^\w+ out of Hamlet/.test(w); }), words(wk[1]).join(" / "));
+assert.ok(words(wk[1]).indexOf("Grain Store: Smith wedding (Chairs out)") !== -1, words(wk[1]).join(" / "));
+assert.ok(words(wk[1]).every(function (w) { return w.indexOf("Maybe") === -1; }), "holding events left out");
+// Check-outs before check-ins, then the Grain Store.
+const rank = { out: 0, in: 1, event: 2, box: 2 };
+wk.forEach(function (d) { d.items.forEach(function (it, i) { if (i) assert.ok(rank[d.items[i - 1].kind] <= rank[it.kind], d.day + ": " + d.items.map(function (x) { return x.kind; })); }); });
+assert.ok(words(wk[2]).some(function (w) { return /out of \w+ \(no clean\)/.test(w); }), words(wk[2]).join(" / "));
+assert.ok(words(wk[3]).indexOf("Grain Store: Supper club 7:30pm") !== -1 && words(wk[3]).join().indexOf("Draft") === -1, words(wk[3]).join(" / "));
+assert.strictEqual(P.summaryItems({ accom: [{ id: "w", guestName: "Jones (Wed)", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] }], properties }, "2026-10-31", 1)[0].items[0].text,
+  "Jones into Amly", "wedding-cottage names lose the (Wed)");
 // Early check-in / late check-out on the booking show in the summary.
-const el = P.summaryDays({ accom: [{ id: "e", guestName: "Kim Early", status: "confirmed", earlyCheckIn: "15:00", lateCheckOut: "12:00",
+const el = P.summaryItems({ accom: [{ id: "e", guestName: "Kim Early", status: "confirmed", earlyCheckIn: "15:00", lateCheckOut: "12:00",
+  arrivalEta: { text: "After 9pm", date: "2026-10-31" },
   stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01", checkInTime: "15:00", checkOutTime: "12:00" }] }], properties }, "2026-10-31", 2);
-assert.deepStrictEqual(el, ["Sat 31 Oct: Early into Amly early 3pm", "Sun 1 Nov: Early out of Amly late 12pm"]);
+assert.deepStrictEqual(el.map(function (d) { return d.items.map(P.itemWords); }), [["Early into Amly (early 3pm)"], ["Early out of Amly (late 12pm)"]]);
+assert.strictEqual(el[0].items[0].time, "3pm");
+assert.strictEqual(el[0].items[0].eta, "After 9pm", "the guests' arrival time, for the page");
 // The pre-arrival WhatsApp picks up the early time from the stay.
 const ea = P.planArrivals({ accom: [{ id: "e", guestName: "Kim Early", phone: "07700900111", status: "confirmed", earlyCheckIn: "15:00",
   stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01", checkInTime: "15:00" }] }], properties, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
 assert.strictEqual(ea.send[0].values.checkInTime, "3:00pm");
-assert.ok(days.every(function (d) { return d.length <= 88 && !/[\n\t]/.test(d); }));
-const sumIn = { accom, properties, events, boxEvents, setups, settings: { day: 0, hour: 8, recipients: [{ name: "Karina", mobile: "07111 222333" }, { name: "Edita", mobile: "" }] } };
+// The whole week in one field: busy days only, no line breaks.
+const wt = P.weekText(wk, 2000);
+assert.ok(wt.startsWith("Sat 31 Oct – Juner into Hamlet (Cot please); "), wt);
+assert.ok(/ \| Sun 1 Nov – /.test(wt), wt);
+assert.ok(!/[\n\t]/.test(wt));
+const quiet = wk.filter(function (d) { return !d.items.length; });
+quiet.forEach(function (d) { assert.ok(wt.indexOf(P.dayShort(d.day)) === -1, "quiet day left out: " + d.day); });
+assert.strictEqual(P.weekText([{ day: "2026-11-01", items: [] }]), "Nothing booked this week");
+const cut = P.weekText(wk, 120);
+assert.ok(cut.length <= 120 && / … and more on the plan$/.test(cut), cut);
+// Meta's rules: the template passes, and the whole body fits at full length.
+assert.ok(T.checkBody("changeover_summary", T.TEMPLATES.changeover_summary.body).ok);
+const fixed = T.TEMPLATES.changeover_summary.body.replace(/\{\{[^}]*\}\}/g, "").length;
+const cap = P.weekCap(fixed);
+const longBody = T.render(T.TEMPLATES.changeover_summary.body, { name: "x".repeat(40), week: P.weekText(Array(7).fill(0).map(function (x, i) {
+  return { day: P.addDays("2026-11-01", i), items: Array(6).fill({ kind: "in", text: "Longname into Glamping", flags: ["extra clean"], note: "a long note about the hot tub and the logs" }) };
+}), cap) });
+assert.ok(longBody.length <= 1024, "summary body " + longBody.length);
+assert.ok(cap >= 600, "room enough to read: " + cap);
+// The plan link: a URL button ending in the day sent + its key; refused when wrong.
+const btn = T.components("changeover_summary", T.TEMPLATES.changeover_summary.body).components[2].buttons[0];
+assert.strictEqual(btn.url, "https://hawthbushfarm.netlify.app/plan/{{1}}");
+assert.ok(Array.isArray(btn.example) && /\/plan\/2026-11-01-/.test(btn.example[0]));
+assert.strictEqual(T.planLinkDay(T.planSuffix("2026-11-01", "sek"), "sek"), "2026-11-01");
+assert.strictEqual(T.planLinkDay(T.planSuffix("2026-11-01", "sek"), "other"), null);
+assert.strictEqual(T.planLinkDay("2026-11-02-" + T.planKey("2026-11-01", "sek"), "sek"), null, "the day is part of the key");
+// Footers: the shared one, and pre-arrival's own (a tap is saved at once).
+assert.ok(T.footerOf("changeover_summary").length <= 60 && T.footerOf("pre_arrival").length <= 60);
+assert.strictEqual(T.components("pre_arrival", T.TEMPLATES.pre_arrival.body).components[1].text, "Urgent? Call 01825 212020");
+assert.ok(/All the best,\nRosanna\n\nIt would be great/.test(T.TEMPLATES.pre_arrival.body), "the question sits right above the buttons");
+const sumIn = { accom, properties, events, boxEvents, setups, planSuffix: function (d) { return T.planSuffix(d, "sek"); },
+  settings: { day: 0, hour: 8, recipients: [{ name: "Karina", mobile: "07111 222333" }, { name: "Edita", mobile: "" }] } };
 p = P.planSummary(Object.assign({ now: at("2026-11-01T07:30:00Z") }, sumIn));   // Sunday 7:30am
 assert.strictEqual(p.send.length, 0, "before the hour");
 p = P.planSummary(Object.assign({ now: at("2026-11-01T08:15:00Z") }, sumIn));
 assert.strictEqual(p.send.length, 1);
 assert.strictEqual(p.send[0].to, "447111222333");
 assert.strictEqual(p.send[0].values.name, "Karina");
-assert.ok(/^Sun 1 Nov:/.test(p.send[0].values.day1) && /^Tue 10 Nov:/.test(p.send[0].values.day10));
+assert.ok(/^Sun 1 Nov – /.test(p.send[0].values.week), p.send[0].values.week);
+assert.deepStrictEqual(Object.keys(p.send[0].values).sort(), ["name", "week"]);
+assert.strictEqual(T.planLinkDay(p.send[0].urlSuffix, "sek"), "2026-11-01");
 assert.deepStrictEqual(p.skipped, [{ name: "Edita", why: "no mobile" }]);
 p = P.planSummary(Object.assign({ now: at("2026-11-02T08:15:00Z") }, sumIn));    // Monday
 assert.strictEqual(p.send.length, 0, "only on the chosen day");
-// The whole body stays inside WhatsApp's 1,024 characters at full length.
-const fixed = T.TEMPLATES.changeover_summary.body.replace(/\{\{[^}]*\}\}/g, "").length;
-const cap = P.dayCap(fixed);
-const longBody = T.render(T.TEMPLATES.changeover_summary.body, Object.assign({ name: "x".repeat(40) },
-  Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (n) { return ["day" + n, "x".repeat(cap)]; }))));
-assert.ok(longBody.length <= 1024, "summary body " + longBody.length + " with days of " + cap);
-assert.ok(cap >= 80, "room enough to read: " + cap);
-// Longer wording leaves less room per day, never too little.
-assert.ok(P.dayCap(900) === 40);
+
+// The plan page: escapes everything, busy days only, quiet days named.
+const HP = require("../netlify/functions/hk-plan.js")._test;
+const html = HP.render([{ day: "2026-11-01", items: [{ kind: "in", text: "O'Neil <b> into Hamlet", time: "4pm", flags: ["extra clean"], note: "Cot <script>", eta: "After 9pm" }] },
+  { day: "2026-11-02", items: [] }], "Sun 8:15 am");
+assert.ok(html.indexOf("<script>") === -1 && html.indexOf("&lt;script&gt;") !== -1 && html.indexOf("O&#39;Neil &lt;b&gt;") !== -1);
+assert.ok(/Sunday 1 November/.test(html) && /arriving After 9pm/.test(html) && /Nothing booked: Mon 2 Nov\./.test(html));
 
 console.log("whatsapp plans and templates: all tests passed");
 
@@ -267,4 +302,25 @@ console.log("whatsapp plans and templates: all tests passed");
   r = await _test.runOnce(at("2026-10-31T09:50:00Z"));
   assert.strictEqual(sent.length, before);
   console.log("whatsapp sending run: all tests passed");
-})().catch(function (e) { console.error(e); process.exit(1); });
+})().then(planLinkButton).catch(function (e) { console.error(e); process.exit(1); });
+
+// ── The summary's plan link goes out as the URL button's value ───────────────
+// Run after the sending run, which fakes fetch too.
+async function planLinkButton() {
+  process.env.WHATSAPP_TOKEN = "tok";
+  const { _test } = require("../netlify/functions/whatsapp-reminders/whatsapp-reminders.js");
+  const T2 = require("../netlify/functions/whatsapp-reminders/templates.js");
+  const realFetch = global.fetch; let body = null;
+  global.fetch = async function (url, o) { body = JSON.parse(o.body); return { ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.1" }] }) }; };
+  try {
+    await _test.sendTemplate("changeover_summary", "447111222333", ["name", "week"], { name: "Karina", week: "Sun 1 Nov – x" }, null, T2.planSuffix("2026-11-01", "sek"));
+    const comps = body.template.components;
+    assert.deepStrictEqual(comps[0].parameters.map(function (p) { return p.text; }), ["Karina", "Sun 1 Nov – x"]);
+    assert.deepStrictEqual(comps[1], { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: T2.planSuffix("2026-11-01", "sek") }] });
+    await assert.rejects(_test.sendTemplate("changeover_summary", "447111222333", ["name", "week"], { name: "K", week: "w" }, null, ""), /No link/);
+    // Pre-arrival: no URL button, quick replies from index 0.
+    await _test.sendTemplate("pre_arrival", "447111222333", ["guestName"], { guestName: "Emma" }, ["eta|a@2026-11-01|0", "eta|a@2026-11-01|1", "eta|a@2026-11-01|2"]);
+    assert.deepStrictEqual(body.template.components.slice(1).map(function (c) { return c.sub_type + c.index; }), ["quick_reply0", "quick_reply1", "quick_reply2"]);
+  } finally { global.fetch = realFetch; }
+  console.log("whatsapp plan link button: all tests passed");
+}

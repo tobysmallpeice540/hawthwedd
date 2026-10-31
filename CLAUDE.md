@@ -824,7 +824,12 @@ own header.
   `WHATSAPP_VERIFY_TOKEN`. The business mobile is untouched.
 - **Replies are allowed and read by email in office hours** (Toby): every
   template's footer says so, with 01825 212020 for anything urgent (31 Oct;
-  Meta caps a footer at 60 characters); there is no auto-reply and no Call button.
+  Meta caps a footer at 60 characters) — except pre-arrival, whose footer is
+  just "Urgent? Call 01825 212020" (`footerOf`): a tap on its buttons is saved
+  at once, so "read in office hours" would mislead right above them.
+  **Buttons always sit at the very bottom of a WhatsApp, under the footer** —
+  there is no placing them mid-message, so pre-arrival's sign-off comes
+  BEFORE its question; there is no auto-reply and no Call button.
   `whatsapp-webhook.js` keeps each inbound message in `wa_messages` (id =
   Meta's message id), matches the number to a letting / event / enquiry
   (`normaliseNumber`: UK numbers to 44…), and emails it to
@@ -876,11 +881,24 @@ own header.
   item passes due, listing the overdue ones). Pre-arrival: from the arrival
   hour on the check-in day, confirmed/completed lettings, consenting guests,
   one per booking per day. Summary: the chosen weekday from the chosen hour,
-  the next 10 days, name first (31 Oct: "Smith out of Hamlet · Jones into
-  Hamlet (cot please) · Grain Store: Smith wedding" — check-outs, then
-  check-ins, + extra clean / note / no exit clean) and the Grain Store (confirmed diary events, published box
-  office events, their notes); each day's line is sized from the wording in
-  use so the body fits 1,024 (`dayCap`). Every send is marked in
+  the next **7** days (31 Oct, Toby) from `summaryItems()` — name first
+  ("Smith out of Hamlet", "Jones into Hamlet"), check-outs, then check-ins
+  (+ extra clean / note / no exit clean / early / late), then the Grain Store
+  (confirmed diary events, published box office events, their notes). **The
+  whole week is ONE merge field, `{{week}}`** (`weekText`: busy days only,
+  "Sun 1 Nov – a; b | Mon 2 Nov – c", cut at a whole item with "… and more on
+  the plan" to fit 1,024 — `weekCap`), because a merge field can't hold a
+  line break and ten day fields kept quiet days in and risked Meta refusing a
+  template so thick with fields. Its **View the plan** URL button ends in
+  `{{1}}` = `planSuffix(day sent)` ("<day>-<HMAC key>", templates.js), sent
+  as the button's parameter (`sendTemplate`'s `urlSuffix`; no suffix = the
+  send is refused, never a broken link). **The plan page** is `hk-plan.js` at
+  `/plan/<suffix>` (netlify.toml): no sign-in, the key checked
+  (`planLinkDay`), dead `PLAN_LINK_DAYS` (14) after the day sent; shows the
+  next 7 days from TODAY, read live, one line per thing with times, flags,
+  the guests' WhatsApp arrival time and the notes; every value escaped, no
+  script (CSP), no-store, noindex. A failed read is an error page, never a
+  short plan. Every send is marked in
   `wa_sent_marks (kind, ref)` BEFORE sending and unmarked on refusal; a
   132000/132001 stops that template for the run (not approved). The log row
   keeps the text exactly as read (`render`), `to_name`, `template`.

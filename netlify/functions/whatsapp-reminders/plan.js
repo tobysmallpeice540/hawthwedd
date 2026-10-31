@@ -16,8 +16,9 @@
 //   - Pre-arrival: on the morning of arrival from the set hour (9am), to
 //     lettings guests who agreed to WhatsApp. One per booking per arrival day.
 //   - Changeover summary: weekly, on the set day from the set hour, to each
-//     housekeeper's number: the next 10 days of check-outs, check-ins and
-//     events with housekeeping notes.
+//     housekeeper's number: the next 7 days of check-outs, check-ins and
+//     events with housekeeping notes, busy days only, plus a link to the plan
+//     page that shows it properly (31 Oct).
 //
 // Every planned message carries `key` — the mark that makes it once only.
 
@@ -246,11 +247,17 @@ function planArrivals(input) {
 }
 
 // ── Changeover summary ───────────────────────────────────────────────────────
-// The next 10 days, one line each: per property its check-outs and check-ins
-// (with the housekeeping note for the guests arriving, an extra clean, or no
-// exit clean), then the Grain Store's events (with their notes). Mirrors what
-// the housekeeping pages show, from the same records: hbf_accom_v1,
-// hawthbush_bookings_v6, box_events (published) and hbf_setup_cleans_v1.
+// The next 7 days (31 Oct, Toby; was 10): per property its check-outs and
+// check-ins (with the housekeeping note for the guests arriving, an extra
+// clean, or no exit clean), then the Grain Store's events (with their notes).
+// Mirrors what the housekeeping pages show, from the same records:
+// hbf_accom_v1, hawthbush_bookings_v6, box_events (published) and
+// hbf_setup_cleans_v1.
+//
+// summaryItems() is the structured plan, read by both the WhatsApp (squeezed
+// into ONE merge field, {{week}}, since a merge field can't hold a line break)
+// and the plan page behind its button (hk-plan.js), which shows it properly.
+const SUMMARY_DAYS = 7;
 function hk(setups, type, kind, refId) {
   const id = type + ":" + kind + ":" + refId;
   return (setups || []).filter(function (x) { return x && x.id === id; })[0] || null;
@@ -276,22 +283,17 @@ function surname(s) {
   return w.length ? w[w.length - 1] : "";
 }
 
-// How long each day's line may be, so the whole message fits WhatsApp's 1,024
-// characters with the wording actually in use (fixedLen: that wording without
-// its merge fields) and a first name of up to 40.
-function dayCap(fixedLen) {
-  return Math.max(40, Math.min(120, Math.floor((1024 - (fixedLen || 0) - 40) / 10)));
-}
-
-function summaryDays(input, from, days, cap) {
+// [{ day, items: [{ kind: out|in|event|box, text, time, flags: [], note }] }]
+// for every day from `from`, quiet days included (items empty). `text` is
+// name first: "Smith out of Hamlet", "Jones into Hamlet", "Smith wedding".
+// Check-outs come before check-ins, then the Grain Store.
+function summaryItems(input, from, days) {
   const props = (input.properties || []).filter(function (p) { return p && !p.archived; });
   const setups = input.setups || [];
   const out = [];
   for (let i = 0; i < days; i++) {
     const day = addDays(from, i);
-    // Name first (31 Oct, Toby): "Smith out of Hamlet", "Jones into Hamlet
-    // (cot please)" — every check-out of the day, then every check-in.
-    const outs = [], ins = [];
+    const outs = [], ins = [], gs = [];
     props.forEach(function (p) {
       const where = shortName(p);
       (input.accom || []).forEach(function (b) {
@@ -299,73 +301,107 @@ function summaryDays(input, from, days, cap) {
         const who = surname(b.guestName) || (b.source === "airbnb" ? "Airbnb guest" : "Guest");
         (b.stays && b.stays.length ? b.stays : [b]).forEach(function (s) {
           if (!s || s.propertyId !== p.id) return;
+          const times = stayTimes(b, s, p);
           // Early check-in / late check-out allowed on the booking (30 Oct).
-          if (s.checkOut === day) outs.push(who + " out of " + where +
-            (b.lateCheckOut && s.checkOutTime === b.lateCheckOut ? " late " + shortTime(b.lateCheckOut) : "") +
-            (hk(setups, "noexit", "accom", b.id) ? " (no clean)" : ""));
+          if (s.checkOut === day) {
+            const late = !!(b.lateCheckOut && s.checkOutTime === b.lateCheckOut);
+            const flags = [];
+            if (late) flags.push("late " + shortTime(b.lateCheckOut));
+            if (hk(setups, "noexit", "accom", b.id)) flags.push("no clean");
+            outs.push({ kind: "out", text: who + " out of " + where, time: shortTime(times.outTime), flags: flags, note: "" });
+          }
           if (s.checkIn === day) {
-            let t = who + " into " + where +
-              (b.earlyCheckIn && s.checkInTime === b.earlyCheckIn ? " early " + shortTime(b.earlyCheckIn) : "");
-            const extra = hk(setups, "setup", "accom", b.id) ? "extra clean" : "";
-            const note = hkNote(setups, "accom", b.id);
-            const paren = [extra, note].filter(Boolean).join(": ");
-            if (paren) t += " (" + paren + ")";
-            ins.push(t);
+            const early = !!(b.earlyCheckIn && s.checkInTime === b.earlyCheckIn);
+            const flags = [];
+            if (early) flags.push("early " + shortTime(b.earlyCheckIn));
+            if (hk(setups, "setup", "accom", b.id)) flags.push("extra clean");
+            // The guests' answer to the pre-arrival WhatsApp, for the plan page.
+            const eta = b.arrivalEta && b.arrivalEta.date === day && b.arrivalEta.text ? String(b.arrivalEta.text) : "";
+            ins.push({ kind: "in", text: who + " into " + where, time: shortTime(times.inTime), flags: flags, note: hkNote(setups, "accom", b.id), eta: eta });
           }
         });
       });
     });
-    const parts = outs.concat(ins);
-    const gs = [];
     (input.events || []).forEach(function (ev) {
       if (!ev || !validDate(ev.date) || ev.status === "Cancelled" || ev.status === "Holding") return;
       const end = validDate(ev.endDate) && ev.endDate > ev.date ? ev.endDate : ev.date;
       if (day < ev.date || day > end) return;
       const type = String(ev.eventType || "event").replace(/\s*\(.*?\)\s*$/, "").trim().toLowerCase();
-      let t = (ev.couple || "Event") + " " + type;
-      if (day === ev.date) {
-        const note = hkNote(setups, "event", ev.id);
-        const extra = hk(setups, "setup", "event", ev.id) ? "extra clean" : "";
-        const paren = [extra, note].filter(Boolean).join(": ");
-        if (paren) t += " (" + paren + ")";
-      }
-      gs.push(t);
+      const first = day === ev.date;
+      const t = /^\d{1,2}:\d{2}$/.test(String(ev.guestArrivalTime || "").trim()) ? shortTime(ev.guestArrivalTime) : "";
+      gs.push({ kind: "event", text: (ev.couple || "Event") + " " + type, time: first ? t : "",
+        flags: first && hk(setups, "setup", "event", ev.id) ? ["extra clean"] : [], note: first ? hkNote(setups, "event", ev.id) : "" });
     });
     (input.boxEvents || []).forEach(function (bx) {
       if (!bx || bx.status === "draft" || !bx.starts_at) return;
       if (londonDate(new Date(bx.starts_at)) !== day) return;
-      let t = (bx.name || "Ticketed event") + " " + clock12(londonParts(new Date(bx.starts_at)).hour + ":" + londonParts(new Date(bx.starts_at)).minute);
-      const note = hkNote(setups, "box", bx.id);
-      if (note) t += " (" + note + ")";
-      gs.push(t);
+      const lp = londonParts(new Date(bx.starts_at));
+      gs.push({ kind: "box", text: bx.name || "Ticketed event", time: shortTime(lp.hour + ":" + lp.minute), flags: [], note: hkNote(setups, "box", bx.id) });
     });
-    if (gs.length) parts.push("Grain Store: " + gs.join(", "));
-    out.push(cleanParam(dayShort(day) + ": " + (parts.length ? parts.join(" · ") : "nothing booked"), cap || 88));
+    out.push({ day: day, items: outs.concat(ins).concat(gs) });
   }
   return out;
 }
 
+// One item as it reads in the WhatsApp: "Jones into Hamlet (extra clean: cot
+// please)", "Grain Store: Supper club 7:30pm".
+function itemWords(it) {
+  let t = it.kind === "event" || it.kind === "box" ? "Grain Store: " + it.text : it.text;
+  if (it.kind === "box" && it.time) t += " " + it.time;
+  const paren = it.flags.concat(it.note ? [it.note] : []).join(": ");
+  return paren ? t + " (" + paren + ")" : t;
+}
+
+// The whole week in ONE merge field: busy days only (31 Oct, Toby), "Sun 1 Nov
+// – a; b | Mon 2 Nov – c". At most `cap` characters, cut at a whole item with
+// "and more on the plan" when it won't fit.
+const MORE = " … and more on the plan";
+function weekText(days, cap) {
+  const max = cap || 700;
+  const busy = days.filter(function (d) { return d.items.length; });
+  if (!busy.length) return "Nothing booked this week";
+  let out = "";
+  for (let i = 0; i < busy.length; i++) {
+    const head = (out ? " | " : "") + dayShort(busy[i].day) + " – ";
+    for (let j = 0; j < busy[i].items.length; j++) {
+      const piece = (j === 0 ? head : "; ") + cleanParam(itemWords(busy[i].items[j]), 160);
+      if (out.length + piece.length + MORE.length > max) return (out || dayShort(busy[i].day)) + MORE;
+      out += piece;
+    }
+  }
+  return out;
+}
+
+// Room for {{week}}: WhatsApp's 1,024 characters less the wording in use
+// (fixedLen: that wording without its merge fields) and a first name of 40.
+function weekCap(fixedLen) {
+  return Math.max(200, Math.min(900, 1024 - (fixedLen || 0) - 40));
+}
+
+// The plan page's link ends in "<from day>-<key>" (templates.js planSuffix);
+// the caller passes planSuffix(from) since this file holds no secret.
 function planSummary(input) {
   const s = input.settings || {};
   const day = s.day == null ? 0 : Number(s.day);
   const hour = s.hour == null ? 8 : Number(s.hour);
   if (londonWeekday(input.now) !== day || londonHour(input.now) < hour) return { send: [], skipped: [] };
   const today = londonDate(input.now);
-  let lines = null;
+  let week = null;
   const send = [], skipped = [];
   (s.recipients || []).forEach(function (r) {
     const to = normaliseNumber(r && r.mobile);
     if (!to) { skipped.push({ name: (r && r.name) || "", why: "no mobile" }); return; }
     const key = "summary|" + today + "|" + to;
     if (input.sent && input.sent.has(key)) return;
-    lines = lines || summaryDays(input, today, 10, dayCap(input.fixedLen));
-    const values = { name: firstName(r.name) };
-    lines.forEach(function (l, i) { values["day" + (i + 1)] = l; });
+    week = week || weekText(summaryItems(input, today, SUMMARY_DAYS), weekCap(input.fixedLen));
     send.push({ template: "changeover_summary", key: key, to: to, toName: r.name || "",
-      record: { kind: "summary", id: today, name: "Changeover summary" }, values: values });
+      record: { kind: "summary", id: today, name: "Changeover summary" },
+      values: { name: firstName(r.name), week: week },
+      urlSuffix: input.planSuffix ? input.planSuffix(today) : "" });
   });
   return { send: send, skipped: skipped };
 }
 
-module.exports = { planChecklists, planArrivals, arrivalMessage, planSummary, summaryDays, dayCap, isQuiet, dueWords, itemsList,
-  normaliseNumber, guestAgreed, arrivalPackFor, londonDate, londonHour, londonWeekday, clock12, CATCH_UP_H };
+module.exports = { planChecklists, planArrivals, arrivalMessage, planSummary, summaryItems, itemWords, weekText, weekCap, SUMMARY_DAYS,
+  isQuiet, dueWords, itemsList, normaliseNumber, guestAgreed, arrivalPackFor, londonDate, londonHour, londonWeekday, clock12,
+  dayShort, dayLong, addDays, CATCH_UP_H };

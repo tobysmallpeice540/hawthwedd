@@ -26,24 +26,24 @@
 const FOOTER = "Replies read in office hours. Urgent? Call 01825 212020";
 const APP_URL = "https://hawthbushfarm.netlify.app/";
 
-// Example days for the page's preview: ten days running from Sun 1 Nov, so
-// the preview reads like a real week (31 Oct, Toby: every example day used to
-// say "Mon 2 Nov").
-const DAY_EXAMPLES = [
-  "Sun 1 Nov: Smith out of Hamlet · Jones into Hamlet (cot please) · Grain Store: Smith wedding",
-  "Mon 2 Nov: Jones out of Amly · Grain Store: Smith wedding",
-  "Tue 3 Nov: nothing booked",
-  "Wed 4 Nov: nothing booked",
-  "Thu 5 Nov: Patel into Glamping",
-  "Fri 6 Nov: Brown into Hamlet (extra clean) · Grain Store: Supper club 7:30pm",
-  "Sat 7 Nov: nothing booked",
-  "Sun 8 Nov: Patel out of Glamping",
-  "Mon 9 Nov: Brown out of Hamlet (no clean)",
-  "Tue 10 Nov: nothing booked"
-];
-const DAY_FIELDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (n) {
-  return { key: "day" + n, label: "Day " + n, example: DAY_EXAMPLES[n - 1] };
-});
+// The plan page behind the changeover summary's button (hk-plan.js):
+//   https://hawthbushfarm.netlify.app/plan/<from day>-<key>
+// key = HMAC("hk-plan:<from day>", HBF_ADMIN_TOKEN), 16 characters, so the
+// link can't be guessed, and it stops working PLAN_LINK_DAYS after the day it
+// was sent — it carries guests' surnames and the notes to housekeepers.
+const PLAN_LINK_DAYS = 14;
+function planKey(from, secret) {
+  return require("crypto").createHmac("sha256", String(secret || "")).update("hk-plan:" + from).digest("base64url").slice(0, 16);
+}
+function planSuffix(from, secret) { return from + "-" + planKey(from, secret); }
+function planUrl(from, secret) { return APP_URL + "plan/" + planSuffix(from, secret); }
+// The day a link was sent, if its key is right; else null.
+function planLinkDay(suffix, secret) {
+  const m = /^(\d{4}-\d{2}-\d{2})-([A-Za-z0-9_-]{16})$/.exec(String(suffix || ""));
+  if (!m || !secret) return null;
+  const want = Buffer.from(planKey(m[1], secret)), got = Buffer.from(m[2]);
+  return want.length === got.length && require("crypto").timingSafeEqual(want, got) ? m[1] : null;
+}
 
 const TEMPLATES = {
   checklist_live: {
@@ -79,13 +79,20 @@ const TEMPLATES = {
   changeover_summary: {
     label: "Weekly changeover summary",
     audience: "Housekeepers (the numbers set below)",
-    when: "Once a week, on the day and hour set below: the next 10 days of check-outs, check-ins and events, with housekeeping notes.",
+    when: "Once a week, on the day and hour set below: the next 7 days of check-outs, check-ins and events (busy days only), and a button to the full plan with times and notes.",
     category: "UTILITY", language: "en_GB",
-    fields: [{ key: "name", label: "Their first name", example: "Karina" }].concat(DAY_FIELDS),
-    body: "Hi {{name}}, here is the Hawthbush Farm changeover plan for the next 10 days.\n\n" +
-      DAY_FIELDS.map(function (f) { return "• {{" + f.key + "}}"; }).join("\n") +
-      "\n\nTimes, full notes and any changes are in the housekeeping app.",
-    button: { text: "Open the app", url: APP_URL }
+    // One field for the whole week (31 Oct, Toby): a merge field can't hold a
+    // line break, and ten day fields left quiet days in and risked Meta
+    // refusing a template so thick with fields. The button opens the plan
+    // page (hk-plan.js), laid out properly, one line per thing.
+    fields: [
+      { key: "name", label: "Their first name", example: "Karina" },
+      { key: "week", label: "The week, busy days only", example: "Sun 1 Nov – Smith out of Hamlet; Jones into Hamlet (cot please); Grain Store: Smith wedding | Mon 2 Nov – Jones out of Amly | Thu 5 Nov – Patel into Glamping (extra clean) | Sat 7 Nov – Grain Store: Supper club 7:30pm" }
+    ],
+    body: "Hi {{name}}, here is the Hawthbush Farm changeover plan for the next 7 days.\n\n{{week}}\n\nTap the button below for the full plan, with times and notes. It updates if anything changes.",
+    // The link ends in a per-send suffix (planSuffix): Meta's {{1}} on a URL
+    // button, filled at send time.
+    button: { text: "View the plan", url: APP_URL + "plan/{{1}}", example: APP_URL + "plan/2026-11-01-AbCdEfGh12345678" }
   },
   pre_arrival: {
     label: "Pre-arrival (guests)",
@@ -103,9 +110,15 @@ const TEMPLATES = {
       { key: "nights", label: "Nights", example: "3 nights" },
       { key: "bookingRef", label: "Booking reference", example: "A12345" }
     ],
-    // Toby's wording, 30 Oct; a line break after the name, 31 Oct.
+    // Toby's wording, 30 Oct; a line break after the name, 31 Oct. WhatsApp
+    // always puts buttons at the very bottom, so the sign-off comes before
+    // the question and the question sits right above the buttons (31 Oct).
     body: "Hi {{guestName}},\nWe're looking forward to seeing you at {{property}} later today. The gate code is {{gateCode}} — please give it to everyone in your group. Your arrival pack is here: {{arrivalPack}}\n\n" +
-      "It would be great if you could let us know roughly when the first of your party will arrive — just tap a button below.\n\nAll the best,\nRosanna",
+      "All the best,\nRosanna\n\n" +
+      "It would be great if you could let us know roughly when the first of your party will arrive — just tap a button below.",
+    // Its own footer (31 Oct, Toby): a tap is saved on the booking at once,
+    // so "replies read in office hours" would mislead right above the buttons.
+    footer: "Urgent? Call 01825 212020",
     button: null,
     // Tap-to-answer buttons (at most 25 characters each). Their order is what
     // the webhook reads back, so a change here is a change of meaning: add at
@@ -155,12 +168,22 @@ function components(name, body) {
   });
   const bodyComp = { type: "BODY", text: toNumbered(body, chk.order) };
   if (examples.length) bodyComp.example = { body_text: [examples] };
-  const out = [bodyComp, { type: "FOOTER", text: FOOTER }];
+  const out = [bodyComp, { type: "FOOTER", text: footerOf(name) }];
   const buttons = [];
-  if (def.button) buttons.push({ type: "URL", text: def.button.text, url: def.button.url });
+  if (def.button) {
+    const b = { type: "URL", text: def.button.text, url: def.button.url };
+    if (def.button.example) b.example = [def.button.example];
+    buttons.push(b);
+  }
   (def.quickReplies || []).forEach(function (t) { buttons.push({ type: "QUICK_REPLY", text: t }); });
   if (buttons.length) out.push({ type: "BUTTONS", buttons: buttons });
   return { components: out, order: chk.order };
+}
+
+// The footer a template carries: its own, else the shared one.
+function footerOf(name) {
+  const def = TEMPLATES[name];
+  return (def && def.footer) || FOOTER;
 }
 
 // WhatsApp refuses values with a line break, a tab or more than four spaces
@@ -297,4 +320,4 @@ function pickHostedPack(hosted, useEvent, tags) {
   return "";
 }
 
-module.exports = { TEMPLATES, FOOTER, buttonLabels, parseEtaPayload, packKey, packUrl, hostedPacks, pickHostedPack, attachmentsFor, packAttachment, ARRIVAL_TEMPLATES, EVENT_KINDS, eventKindOf, usesEventTemplate, packTags, checkBody, toNumbered, components, cleanParam, render, sendOrder };
+module.exports = { TEMPLATES, FOOTER, footerOf, PLAN_LINK_DAYS, planKey, planSuffix, planUrl, planLinkDay, buttonLabels, parseEtaPayload, packKey, packUrl, hostedPacks, pickHostedPack, attachmentsFor, packAttachment, ARRIVAL_TEMPLATES, EVENT_KINDS, eventKindOf, usesEventTemplate, packTags, checkBody, toNumbered, components, cleanParam, render, sendOrder };
