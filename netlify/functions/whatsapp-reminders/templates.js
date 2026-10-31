@@ -17,11 +17,12 @@
 // knows. Values sent later may not contain line breaks (cleanParam).
 //
 // The footer and button are fixed per template: the footer (Toby, 29 Oct) says
-// replies go to email.
+// replies go to email; 31 Oct, plus a number to ring if urgent. Meta allows a
+// footer of 60 characters at most, so Toby's fuller wording is shortened.
 
 "use strict";
 
-const FOOTER = "Replies go to our email, read in office hours";
+const FOOTER = "Replies go to email (office hours). Urgent: 01825 212020";
 const APP_URL = "https://hawthbushfarm.netlify.app/";
 
 // Example days for the page's preview: ten days running from Sun 1 Nov, so

@@ -823,7 +823,8 @@ own header.
   `WHATSAPP_TOKEN` (permanent system-user token), `WHATSAPP_APP_SECRET`,
   `WHATSAPP_VERIFY_TOKEN`. The business mobile is untouched.
 - **Replies are allowed and read by email in office hours** (Toby): every
-  template's footer says so; there is no auto-reply and no Call button.
+  template's footer says so, with 01825 212020 for anything urgent (31 Oct;
+  Meta caps a footer at 60 characters); there is no auto-reply and no Call button.
   `whatsapp-webhook.js` keeps each inbound message in `wa_messages` (id =
   Meta's message id), matches the number to a letting / event / enquiry
   (`normaliseNumber`: UK numbers to 44…), and emails it to
