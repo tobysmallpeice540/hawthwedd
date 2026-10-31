@@ -289,29 +289,33 @@ function summaryDays(input, from, days, cap) {
   const out = [];
   for (let i = 0; i < days; i++) {
     const day = addDays(from, i);
-    const parts = [];
+    // Name first (31 Oct, Toby): "Smith out of Hamlet", "Jones into Hamlet
+    // (cot please)" — every check-out of the day, then every check-in.
+    const outs = [], ins = [];
     props.forEach(function (p) {
-      const bits = [];
+      const where = shortName(p);
       (input.accom || []).forEach(function (b) {
         if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
+        const who = surname(b.guestName) || (b.source === "airbnb" ? "Airbnb guest" : "Guest");
         (b.stays && b.stays.length ? b.stays : [b]).forEach(function (s) {
           if (!s || s.propertyId !== p.id) return;
           // Early check-in / late check-out allowed on the booking (30 Oct).
-          if (s.checkOut === day) bits.push((b.lateCheckOut && s.checkOutTime === b.lateCheckOut ? "out late " + shortTime(b.lateCheckOut) : "out") +
+          if (s.checkOut === day) outs.push(who + " out of " + where +
+            (b.lateCheckOut && s.checkOutTime === b.lateCheckOut ? " late " + shortTime(b.lateCheckOut) : "") +
             (hk(setups, "noexit", "accom", b.id) ? " (no clean)" : ""));
           if (s.checkIn === day) {
-            let t = "in " + surname(b.guestName || (b.source === "airbnb" ? "Airbnb" : "guest")) +
+            let t = who + " into " + where +
               (b.earlyCheckIn && s.checkInTime === b.earlyCheckIn ? " early " + shortTime(b.earlyCheckIn) : "");
             const extra = hk(setups, "setup", "accom", b.id) ? "extra clean" : "";
             const note = hkNote(setups, "accom", b.id);
             const paren = [extra, note].filter(Boolean).join(": ");
             if (paren) t += " (" + paren + ")";
-            bits.push(t);
+            ins.push(t);
           }
         });
       });
-      if (bits.length) parts.push(shortName(p) + " " + bits.join(", "));
     });
+    const parts = outs.concat(ins);
     const gs = [];
     (input.events || []).forEach(function (ev) {
       if (!ev || !validDate(ev.date) || ev.status === "Cancelled" || ev.status === "Holding") return;
@@ -335,7 +339,7 @@ function summaryDays(input, from, days, cap) {
       if (note) t += " (" + note + ")";
       gs.push(t);
     });
-    if (gs.length) parts.push("Grain St " + gs.join(", "));
+    if (gs.length) parts.push("Grain Store: " + gs.join(", "));
     out.push(cleanParam(dayShort(day) + ": " + (parts.length ? parts.join(" · ") : "nothing booked"), cap || 88));
   }
   return out;

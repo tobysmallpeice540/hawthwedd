@@ -152,19 +152,21 @@ const boxEvents = [{ id: "bx1", name: "Supper club", status: "published", starts
                    { id: "bx2", name: "Draft one", status: "draft", starts_at: "2026-11-03T19:30:00Z" }];
 const days = P.summaryDays({ accom, properties, events, boxEvents, setups }, "2026-10-31", 10);
 assert.strictEqual(days.length, 10);
-assert.ok(days[0].startsWith("Sat 31 Oct: Hamlet in Juner (Cot please), in Places (extra clean) · Amly in "), days[0]);
+assert.ok(days[0].startsWith("Sat 31 Oct: Juner into Hamlet (Cot please) · Places into Hamlet (extra clean) · "), days[0]);
 assert.ok(days[0].endsWith("…") && days[0].length === 88, "a busy day is cut to fit");
-assert.ok(/^Sun 1 Nov: Hamlet out .*Grain St Smith wedding \(Chairs out\)/.test(days[1]) || days[1].length === 88, days[1]);
+assert.ok(/^Sun 1 Nov: \w+ out of Hamlet .*Grain Store: Smith wedding \(Chairs out\)/.test(days[1]) || days[1].length === 88, days[1]);
 assert.ok(days[1].indexOf("Maybe") === -1, "holding events left out");
-assert.ok(/^Mon 2 Nov: .*out \(no clean\)|^Mon 2 Nov:/.test(days[2]));
+assert.ok(/^Mon 2 Nov: .*out of \w+ \(no clean\)|^Mon 2 Nov:/.test(days[2]));
+// Check-outs before check-ins, whatever order the bookings are in.
+assert.ok(!/into .* out of /.test(days[1].replace(/Grain Store:.*/, "")), days[1]);
 assert.ok(days[3].indexOf("Supper club 7:30pm") !== -1 && days[3].indexOf("Draft") === -1, days[3]);
 assert.strictEqual(days[9], "Mon 9 Nov: nothing booked");
 assert.strictEqual(P.summaryDays({ accom: [{ id: "w", guestName: "Jones (Wed)", status: "confirmed", stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01" }] }], properties }, "2026-10-31", 1)[0],
-  "Sat 31 Oct: Amly in Jones", "wedding-cottage names lose the (Wed)");
+  "Sat 31 Oct: Jones into Amly", "wedding-cottage names lose the (Wed)");
 // Early check-in / late check-out on the booking show in the summary.
 const el = P.summaryDays({ accom: [{ id: "e", guestName: "Kim Early", status: "confirmed", earlyCheckIn: "15:00", lateCheckOut: "12:00",
   stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01", checkInTime: "15:00", checkOutTime: "12:00" }] }], properties }, "2026-10-31", 2);
-assert.deepStrictEqual(el, ["Sat 31 Oct: Amly in Early early 3pm", "Sun 1 Nov: Amly out late 12pm"]);
+assert.deepStrictEqual(el, ["Sat 31 Oct: Early into Amly early 3pm", "Sun 1 Nov: Early out of Amly late 12pm"]);
 // The pre-arrival WhatsApp picks up the early time from the stay.
 const ea = P.planArrivals({ accom: [{ id: "e", guestName: "Kim Early", phone: "07700900111", status: "confirmed", earlyCheckIn: "15:00",
   stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01", checkInTime: "15:00" }] }], properties, now: at("2026-10-31T09:05:00Z"), sent: new Set() });

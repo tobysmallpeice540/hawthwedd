@@ -844,7 +844,9 @@ own header.
   Resubmit. Sent: `wa_messages` newest first, filter by number.
 - **Templates live in `netlify/functions/whatsapp-reminders/templates.js`**
   (shared by `whatsapp-send.js` and the sender): `checklist_live`,
-  `checklist_overdue`, `changeover_summary`, `pre_arrival`. Wording uses NAMED
+  `checklist_overdue`, `changeover_summary`, `pre_arrival`. `checklist_live` gives
+  the count and first due time only, no item list — staff log in to see them
+  (Toby, 31 Oct); `checklist_overdue` still lists the overdue items. Wording uses NAMED
   merge fields (`{{guestName}}`); on submission they are numbered in
   first-appearance order and the body + order are stored in `app_data`
   `hbf_whatsapp_submitted_v1` (written only by `whatsapp-send` submit).
@@ -871,8 +873,9 @@ own header.
   item passes due, listing the overdue ones). Pre-arrival: from the arrival
   hour on the check-in day, confirmed/completed lettings, consenting guests,
   one per booking per day. Summary: the chosen weekday from the chosen hour,
-  the next 10 days per property (out / in + surname + extra clean / note /
-  no exit clean) and the Grain Store (confirmed diary events, published box
+  the next 10 days, name first (31 Oct: "Smith out of Hamlet · Jones into
+  Hamlet (cot please) · Grain Store: Smith wedding" — check-outs, then
+  check-ins, + extra clean / note / no exit clean) and the Grain Store (confirmed diary events, published box
   office events, their notes); each day's line is sized from the wording in
   use so the body fits 1,024 (`dayCap`). Every send is marked in
   `wa_sent_marks (kind, ref)` BEFORE sending and unmarked on refusal; a

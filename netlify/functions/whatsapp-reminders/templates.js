@@ -24,8 +24,23 @@
 const FOOTER = "Replies go to our email, read in office hours";
 const APP_URL = "https://hawthbushfarm.netlify.app/";
 
+// Example days for the page's preview: ten days running from Sun 1 Nov, so
+// the preview reads like a real week (31 Oct, Toby: every example day used to
+// say "Mon 2 Nov").
+const DAY_EXAMPLES = [
+  "Sun 1 Nov: Smith out of Hamlet · Jones into Hamlet (cot please) · Grain Store: Smith wedding",
+  "Mon 2 Nov: Jones out of Amly · Grain Store: Smith wedding",
+  "Tue 3 Nov: nothing booked",
+  "Wed 4 Nov: nothing booked",
+  "Thu 5 Nov: Patel into Glamping",
+  "Fri 6 Nov: Brown into Hamlet (extra clean) · Grain Store: Supper club 7:30pm",
+  "Sat 7 Nov: nothing booked",
+  "Sun 8 Nov: Patel out of Glamping",
+  "Mon 9 Nov: Brown out of Hamlet (no clean)",
+  "Tue 10 Nov: nothing booked"
+];
 const DAY_FIELDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (n) {
-  return { key: "day" + n, label: "Day " + n, example: n === 1 ? "Sun 1 Nov: Hamlet out, in Jones (cot please) · Grain St: Smith wedding" : "Mon 2 Nov: nothing booked" };
+  return { key: "day" + n, label: "Day " + n, example: DAY_EXAMPLES[n - 1] };
 });
 
 const TEMPLATES = {
@@ -41,7 +56,8 @@ const TEMPLATES = {
       { key: "due", label: "When the first is due", example: "3:00pm today" },
       { key: "items", label: "Their items", example: "Welcome hamper · Heating on · Lights on" }
     ],
-    body: "Hi {{name}}, the {{list}} checklist is now live in the Hawthbush Farm app. You have {{count}} on it, the first due by {{due}}: {{items}}. Please tick them off as you go.",
+    // No list of items (31 Oct, Toby): they log in to see them.
+    body: "Hi {{name}}, the {{list}} checklist is now live in the Hawthbush Farm app. You have {{count}} on it, the first due by {{due}}. Please log in to see them, and tick them off as you go.",
     button: { text: "Open the app", url: APP_URL }
   },
   checklist_overdue: {
@@ -85,8 +101,8 @@ const TEMPLATES = {
       { key: "nights", label: "Nights", example: "3 nights" },
       { key: "bookingRef", label: "Booking reference", example: "A12345" }
     ],
-    // Toby's wording, 30 Oct.
-    body: "Hi {{guestName}}, we're looking forward to seeing you at {{property}} later today. The gate code is {{gateCode}} — please give it to everyone in your group. Your arrival pack is here: {{arrivalPack}}\n\n" +
+    // Toby's wording, 30 Oct; a line break after the name, 31 Oct.
+    body: "Hi {{guestName}},\nWe're looking forward to seeing you at {{property}} later today. The gate code is {{gateCode}} — please give it to everyone in your group. Your arrival pack is here: {{arrivalPack}}\n\n" +
       "It would be great if you could let us know roughly when the first of your party will arrive — just tap a button below.\n\nAll the best,\nRosanna",
     button: null,
     // Tap-to-answer buttons (at most 25 characters each). Their order is what
