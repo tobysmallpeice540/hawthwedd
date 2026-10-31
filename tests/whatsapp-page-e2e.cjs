@@ -76,6 +76,11 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
   // Messages
   await page.getByRole('tab', { name: 'Messages' }).click()
   await page.getByText('Pre-arrival (guests)').waitFor({ timeout: 5000 })
+  // The summary's day and time are on its card too (31 Oct, Toby).
+  await page.getByRole('combobox', { name: 'Summary day' }).selectOption('3')
+  await page.getByText('Saved.').last().waitFor({ timeout: 5000 })
+  assert.ok(/"summary":\{[^}]*"day":3/.test(writes()), writes().slice(-300))
+  assert.ok(await page.getByText(/^Goes from 9am on the (arrival day|day before arrival) — change it/).isVisible(), 'pre-arrival says when it goes')
   const card = page.locator('div', { has: page.getByText('Pre-arrival (guests)', { exact: true }) }).filter({ has: page.getByRole('button', { name: 'Wording' }) }).last()
   await card.getByRole('button', { name: 'Wording' }).click()
   const ta = card.locator('textarea')

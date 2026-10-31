@@ -846,10 +846,12 @@ own header.
   (`/{WABA}/subscribed_apps` — a verified callback URL alone does NOT bring
   messages in; "Link it now"); a test box; who gets what (staff mobiles, the
   housekeepers' summary numbers, summary day/hour, arrival hour); Check now.
-  Messages: every template — an On / Off switch (`role="switch"`, 31 Oct;
+  Messages: every template — an On / Off switch (`role="switch"`, the word
+  under it; 31 Oct;
   Off stops every automatic send of it, but the manual Send WhatsApp on a
-  letting still works — Toby), its wording, Meta's status, Submit /
-  Resubmit. Sent: `wa_messages` newest first, filter by number.
+  letting still works — Toby), when it goes (`when`: the summary's day and
+  hour selects, `WaSummaryWhen`, the same as on Setup; pre-arrival's timing
+  in words), its wording, Meta's status, Submit / Resubmit. Sent: `wa_messages` newest first, filter by number.
 - **Templates live in `netlify/functions/whatsapp-reminders/templates.js`**
   (shared by `whatsapp-send.js` and the sender): `checklist_live`,
   `checklist_overdue`, `changeover_summary`, `pre_arrival`. `checklist_live` gives

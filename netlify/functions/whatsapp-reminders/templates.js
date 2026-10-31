@@ -79,7 +79,7 @@ const TEMPLATES = {
   changeover_summary: {
     label: "Weekly changeover summary",
     audience: "Housekeepers (the numbers set below)",
-    when: "Once a week, on the day and hour set below: the next 7 days of check-outs, check-ins and events (busy days only), and a button to the full plan for 10 days, with times and notes.",
+    when: "Once a week, on the day and hour set here (or on the Setup tab): the next 7 days of check-outs, check-ins and events (busy days only), and a button to the full plan for 10 days, with times and notes.",
     category: "UTILITY", language: "en_GB",
     // One field for the whole week (31 Oct, Toby): a merge field can't hold a
     // line break, and ten day fields left quiet days in and risked Meta

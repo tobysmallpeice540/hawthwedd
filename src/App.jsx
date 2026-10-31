@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-31f";
+const APP_BUILD = "2026-10-31h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -19327,6 +19327,11 @@ function WhatsAppPage() {
   const summary = Object.assign({ day:0, hour:8, recipients:[] }, (settings && settings.summary) || {});
   const arrival = Object.assign({ hour:9, daysBefore:0, gateCode:"", packs:{} }, (settings && settings.arrival) || {});
 
+  // The summary's day and hour, on the Setup tab AND on its card on the
+  // Messages tab (31 Oct, Toby looked for them there).
+  const saveSummaryWhen = function(patch) {
+    return save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, patch); return x; });
+  };
   return (
     <div style={{ paddingTop:28, maxWidth:820 }}>
       <PageHeader title="WhatsApp" sub="Messages from the 01825 number. Replies are emailed to hawthbushfarm@gmail.com, read in office hours. Nothing is sent between 10pm and 8am."/>
@@ -19384,18 +19389,7 @@ function WhatsAppPage() {
 
           <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Housekeepers — weekly changeover summary</div>
           {settings === null ? <div style={{ fontSize:12, color:T.textLight }}>Loading…</div> : (<>
-            <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:13, color:T.text, marginBottom:8 }}>
-              Send on
-              <select value={summary.day} disabled={!!busy} style={sel}
-                onChange={function(e){ const v = Number(e.target.value); save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, { day: v }); return x; }); }}>
-                {WA_DAYS.map(function(d, i){ return <option key={i} value={i}>{d}</option>; })}
-              </select>
-              from
-              <select value={summary.hour} disabled={!!busy} style={sel}
-                onChange={function(e){ const v = Number(e.target.value); save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, { hour: v }); return x; }); }}>
-                {[8,9,10,11,12,13,14,15,16,17,18,19,20,21].map(function(h){ return <option key={h} value={h}>{waHourLabel(h)}</option>; })}
-              </select>
-            </div>
+            <WaSummaryWhen summary={summary} busy={!!busy} onSave={saveSummaryWhen}/>
             <WaRecipients list={summary.recipients} busy={!!busy}
               onSave={function(list){ return save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, { recipients: list }); return x; }, "Housekeepers' numbers saved."); }}/>
           </>)}
@@ -19418,6 +19412,9 @@ function WhatsAppPage() {
         </div>
         {(st.catalogue || []).map(function(t) {
           return <WaTemplateCard key={t.name} t={t} conf={tpls[t.name] || {}} busy={busy}
+            when={t.name === "changeover_summary" && settings !== null ? <WaSummaryWhen summary={summary} busy={!!busy} onSave={saveSummaryWhen}/>
+              : t.name === "pre_arrival" && settings !== null ? <div style={{ fontSize:13, color:T.text }}>Goes from {waHourLabel(arrival.hour)} on {Number(arrival.daysBefore) === 1 ? "the day before arrival" : "the arrival day"} — change it, the gate code and the packs on the Setup tab.</div>
+              : null}
             onToggle={function(on){ save(function(x){ x.templates = x.templates || {}; x.templates[t.name] = Object.assign({}, x.templates[t.name], { on: on }); return x; }, on ? "Switched on." : "Switched off."); }}
             onSaveBody={function(body){ return save(function(x){ x.templates = x.templates || {}; x.templates[t.name] = Object.assign({}, x.templates[t.name], { body: body }); return x; }, "Wording saved (not yet sent to Meta)."); }}
             onSubmit={function(body){ return act("submit:" + t.name, async function() {
@@ -19434,7 +19431,27 @@ function WhatsAppPage() {
 }
 
 // One template on the Messages tab. At module scope: it renders a textarea.
-function WaTemplateCard({ t, conf, busy, onToggle, onSaveBody, onSubmit }) {
+// When the weekly changeover summary goes: a day and an hour. At module scope:
+// it renders inputs.
+function WaSummaryWhen({ summary, busy, onSave }) {
+  const sel = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px" };
+  return (
+    <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:13, color:T.text, marginBottom:8 }}>
+      Send every
+      <select aria-label="Summary day" value={summary.day} disabled={busy} style={sel}
+        onChange={function(e){ onSave({ day: Number(e.target.value) }); }}>
+        {WA_DAYS.map(function(d, i){ return <option key={i} value={i}>{d}</option>; })}
+      </select>
+      from
+      <select aria-label="Summary time" value={summary.hour} disabled={busy} style={sel}
+        onChange={function(e){ onSave({ hour: Number(e.target.value) }); }}>
+        {[8,9,10,11,12,13,14,15,16,17,18,19,20,21].map(function(h){ return <option key={h} value={h}>{waHourLabel(h)}</option>; })}
+      </select>
+    </div>
+  );
+}
+
+function WaTemplateCard({ t, conf, busy, when, onToggle, onSaveBody, onSubmit }) {
   const live = (t.submitted && t.submitted.body) || "";
   const start = conf.body || live || t.defaultBody;
   const [body, setBody] = useState(start);
@@ -19456,17 +19473,19 @@ function WaTemplateCard({ t, conf, busy, onToggle, onSaveBody, onSubmit }) {
           </div>
         </div>
         {/* On / Off for every automatic send of this message (31 Oct, Toby).
-            The Send WhatsApp button on a letting still works when Off. */}
+            The Send WhatsApp button on a letting still works when Off. The
+            word sits under the switch (Toby): beside it, the row looked odd. */}
         <button type="button" role="switch" aria-checked={!!conf.on} aria-label={"Automatic sending: " + t.label} disabled={!!busy}
           onClick={function(){ onToggle(!conf.on); }}
           title={conf.on ? "On: sent automatically. Click to turn off." : "Off: never sent automatically. Click to turn on."}
-          style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:7, background:"none", border:"none", padding:0, cursor: busy ? "default" : "pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, color: conf.on ? T.green : T.textMid, whiteSpace:"nowrap" }}>
+          style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, flex:"0 0 auto", minWidth:40, background:"none", border:"none", padding:0, cursor: busy ? "default" : "pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, lineHeight:1, color: conf.on ? T.green : T.textMid, whiteSpace:"nowrap" }}>
           <span style={{ position:"relative", width:34, height:20, borderRadius:10, background: conf.on ? T.green : T.border, transition:"background .15s", flex:"0 0 auto" }}>
             <span style={{ position:"absolute", top:2, left: conf.on ? 16 : 2, width:16, height:16, borderRadius:8, background:"#fff", boxShadow:"0 1px 2px rgba(0,0,0,.25)", transition:"left .15s" }}/>
           </span>
           {conf.on ? "On" : "Off"}
         </button>
       </div>
+      {when && <div style={{ marginTop:10 }}>{when}</div>}
       {conf.on && !approved && <div style={{ fontSize:12, color:T.amber, marginTop:6 }}>Switched on, but nothing goes until Meta approves it.</div>}
       <div style={{ marginTop:10 }}>
         <button type="button" onClick={function(){ setOpen(!open); }} style={{ ...smallBtn, fontWeight:500 }}>{open ? "Hide wording" : "Wording"}</button>
