@@ -227,6 +227,8 @@ const html = HP.render([{ day: "2026-11-01", items: [{ kind: "in", text: "O'Neil
   { day: "2026-11-02", items: [] }], "Sun 8:15 am");
 assert.ok(html.indexOf("<script>") === -1 && html.indexOf("&lt;script&gt;") !== -1 && html.indexOf("O&#39;Neil &lt;b&gt;") !== -1);
 assert.ok(/Sunday 1 November/.test(html) && /arriving After 9pm/.test(html) && /Nothing booked: Mon 2 Nov\./.test(html));
+assert.strictEqual(HP.PAGE_DAYS, 10, "the page looks 10 days ahead; the WhatsApp 7");
+assert.strictEqual(P.SUMMARY_DAYS, 7);
 
 console.log("whatsapp plans and templates: all tests passed");
 

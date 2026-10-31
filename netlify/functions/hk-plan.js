@@ -1,7 +1,8 @@
 // netlify/functions/hk-plan.js
 //
 // The changeover plan page behind the button on the weekly changeover summary
-// WhatsApp (31 Oct, Toby): the next 7 days, busy days only, one line per
+// WhatsApp (31 Oct, Toby): the next 10 days (PAGE_DAYS — the WhatsApp itself
+// covers 7), busy days only, one line per
 // check-out, check-in and Grain Store event, with times, extra cleans, no-exit
 // cleans, arrival times the guests gave and the notes to housekeepers. Read
 // live, so a change made after the WhatsApp went shows here.
@@ -22,6 +23,8 @@
 const T = require("./whatsapp-reminders/templates.js");
 const P = require("./whatsapp-reminders/plan.js");
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
+// The page looks further ahead than the WhatsApp's 7 days (Toby, 31 Oct).
+const PAGE_DAYS = 10;
 
 const HEADERS = {
   "Content-Type": "text/html; charset=utf-8",
@@ -67,7 +70,7 @@ function render(days, nowLabel) {
   const quiet = days.filter(function (d) { return !d.items.length; });
   let h = "<h1>Changeover plan</h1><div class=\"sub\">" + esc(P.dayLong(days[0].day)) + " to " + esc(P.dayLong(days[days.length - 1].day)) +
     " · as of " + esc(nowLabel) + "</div>";
-  if (!busy.length) h += "<div class=\"day\">Nothing booked in these 7 days.</div>";
+  if (!busy.length) h += "<div class=\"day\">Nothing booked in these " + days.length + " days.</div>";
   busy.forEach(function (d) {
     h += "<section class=\"day\"><h2>" + esc(P.dayLong(d.day)) + "</h2>";
     d.items.forEach(function (it) {
@@ -110,7 +113,7 @@ exports.handler = async function (event) {
   if (!process.env.SUPABASE_SERVICE_KEY) return message(503, "Please try again in a moment.");
   try {
     const sk = process.env.SUPABASE_SERVICE_KEY;
-    const until = new Date(now.getTime() + (P.SUMMARY_DAYS + 1) * 864e5).toISOString();
+    const until = new Date(now.getTime() + (PAGE_DAYS + 1) * 864e5).toISOString();
     const bx = await fetch(SUPABASE_URL + "/rest/v1/box_events?status=neq.draft&starts_at=gte." + today +
       "&starts_at=lte." + encodeURIComponent(until) + "&select=id,name,status,starts_at",
       { headers: { "apikey": sk, "Authorization": "Bearer " + sk } });
@@ -122,7 +125,7 @@ exports.handler = async function (event) {
       setups: (await appData("hbf_setup_cleans_v1")) || [],
       boxEvents: await bx.json()
     };
-    const days = P.summaryItems(input, today, P.SUMMARY_DAYS);
+    const days = P.summaryItems(input, today, PAGE_DAYS);
     const lp = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "numeric", minute: "2-digit", hour12: true, weekday: "short" }).format(now);
     return { statusCode: 200, headers: HEADERS, body: page("Changeover plan", render(days, lp)) };
   } catch (e) {
@@ -132,4 +135,4 @@ exports.handler = async function (event) {
   }
 };
 
-exports._test = { render: render, page: page };
+exports._test = { render: render, page: page, PAGE_DAYS: PAGE_DAYS };

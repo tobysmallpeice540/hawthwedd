@@ -895,7 +895,8 @@ own header.
   send is refused, never a broken link). **The plan page** is `hk-plan.js` at
   `/plan/<suffix>` (netlify.toml): no sign-in, the key checked
   (`planLinkDay`), dead `PLAN_LINK_DAYS` (14) after the day sent; shows the
-  next 7 days from TODAY, read live, one line per thing with times, flags,
+  next **10** days from TODAY (`PAGE_DAYS`; the WhatsApp itself covers 7 —
+  Toby, 31 Oct), read live, one line per thing with times, flags,
   the guests' WhatsApp arrival time and the notes; every value escaped, no
   script (CSP), no-store, noindex. A failed read is an error page, never a
   short plan. Every send is marked in
