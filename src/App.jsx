@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-31b";
+const APP_BUILD = "2026-10-31c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -19455,9 +19455,17 @@ function WaTemplateCard({ t, conf, busy, onToggle, onSaveBody, onSubmit }) {
             {t.submitted && t.submitted.at ? <span style={{ color:T.textLight }}> · last sent to Meta {new Date(t.submitted.at).toLocaleDateString("en-GB", { day:"numeric", month:"short" })}</span> : null}
           </div>
         </div>
-        <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:6, fontSize:13, color:T.text, whiteSpace:"nowrap" }}>
-          <input type="checkbox" checked={!!conf.on} disabled={!!busy} onChange={function(e){ onToggle(e.target.checked); }}/> Send
-        </label>
+        {/* On / Off for every automatic send of this message (31 Oct, Toby).
+            The Send WhatsApp button on a letting still works when Off. */}
+        <button type="button" role="switch" aria-checked={!!conf.on} aria-label={"Automatic sending: " + t.label} disabled={!!busy}
+          onClick={function(){ onToggle(!conf.on); }}
+          title={conf.on ? "On: sent automatically. Click to turn off." : "Off: never sent automatically. Click to turn on."}
+          style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:7, background:"none", border:"none", padding:0, cursor: busy ? "default" : "pointer", fontFamily:"inherit", fontSize:13, fontWeight:600, color: conf.on ? T.green : T.textMid, whiteSpace:"nowrap" }}>
+          <span style={{ position:"relative", width:34, height:20, borderRadius:10, background: conf.on ? T.green : T.border, transition:"background .15s", flex:"0 0 auto" }}>
+            <span style={{ position:"absolute", top:2, left: conf.on ? 16 : 2, width:16, height:16, borderRadius:8, background:"#fff", boxShadow:"0 1px 2px rgba(0,0,0,.25)", transition:"left .15s" }}/>
+          </span>
+          {conf.on ? "On" : "Off"}
+        </button>
       </div>
       {conf.on && !approved && <div style={{ fontSize:12, color:T.amber, marginTop:6 }}>Switched on, but nothing goes until Meta approves it.</div>}
       <div style={{ marginTop:10 }}>

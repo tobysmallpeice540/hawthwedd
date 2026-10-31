@@ -91,7 +91,7 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
   assert.ok(/pre_arrival[^}]*"body":"Hi \{\{guestName\}\}, see you at/.test(writes()), 'wording kept in settings')
   // Switch the approved one on.
   const liveCard = page.locator('div', { has: page.getByText('Checklist is live', { exact: true }) }).filter({ has: page.getByRole('button', { name: 'Wording' }) }).last()
-  await liveCard.getByLabel('Send').click()
+  await liveCard.getByRole('switch').click()
   await page.getByText('Switched on.').waitFor({ timeout: 5000 })
   assert.ok(/"checklist_live":\{"on":true\}/.test(writes()))
 
