@@ -18,11 +18,12 @@
 //
 // The footer and button are fixed per template: the footer (Toby, 29 Oct) says
 // replies go to email; 31 Oct, plus a number to ring if urgent. Meta allows a
-// footer of 60 characters at most, so Toby's fuller wording is shortened.
+// footer of 60 characters at most, so Toby's fuller wording is shortened
+// (his choice of the two short versions).
 
 "use strict";
 
-const FOOTER = "Replies go to email (office hours). Urgent: 01825 212020";
+const FOOTER = "Replies read in office hours. Urgent? Call 01825 212020";
 const APP_URL = "https://hawthbushfarm.netlify.app/";
 
 // Example days for the page's preview: ten days running from Sun 1 Nov, so
