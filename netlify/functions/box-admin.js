@@ -165,7 +165,10 @@ function countsAsSold(o) {
 // business. door.events returns just enough to choose which door they are on.
 var DOOR_ACTIONS = {
   "ping": true, "door.events": true, "door.list": true,
-  "door.admit": true, "door.unadmit": true
+  "door.admit": true, "door.unadmit": true,
+  // Names and times of ticketed events only (2 Nov) — so the bar's own rota
+  // pages can show who is on at a supper club as well as at a wedding.
+  "housekeeping.events": true
 };
 
 // Everything a housekeeping login may do: see when ticketed events are on, so

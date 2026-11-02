@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-10-31h";
+const APP_BUILD = "2026-11-02a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8417,8 +8417,10 @@ function SetupCleanToggle({ kind, refId }) {
   }, [kind, refId]);
   if (refId == null || refId === "") return null;
   const lettings = kind === "accom";
-  // Notes to housekeepers: on lettings, and (28 Oct) on diary events.
-  const withNotes = kind === "accom" || kind === "event";
+  // Notes to housekeepers: on lettings, (28 Oct) diary events and (2 Nov)
+  // box office events — whose notes the housekeeping views, the WhatsApp
+  // summary and the plan page already read.
+  const withNotes = kind === "accom" || kind === "event" || kind === "box";
   const setupId = "setup:" + kind + ":" + refId;
   const noteId = "note:" + kind + ":" + refId;
   const has = function(id) { return !!(list && list.some(function(x) { return x && x.id === id; })); };
@@ -8504,6 +8506,326 @@ function boxAsCalendarEvents(boxEvents) {
 async function loadBoxEventsForHousekeeping(since) {
   const r = await boxAdmin("housekeeping.events", { since: since });
   return Array.isArray(r && r.events) ? r.events : [];
+}
+
+// ─── Box office staffing (2 Nov 2026) ────────────────────────────────────────
+// A ticketed event's rota, shift times, hours worked and office notes, so a
+// supper club needs no diary event alongside it. Kept in its own app_data key,
+// one record per box office event — no box_events column, no booking save path
+// (the same reasoning as the setup cleans):
+//   { id: <box_events.id>, setup: [], dayManager: [], … (STAFFING_FIELDS),
+//     staffShifts: {}, hoursWorked: {}, officeNotes, eventName, eventDate, updatedAt }
+// eventName / eventDate are a snapshot taken with each rota save. They are read
+// only when the box office event itself is not in the list read back (a draft,
+// or deleted), so hours logged against it still reach the hours report.
+const BOX_STAFFING_STORAGE = "hbf_box_staffing_v1";
+// Ticketed events from here on reach the staffing reports. The box office
+// started in 2026; nothing before it has a rota.
+const BOX_ROTA_SINCE = "2026-01-01";
+const BOX_ROTA_FIELDS = ["setup"].concat(STAFFING_FIELDS);
+
+function isBoxRotaId(id) { return typeof id === "string" && id.indexOf("box:") === 0; }
+
+// Writes ONLY the fields given, over a fresh read of that record — never the
+// whole record as this screen holds it — queued with every other save of the
+// key. Two people on the same event's rota therefore only collide on the same
+// field (one role's list, the shifts, the hours or the notes).
+function patchBoxStaffing(boxId, fields) {
+  return queueSave(BOX_STAFFING_STORAGE, async function() {
+    const server = await sbGetStrict(BOX_STAFFING_STORAGE);
+    if (server != null && !Array.isArray(server)) throw new Error("Unexpected data for " + BOX_STAFFING_STORAGE + ", so nothing was saved.");
+    const id = String(boxId);
+    const stamp = new Date().toISOString();
+    let found = false;
+    const next = (server || []).map(function(r) {
+      if (!r || String(r.id) !== id) return r;
+      found = true;
+      return Object.assign({}, r, fields, { id: id, updatedAt: stamp });
+    });
+    if (!found) next.push(Object.assign({}, fields, { id: id, updatedAt: stamp }));
+    await sbSet(BOX_STAFFING_STORAGE, next);
+    return next;
+  });
+}
+
+function boxRotaHasAnything(rec) {
+  if (!rec) return false;
+  if (BOX_ROTA_FIELDS.some(function(f) { return Array.isArray(rec[f]) && rec[f].length > 0; })) return true;
+  return Object.keys(rec.hoursWorked || {}).length > 0;
+}
+
+// Ticketed events in the shape the staffing reports read — a diary event's rota
+// fields — with id "box:<uuid>" so a click can tell them from diary events.
+function boxRotaRecords(boxEvents, staffing) {
+  const byId = {};
+  (Array.isArray(staffing) ? staffing : []).forEach(function(r) { if (r && r.id != null) byId[String(r.id)] = r; });
+  const shape = function(boxId, name, date, endDate, rec) {
+    const o = { id: "box:" + boxId, boxId: boxId, couple: name, date: date, endDate: endDate || "",
+      status: "Confirmed", eventType: "Box office", isBoxOffice: true,
+      staffShifts: (rec && rec.staffShifts) || {}, hoursWorked: (rec && rec.hoursWorked) || {} };
+    BOX_ROTA_FIELDS.forEach(function(f) { o[f] = rec && Array.isArray(rec[f]) ? rec[f] : []; });
+    return o;
+  };
+  const out = [], seen = {};
+  (boxEvents || []).forEach(function(bx) {
+    const d = londonDateOf(bx && bx.starts_at);
+    if (!d) return;
+    const e = londonDateOf(bx.ends_at);
+    const k = String(bx.id);
+    seen[k] = true;
+    out.push(shape(k, String(bx.name || "Ticketed event").trim(), d, e && e > d ? e : "", byId[k]));
+  });
+  // A rota whose event was not read back (a draft, deleted, or the read failed):
+  // kept from its snapshot so its hours are never silently dropped.
+  Object.keys(byId).forEach(function(k) {
+    const r = byId[k];
+    if (seen[k] || !boxRotaHasAnything(r) || !isValidEventDate(r.eventDate)) return;
+    const o = shape(k, String(r.eventName || "Ticketed event").trim(), r.eventDate, "", r);
+    o.fromSnapshot = true;   // nothing to open; reports only
+    out.push(o);
+  });
+  return out;
+}
+
+// Ticketed events as rota records, for the reports, the staff page, the event
+// form's clash warning and the bar's rota. Read-only: a failure shows nothing
+// extra and says so through `failed`, never stops the page.
+function useBoxRota(enabled) {
+  const [state, setState] = useState({ records: [], failed: false });
+  const reload = useCallback(async function() {
+    if (!enabled) return;
+    let events = [], staffing = [], failed = false;
+    try { events = await loadBoxEventsForHousekeeping(BOX_ROTA_SINCE); } catch (e) { failed = true; console.warn("Box office events not read for the rota:", e); }
+    try { const v = await sbGet(BOX_STAFFING_STORAGE); staffing = Array.isArray(v) ? v : []; } catch (e) { failed = true; }
+    setState({ records: boxRotaRecords(events, staffing), failed: failed });
+  }, [enabled]);
+  useEffect(function() { reload(); }, [reload]);
+  return { records: state.records, failed: state.failed, reload: reload };
+}
+
+// The staff page's "remove from rotas", for ticketed events. Like the diary
+// version, anyone with hours logged on an event stays on it — that is a pay
+// record.
+function removeStaffFromBoxRotas(staffId) {
+  return queueSave(BOX_STAFFING_STORAGE, async function() {
+    const server = await sbGetStrict(BOX_STAFFING_STORAGE);
+    if (!Array.isArray(server)) return { cleared: 0, kept: 0 };
+    let cleared = 0, kept = 0;
+    const next = server.map(function(r) {
+      if (!r) return r;
+      const onIt = BOX_ROTA_FIELDS.some(function(f) { return Array.isArray(r[f]) && r[f].indexOf(staffId) !== -1; });
+      if (!onIt) return r;
+      if (Number((r.hoursWorked || {})[staffId] || 0) > 0) { kept++; return r; }
+      const o = Object.assign({}, r);
+      BOX_ROTA_FIELDS.forEach(function(f) {
+        if (Array.isArray(r[f])) o[f] = r[f].filter(function(x) { return x !== staffId; });
+      });
+      if (o.staffShifts && o.staffShifts[staffId]) { o.staffShifts = Object.assign({}, o.staffShifts); delete o.staffShifts[staffId]; }
+      o.updatedAt = new Date().toISOString();
+      cleared++;
+      return o;
+    });
+    if (cleared) await sbSet(BOX_STAFFING_STORAGE, next);
+    return { cleared: cleared, kept: kept };
+  });
+}
+
+// "13:30" → minutes. Shifts ending before 06:00 count as the next day.
+function rotaMins(t) {
+  const p = String(t || "").split(":").map(Number);
+  return p[0] * 60 + (p[1] || 0);
+}
+
+// Shift times and actual hours for everyone on a rota. Module scope: it renders
+// inputs (CLAUDE.md → React).
+function RotaShiftGrid({ setupIds, eventIds, shifts, hours, staff, onShift, onHours, setupTag }) {
+  const all = setupIds.concat(eventIds.filter(function(id) { return setupIds.indexOf(id) === -1; }));
+  if (!all.length) return null;
+  const total = Object.keys(hours || {}).reduce(function(a, k) { return a + (Number(hours[k]) || 0); }, 0);
+  const head = { fontSize:10, fontWeight:700, color:T.textLight, letterSpacing:1, textTransform:"uppercase" };
+  const tStyle = { background:"#fff", border:"1.5px solid " + T.border, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"5px 8px", outline:"none", width:90 };
+  const cols = "44px minmax(0, 1fr) 90px 90px 70px 90px 16px";
+  return (
+    <div>
+      <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:12, marginTop:4, borderTop:"1px solid " + T.border, paddingTop:16 }}>Shift times &amp; hours worked</div>
+      <div style={{ display:"grid", gridTemplateColumns:cols, alignItems:"center", gap:"6px 10px", marginBottom:8, padding:"0 11px" }}>
+        <div/>
+        <div style={head}>Name</div>
+        <div style={Object.assign({}, head, { textAlign:"center" })}>From</div>
+        <div style={Object.assign({}, head, { textAlign:"center" })}>To</div>
+        <div style={Object.assign({}, head, { textAlign:"center" })}>Est.</div>
+        <div style={Object.assign({}, head, { textAlign:"center" })}>Actual hrs</div>
+        <div/>
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        {all.map(function(id) {
+          const person = (staff || []).find(function(s) { return s.id === id; });
+          const sh = (shifts || {})[id] || {};
+          const isSetup = setupIds.indexOf(id) !== -1 && eventIds.indexOf(id) === -1;
+          let diff = sh.start && sh.end ? rotaMins(sh.end) - rotaMins(sh.start) : 0;
+          if (sh.start && sh.end && diff < 0) diff += 1440;   // past midnight
+          const est = diff > 0 ? +(diff / 60).toFixed(2) : null;
+          const hv = (hours || {})[id];
+          return (
+            <div key={id} style={{ display:"grid", gridTemplateColumns:cols, alignItems:"center", gap:"6px 10px", padding:"7px 10px",
+              background: isSetup ? T.amberBg : T.bgInput, borderRadius:7, border:"1px solid " + T.border }}>
+              <StaffChip initials={id} staff={staff}/>
+              <span style={{ fontSize:13, color:T.text, fontWeight:500 }}>
+                {(person && person.name) || id}
+                {isSetup && <span style={{ fontSize:10, color:T.amber, fontWeight:700, marginLeft:6 }}>{setupTag}</span>}
+              </span>
+              <input type="time" aria-label={"Start time for " + ((person && person.name) || id)} value={sh.start || ""} onChange={function(e) { onShift(id, "start", e.target.value); }} style={tStyle}/>
+              <input type="time" aria-label={"End time for " + ((person && person.name) || id)} value={sh.end || ""} onChange={function(e) { onShift(id, "end", e.target.value); }} style={tStyle}/>
+              <span style={{ fontSize:13, color:T.textLight, textAlign:"center" }}>{est !== null ? est + "h" : "—"}</span>
+              <input type="number" min="0" step="0.25" aria-label={"Hours worked by " + ((person && person.name) || id)}
+                value={hv !== undefined ? hv : ""} placeholder="—"
+                onChange={function(e) { onHours(id, e.target.value); }}
+                style={Object.assign({}, tStyle, { width:80, textAlign:"center" })}/>
+              <span style={{ fontSize:12, color:T.textLight }}>h</span>
+            </div>
+          );
+        })}
+      </div>
+      {total > 0 && (
+        <div style={{ marginTop:12, padding:"8px 14px", background:T.accentLight, borderRadius:7, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"nowrap" }}>
+          <span style={{ fontSize:12, color:T.midBlue, fontWeight:600 }}>Total hours this event</span>
+          <span style={{ fontSize:16, color:T.midBlue, fontWeight:700 }}>{total}h</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Reads one ticketed event's staffing record; null while loading. A failed read
+// leaves the panel read-only — saving blind could write blanks over a real rota.
+function useBoxStaffingRecord(boxId) {
+  const [rec, setRec] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(function() {
+    let off = false;
+    setRec(null); setErr("");
+    sbGetStrict(BOX_STAFFING_STORAGE).then(function(v) {
+      if (off) return;
+      const list = Array.isArray(v) ? v : [];
+      setRec(list.find(function(r) { return r && String(r.id) === String(boxId); }) || { id: String(boxId) });
+    }).catch(function() { if (!off) setErr("This could not be read, so it can't be changed just now. Reload the page to try again."); });
+    return function() { off = true; };
+  }, [boxId]);
+  return [rec, setRec, err];
+}
+
+// Box office editor → Staffing. The same roles, shift times and hours as the
+// event form's Staffing section; saves itself a moment after each change.
+function BoxStaffingPanel({ boxId, staff, eventName, eventDate }) {
+  const [rec, setRec, loadErr] = useBoxStaffingRecord(boxId);
+  const [saveState, setSaveState] = useState("idle");
+  const pending = useRef({});
+  const timer = useRef(null);
+  const snap = useRef({});
+  snap.current = { eventName: eventName || "", eventDate: eventDate || "" };
+
+  const flush = useCallback(function() {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    const fields = pending.current;
+    if (!Object.keys(fields).length) return Promise.resolve();
+    pending.current = {};
+    setSaveState("saving");
+    return patchBoxStaffing(boxId, Object.assign({}, fields, snap.current))
+      .then(function() { if (!Object.keys(pending.current).length) setSaveState("saved"); })
+      .catch(function(e) {
+        console.error(e);
+        // Keep the unsaved change (under anything typed since) for the retry.
+        pending.current = Object.assign({}, fields, pending.current);
+        setSaveState("error");
+      });
+  }, [boxId]);
+  // Leaving the event (or the page) saves what is waiting rather than losing it.
+  useEffect(function() { return function() { flush(); }; }, [flush]);
+
+  if (loadErr) return <BoxCard title="Staffing"><div style={{ fontSize:13, color:T.red }}>{loadErr}</div></BoxCard>;
+  if (!rec) return <div style={{ padding:"20px 0", color:T.textLight, fontSize:13 }}>Loading the rota…</div>;
+
+  const change = function(field, value) {
+    setRec(function(r) { const o = Object.assign({}, r); o[field] = value; return o; });
+    const p = Object.assign({}, pending.current); p[field] = value; pending.current = p;
+    setSaveState("pending");
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(flush, 800);
+  };
+  const shifts = rec.staffShifts || {};
+  const hours = rec.hoursWorked || {};
+  const onShift = function(id, field, val) {
+    const one = Object.assign({}, shifts[id] || {}); one[field] = val;
+    const all = Object.assign({}, shifts); all[id] = one;
+    change("staffShifts", all);
+  };
+  const onHours = function(id, val) {
+    const all = Object.assign({}, hours);
+    if (val === "") delete all[id]; else all[id] = parseFloat(val) || 0;
+    change("hoursWorked", all);
+  };
+  // "Sunday" is the day after a wedding — not a role a ticketed night has,
+  // unless somebody is already on it.
+  const roles = STAFFING_FIELDS.filter(function(f) { return f !== "sunday" || (rec.sunday || []).length > 0; });
+  const setupIds = rec.setup || [];
+  const eventIds = [];
+  roles.forEach(function(f) { (rec[f] || []).forEach(function(id) { if (eventIds.indexOf(id) === -1) eventIds.push(id); }); });
+  const stateText = { pending: "Saving…", saving: "Saving…", saved: "All changes saved", error: "Not saved" }[saveState] || "";
+
+  return (
+    <BoxCard title="Staffing">
+      <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"nowrap", marginBottom:14, minHeight:22 }}>
+        <span style={{ fontSize:12.5, color:T.textLight, flex:1, minWidth:0 }}>Shows on the Staffing Rota, Hours Worked and timeline reports with the diary events.</span>
+        {stateText && <span style={{ fontSize:12, fontWeight:700, color: saveState === "error" ? T.red : saveState === "saved" ? T.green : T.textLight, whiteSpace:"nowrap" }}>{stateText}</span>}
+        {saveState === "error" && <BoxBtn tone="ghost" onClick={function() { flush(); }}>Try again</BoxBtn>}
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+        <StaffPicker label="Set-up (day before)" value={setupIds} onChange={function(v) { change("setup", v); }} staff={staff || []}/>
+        {roles.map(function(f) {
+          return <StaffPicker key={f} label={STAFFING_LABELS[f]} value={rec[f] || []} onChange={function(v) { change(f, v); }} staff={staff || []}/>;
+        })}
+        <RotaShiftGrid setupIds={setupIds} eventIds={eventIds} shifts={shifts} hours={hours} staff={staff || []}
+          onShift={onShift} onHours={onHours} setupTag="Set-up"/>
+      </div>
+    </BoxCard>
+  );
+}
+
+// Office notes on a ticketed event: for staff only, never shown to customers.
+// Saved when the box loses focus.
+function BoxOfficeNotes({ boxId }) {
+  const [rec, setRec, loadErr] = useBoxStaffingRecord(boxId);
+  const [draft, setDraft] = useState(null);
+  const [state, setState] = useState("");
+  if (loadErr || !rec) return null;
+  const stored = String(rec.officeNotes || "");
+  const text = draft == null ? stored : draft;
+  const save = async function() {
+    if (draft == null) return;
+    const t = draft.trim();
+    if (t === stored.trim()) { setDraft(null); return; }
+    setState("saving");
+    try {
+      await patchBoxStaffing(boxId, { officeNotes: t });
+      setRec(function(r) { return Object.assign({}, r, { officeNotes: t }); });
+      setDraft(null); setState("saved");
+      setTimeout(function() { setState(""); }, 2000);
+    } catch (e) { console.error(e); setState("error"); }
+  };
+  return (
+    <div style={{ background:"#fff", border:"1px solid " + T.border, borderRadius:10, padding:"11px 16px", margin:"0 0 16px" }}>
+      <div style={{ display:"flex", alignItems:"baseline", gap:"2px 8px", flexWrap:"wrap", marginBottom:4 }}>
+        <span style={{ fontSize:12, fontWeight:700, color:T.textMid }}>Office notes</span>
+        <span style={{ fontSize:11, color:T.textLight, minWidth:0 }}>staff only, never shown to customers</span>
+        {state === "saved" && <span style={{ fontSize:11, fontWeight:700, color:T.green }}>Saved</span>}
+        {state === "error" && <span style={{ fontSize:11, fontWeight:700, color:T.red }}>Not saved — click away again to retry</span>}
+      </div>
+      <textarea rows={3} value={text} placeholder="Anything the team needs to know about this night" aria-label="Office notes"
+        onChange={function(e) { setDraft(e.target.value); }} onBlur={save}
+        style={{ width:"100%", boxSizing:"border-box", border:"1.5px solid " + T.border, borderRadius:8, padding:"8px 10px",
+          fontFamily:"inherit", fontSize:13.5, color:T.text, background:"#fff", resize:"vertical", outline:"none" }}/>
+    </div>
+  );
 }
 
 function changeoverRecordMap(recs) {
@@ -10760,6 +11082,14 @@ export default function App({ role = "admin", onSignOut } = {}) {
   // a way back. It is the real thing: a sign-off made here is saved.
   const hkPreview   = !barOnly && !cleanerOnly && view === "housekeeping";
   const cleanerShell = cleanerOnly || hkPreview;
+  // Ticketed events' rotas (2 Nov), for the staffing reports, the staff page and
+  // the event form's clash warning. Read again on arriving at any of those, so
+  // a rota changed in the box office a minute ago is there.
+  const boxRota = useBoxRota(!barOnly && !cleanerOnly);
+  const reloadBoxRota = boxRota.reload;
+  useEffect(function() {
+    if (view === "reports" || view === "staff" || view === "form") reloadBoxRota();
+  }, [view, reloadBoxRota]);
 
   // Publish this build on load, then watch for a newer one. Any tab left open
   // across a deploy finds out within a minute instead of silently running old
@@ -11563,14 +11893,18 @@ export default function App({ role = "admin", onSignOut } = {}) {
         return touched ? next : b;
       });
     });
-    return { cleared: cleared, kept: kept };
-  }, [mutateBookings]);
+    // Ticketed events' rotas too (2 Nov), by the same rule.
+    const bx = await removeStaffFromBoxRotas(staffId);
+    reloadBoxRota();
+    return { cleared: cleared + bx.cleared, kept: kept + bx.kept };
+  }, [mutateBookings, reloadBoxRota]);
 
   const handleDeleteStaff = id => {
     const s = staff.find(x=>x.id===id);
-    const onRotas = bookings.filter(b => ["setup"].concat(STAFFING_FIELDS)
+    const withBox = bookings.concat(boxRota.records);
+    const onRotas = withBox.filter(b => ["setup"].concat(STAFFING_FIELDS)
       .some(f => Array.isArray(b[f]) && b[f].indexOf(id) !== -1)).length;
-    const withHours = bookings.filter(b => Number((b.hoursWorked||{})[id] || 0) > 0).length;
+    const withHours = withBox.filter(b => Number((b.hoursWorked||{})[id] || 0) > 0).length;
     askConfirm("Remove this staff member?",
       `${s?.name||"This person"} will be removed from the staff list` +
       (onRotas ? `, and taken off ${onRotas} rota${onRotas!==1?"s":""}` : "") +
@@ -11779,7 +12113,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId, true) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
+        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId, true) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} boxEvents={boxRota.records} onOpenBoxEvent={goToBoxEvent} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -11829,7 +12163,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
             }
           }}
         />}
-        {view==="staff"   && <StaffView staff={staff} bookings={bookings} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onPurgeOrphan={removeStaffFromRotas} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
+        {view==="staff"   && <StaffView staff={staff} bookings={bookings.concat(boxRota.records)} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onPurgeOrphan={removeStaffFromRotas} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
         {view==="bar"        && <BarView/>}
         {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)} onOpenEvent={goToEvent} onOpenBoxEvent={goToBoxEvent}/>}
         {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)} bookings={bookings} onOpenEvent={goToEvent} onEnquiriesChanged={setEnquiries}/>}
@@ -11841,8 +12175,8 @@ export default function App({ role = "admin", onSignOut } = {}) {
           patchBooking={patchBooking}
           onSelectEnquiry={goToEnquiry}
           focusRequestId={focusViewingReqId} clearFocusRequest={()=>setFocusViewingReqId(null)}/>}
-        {view==="boxoffice"  && <BoxOfficeView bookings={bookings} focusEventId={focusBoxEventId} clearFocusEvent={()=>setFocusBoxEventId(null)}/>}
-        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenBoxEvent={goToBoxEvent}/>}
+        {view==="boxoffice"  && <BoxOfficeView bookings={bookings} staff={staff} focusEventId={focusBoxEventId} clearFocusEvent={()=>setFocusBoxEventId(null)}/>}
+        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenBoxEvent={goToBoxEvent} boxRota={boxRota.records}/>}
         {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
         {view==="activity"   && <ActivityView/>}
         {view==="emails"     && <EmailsView/>}
@@ -20392,6 +20726,37 @@ function EventClashWarning({ bookings, formData }) {
   );
 }
 
+// A ticketed event already on these dates (2 Nov). Usually it means this diary
+// event is a second copy of the same night — which then shows twice on the
+// calendar and has to be kept in step by hand. Staffing, notes and cleans all
+// live on the box office event, so it points there. A warning, never a block.
+function BoxEventClashWarning({ boxEvents, formData, onOpenBoxEvent }) {
+  if (!formData || !isValidEventDate(formData.date)) return null;
+  const live = (boxEvents || []).filter(function(b) { return !b.fromSnapshot; });
+  const hits = overlappingEvents(live, formData.date, formData.endDate, null);
+  if (!hits.length) return null;
+  return (
+    <div style={{ background:T.amberBg, border:"1px solid #fde68a", borderRadius:8, padding:"9px 13px", marginTop:2 }}>
+      {hits.slice(0, 3).map(function(c) {
+        return (
+          <div key={c.id} style={{ fontSize:12, fontWeight:700, color:"#92400e", lineHeight:1.55 }}>
+            {"There's already a box office event that night: " + (c.couple || "Ticketed event") + " (" + fmtDate(c.date) + "). Is this the same thing?"}
+            {onOpenBoxEvent && c.boxId && (
+              <button type="button" onClick={function() { onOpenBoxEvent(c.boxId); }}
+                style={{ marginLeft:8, background:"#fff", border:"1px solid #fcd34d", color:"#92400e", padding:"1px 8px", borderRadius:5, cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>
+                Open it
+              </button>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ fontSize:11, color:"#b45309", marginTop:4, fontStyle:"italic" }}>
+        If it is, there's no need for a diary event: staffing, office notes, housekeeping and checklists all live on the box office event.
+      </div>
+    </div>
+  );
+}
+
 // Previous / next event arrows for the event header.
 function EventStepper({ prev, next, onStep }) {
   const btn = function(on) {
@@ -20543,7 +20908,7 @@ function AvailabilityDateInput({ value, onChange, bookings, enquiries, ignoreEve
   );
 }
 
-function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onUpdateAccomBookings, onOpenAccomBooking, allBookings, invoiceRecords, onSaveInvoiceRecords, onAddAccom, enquiries, onOpenEnquiry , onOpenEvent, onOpenFunctionSheet}) {
+function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, onAutoSave, onDelete, xeroToken, gmailToken, accomBookings, accomProperties, onSaveAccomBooking, onCreateAccomBookings, onUpdateAccomBookings, onOpenAccomBooking, allBookings, boxEvents, onOpenBoxEvent, invoiceRecords, onSaveInvoiceRecords, onAddAccom, enquiries, onOpenEnquiry , onOpenEvent, onOpenFunctionSheet}) {
   const [activeSection, setActiveSection] = useState("core");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const update = (key,val) => setFormData(f=>({...f,[key]:val}));
@@ -20954,6 +21319,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
                         )}
                       </div>
                       <EventClashWarning bookings={allBookings} formData={formData}/>
+                      <BoxEventClashWarning boxEvents={boxEvents} formData={formData} onOpenBoxEvent={onOpenBoxEvent}/>
                       <PencilClashWarning enquiries={enquiries} formData={formData} onOpenEnquiry={onOpenEnquiry}/>
                     </div>
                   ) : field.type==="select" ? (
@@ -21605,7 +21971,18 @@ function CashflowReport({ bookings, accomBookings, accomProperties, onOpenEvent,
   );
 }
 
-function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry, accomBookings, accomProperties, onOpenAccom, onOpenBoxEvent }) {
+function ReportsView({ bookings, staff, reportType, setReportType, enquiries, setView, onEditBooking, onSelectEnquiry, accomBookings, accomProperties, onOpenAccom, onOpenBoxEvent, boxRota }) {
+  // The staffing reports read diary events AND ticketed events (2 Nov) — a
+  // box office row opens the box office editor.
+  const withBoxRota = (bookings || []).concat(boxRota || []);
+  const openRotaEvent = function(id) {
+    if (isBoxRotaId(id)) {
+      const r = (boxRota || []).find(function(x) { return x.id === id; });
+      if (onOpenBoxEvent && r && !r.fromSnapshot) onOpenBoxEvent(r.boxId);
+      return;
+    }
+    onEditBooking(id);
+  };
   const types = REPORT_TYPES;
   const inSidebar = useContext(SidebarNavContext);
   // If an old/removed report type is still selected, fall back to summary
@@ -21620,10 +21997,10 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
       )}
       {activeType==="summary"   && <SummaryReport bookings={bookings} onOpenEvent={onEditBooking}/>}
       {activeType==="calendar"  && <CalendarReport bookings={bookings} enquiries={enquiries||[]} setView={setView} onEditBooking={onEditBooking} onSelectEnquiry={onSelectEnquiry}/>}
-      {activeType==="staffing"  && <StaffingRota bookings={bookings} staff={staff} onOpenEvent={onEditBooking}/>}
-      {activeType==="hours"     && <HoursReport bookings={bookings} staff={staff} onOpenEvent={onEditBooking}/>}
+      {activeType==="staffing"  && <StaffingRota bookings={withBoxRota} staff={staff} onOpenEvent={openRotaEvent}/>}
+      {activeType==="hours"     && <HoursReport bookings={withBoxRota} staff={staff} onOpenEvent={openRotaEvent}/>}
       {activeType==="housekeeping" && <HousekeepingPayReport staff={staff} onOpenEvent={onEditBooking} onOpenAccom={onOpenAccom} onOpenBoxEvent={onOpenBoxEvent}/>}
-      {activeType==="timeline"  && <StaffTimelineReport bookings={bookings} staff={staff}/>}
+      {activeType==="timeline"  && <StaffTimelineReport bookings={withBoxRota} staff={staff}/>}
       {activeType==="funnel"    && <SalesFunnelReport enquiries={enquiries||[]} bookings={bookings}/>}
       {activeType==="cashflow"  && <CashflowReport bookings={bookings} accomBookings={accomBookings||[]} accomProperties={accomProperties||[]} onOpenEvent={onEditBooking} onOpenAccom={onOpenAccom}/>}
     </div>
@@ -23644,6 +24021,8 @@ function BarView() {
   const [productForm, setProductForm] = useState(null);
   const [editingEvent, setEditingEvent] = useState(null);
   const [confirmDlg, setConfirmDlg]   = useState(null);
+  // Ticketed events' rotas (2 Nov) sit on the bar's rota pages with the diary's.
+  const boxRota = useBoxRota(true);
 
   useEffect(() => {
     (async () => {
@@ -23720,8 +24099,8 @@ function BarView() {
       {barView === "history"   && <EventHistoryView events={events} products={products} onEdit={handleEditEvent} onDelete={handleDeleteEvent}/>}
       {barView === "report"    && <BarReportView  products={products} events={events}/>}
       {barView === "reconcile" && <BarReconcileView products={products} events={events}/>}
-      {barView === "rota"      && <StaffingRota bookings={farmEvents} staff={staff}/>}
-      {barView === "eventrota" && <StaffTimelineReport bookings={farmEvents} staff={staff}/>}
+      {barView === "rota"      && <StaffingRota bookings={farmEvents.concat(boxRota.records)} staff={staff}/>}
+      {barView === "eventrota" && <StaffTimelineReport bookings={farmEvents.concat(boxRota.records)} staff={staff}/>}
       {barView === "products"  && <ProductsView   products={products} onSave={saveProducts}/>}
     </div>
   );
@@ -30245,7 +30624,7 @@ function BoxStat({ label, value, sub, tone }) {
 // from before, so nobody mid-session is thrown out by this change.
 
 // ── The tab itself ───────────────────────────────────────────────────────────
-function BoxOfficeView({ bookings, focusEventId, clearFocusEvent }) {
+function BoxOfficeView({ bookings, staff, focusEventId, clearFocusEvent }) {
   // A sidebar click does what the Events/Orders/Door/Settings tabs did.
   const [tab, setTab] = useNavTab("boxoffice", function(id) { if (id !== "events") setOpenEventId(null); });
   // Arriving from a link elsewhere (the home page) opens that event straight
@@ -30275,7 +30654,7 @@ function BoxOfficeView({ bookings, focusEventId, clearFocusEvent }) {
       )}
 
       {tab === "events" && (openEventId
-        ? <BoxEventEditor eventId={openEventId} weddings={bookings} onBack={()=>setOpenEventId(null)}/>
+        ? <BoxEventEditor eventId={openEventId} weddings={bookings} staff={staff} onBack={()=>setOpenEventId(null)}/>
         : <BoxEventsScreen onOpen={setOpenEventId}/>)}
       {tab === "orders"   && <BoxOrdersScreen onOpenEvent={function(id) { setOpenEventId(id); setTab("events"); }}/>}
       {tab === "door"     && <BoxDoorScreen/>}
@@ -30460,7 +30839,7 @@ function BoxSellerCard({ form, payees, setSeller, update }) {
 }
 
 // ── One event ────────────────────────────────────────────────────────────────
-function BoxEventEditor({ eventId, weddings, onBack }) {
+function BoxEventEditor({ eventId, weddings, staff, onBack }) {
   const [data, setData]       = useState(null);
   const [form, setForm]       = useState(null);
   const [loading, setLoading] = useState(true);
@@ -30570,13 +30949,18 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
   const capacity  = form.capacity ? Number(form.capacity) : issued;
   const remaining = Math.max(capacity - sold, 0);
 
-  // The wedding diary is the thing this must never quietly collide with — a
-  // comedy night on the evening of somebody's wedding is not a small mistake.
+  // The diary is the thing this must never quietly collide with — a comedy
+  // night on the evening of somebody's wedding is not a small mistake, and a
+  // diary event made for this same night (2 Nov: a supper club entered in both)
+  // is a second copy to keep in step. Any diary event that is not cancelled.
   const startDay = form.starts_local ? form.starts_local.slice(0, 10) : null;
   const endDay   = form.ends_local ? form.ends_local.slice(0, 10) : startDay;
-  const clashes  = startDay ? overlappingEvents(weddings || [], startDay, endDay) : [];
+  const clashes  = startDay ? overlappingEvents(weddings || [], startDay, endDay)
+    .filter(function(c) { return c.status !== "Cancelled"; }) : [];
+  // The rota keeps a snapshot of the SAVED name and day, not the unsaved form.
+  const savedDay = data && data.event ? londonDateOf(data.event.starts_at) : null;
 
-  const panes = [["details","Details"],["tickets","Tickets"],["settings","Settings"],
+  const panes = [["details","Details"],["staffing","Staffing"],["tickets","Tickets"],["settings","Settings"],
                  ["orders",`Orders (${(data.orders || []).filter(o=>o.status!=="cancelled"&&o.status!=="pending").length})`],
                  ["waitlist",`Waitlist (${(data.waitlist || []).filter(w=>!w.converted).length})`]];
 
@@ -30645,21 +31029,27 @@ function BoxEventEditor({ eventId, weddings, onBack }) {
       {clashes.length > 0 && (
         <div style={{ background:T.amberBg, border:`1px solid #fcd34d`, borderRadius:9, padding:"13px 16px", marginBottom:18 }}>
           <div style={{ fontSize:13.5, fontWeight:700, color:"#92400e", marginBottom:4 }}>
-            There {clashes.length === 1 ? "is a wedding" : `are ${clashes.length} weddings`} in the diary on that date
+            There {clashes.length === 1 ? "is an event" : `are ${clashes.length} events`} in the diary on that date
           </div>
           <div style={{ fontSize:12.5, color:"#92400e", lineHeight:1.6 }}>
-            {clashes.map(function(c) { return (c.couple || "Unnamed") + " (" + fmtDate(c.date) + ")"; }).join(" · ")}
-            {" — check the barn is actually free before you publish."}
+            {clashes.map(function(c) { return (c.couple || "Unnamed") + " (" + (c.eventType ? c.eventType + ", " : "") + fmtDate(c.date) + ")"; }).join(" · ")}
+            {" — check the barn is actually free before you publish. If one of these is this same night, keep it here and delete the diary copy: staffing, notes and cleans all live on the box office event."}
           </div>
         </div>
       )}
 
       <SetupCleanToggle kind="box" refId={eventId}/>
+      <BoxOfficeNotes boxId={eventId}/>
       <RecordChecklistsPanel kind="box" refId={eventId} noun="event"/>
 
       <TabStrip tabs={panes} value={pane} onChange={setPane}/>
 
       {pane === "details" && <BoxEventDetails form={form} update={update}/>}
+
+      {pane === "staffing" && (
+        <BoxStaffingPanel boxId={eventId} staff={staff || []}
+          eventName={data && data.event ? data.event.name : form.name} eventDate={savedDay}/>
+      )}
 
       {pane === "tickets" && (
         <div>

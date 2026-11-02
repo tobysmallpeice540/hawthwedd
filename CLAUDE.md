@@ -602,7 +602,7 @@ own header.
   else on the Grain Store's clean before it (`attachArrivalNotes`, events
   and box office), worded "For <event>, on <day>: …" (`hkNoteForEvent`),
   and on the event's own row on Live — never on its own clean after. The
-  box office editor writes ticks only.
+  box office editor has notes too (2 Nov), same key, `note:box:<uuid>`.
   **The sign-off pop-up shows both** (28 Oct, Toby): "Notes from previous
   let" (the note written on the let or event this clean comes after —
   `job.prevNote`) and "Notes for next let" (the arrival notes above —
@@ -1000,6 +1000,38 @@ own header.
   arrival times in `tests/whatsapp-webhook-test.cjs` and `tests/arrival-badges-e2e.cjs`.
 - Still to build: Send buttons and a WhatsApp panel on records, couples'
   templates.
+
+### Box office staffing (2 Nov 2026)
+
+- **A ticketed night needs no diary event.** A supper club was entered in both
+  (diary #230 and the box office) because rota and notes only lived on diary
+  events. The box office editor now has a **Staffing** tab (the event form's
+  roles, less "Sunday"; "Set-up (day before)" for Friday Set-Up; shift times and
+  actual hours — `BoxStaffingPanel`, `RotaShiftGrid`), **Office notes** (staff
+  only, `BoxOfficeNotes`) and housekeeper notes (`SetupCleanToggle kind="box"`).
+- Stored in `app_data` `hbf_box_staffing_v1`, one record per box event:
+  `{ id: <uuid>, setup, dayManager, … (STAFFING_FIELDS), staffShifts,
+  hoursWorked, officeNotes, eventName, eventDate, updatedAt }`. No box_events
+  column, no SQL. **Every write is `patchBoxStaffing(boxId, fields)`** — only the
+  fields given, over a fresh read, queued — so the rota (autosaved 800ms after a
+  change, flushed on leaving) and the notes never overwrite each other.
+  `eventName`/`eventDate` are a snapshot of the SAVED event, taken with each
+  rota save, used only when the event is not read back (draft or deleted):
+  those rows are `fromSnapshot`, reach the reports, and open nothing.
+- **The staffing reports read both**: `useBoxRota()` (box-admin
+  `housekeeping.events` from `BOX_ROTA_SINCE` + the key) → `boxRotaRecords()`,
+  booking-shaped with id `box:<uuid>`. Rota Overview, Hours Worked, Event Rota,
+  the staff page's counts and "remove from rotas" (`removeStaffFromBoxRotas`,
+  hours kept, as for diary events), and the bar's rota pages. A report row
+  opens the box office editor (`openRotaEvent`). App reads it again on arriving
+  at Reports, Staff or an event form. **The bar login may now call
+  `housekeeping.events`** (names and times only) for its rota pages.
+- **Clash warnings both ways**: the event form shows
+  `BoxEventClashWarning` ("There's already a box office event that night: … Is
+  this the same thing?", Open it); the box office editor warns of ANY diary
+  event that day (not only weddings), cancelled ones left out. Warnings only.
+- Test: `tests/box-staffing-e2e.cjs`. `changeover-e2e` "cleaner run" fails on
+  main as well as here (a past-week sign-off is read-only) — not this change.
 
 ## Working in this folder from a Claude session
 
