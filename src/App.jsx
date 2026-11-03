@@ -1003,6 +1003,15 @@ function fmtDate(dateStr) {
   return d.toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"2-digit" });
 }
 
+// "Fr 03 Dec 26": fmtDate with the day of the week's first two letters in
+// front (Toby, 3 Nov — the lettings bookings list).
+function fmtDateDay(dateStr) {
+  const f = fmtDate(dateStr);
+  if (!f) return "";
+  const d = new Date(String(dateStr).slice(0,10) + "T00:00:00");
+  return isNaN(d) ? f : d.toLocaleDateString("en-GB", { weekday:"short" }).slice(0, 2) + " " + f;
+}
+
 function dayOfWeek(dateStr) {
   if (!dateStr) return "";
   return new Date(dateStr + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long" });
@@ -2800,7 +2809,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-03e";
+const APP_BUILD = "2026-11-03f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3996,7 +4005,9 @@ function AccomListRow({ b, primary, properties, gridTemplate, onOpen, lost }) {
           }
         </div>
       ))}
-      <div style={{ padding:"11px 12px", fontSize:12 }}>{fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}</div>
+      <div style={{ padding:"11px 12px", fontSize:12 }}>
+        <span style={{ whiteSpace:"nowrap" }}>{fmtDateDay(primary.checkIn)}</span> – <span style={{ whiteSpace:"nowrap" }}>{fmtDateDay(primary.checkOut)}</span>
+      </div>
       <div style={{ padding:"11px 12px" }}>
         <span style={{ fontSize:11, fontWeight:700, color:srcMeta.text, background:srcMeta.bg, padding:"2px 7px", borderRadius:8 }}>{srcLabel}</span>
       </div>
@@ -4031,7 +4042,7 @@ function AccomListCard({ b, primary, properties, onOpen, lost }) {
           <div style={{ fontWeight:700, color:T.text, fontSize:15, wordBreak:"break-word" }}>{accomGuestLabel(b)}<AirbnbAttentionChip b={b}/></div>
           {lost && <div style={{ marginTop:3 }}><LostPropertyChip text={lost}/></div>}
           <div style={{ fontSize:12.5, color:T.accent, fontWeight:600, marginTop:2 }}>
-            {fmtDate(primary.checkIn)} – {fmtDate(primary.checkOut)}
+            {fmtDateDay(primary.checkIn)} – {fmtDateDay(primary.checkOut)}
           </div>
         </div>
         <span style={{ fontSize:11, fontWeight:700, color:meta.text, background:meta.bg, padding:"2px 8px", borderRadius:8, whiteSpace:"nowrap", flexShrink:0 }}>{meta.label}</span>
@@ -4099,7 +4110,7 @@ function AccomList({ properties, bookings, filterProp, setFilterProp, filterStat
 
   // Build dynamic grid: Guest | per-property | Dates | Source | Event | Status | Value | Paid
   const propCols = properties.map(function(){ return "0.55fr"; }).join(" ");
-  const gridTemplate = "1.5fr " + propCols + " 1.1fr 0.7fr 0.75fr 0.75fr 0.75fr 0.75fr";
+  const gridTemplate = "1.5fr " + propCols + " 1.4fr 0.7fr 0.75fr 0.75fr 0.75fr 0.75fr";
   const lostOf = function(b) { return changeovers ? lostPropertyFor(changeovers, b.id) : ""; };
 
   return (
@@ -9235,6 +9246,85 @@ function changeoverFeedbackWho(r) {
   if (by) parts.push("signed off by " + by);
   return parts.join(" · ") || "Housekeeping";
 }
+// ─── Admin home: something has stopped syncing ──────────────────────────────
+// The farm Gmail connection (Airbnb emails, the email archive, the follow-up
+// checks) and the Airbnb calendars (hourly, sync-all-icals) fail silently
+// otherwise: the Gmail connection lapsed on 1 Nov and nobody knew for two
+// days. Problems are an error recorded by the job itself, or a job that has
+// not run for SYNC_STALE_MS (it runs hourly or more, so that is two misses).
+const SYNC_STALE_MS = 3 * 60 * 60 * 1000;
+function syncAgeText(iso) {
+  if (!iso) return "never";
+  return new Date(iso).toLocaleString("en-GB", { timeZone:"Europe/London", weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+}
+// Pure: { props, mail, archive, now (ms) } → [{ key, text }]. `mail` and
+// `archive` are airbnb_admin_status / email_admin_status, or null when they
+// could not be read (then nothing is said about them — no false alarm).
+function syncHealthProblems(o) {
+  const out = [], now = o.now;
+  const stale = function(iso) { return !iso || !(now - new Date(iso).getTime() < SYNC_STALE_MS); };
+  const lapsed = /invalid_grant|no longer accepts|withdrawn|expired|connect gmail again/i;
+  const mail = o.mail, arc = o.archive;
+  if (mail || arc) {
+    const connected = (mail && mail.connected) || (arc && arc.connected);
+    const errs = [mail && mail.last_error, arc && arc.last_error].filter(Boolean);
+    if (!connected) {
+      out.push({ key:"gmail", text:"The farm Gmail is not connected, so the Airbnb emails, the email archive and the follow-up checks are not running." });
+    } else if (errs.some(function(e) { return lapsed.test(e); })) {
+      out.push({ key:"gmail", text:"The farm Gmail connection has lapsed. The Airbnb emails, the email archive and the follow-up checks have stopped until it is connected again." });
+    } else {
+      if (mail && mail.last_error) out.push({ key:"mail", text:"Airbnb emails: " + mail.last_error });
+      else if (mail && stale(mail.last_sync_at)) out.push({ key:"mail", text:"The Airbnb email sync has not run since " + syncAgeText(mail.last_sync_at) + "." });
+      if (arc && arc.last_error) out.push({ key:"archive", text:"Email archive: " + arc.last_error });
+      else if (arc && stale(arc.last_sync_at)) out.push({ key:"archive", text:"The email archive has not run since " + syncAgeText(arc.last_sync_at) + "." });
+    }
+  }
+  (o.props || []).forEach(function(p) {
+    if (!p || p.archived || !p.airbnbImportUrl) return;
+    const err = p.lastSyncError && p.lastSyncError.error;
+    const errNewer = err && (!p.lastSyncedAt || p.lastSyncError.at > p.lastSyncedAt);
+    if (errNewer || stale(p.lastSyncedAt)) {
+      out.push({ key:"ical:" + p.id, text:"Airbnb calendar for " + (p.name || p.id) + " has not synced since " + syncAgeText(p.lastSyncedAt)
+        + (errNewer ? " (" + err + ")" : "") + ". New Airbnb bookings will not reach the app until it does." });
+    }
+  });
+  return out;
+}
+function SyncHealthBanner({ onFix }) {
+  const [probs, setProbs] = useState([]);
+  useEffect(function() {
+    let off = false;
+    async function check() {
+      // Each read on its own: one failing must not hide the others. A failed
+      // read says nothing (it is not evidence that a sync has stopped).
+      const r = await Promise.all([
+        sbGetStrict(PROPERTIES_STORAGE).catch(function() { return null; }),
+        sbRpcQuiet("airbnb_admin_status").catch(function() { return null; }),
+        sbRpcQuiet("email_admin_status").catch(function() { return null; })
+      ]);
+      if (!off) setProbs(syncHealthProblems({ props: Array.isArray(r[0]) ? r[0] : [], mail: r[1], archive: r[2], now: Date.now() }));
+    }
+    check();
+    const t = setInterval(check, 10 * 60 * 1000);
+    const vis = function() { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", vis);
+    return function() { off = true; clearInterval(t); document.removeEventListener("visibilitychange", vis); };
+  }, []);
+  if (!probs.length) return null;
+  return (
+    <div role="alert" style={{ background:T.redBg, border:"1.5px solid " + T.red, borderRadius:10, padding:"11px 15px", marginBottom:16 }}>
+      <div style={{ fontSize:14, fontWeight:800, color:T.red, marginBottom:4 }}>Something has stopped syncing</div>
+      {probs.map(function(p) {
+        return <div key={p.key} style={{ fontSize:13, color:T.text, lineHeight:1.55, margin:"3px 0" }}>· {p.text}</div>;
+      })}
+      <button type="button" onClick={onFix}
+        style={{ marginTop:8, background:"#fff", border:"1.5px solid " + T.red, color:T.red, borderRadius:6, padding:"6px 12px", fontSize:12.5, fontWeight:700, fontFamily:"inherit", cursor:"pointer" }}>
+        Open Lettings → Settings
+      </button>
+    </div>
+  );
+}
+
 function HousekeepingFeedback({ recs, seen, onRead, onOpen }) {
   const [busy, setBusy] = useState("");
   const [err, setErr]   = useState("");
@@ -23744,6 +23834,10 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
     <div style={UI_CLASSIC ? { maxWidth:1100, margin:"0 auto", padding:"28px 28px 60px" } : { maxWidth:1100 }}>
       <PageHeader title="Home"
         sub={<>Today: {fmtDay(today)}{UI_CLASSIC && <span style={{ color:T.textLight, marginLeft:10, fontSize:11 }}>build {APP_BUILD}</span>}</>}/>
+
+      {/* The Gmail connection or an Airbnb calendar has stopped — above
+          everything, because nothing else on the page can show it. */}
+      <SyncHealthBanner onFix={function() { navSet("lettings", "settings"); setView("lettings"); }}/>
 
       {/* Checklists that have started and are not finished — first, because
           they are things somebody should be doing now. */}

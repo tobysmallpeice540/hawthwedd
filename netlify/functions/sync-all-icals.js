@@ -200,7 +200,12 @@ exports.handler = async function() {
           allNewBlocks = allNewBlocks.concat(result.newBlocks);
         }
         if (result.feedUids) feeds[prop.id] = result.feedUids;
-        results.push({ id: prop.id, property: prop.name, imported: result.imported, total: result.total });
+        // A feed that is not a whole calendar (an error page sent with a 200,
+        // or a cut-off download) is not a sync: the home page's warning must
+        // see it, so it is reported as a failure, not stamped as synced.
+        results.push(result.feedUids
+          ? { id: prop.id, property: prop.name, imported: result.imported, total: result.total }
+          : { id: prop.id, property: prop.name, imported: result.imported, total: result.total, error: "Airbnb did not send a complete calendar" });
         console.log("[sync-all-icals] " + prop.name + ": " + result.imported + " new / " + result.total + " total");
       } catch (propErr) {
         console.error("[sync-all-icals] Error syncing " + prop.name + ":", propErr.message);
@@ -224,11 +229,15 @@ exports.handler = async function() {
       totalImported = merged.added; flaggedNow = flagged.flagged; cleared = flagged.cleared;
     }
 
-    // Stamp lastSyncedAt on the properties that actually synced, onto a fresh
-    // copy of the settings — and only write if one did.
+    // Stamp lastSyncedAt on the properties that actually synced, and
+    // lastSyncError on the ones that failed (cleared again on the next good
+    // sync), onto a fresh copy of the settings — the admin home page warns
+    // from these. Written only if something changed.
     var syncedIds = results.filter(function(r) { return !r.error; }).map(function(r) { return r.id; });
-    if (syncedIds.length) {
-      var stamped = stampSynced(await sbGet(PROPS_KEY) || [], syncedIds, now);
+    var failed = {};
+    results.forEach(function(r) { if (r.error) failed[r.id] = String(r.error).slice(0, 200); });
+    if (syncedIds.length || Object.keys(failed).length) {
+      var stamped = stampSynced(await sbGet(PROPS_KEY) || [], syncedIds, now, failed);
       if (stamped.changed) await sbSet(PROPS_KEY, stamped.list);
     }
 
@@ -261,13 +270,25 @@ function mergeNewImports(fresh, newBlocks) {
   return { list: list, added: added };
 }
 
-// Set lastSyncedAt on the given property ids in a freshly read settings list.
-function stampSynced(fresh, ids, now) {
+// Set lastSyncedAt (and clear lastSyncError) on the given property ids in a
+// freshly read settings list; set lastSyncError { at, error } on the ones in
+// `failed` ({ id: message }), keeping their lastSyncedAt.
+function stampSynced(fresh, ids, now, failed) {
   var changed = false;
+  failed = failed || {};
   var list = (Array.isArray(fresh) ? fresh : []).map(function(p) {
-    if (!p || ids.indexOf(p.id) === -1 || !p.airbnbImportUrl) return p;
-    changed = true;
-    return Object.assign({}, p, { lastSyncedAt: now });
+    if (!p || !p.airbnbImportUrl) return p;
+    if (ids.indexOf(p.id) !== -1) {
+      changed = true;
+      var ok = Object.assign({}, p, { lastSyncedAt: now });
+      delete ok.lastSyncError;
+      return ok;
+    }
+    if (failed[p.id]) {
+      changed = true;
+      return Object.assign({}, p, { lastSyncError: { at: now, error: failed[p.id] } });
+    }
+    return p;
   });
   return { list: list, changed: changed };
 }

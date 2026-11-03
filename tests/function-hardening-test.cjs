@@ -181,6 +181,9 @@ console.log("\n— sync-all-icals: append only what is missing —");
   const st = I.stampSynced([{ id: "hamlet", airbnbImportUrl: "x" }, { id: "amly", airbnbImportUrl: "y" }, { id: "glamping" }], ["hamlet"], "T");
   eq("only properties that synced are stamped", st.list.map(p => p.lastSyncedAt || null), ["T", null, null]);
   ok("nothing synced = no write", I.stampSynced([{ id: "hamlet", airbnbImportUrl: "x" }], [], "T").changed === false);
+  const fl = I.stampSynced([{ id: "hamlet", airbnbImportUrl: "x", lastSyncedAt: "OLD" }, { id: "amly", airbnbImportUrl: "y", lastSyncError: { at: "A", error: "e" } }], ["amly"], "T", { hamlet: "HTTP 500" });
+  eq("a failure keeps the last good sync and records why", [fl.list[0].lastSyncedAt, fl.list[0].lastSyncError], ["OLD", { at: "T", error: "HTTP 500" }]);
+  ok("a good sync clears an earlier error", fl.list[1].lastSyncedAt === "T" && !("lastSyncError" in fl.list[1]));
 }
 
 console.log("\n— send-accom-reminders: claim before send, settle after —");
