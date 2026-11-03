@@ -9299,6 +9299,20 @@ function HkNoteLine({ text }) {
 // only thing it writes is the changeover sign-off (CHANGEOVERS_STORAGE).
 const CLEANER_DAYS_AHEAD = 14;
 
+// Arrow into a door for a check-in, out of one for a check-out (3 Nov, Toby:
+// to make the two stand apart at a glance on Live).
+function InOutArrow({ dir }) {
+  const inward = dir === "in";
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink:0 }}>
+      {inward ? <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/> : <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>}
+      {inward ? <polyline points="10 17 15 12 10 7"/> : <polyline points="16 17 21 12 16 7"/>}
+      {inward ? <line x1="15" y1="12" x2="3" y2="12"/> : <line x1="21" y1="12" x2="9" y2="12"/>}
+    </svg>
+  );
+}
+
 function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMap, today, onOpenJob }) {
   const end = addDaysIso(today, CLEANER_DAYS_AHEAD);
 
@@ -9397,8 +9411,9 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
     };
     const c = map[kind];
     return (
-      <span style={{ fontSize:10, fontWeight:700, padding:"3px 9px", borderRadius:9,
+      <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", gap:4, minWidth:84, boxSizing:"border-box", fontSize:10, fontWeight:700, padding:"3px 9px", borderRadius:9,
         background:c.bg, color:c.fg, border:"1px solid " + c.bd, whiteSpace:"nowrap", flexShrink:0 }}>
+        {(kind === "in" || kind === "out") && <InOutArrow dir={kind}/>}
         {c.text}
       </span>
     );
@@ -9475,7 +9490,9 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
               // One line on a phone: what and where on the left (who under
               // it), the lozenge on the right.
               return (
-                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", flexWrap:"nowrap" }}>
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", flexWrap:"nowrap",
+                  borderLeft: it.kind === "in" ? "3px solid #86efac" : it.kind === "out" ? "3px solid #fdba74" : "3px solid transparent",
+                  paddingLeft:8, marginLeft:-11 }}>
                   {chip(it.kind)}
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13, fontWeight:600, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
