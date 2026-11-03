@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-03d";
+const APP_BUILD = "2026-11-03e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -28960,6 +28960,18 @@ const DEFAULT_AUTOMATIONS = {
     body: "Hello {firstName},\n\nI will not keep emailing, but I did not want your enquiry to slip through the cracks. If you are still looking, we would love to help — just reply with the dates you have in mind, or a good time to call.\n\nIf your plans have moved on, we wish you all the very best.\n\nWarm regards,\nHawthbush Farm" }
 };
 function automationDays(v, d) { const n = Number(v); return isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : d; }
+// JSON with every object's keys sorted. The database stores app_data values
+// as jsonb, which hands keys back in ITS order (shortest first), so a plain
+// JSON.stringify of the read-back never matches what was sent, however
+// faithfully it was saved.
+function canonicalJson(v) {
+  if (Array.isArray(v)) return "[" + v.map(canonicalJson).join(",") + "]";
+  if (v && typeof v === "object") {
+    return "{" + Object.keys(v).sort().filter(function(k) { return v[k] !== undefined; })
+      .map(function(k) { return JSON.stringify(k) + ":" + canonicalJson(v[k]); }).join(",") + "}";
+  }
+  return JSON.stringify(v === undefined ? null : v);
+}
 
 const AUTOMATION_CARDS = [
   { id: "followup", title: "First enquiry follow-up",
@@ -29011,7 +29023,7 @@ function AutomationsPanel() {
       // sbSet reports a failure on the banner rather than throwing, so check
       // the save actually landed before saying it did.
       const back = await sbGet(AUTOMATIONS_STORAGE);
-      if (JSON.stringify(back) !== JSON.stringify(cfg)) throw new Error("the saved copy does not match — try again");
+      if (canonicalJson(back) !== canonicalJson(cfg)) throw new Error("the saved copy does not match — try again");
       setDirty(false); setFlash("Saved.");
     }
     catch (e) { setFlash("Not saved: " + (e.message || e)); }
@@ -29056,7 +29068,9 @@ function AutomationsPanel() {
           {preview && preview.gmail && (
             <span style={{ fontSize:12, color: preview.gmail.error ? T.amber : T.textLight }}>
               {preview.gmail.source === "farm" ? "Gmail checked just now (" + (preview.gmail.account || "farm mailbox") + ", " + preview.gmail.checked + " address" + (preview.gmail.checked === 1 ? "" : "es") + ")."
-                : preview.gmail.error ? "Farm Gmail not reachable (" + preview.gmail.error + "), so the app's own check was used." : ""}
+                : preview.gmail.error ? (/invalid_grant|refused the stored access/.test(preview.gmail.error)
+                    ? "The farm Gmail connection has lapsed — connect Gmail again in Lettings → Settings → Airbnb Sync. Until then follow-ups go only on older Gmail checks, and the Airbnb emails and email archive have stopped too."
+                    : "Farm Gmail not reachable (" + preview.gmail.error + "), so older Gmail checks were used.") : ""}
             </span>
           )}
         </div>
