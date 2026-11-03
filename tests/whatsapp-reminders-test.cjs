@@ -176,6 +176,15 @@ assert.strictEqual(el[0].items[0].eta, "After 9pm", "the guests' arrival time, f
 const ea = P.planArrivals({ accom: [{ id: "e", guestName: "Kim Early", phone: "07700900111", status: "confirmed", earlyCheckIn: "15:00",
   stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-01", checkInTime: "15:00" }] }], properties, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
 assert.strictEqual(ea.send[0].values.checkInTime, "3:00pm");
+// Late check-out: the time goes with the last day, from the stay leaving last.
+const la = P.planArrivals({ accom: [{ id: "l", guestName: "Lou Late", phone: "07700900112", status: "confirmed", lateCheckOut: "12:00",
+  stays: [{ propertyId: "hamlet", checkIn: "2026-10-31", checkOut: "2026-11-02" },
+          { propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-03", checkOutTime: "12:00" }] }], properties, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
+assert.strictEqual(la.send[0].values.checkOutDate, "Tuesday 3 November");
+assert.strictEqual(la.send[0].values.checkOutTime, "12:00pm", "late check-out from the stay leaving last");
+const one = P.planArrivals({ accom: [{ id: "o", guestName: "Ola One", phone: "07700900113", status: "confirmed", earlyCheckIn: "14:00", lateCheckOut: "12:00",
+  stays: [{ propertyId: "amly", checkIn: "2026-10-31", checkOut: "2026-11-02", checkInTime: "14:00", checkOutTime: "12:00" }] }], properties, now: at("2026-10-31T09:05:00Z"), sent: new Set() });
+assert.deepStrictEqual([one.send[0].values.checkInTime, one.send[0].values.checkOutTime], ["2:00pm", "12:00pm"], "early in and late out on one stay");
 // The whole week in one field: busy days only, no line breaks.
 const wt = P.weekText(wk, 2000);
 assert.ok(wt.startsWith("Sat 31 Oct – Juner into Hamlet (Cot please); "), wt);

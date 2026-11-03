@@ -206,6 +206,10 @@ function arrivalMessage(b, day, props, arrival, hostedPacks, events) {
   const prop = props[first.propertyId];
   const t = stayTimes(b, first, prop);
   const out = arriving.map(function (s) { return s.checkOut; }).filter(validDate).sort().pop() || first.checkOut;
+  // The check-out time goes with the check-out day: the stay leaving last
+  // (where a late check-out is written, applyEarlyLate), not the first one.
+  const lastStay = arriving.filter(function (s) { return s.checkOut === out; })[0] || first;
+  const outTime = stayTimes(b, lastStay, props[lastStay.propertyId]).outTime;
   const nights = validDate(out) ? Math.round((new Date(out + "T12:00:00Z") - new Date(day + "T12:00:00Z")) / 864e5) : 0;
   const names = arriving.map(function (s) { const p = props[s.propertyId]; return (p && p.name) || s.propertyName || s.propertyId; });
   const hosted = pickHostedPack(hostedPacks, usesEventTemplate(b), packTags(b, events, arriving));
@@ -221,7 +225,7 @@ function arrivalMessage(b, day, props, arrival, hostedPacks, events) {
       arrivalPack: cleanParam(arrivalPackFor(arrival, arriving) || hosted || "https://www.hawthbushfarm.co.uk", 300),
       checkInTime: clock12(t.inTime) || "—",
       checkOutDate: validDate(out) ? dayLong(out) : "—",
-      checkOutTime: clock12(t.outTime) || "—",
+      checkOutTime: clock12(outTime) || "—",
       nights: nights === 1 ? "1 night" : nights + " nights",
       bookingRef: String(b.id || "").toUpperCase() || "—"
     } };
