@@ -51,7 +51,9 @@ const call = function (b) { return fn.handler({ httpMethod: "POST", headers: { a
   r = await call({ action: "sendBooking", bookingId: "A1" });
   assert.strictEqual(r.code, 200, JSON.stringify(r.body));
   assert.strictEqual(sent.template.name, "pre_arrival");
-  assert.strictEqual(sent.template.components[0].parameters[2].text, "4321");
+  // Values go in the order of the wording Meta has (here the standard one).
+  const gateAt = require("../netlify/functions/whatsapp-reminders/templates.js").sendOrder("pre_arrival", null).indexOf("gateCode");
+  assert.strictEqual(sent.template.components[0].parameters[gateAt].text, "4321");
   assert.strictEqual(sent.template.components[1].parameters[0].payload, "eta|A1@" + IN + "|0");
   assert.ok(marks["A1|" + IN], "marked, so the automatic one won't send it again");
   assert.ok(/sent by hand by Rosanna/.test(logged[0].body));
