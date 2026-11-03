@@ -408,4 +408,4 @@ function planSummary(input) {
 
 module.exports = { planChecklists, planArrivals, arrivalMessage, planSummary, summaryItems, itemWords, weekText, weekCap, SUMMARY_DAYS,
   isQuiet, dueWords, itemsList, normaliseNumber, guestAgreed, arrivalPackFor, londonDate, londonHour, londonWeekday, clock12,
-  dayShort, dayLong, addDays, CATCH_UP_H };
+  dayShort, dayLong, addDays, stayTimes, CATCH_UP_H };

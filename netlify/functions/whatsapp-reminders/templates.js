@@ -128,6 +128,23 @@ const TEMPLATES = {
     // the webhook reads back, so a change here is a change of meaning: add at
     // the end, never reorder.
     quickReplies: ["Before 6pm", "6pm to 9pm", "After 9pm"]
+  },
+  // Home Assistant's important alerts (3 Nov, Toby): boiler, pellet auger,
+  // water, sauna, cold arrivals. Sent by ha-link.js when Home Assistant asks,
+  // to the numbers in the ha_link table — never on a schedule, never held back
+  // at night (an empty water tank can't wait for 8am).
+  estate_alert: {
+    label: "Estate alert (Home Assistant)",
+    audience: "Toby (the numbers on the Home Assistant link)",
+    when: "Whenever Home Assistant raises an important alert: boiler, pellet auger, water, sauna, a cold building before guests arrive. Day or night; the same alert at most once an hour.",
+    category: "UTILITY", language: "en_GB",
+    fields: [
+      { key: "title", label: "What happened", example: "Low water" },
+      { key: "message", label: "The detail", example: "Tank A is at 22% (below 25%)." }
+    ],
+    body: "Hawthbush Farm alert: {{title}}\n\nDetails: {{message}}\n\nSent automatically by Home Assistant.",
+    footer: "Automatic alert from Home Assistant",
+    button: null
   }
 };
 
