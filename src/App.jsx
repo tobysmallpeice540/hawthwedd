@@ -2800,7 +2800,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-02a";
+const APP_BUILD = "2026-11-03a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -19883,7 +19883,7 @@ function WaArrivalSettings({ arrival, busy, hosted, onSave }) {
           {[8,9,10,11,12,13,14,15,16,17,18,19,20].map(function(h){ return <option key={h} value={h}>{waHourLabel(h)}</option>; })}
         </select>
       </div>
-      {Number(arrival.daysBefore) === 1 && <div style={{ fontSize:12, color:T.amber }}>The standard wording says "later today" — change it on the Messages tab if it goes the day before.</div>}
+      {Number(arrival.daysBefore) === 1 && <div style={{ fontSize:12, color:T.amber }}>The standard wording says "begins today" — change it on the Messages tab if it goes the day before.</div>}
       <div style={{ fontSize:12, color:T.textMid }}>Only guests who agreed to WhatsApp on their booking (Airbnb guests only if ticked by hand).</div>
       <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8 }}>
         <span style={{ fontSize:13, color:T.text, flex:"0 0 140px" }}>Gate code</span>

@@ -914,6 +914,15 @@ own header.
   `media {type,id,mime,name}` and fetches it from Meta with `WHATSAPP_TOKEN`
   at email time, attached up to 10MB; bigger or failed = named in the email,
   never a failed delivery.
+- **Meta rejected pre-arrival as INCORRECT_CATEGORY** (3 Nov): a UTILITY
+  template must read as information about the recipient's own transaction.
+  "We're looking forward to seeing you…" read as relationship marketing; it
+  now opens "Your stay at {{property}} begins today. Check-in is from … and
+  check-out is by … on …". Keep warm or promotional wording out of every
+  utility template, and never resubmit as MARKETING — guests agreed to
+  "information about your stay only, never marketing". A rejected template
+  is edited in place by Resubmit; a saved wording on the card overrides the
+  standard one, so "Standard wording" first.
 - **Pre-arrival asks for an arrival time** (30 Oct): three tap-to-answer
   buttons (`quickReplies` on `pre_arrival` — "Before 6pm", "6pm to 9pm",
   "After 9pm"; their ORDER is their meaning: add at the end, never reorder).

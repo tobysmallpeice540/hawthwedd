@@ -110,12 +110,16 @@ const TEMPLATES = {
       { key: "nights", label: "Nights", example: "3 nights" },
       { key: "bookingRef", label: "Booking reference", example: "A12345" }
     ],
-    // Toby's wording, 30 Oct; a line break after the name, 31 Oct. WhatsApp
-    // always puts buttons at the very bottom, so the sign-off comes before
-    // the question and the question sits right above the buttons (31 Oct).
-    body: "Hi {{guestName}},\nWe're looking forward to seeing you at {{property}} later today. The gate code is {{gateCode}} — please give it to everyone in your group. Your arrival pack is here: {{arrivalPack}}\n\n" +
+    // Toby's wording, 30 Oct; a line break after the name, 31 Oct. Meta
+    // rejected the first version as the wrong category (3 Nov) — a UTILITY
+    // message must read as information about the guest's own booking, and
+    // "we're looking forward to seeing you" reads as relationship marketing.
+    // So it now opens with the stay itself: where, check-in, check-out.
+    // WhatsApp always puts buttons at the very bottom, so the sign-off comes
+    // before the question and the question sits right above the buttons.
+    body: "Hi {{guestName}},\nYour stay at {{property}} begins today. Check-in is from {{checkInTime}} and check-out is by {{checkOutTime}} on {{checkOutDate}}. The gate code is {{gateCode}} — please give it to everyone in your group. Your arrival pack is here: {{arrivalPack}}\n\n" +
       "All the best,\nRosanna\n\n" +
-      "It would be great if you could let us know roughly when the first of your party will arrive — just tap a button below.",
+      "Please let us know roughly when the first of your party will arrive by tapping a button below.",
     // Its own footer (31 Oct, Toby): a tap is saved on the booking at once,
     // so "replies read in office hours" would mislead right above the buttons.
     footer: "Urgent? Call 01825 212020",

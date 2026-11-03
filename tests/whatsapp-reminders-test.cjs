@@ -205,7 +205,9 @@ assert.strictEqual(T.planLinkDay("2026-11-02-" + T.planKey("2026-11-01", "sek"),
 // Footers: the shared one, and pre-arrival's own (a tap is saved at once).
 assert.ok(T.footerOf("changeover_summary").length <= 60 && T.footerOf("pre_arrival").length <= 60);
 assert.strictEqual(T.components("pre_arrival", T.TEMPLATES.pre_arrival.body).components[1].text, "Urgent? Call 01825 212020");
-assert.ok(/All the best,\nRosanna\n\nIt would be great/.test(T.TEMPLATES.pre_arrival.body), "the question sits right above the buttons");
+assert.ok(/All the best,\nRosanna\n\nPlease let us know roughly when/.test(T.TEMPLATES.pre_arrival.body), "the question sits right above the buttons");
+assert.ok(/^Hi \{\{guestName\}\},\nYour stay at \{\{property\}\} begins today\./.test(T.TEMPLATES.pre_arrival.body), "opens with the booking itself (Meta, 3 Nov)");
+assert.ok(!/looking forward/i.test(T.TEMPLATES.pre_arrival.body), "no relationship wording in a utility message");
 const sumIn = { accom, properties, events, boxEvents, setups, planSuffix: function (d) { return T.planSuffix(d, "sek"); },
   settings: { day: 0, hour: 8, recipients: [{ name: "Karina", mobile: "07111 222333" }, { name: "Edita", mobile: "" }] } };
 p = P.planSummary(Object.assign({ now: at("2026-11-01T07:30:00Z") }, sumIn));   // Sunday 7:30am
