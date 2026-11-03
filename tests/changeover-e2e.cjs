@@ -400,8 +400,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
   } catch (e) { fails.push('sunday run: ' + e.message) }
 
   // ── Setup cleans ─────────────────────────────────────────────────────────
-  // Window opens when the place was last left (within the week before), or a
-  // week before; closes at check-in − 2h / the event's start.
+  // Listed on the arrival / event day only (3 Nov, Toby) — never days ahead,
+  // so it is not red, nor on Still to sign off, before then. Ready by
+  // check-in − 2h / the event's start.
   try {
     const wd = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()]
     const setupApp = () => {
@@ -411,11 +412,13 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
         { id: 'P2', guestName: 'Second Family', status: 'confirmed', source: 'direct', stays: [stay('hamlet', plus(6), plus(8))], schedule: [] },
         { id: 'P3', guestName: 'Amly Arrivals', status: 'confirmed', source: 'direct', stays: [stay('amly', plus(10), plus(12))], schedule: [] },
       ]
-      a.hawthbush_bookings_v6 = [{ id: 901, couple: 'Party Prep', date: plus(5), status: 'Confirmed', eventType: 'Party' }]
+      a.hawthbush_bookings_v6 = [{ id: 901, couple: 'Party Prep', date: plus(0), status: 'Confirmed', eventType: 'Party' },
+        { id: 902, couple: 'Later Do', date: plus(5), status: 'Confirmed', eventType: 'Party' }]
       a.hbf_changeovers_v1 = []
       a.hbf_setup_cleans_v1 = [
         { id: 'setup:accom:P2', kind: 'accom', refId: 'P2' }, { id: 'setup:accom:P3', kind: 'accom', refId: 'P3' },
         { id: 'setup:event:901', kind: 'event', refId: 901 }, { id: 'setup:box:bx-late', kind: 'box', refId: 'bx-late' },
+        { id: 'setup:event:902', kind: 'event', refId: 902 },
       ]
       return a
     }
@@ -442,13 +445,20 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     const hk = setupApp()
     let c = await openWith(hk, cleanerRpc)
     try {
-      await c.page.getByText('Still to sign off').waitFor({ timeout: 15000 })
+      await c.page.getByText('Before Party Prep').first().waitFor({ timeout: 15000 })
       const pg = c.page
       const pillT = async (n) => pg.locator('span[title]', { hasText: n }).first().getAttribute('title')
-      check('setup: Grain St. red while its setup clean is due', (await pillT('Grain St.')) === 'To clean', await pillT('Grain St.'))
+      check('setup: Grain St. red on the day of its extra clean', (await pillT('Grain St.')) === 'To clean', await pillT('Grain St.'))
       check('setup: Hamlet still shows its guests', (await pillT('Hamlet')) === 'Guests', await pillT('Hamlet'))
-      const od = await pg.getByText('Still to sign off').locator('..').innerText()
-      check('setup: due setup in Still to sign off', /Extra clean · Party Prep · by /.test(od), od)
+      check('setup: nothing on Still to sign off ahead of its day', (await pg.getByText('Still to sign off').count()) === 0)
+      // Each extra clean on its own day's card only.
+      const dayCard = async (d) => { const l = pg.locator('[data-day="' + d + '"]'); return (await l.count()) ? await l.innerText() : '' }
+      const t0 = await dayCard(plus(0)), t5 = await dayCard(plus(5))
+      check('setup: today card has the extra clean for today', /Before Party Prep/.test(t0) && !/Before Later Do/.test(t0), t0)
+      check('setup: a later extra clean is on its own day', /Before Later Do/.test(t5), t5)
+      let others = ''
+      for (const n of [1, 2, 3, 4]) others += await dayCard(plus(n))
+      check('setup: and on no day before it', !/Before Later Do/.test(others), others.slice(0, 600))
 
       await pg.getByRole('tab', { name: 'Upcoming', exact: true }).click()
       await pg.getByText(/This week/).waitFor({ timeout: 5000 })
@@ -469,11 +479,12 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
       await pg.getByText('Second Family').first().waitFor({ timeout: 5000 })
       const bk = await pg.locator('body').innerText()
-      check('setup: four extra-clean cards on Bookings', (bk.match(/Extra clean/g) || []).length === 4, String((bk.match(/Extra clean/g) || []).length))
+      check('setup: five extra-clean cards on Bookings', (bk.match(/Extra clean/g) || []).length === 5, String((bk.match(/Extra clean/g) || []).length))
+      check('setup: Bookings says the day, not a week ahead', !/From .* · by /.test(bk) && bk.indexOf(dshort(plus(5))) !== -1, bk.slice(0, 600))
 
       // Sign off the event's setup clean.
       await pg.getByRole('tab', { name: 'Live', exact: true }).click()
-      const row = pg.getByText('Still to sign off').locator('..').locator('div[style*="nowrap"]', { hasText: 'Party Prep' }).filter({ has: pg.locator('button') }).last()
+      const row = pg.locator('[data-day="' + plus(0) + '"] div[style*="nowrap"]', { hasText: 'Before Party Prep' }).filter({ has: pg.getByRole('button', { name: 'To clean' }) }).last()
       await row.getByRole('button', { name: 'To clean' }).click()
       await pg.getByText('Edita hours').waitFor({ timeout: 5000 })
       check('setup: dialog says when it is needed by', /ready by/.test(await pg.locator('body').innerText()))
@@ -482,7 +493,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.getByText('Edita hours').waitFor({ state: 'detached', timeout: 5000 })
       const r = (hk.hbf_changeovers_v1 || []).find((x) => x.id === 'setup:event:901:grainstore')
       check('setup: sign-off saved under its own id', r && r.kind === 'setup' && r.setupOf === 'event' && r.hours.edita === 1.5, JSON.stringify(hk.hbf_changeovers_v1))
-      check('setup: Grain St. ready after the sign-off', (await pillT('Grain St.')) === 'Ready', await pillT('Grain St.'))
+      check('setup: Grain St. no longer red after the sign-off (the party is on)', (await pillT('Grain St.')) === 'Guests', await pillT('Grain St.'))
       check('setup: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
 
@@ -498,7 +509,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('setup: event form shows it ticked', await box.isChecked())
       await box.click()
       await pg.waitForTimeout(800)
-      check('setup: unticking removes only that request', Array.isArray(ad.hbf_setup_cleans_v1) && ad.hbf_setup_cleans_v1.length === 3 &&
+      check('setup: unticking removes only that request', Array.isArray(ad.hbf_setup_cleans_v1) && ad.hbf_setup_cleans_v1.length === 4 &&
         !ad.hbf_setup_cleans_v1.some((x) => x.id === 'setup:event:901'), JSON.stringify(ad.hbf_setup_cleans_v1))
       check('setup: box unticked', !(await box.isChecked()))
       // A letting: the Hamlet tile (guests in) opens First Family.
@@ -878,7 +889,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
   // ── An event with no earlier event: its note rides on its pre-clean ──
   try {
     const lone = freshApp()
-    lone.hawthbush_bookings_v6 = [{ id: 801, couple: 'Smith Wedding', date: plus(3), status: 'Confirmed', eventType: 'Wedding (Peak)' }]
+    lone.hawthbush_bookings_v6 = [{ id: 801, couple: 'Smith Wedding', date: plus(0), status: 'Confirmed', eventType: 'Wedding (Peak)' }]
     lone.hbf_setup_cleans_v1 = [
       { id: 'setup:event:801', kind: 'event', refId: 801 },
       { id: 'note:event:801', kind: 'note', of: 'event', refId: 801, text: 'Tables out for 120' },
@@ -886,9 +897,9 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     const c = await open({ rpc: cleanerRpc, app: lone, box: [] })
     try {
       const pg = c.page
-      await pg.getByText('Still to sign off').waitFor({ timeout: 15000 })
-      const overdue = await pg.getByText('Still to sign off').locator('..').innerText()
-      check('lone event: note on its pre-clean', /Extra clean|Before Smith Wedding/.test(overdue) && /For Smith Wedding, on .*: Tables out for 120/.test(overdue), overdue)
+      await pg.getByText('Before Smith Wedding').first().waitFor({ timeout: 15000 })
+      const overdue = await pg.locator('[data-day="' + plus(0) + '"]').innerText()
+      check('lone event: note on its pre-clean', /Before Smith Wedding/.test(overdue) && /For Smith Wedding, on .*: Tables out for 120/.test(overdue), overdue)
       const row = pg.locator('div', { hasText: 'Tables out for 120' }).filter({ has: pg.getByRole('button', { name: 'To clean' }) }).last()
       await row.getByRole('button', { name: 'To clean' }).click()
       await pg.getByText('Notes for next event').waitFor({ timeout: 5000 })

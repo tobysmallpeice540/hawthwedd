@@ -8213,12 +8213,12 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
 // refId, at }. Its sign-off is an ordinary record in CHANGEOVERS_STORAGE, id
 // "setup:<kind>:<refId>:<unit>" — one per property for a multi-stay letting.
 //
-// The window opens when the place was last left (a check-out, or the end of
-// the previous Grain Store event) if that was within the week before, or a
-// week before otherwise; it closes at check-in less the early-arrival
-// allowance, or at the event's start.
+// It is listed on the day the guests arrive or the event is on — not before
+// (3 Nov, Toby: a clean a week ahead sat on the housekeepers' list every day
+// until it was signed off). It is ready by check-in less the early-arrival
+// allowance, or the event's start. If the place is freed earlier that same day
+// (a check-out that morning) the window opens then.
 const SETUP_CLEANS_STORAGE = "hbf_setup_cleans_v1";
-const SETUP_CLEAN_LEAD_DAYS = 7;
 // The same key also holds notes to the housekeepers (28 Oct):
 //   { id: "note:<kind>:<refId>", kind: "note", of, refId, text, at }
 // A letting's note is about getting ready for THOSE guests, so it goes on the
@@ -8343,17 +8343,16 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
   const use = unitUsages(properties, accom, events, boxEvents);
   const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
   const add = function(req, unitId, unitName, unitShort, begins, closes, who, suffix, occ, note) {
-    // The last time the place was left before this begins, if within the week.
-    const earliest = addDaysIso(begins.date, -SETUP_CLEAN_LEAD_DAYS);
+    // The place freed earlier the same day (a check-out that morning), if so.
     const prev = (use[unitId] || []).filter(function(u) {
-      return u.key !== req.kind + ":" + req.refId && ptKey(u.frees) <= ptKey(begins) && u.frees.date >= earliest;
+      return u.key !== req.kind + ":" + req.refId && ptKey(u.frees) <= ptKey(begins) && u.frees.date === begins.date;
     }).sort(function(a, z) { return ptKey(a.frees) < ptKey(z.frees) ? 1 : -1; })[0];
-    const opens = prev ? prev.frees : { date: earliest, time: null };
+    const opens = prev ? prev.frees : { date: begins.date, time: null };
     const id = "setup:" + req.kind + ":" + req.refId + ":" + unitId + (suffix || "");
     out.push({
       job: { id: id, kind: "setup", setupOf: req.kind, refId: req.refId, unitId: unitId, unitName: unitName,
-        start: opens.date, due: opens.date, eventStart: begins.date, who: "Extra clean · " + who,
-        note: note || "" },
+        start: begins.date, due: begins.date, eventStart: begins.date, readyBy: closes.time || "",
+        who: "Extra clean · " + who, note: note || "" },
       window: { id: id, unitId: unitId, unitName: unitName, unitShort: unitShort, start: opens, end: closes,
         outWho: "Extra clean", inWho: who, setup: true, tight: false, occ: occ || "" }
     });
@@ -8864,10 +8863,10 @@ function changeoverHoursText(rec) {
 function unitStatuses(units, jobs, recMap, today) {
   return (units || []).map(function(u) {
     const mine = (jobs || []).filter(function(j) { return j.unitId === u.id; });
-    // A setup clean nobody signed off before the guests arrived stays on the
-    // to-do list, but no longer turns the tile red over them.
+    // A setup clean is red on its day; one nobody signed off by then stays on
+    // the to-do list, but no longer turns the tile red over the guests.
     const due = mine.filter(function(j) {
-      return changeoverState(j, recMap[j.id], today) === "due" && !(j.kind === "setup" && today >= j.eventStart);
+      return changeoverState(j, recMap[j.id], today) === "due" && !(j.kind === "setup" && today > j.eventStart);
     });
     const inuse = mine.filter(function(j) { return changeoverState(j, recMap[j.id], today) === "inuse"; });
     const done = mine.filter(function(j) { return !!recMap[j.id]; })
@@ -9387,11 +9386,12 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
     });
   });
 
-  // Setup cleans, on the day their window opens.
+  // Setup cleans, on the day of the arrival or event they are for.
   (jobs || []).forEach(function(j) {
     if (j.kind !== "setup") return;
     add(j.start, { kind: "setup", rank: propRank(j.unitId) === 900 ? 999 : propRank(j.unitId), label: j.unitName,
-      detail: j.who.replace(/^(Setup|Extra clean) · /, "Before ") + " · by " + fmtDayShort(j.eventStart), job: j });
+      time: j.readyBy ? "by " + j.readyBy : "",
+      detail: j.who.replace(/^(Setup|Extra clean) · /, "Before "), job: j });
   });
 
   const days = Object.keys(byDay).sort();
@@ -9473,7 +9473,7 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
         });
         const changeovers = changeoverProps(items.filter(function(it) { return !it.noExit; }));
         return (
-          <div key={d} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10,
+          <div key={d} data-day={d} style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10,
             padding:"13px 16px", marginBottom:10 }}>
             <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8, flexWrap:"wrap" }}>
               <span style={{ fontSize:14, fontWeight:700, color: d === today ? T.accent : T.text }}>
@@ -9620,7 +9620,7 @@ function CleanerBookings({ properties, accom, events, boxEvents, boxErr, setups,
       key: j.id, jobId: j.id, unitId: j.unitId, unitShort: p ? shortPropLabel(p) : GRAIN_STORE_UNIT.short,
       unitColour: p ? p.colour : "#ef4444",
       start: j.start, end: j.eventStart, name: j.who.replace(/^(Setup|Extra clean) · /, ""),
-      when: "From " + fmtDayShort(j.start) + " · by " + fmtDayShort(j.eventStart),
+      when: fmtDayShort(j.eventStart) + (j.readyBy ? " · ready by " + j.readyBy : ""),
       source: "Extra clean", sourceMeta: { bg: T.tint, text: T.midBlue },
       status: "Before arrival", statusMeta: { bg: T.bgInput, text: T.textMid }
     };

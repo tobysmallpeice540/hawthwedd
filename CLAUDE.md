@@ -564,11 +564,14 @@ own header.
 - **Setup cleans** (`setupCleanItems`): a "Setup clean" tick box on the letting
   form, the event form and the box office event editor (`SetupCleanToggle`,
   saved to its own key `hbf_setup_cleans_v1` — `{ id: "setup:<kind>:<refId>" }` —
-  so no booking save path and no box office column is involved). Window: from
-  when the place was last left (`unitUsages`) if within `SETUP_CLEAN_LEAD_DAYS`
-  (7), else a week before; to check-in − 2h / the event's start. Sign-off id
+  so no booking save path and no box office column is involved). **Listed on
+  the arrival / event day only** (3 Nov, Toby — it used to open up to a week
+  ahead and then sat red on Still to sign off every day until signed): job
+  `start` = `due` = that day, `readyBy` = check-in − 2h / the event's start
+  (shown "by HH:MM" on Live, "ready by" on Bookings). The window opens earlier
+  that day only if the place is freed that morning (`unitUsages`). Sign-off id
   `setup:<kind>:<refId>:<unit>`, kind `setup`, `setupOf` the record's kind. Red
-  from the day the window opens; once the stay or event has begun it no longer
+  on its day; an unsigned one after that is on Still to sign off but no longer
   turns the tile red. Draft box office events are not in housekeeping, so their
   setup clean waits until published. Shown to everyone as **"Extra clean before
   arrival"** (lettings) / "Extra clean before the event" — a bare tick box, no
