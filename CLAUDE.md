@@ -857,7 +857,8 @@ own header.
   in words), its wording, Meta's status, Submit / Resubmit. Sent: `wa_messages` newest first, filter by number.
 - **Templates live in `netlify/functions/whatsapp-reminders/templates.js`**
   (shared by `whatsapp-send.js` and the sender): `checklist_live`,
-  `checklist_overdue`, `changeover_summary`, `pre_arrival`. `checklist_live` gives
+  `checklist_overdue`, `changeover_summary`, `pre_arrival`, `estate_alert`
+  (sent by ha-link, below). `checklist_live` gives
   the count and first due time only, no item list — staff log in to see them
   (Toby, 31 Oct); `checklist_overdue` still lists the overdue items. Wording uses NAMED
   merge fields (`{{guestName}}`); on submission they are numbered in
@@ -1044,6 +1045,32 @@ own header.
   event that day (not only weddings), cancelled ones left out. Warnings only.
 - Test: `tests/box-staffing-e2e.cjs`. `changeover-e2e` "cleaner run" fails on
   main as well as here (a past-week sign-off is read-only) — not this change.
+
+### Home Assistant link (3 Nov 2026)
+
+- **`netlify/functions/ha-link/`** is the farm Home Assistant's only way in.
+  It sends `x-ha-token`; the table `ha_link` (one row, RLS on, no policies,
+  revoked from public/anon/authenticated) holds its SHA-256 and `alert_to`
+  (WhatsApp numbers, international digits — Toby's). No Netlify setting: a new
+  token is a new hash in that row; the token itself lives only in Home
+  Assistant's `secrets.yaml` (`ha_link_token`).
+- `today` (`feed.js`, pure): per property whether it is occupied tonight,
+  arriving / departing today (times from `plan.stayTimes`), arriving
+  tomorrow, next arrival within 60 days; the Grain Store's event today /
+  tomorrow, start, next event. Same counting rules as the changeover summary.
+  **No names, numbers or money.** A failed or empty read is a 500, never
+  "nobody is coming". Home Assistant polls it every 15 minutes (`rest:` in
+  its configuration.yaml → `sensor.bookings_today` + binary sensors).
+- `alert`: the `estate_alert` WhatsApp (UTILITY, in templates.js) to
+  `alert_to`. Day or night — no quiet hours, these are alarms. The same
+  title at most once a London hour (`wa_sent_marks` kind `ha`, marked before
+  sending, freed if every send fails). Only while switched ON in Settings →
+  WhatsApp → Messages. 132000/132001 (not approved) falls back to plain text,
+  which WhatsApp only delivers inside the 24-hour window — reported as such.
+  Logged in `wa_messages` (`record_kind` `ha`). Home Assistant calls it from
+  `script.estate_alert` (`rest_command.estate_whatsapp`), which every alert
+  automation uses.
+- Test: `tests/ha-link-test.cjs`. Migration `supabase/2026-11-03a-ha-link.sql`.
 
 ## Working in this folder from a Claude session
 
