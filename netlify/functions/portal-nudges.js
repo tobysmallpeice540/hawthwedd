@@ -28,6 +28,7 @@
 
 const crypto = require("crypto");
 
+const GmailCopy = require("./mail-lib/gmail-copy.js");
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const RESEND_KEY   = process.env.RESEND_API_KEY;
@@ -246,7 +247,8 @@ async function logEmails(entries) {
     var log = (await sbGet(EMAIL_LOG_KEY)) || [];
     entries.forEach(function (x) {
       log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: x.at, subject: x.subject,
-                 to: x.to, template: "portal_nudge", bookingId: String(x.event_id), body: String(x.text || "").slice(0, 8000) });
+                 to: x.to, template: "portal_nudge", bookingId: String(x.event_id), body: String(x.text || "").slice(0, 8000),
+                 gmailId: x.gmailId || undefined });
     });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
   } catch (e) { console.error("email log write failed:", e.message); }
@@ -326,7 +328,14 @@ exports.handler = async function (event) {
       });
       if (!res.ok) throw new Error((await res.text()).slice(0, 300));
       sent.push(m.event_id);
-      logged.push({ at: new Date().toISOString(), subject: m.subject, to: m.to.join(", "), event_id: m.event_id, text: m.text });
+      // It has gone. Its copy in the farm Gmail's Sent while there is time
+      // (fileSentCopy never throws); without one the archive uses the log.
+      var left = 9000 - (Date.now() - started);
+      var copy = left > 800 ? await GmailCopy.fileSentCopy({ to: m.to, subject: m.subject, html: m.html, text: m.text,
+        resendId: await GmailCopy.resendIdOf(res), budgetMs: Math.min(3000, left) }) : { ok: false, why: "out of time" };
+      if (!copy.ok) console.warn("[portal-nudges] no copy in Gmail Sent: " + copy.why);
+      logged.push({ at: new Date().toISOString(), subject: m.subject, to: m.to.join(", "), event_id: m.event_id, text: m.text,
+        gmailId: copy.ok ? copy.gmailId : undefined });
     } catch (e) {
       failed.push({ event_id: m.event_id, error: String(e.message || e) });
       try { await rpc("wp_nudge_unmark", { p_event: m.event_id, p_week: week }); }

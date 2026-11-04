@@ -6,10 +6,10 @@
 // with the guest, and a cancellation the iCal feed does not tell us about.
 //
 // This function only ever reads. The connection asks Google for gmail.readonly
-// (needed) and gmail.send (optional, 4 Nov 2026: the enquiry follow-ups in
-// automations.js send through the farm Gmail as hello@, falling back to Resend
-// when send was not granted), given once by Toby through Google's own sign-in
-// (Settings → Airbnb email). The refresh token is
+// (needed) and gmail.insert (optional, 4 Nov 2026: the app files a copy of
+// each automated email to a customer in the farm Gmail's Sent folder —
+// mail-lib/gmail-copy.js; insert cannot send or read), given once by Toby
+// through Google's own sign-in (Settings → Airbnb email). The refresh token is
 // kept encrypted in airbnb_mail_state, which only the service role can read;
 // the key is derived from HBF_ADMIN_TOKEN, so a copy of the database alone is
 // not enough to use it.
@@ -45,7 +45,7 @@ const SITE          = "https://hawthbushfarm.netlify.app";
 const CLIENT_ID     = process.env.GOOGLE_CLIENT_ID || "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
 const REDIRECT_URI  = process.env.GMAIL_REDIRECT_URI || (SITE + "/.netlify/functions/airbnb-mail");
 const SCOPE         = "https://www.googleapis.com/auth/gmail.readonly";
-const SEND_SCOPE    = "https://www.googleapis.com/auth/gmail.send";
+const INSERT_SCOPE  = "https://www.googleapis.com/auth/gmail.insert";
 // The first read goes back to the start of 2026 (Toby's choice). A stay in
 // 2026 booked in 2025 still gets its full name and payout from the reminder
 // and payout emails, which come nearer the stay. Only bookings that end in
@@ -483,11 +483,11 @@ async function handleCallback(q) {
   try { account = (await gmail(tok.access_token, "profile")).emailAddress || ""; } catch (e) { /* the name is only for show */ }
   await setState({ token_enc: sealToken(tok.refresh_token), account_email: account, connected_at: new Date().toISOString(),
     connected_by: String(st.w || "").slice(0, 120), last_error: null, backfill_done: false, backfill_page: null, last_ok_at: null });
-  const canSend = String(tok.scope || "").split(" ").indexOf(SEND_SCOPE) !== -1;
+  const canFile = String(tok.scope || "").split(" ").indexOf(INSERT_SCOPE) !== -1;
   return page("Gmail connected", "<p>Airbnb emails in <strong>" + esc(account || "your Gmail") + "</strong> will now be read every hour. " +
     "The first read goes back to the start of 2026 and takes a little while — press <em>Sync now</em> in Settings → Airbnb email to hurry it along.</p>" +
-    (canSend ? "<p>The enquiry follow-up emails will be sent from this Gmail, as hello@hawthbushfarm.co.uk.</p>"
-             : "<p>Sending was not allowed on Google's screen, so the enquiry follow-up emails will still go out through Resend. Connect again and tick the sending box to send them from Gmail.</p>"), true);
+    (canFile ? "<p>A copy of every automated email the app sends to a customer will now appear in this Gmail's <strong>Sent</strong> folder.</p>"
+             : "<p>Adding to Gmail was not allowed on Google's screen, so copies of the app's emails will not appear in Sent. Connect again and tick that box to have them filed there.</p>"), true);
 }
 
 // ── Handler ─────────────────────────────────────────────────────────────────
@@ -512,7 +512,7 @@ exports.handler = async function(event) {
       if (!process.env.GOOGLE_CLIENT_SECRET) return json(500, { error: "GOOGLE_CLIENT_SECRET is not set in Netlify" });
       const state = signState({ u: staff.id, w: staff.who, e: Date.now() + 15 * 60000, n: crypto.randomBytes(9).toString("hex") });
       const url = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
-        client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: SCOPE + " " + SEND_SCOPE,
+        client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: SCOPE + " " + INSERT_SCOPE,
         access_type: "offline", prompt: "consent", include_granted_scopes: "false", state: state
       }).toString();
       return json(200, { ok: true, url: url });

@@ -21,6 +21,7 @@
 //
 // Required env vars: SUPABASE_SERVICE_KEY, RESEND_API_KEY
 
+const GmailCopy = require("./mail-lib/gmail-copy.js");
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 // The service key, not the anon key. Server-side code has no business holding
 // the same credential the public pages carry, and app_data has row level
@@ -138,14 +139,15 @@ async function sbAppend(key, change) {
   await sbSet(key, change(list).list);
 }
 
-async function logEmail(subject, to, type, refId, bodyText) {
+// gmailId: its copy in the farm Gmail's Sent — the archive reads that one.
+async function logEmail(subject, to, type, refId, bodyText, gmailId) {
   try {
     const log = (await sbGet(EMAIL_LOG_KEY)) || [];
     log.push({
       id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
       sentAt: new Date().toISOString(),
       subject: subject, to: to, template: type, bookingId: refId,
-      body: String(bodyText || "").slice(0, 8000)
+      body: String(bodyText || "").slice(0, 8000), gmailId: gmailId || undefined
     });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
   } catch (e) { console.error("logEmail failed:", e.message); }
@@ -666,7 +668,7 @@ exports.handler = async function (event) {
   const termsUrl = await getTermsUrl();
   const rendered = render(settings, input, events, now, termsUrl);
 
-  let sent = false, sendError = "";
+  let sent = false, sendError = "", gmailId;
   if (settings.enabled === false) {
     sendError = "Brochure emails are switched off in Settings.";
   } else if (!RESEND_KEY) {
@@ -683,6 +685,10 @@ exports.handler = async function (event) {
       });
       if (!res.ok) throw new Error(await res.text());
       sent = true;
+      // Its copy in the farm Gmail's Sent (fileSentCopy never throws).
+      const copy = await GmailCopy.fileSentCopy({ to: input.email, subject: rendered.subject, html: rendered.html,
+        text: rendered.text, resendId: await GmailCopy.resendIdOf(res), budgetMs: 3000 });
+      if (copy.ok) gmailId = copy.gmailId; else console.warn("Brochure email: no copy in Gmail Sent: " + copy.why);
     } catch (e) {
       sendError = String(e.message || e);
       console.error("Brochure email failed:", sendError);
@@ -690,7 +696,7 @@ exports.handler = async function (event) {
   }
 
   if (sent) {
-    await logEmail(rendered.subject, input.email, "brochure_request", enquiryId, rendered.text);
+    await logEmail(rendered.subject, input.email, "brochure_request", enquiryId, rendered.text, gmailId);
     // Mark the request as emailed. Re-read again: the enquiry write above may
     // have taken a while and somebody else may have submitted in between.
     try {

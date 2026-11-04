@@ -293,24 +293,43 @@ own header.
   `tests/automations-test.cjs` (rules), `tests/automations-run-test.cjs` (the
   whole run, faked at fetch), `money-and-day-test.cjs` (app and function
   defaults agree).
-  **Sent through the farm Gmail as hello@** (4 Nov 2026, Toby): a fresh email
-  with the template's subject (not a reply in the enquiry's thread — Toby's
-  choice), multipart text + HTML (`buildMime`), so it sits in Gmail's Sent.
-  Only when the connection was given `gmail.send` (the Airbnb-mail connect now
-  asks for readonly + send; send is optional) AND hello@ is a verified "Send
-  mail as" address (`gmailSendReady` reads `settings/sendAs` — otherwise Gmail
-  would silently send as hawthbushfarm@gmail.com) AND that alias goes out
-  through an SMTP relay (`smtpMsa`, Brevo's smtp-relay.brevo.com) — through
-  Google's own servers a non-Google From fails the domain's DMARC and Yahoo
-  bounces it (Toby's experience); else Resend as before. A
-  Gmail send refused outright (401/403) moves that email and the rest of the
-  run to Resend; any other Gmail failure is unmarked and retried next run,
-  NEVER re-sent by Resend in the same run (it may have gone). The log entry
-  carries `via` and `gmailId`; the email archive skips log entries with a
-  `gmailId` (`logRows`), because Gmail's Sent copy arrives as the real email.
-  The preview says which way they would go (`sendVia`). Our own follow-up now
-  shows to `lastEmailWith` as email exchanged on the day it went — the same
-  date the chain already counts from, so no rule moves.
+  They go through Resend, and each is filed in the farm Gmail's Sent (below).
+- **Copies of the app's customer emails in the farm Gmail's Sent** (4 Nov 2026,
+  Toby — replaced a same-day attempt to SEND through Gmail as hello@, which
+  needed an SMTP relay to pass DMARC). Resend still delivers everything;
+  `netlify/functions/mail-lib/gmail-copy.js` `fileSentCopy` then files a copy
+  with Gmail's `messages.insert` (upload, `labelIds: ["SENT"]`,
+  `internalDateSource=dateHeader`) on the Airbnb-mail connection's sealed token.
+  The connection now asks for `gmail.readonly` + `gmail.insert` (insert cannot
+  send or read); without insert nothing is filed. The copy carries the
+  **Message-ID Resend gave the delivered email** (`GET /emails/:id` →
+  `message_id`, paced 600ms and backing off on 429 — Resend allows ~2 requests
+  a second account-wide), so the customer's reply threads under it; failing
+  that, an id of our own (`<hbf-uuid@hawthbushfarm.co.uk>`). `fileSentCopy`
+  **never throws** and stops at its budget; each sender files only while its
+  run has time left. A copy that fails costs only the copy: the send counts,
+  stays marked, is never retried or re-sent. The log entry gets `gmailId` when
+  filed, and the email archive skips log entries with a `gmailId`
+  (`logRows`) because Gmail's Sent copy arrives as the real email; without one
+  the archive copies the log entry as before.
+  **Who files:** follow-ups (`automations.js`), viewing replies
+  (`handle-viewing.js`), the weekly portal reminder (`portal-nudges.js`),
+  lettings emails and reminders (`send-accom-email.js`,
+  `send-accom-reminders.js`), lettings payment emails to the guest
+  (`stripe-accom-webhook.js`), couples' bar-money emails
+  (`stripe-ticket-webhook.js` `barSend`, not the office's), the brochure email
+  (`submit-brochure.js`), and the contract reminder, "we have your signature"
+  and signed-PDF emails (`contract-lib/common.js` `sendEmail(..., { copy:
+  true })`, budget 2.5s inside the signing request). **Never:** sign-in links
+  and codes (`portal-auth.js`, the contract invite in `contract-admin.js`) —
+  credentials; box office tickets (Toby: volume); the cleaners' summary; office
+  notifications. Pinned by `tests/gmail-copy-test.cjs` (including which files
+  call it) and `tests/automations-run-test.cjs`.
+  Our copies now show to the follow-up run's `lastEmailWith` as email
+  exchanged with that address, on the day they went. For a follow-up that is
+  the date the chain already counts from; any other automated email to an
+  enquiry (a viewing reply, the brochure) now counts as contact from us, which
+  it is.
 - **Web addresses in emails become links with or without `https://`**
   (`linkifyEscaped` / `LINK_RE`, copied into every function that builds an
   email body — `_email-shell.js` is the master copy). Bare domains need a
@@ -492,7 +511,8 @@ own header.
 ### Airbnb emails (25 Oct 2026, migration q)
 
 - **`netlify/functions/airbnb-mail/`** reads the Airbnb emails in Toby's personal
-  Gmail (`gmail.readonly`, connected once in Lettings → Settings → Airbnb Sync)
+  Gmail (`gmail.readonly` + `gmail.insert` for the Sent copies, connected once in
+  Lettings → Settings → Airbnb Sync)
   and puts them on Airbnb lettings bookings. `parse.js` is pure (parser +
   `planBookingPatches`), pinned by `tests/airbnb-mail-test.cjs`; the worker is
   pinned by `tests/airbnb-mail-worker-test.cjs`, the screens by

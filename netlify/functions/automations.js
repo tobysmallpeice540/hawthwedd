@@ -51,25 +51,19 @@
 //   POST, Authorization: Bearer <admin JWT>    { dryRun: true } only — the
 //                                              "What would go today" preview
 //
-// Sending (4 Nov 2026, Toby): through the farm Gmail, as hello@ (a verified
-// "Send mail as" address there, set to go out through an SMTP relay — Brevo),
-// each a fresh email with its own subject, so it sits in Gmail's Sent. Only
-// when the connection was given gmail.send AND hello@ is a verified send-as
-// address (otherwise Gmail would quietly send as hawthbushfarm@gmail.com) AND
-// it sends through a relay (Gmail's own servers fail the domain's DMARC) —
-// else through Resend, as before. A Gmail send
-// refused outright (401/403: certainly not sent) moves the rest of the run to
-// Resend; any other failure is unmarked and retried next run, never re-sent
-// another way in the same run, because it may have gone.
+// Sending: through Resend, from hello@. Each email that goes is also filed in
+// the farm Gmail's Sent folder (4 Nov 2026, Toby — mail-lib/gmail-copy.js),
+// threading with the customer's reply; a copy that cannot be filed costs only
+// the copy, never the send.
 //
-// Required env vars: SUPABASE_SERVICE_KEY, HBF_ADMIN_TOKEN; RESEND_API_KEY for
-// the fallback
+// Required env vars: SUPABASE_SERVICE_KEY, RESEND_API_KEY, HBF_ADMIN_TOKEN
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const RESEND_KEY   = process.env.RESEND_API_KEY;
 const ADMIN_TOKEN  = process.env.HBF_ADMIN_TOKEN;
 const crypto = require("crypto");
+const GmailCopy = require("./mail-lib/gmail-copy.js");
 
 // Constant-time compare for the office token. A plain === leaks, through its
 // timing, how much of a guess was right. Unequal lengths (or no token set)
@@ -101,6 +95,8 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "631658172216-bh6vocim7
 const MAX_GMAIL_CHECKS = 40;
 const GMAIL_BUDGET_MS = 4000;
 const SEND_BUDGET_MS = 7500;
+// Copies to Gmail's Sent stop here — Netlify stops the function at 10s.
+const COPY_DEADLINE_MS = 8800;
 
 // A bad day (a data import, a clock problem) must not become a mass mailing.
 const MAX_SENDS_PER_RUN = 15;
@@ -415,9 +411,9 @@ async function logEmails(entries) {
         id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
         sentAt: x.at, subject: x.subject, to: x.to, template: "auto_" + x.kind, bookingId: x.refId,
         body: String(x.text || "").slice(0, 8000),
-        // Sent through the farm Gmail: the archive reads the real copy from
-        // Gmail's Sent, so it does not copy this entry in as well.
-        via: x.via || "resend", gmailId: x.gmailId || undefined
+        // Filed in Gmail's Sent: the archive reads that copy, so it does not
+        // copy this entry in as well.
+        gmailId: x.gmailId || undefined
       });
     });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
@@ -450,72 +446,17 @@ async function farmGmailAccess() {
   });
   const data = await t.json().catch(function () { return {}; });
   if (!t.ok || !data.access_token) throw new Error("Google refused the stored access (" + (data.error || t.status) + ")");
-  return { access: data.access_token, account: row.account_email || "", scope: String(data.scope || "") };
+  return { access: data.access_token, account: row.account_email || "" };
 }
-// ─── Sending through the farm Gmail ──────────────────────────────────────────
-const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
-// Whether this access may send as FROM_EMAIL: { ok, why }.
-async function gmailSendReady(g) {
-  if (!g || !g.access) return { ok: false, why: "the farm Gmail could not be reached" };
-  if (String(g.scope || "").split(" ").indexOf(GMAIL_SEND_SCOPE) === -1) {
-    return { ok: false, why: "sending was not allowed when Gmail was connected" };
-  }
-  const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs", { headers: { Authorization: "Bearer " + g.access } });
-  if (!r.ok) return { ok: false, why: "could not read Gmail's send-as addresses (" + r.status + ")" };
-  const list = ((await r.json().catch(function () { return {}; })).sendAs) || [];
-  const mine = list.find(function (a) { return a && String(a.sendAsEmail || "").toLowerCase() === FROM_EMAIL; });
-  if (!mine) return { ok: false, why: FROM_EMAIL + " is not a \"Send mail as\" address in the farm Gmail" };
-  if (!mine.isPrimary && mine.verificationStatus !== "accepted") return { ok: false, why: FROM_EMAIL + " is not verified in the farm Gmail" };
-  // Sent through Google's own servers, mail "from" a non-Google domain fails
-  // that domain's DMARC and is bounced by Yahoo and others (Toby, 4 Nov). Only
-  // use Gmail when the alias goes out through an SMTP relay (Brevo), which
-  // signs for hawthbushfarm.co.uk.
-  if (!mine.smtpMsa || !mine.smtpMsa.host) return { ok: false, why: FROM_EMAIL + " is set to send through Gmail's own servers, not an SMTP relay such as Brevo" };
-  return { ok: true, relay: String(mine.smtpMsa.host) };
-}
-// RFC 2047 for a header that may hold non-ASCII (a dash, a name with an accent).
-function mimeWord(s) {
-  s = String(s || "");
-  return /^[\x20-\x7e]*$/.test(s) ? s : "=?UTF-8?B?" + Buffer.from(s, "utf8").toString("base64") + "?=";
-}
-function b64Lines(s) { return Buffer.from(String(s || ""), "utf8").toString("base64").replace(/.{76}/g, "$&\r\n"); }
-// A whole email, text and HTML, as Gmail's API takes it (base64url).
-function buildMime(o) {
-  const boundary = "hbf-" + crypto.randomBytes(12).toString("hex");
-  const head = [
-    "From: " + mimeWord(o.fromName) + " <" + o.from + ">",
-    "To: " + o.to.join(", "),
-    "Subject: " + mimeWord(o.subject),
-    "MIME-Version: 1.0",
-    "Content-Type: multipart/alternative; boundary=\"" + boundary + "\""
-  ];
-  const part = function (type, body) {
-    return "--" + boundary + "\r\nContent-Type: " + type + "; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + b64Lines(body) + "\r\n";
-  };
-  const raw = head.join("\r\n") + "\r\n\r\n" + part("text/plain", o.text) + part("text/html", o.html) + "--" + boundary + "--\r\n";
-  return Buffer.from(raw, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-async function sendViaGmail(access, d, r) {
-  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-    method: "POST", headers: { Authorization: "Bearer " + access, "Content-Type": "application/json" },
-    body: JSON.stringify({ raw: buildMime({ from: FROM_EMAIL, fromName: "Hawthbush Farm", to: d.to, subject: r.subject, html: r.html, text: r.text }) })
-  });
-  if (!res.ok) {
-    const err = new Error("Gmail " + res.status + ": " + (await res.text()).slice(0, 200));
-    err.refused = res.status === 401 || res.status === 403;    // certainly not sent
-    throw err;
-  }
-  const out = await res.json().catch(function () { return {}; });
-  return out.id || null;
-}
+// The id Resend gives the email, for filing its copy in Gmail's Sent.
 async function sendViaResend(d, r) {
-  if (!RESEND_KEY) throw new Error("RESEND_API_KEY is not set");
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({ from: FROM_HEADER, to: d.to, reply_to: FROM_EMAIL, subject: r.subject, html: r.html, text: r.text })
   });
   if (!res.ok) throw new Error((await res.text()).slice(0, 300));
+  return GmailCopy.resendIdOf(res);
 }
 // The newest message from or to an address, as a London date (null: none).
 async function lastEmailWith(access, addr) {
@@ -547,7 +488,7 @@ async function checkFarmGmail(addrs, deadline) {
     }));
   }
   return { seen: out, account: g.account, checked: Object.keys(out).length, failed: failed,
-    skipped: Math.max(0, addrs.length - Object.keys(out).length - failed), access: g };
+    skipped: Math.max(0, addrs.length - Object.keys(out).length - failed) };
 }
 // The run's view of email: the farm Gmail's answer where it has one (newest
 // date of the two, checked now), the app's cache otherwise.
@@ -655,11 +596,9 @@ exports.handler = async function (event) {
   first.due.forEach(function (d) { d.to.forEach(function (a) { if (addrs.indexOf(a) === -1) addrs.push(a); }); });
   first.waiting.concat(first.freeze).forEach(function (w) { if (w.addr && addrs.indexOf(w.addr) === -1) addrs.push(w.addr); });
   let gmail = { source: "app", checked: 0 };
-  let farm = null;                                   // the farm Gmail's access, for sending too
   if (addrs.length) {
     try {
       const g = await checkFarmGmail(addrs, t0 + GMAIL_BUDGET_MS);
-      farm = g.access;
       input.emailSeen = mergeSeen(emailSeen || {}, g.seen);
       gmail = { source: "farm", account: g.account, checked: g.checked, failed: g.failed, skipped: g.skipped };
     } catch (e) {
@@ -669,18 +608,11 @@ exports.handler = async function (event) {
   }
   const plan = addrs.length ? planAutomations(input) : first;
 
-  // How today's emails would go: the farm Gmail if it may send as hello@,
-  // otherwise Resend. Asked only when something is due.
-  let route = { via: "resend", why: "" };
-  if (plan.due.length) {
-    try {
-      const ready = await gmailSendReady(farm);
-      route = ready.ok ? { via: "gmail", relay: ready.relay } : { via: "resend", why: ready.why };
-    } catch (e) { route = { via: "resend", why: String(e.message || e) }; }
-  }
-
   if (body.dryRun) {
-    return reply(200, { ok: true, today: today, dryRun: true, sendVia: plan.due.length ? route : null,
+    // Whether the copies will be filed in Gmail's Sent — asked only when
+    // something would go.
+    const sentCopy = plan.due.length ? await GmailCopy.copyReady() : null;
+    return reply(200, { ok: true, today: today, dryRun: true, sentCopy: sentCopy,
       due: plan.due.map(function (d) { const r = renderEmail(d, plan.cfg); return { kind: d.kind, to: d.to, who: d.who, subject: r.subject }; }),
       waiting: plan.waiting,
       freeze: plan.freeze.map(function (f) { return { who: f.who, after: f.after }; }), gmail: gmail });
@@ -705,7 +637,7 @@ exports.handler = async function (event) {
   }
 
   if (!plan.due.length) return reply(freezeError ? 207 : 200, { ok: !freezeError, today: today, sent: 0, frozen: frozen.length, freezeError: freezeError, gmail: gmail });
-  if (route.via === "resend" && !RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length, frozen: frozen.length });
+  if (!RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length, frozen: frozen.length });
 
   // Marked BEFORE sending, in one write. If the run is cut off part way, the
   // worst outcome is that somebody marked is not emailed — never that
@@ -726,31 +658,24 @@ exports.handler = async function (event) {
     return reply(500, { error: "Could not record what is about to be sent, so nothing was sent: " + e.message });
   }
 
-  const sent = [], failed = [], logged = [];
+  const sent = [], failed = [], logged = [], copyMisses = [];
   let heldForTime = 0;
   for (const d of batch) {
     // Out of time: give it back (unmarked below), for the next run.
     if (Date.now() - t0 > SEND_BUDGET_MS) { failed.push({ kind: d.kind, ref: d.refId, mark: d.mark, error: "out of time — next run", held: true }); heldForTime++; continue; }
     const r = renderEmail(d, plan.cfg);
-    try {
-      let via = route.via, gmailId = null;
-      if (via === "gmail") {
-        try { gmailId = await sendViaGmail(farm.access, d, r); }
-        catch (e) {
-          // Refused outright: nothing went, so this one and the rest of the
-          // run go by Resend. Anything else may have gone: retried next run.
-          if (!e.refused || !RESEND_KEY) throw e;
-          console.error("[automations] Gmail refused sending, Resend for the rest:", e.message);
-          route = { via: "resend", why: e.message };
-          via = "resend";
-        }
-      }
-      if (via === "resend") await sendViaResend(d, r);
-      sent.push({ kind: d.kind, ref: d.refId, via: via });
-      logged.push({ at: new Date().toISOString(), subject: r.subject, to: d.to.join(", "), kind: d.kind, refId: d.refId, text: r.text, via: via, gmailId: gmailId });
-    } catch (e) {
-      failed.push({ kind: d.kind, ref: d.refId, mark: d.mark, error: String(e.message || e) });
-    }
+    let resendId;
+    try { resendId = await sendViaResend(d, r); }
+    catch (e) { failed.push({ kind: d.kind, ref: d.refId, mark: d.mark, error: String(e.message || e) }); continue; }
+    // It has gone. Its copy in Gmail's Sent only while the run has time to
+    // spare; without one, the archive takes the email from the app's log.
+    const left = COPY_DEADLINE_MS - (Date.now() - t0);
+    const copy = left > 800 ? await GmailCopy.fileSentCopy({ to: d.to, subject: r.subject, html: r.html, text: r.text,
+      resendId: resendId, budgetMs: Math.min(4000, left) }) : { ok: false, why: "out of time" };
+    if (!copy.ok) copyMisses.push(copy.why);
+    sent.push({ kind: d.kind, ref: d.refId, copied: !!copy.ok });
+    logged.push({ at: new Date().toISOString(), subject: r.subject, to: d.to.join(", "), kind: d.kind, refId: d.refId, text: r.text,
+      gmailId: copy.ok ? copy.gmailId : undefined });
   }
   if (failed.length) {
     try {
@@ -767,7 +692,8 @@ exports.handler = async function (event) {
   console.log("[automations] " + today + " sent " + sent.length + ", failed " + failed.length +
               (plan.due.length > MAX_SENDS_PER_RUN ? ", " + (plan.due.length - MAX_SENDS_PER_RUN) + " held to tomorrow" : ""));
   return reply(failed.length || freezeError ? 207 : 200, { ok: !failed.length && !freezeError, today: today, sent: sent, failed: failed,
-    held: Math.max(0, plan.due.length - MAX_SENDS_PER_RUN) + heldForTime, frozen: frozen.length, freezeError: freezeError, gmail: gmail, sendVia: route });
+    held: Math.max(0, plan.due.length - MAX_SENDS_PER_RUN) + heldForTime, frozen: frozen.length, freezeError: freezeError, gmail: gmail,
+    copyMisses: copyMisses.length ? copyMisses : undefined });
 };
 
-exports._test = { buildMime, gmailSendReady, planAutomations, freezeEnquiries, mergeSeen, openSealedToken, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, DEFAULTS, STEPS };
+exports._test = { planAutomations, freezeEnquiries, mergeSeen, openSealedToken, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, DEFAULTS, STEPS };

@@ -3,6 +3,7 @@
 // Admin only: the caller's Supabase session must belong to an active admin.
 // (The public page learns nothing it could use here, but a request id is not
 // a credential — the check is on the caller, not on knowing the id.)
+const GmailCopy = require("./mail-lib/gmail-copy.js");
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 // The service key, not the anon key. Server-side code has no business
 // holding the same credential the public pages carry — and once app_data
@@ -388,8 +389,12 @@ exports.handler = async (event) => {
         }),
       });
       if (sendRes.ok) {
+        // Its copy in the farm Gmail's Sent; the archive then reads that one.
+        const copy = await GmailCopy.fileSentCopy({ to: req.email, subject: subject, html: emailBody, text: bodyText,
+          resendId: await GmailCopy.resendIdOf(sendRes) });
+        if (!copy.ok) console.warn("[handle-viewing] no copy in Gmail Sent: " + copy.why);
         await logEmail({ subject: subject, to: req.email, type: "viewing_" + action, requestId: id,
-          body: String(bodyText || "").slice(0, 8000) });
+          body: String(bodyText || "").slice(0, 8000), gmailId: copy.ok ? copy.gmailId : undefined });
       } else {
         console.log("Email send failed:", await sendRes.text());
       }

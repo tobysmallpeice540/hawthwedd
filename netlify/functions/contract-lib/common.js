@@ -8,6 +8,7 @@
 // Required env vars: SUPABASE_SERVICE_KEY · RESEND_API_KEY
 
 const { renderContractPdf } = require("./pdf.js");
+const GmailCopy = require("../mail-lib/gmail-copy.js");
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
@@ -105,6 +106,9 @@ function buildEmailHtml(bodyText, buttonUrl, buttonLabel, code) {
 }
 
 // to: one address or several. attachments: [{ filename, content (base64) }].
+// copy: also file it in the farm Gmail's Sent (mail-lib/gmail-copy.js) — never
+// for an email carrying a sign-in link or code (a credential), never for the
+// office's own copy. Returns { ok, gmailId? }.
 async function sendEmail(to, subject, bodyText, opt) {
   const o = opt || {};
   if (!RESEND_KEY) return { ok: false, error: "RESEND_API_KEY not set" };
@@ -117,18 +121,26 @@ async function sendEmail(to, subject, bodyText, opt) {
     body: JSON.stringify(payload)
   });
   if (!res.ok) return { ok: false, error: "Resend failed: " + (await res.text()).slice(0, 300) };
-  return { ok: true };
+  if (!o.copy) return { ok: true };
+  const copy = await GmailCopy.fileSentCopy({ to: payload.to, subject: subject, html: payload.html, text: bodyText,
+    attachments: payload.attachments, resendId: await GmailCopy.resendIdOf(res),
+    budgetMs: 2500 });   // short: the signing request also makes, stores and emails the PDF
+  if (!copy.ok) console.warn("[contracts] no copy in Gmail Sent: " + copy.why);
+  return { ok: true, gmailId: copy.ok ? copy.gmailId : null };
 }
 
 // Recent Automated Emails. Re-reads first (a shared array). The sign-in link
 // is never in the body passed here: it is a credential.
-async function logEmail(subject, to, type, bookingId, bodyText) {
+// gmailId: its copy in the farm Gmail's Sent — the archive reads that one, so
+// it does not copy this entry in as well.
+async function logEmail(subject, to, type, bookingId, bodyText, gmailId) {
   try {
     const rows = await sbRest("app_data?key=eq." + EMAIL_LOG_KEY + "&select=value");
     const log = (rows && rows[0] && rows[0].value) || [];
     log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(),
       subject: subject, to: Array.isArray(to) ? to.join(", ") : to, template: type,
-      bookingId: bookingId == null ? "" : String(bookingId), body: String(bodyText || "").slice(0, 8000) });
+      bookingId: bookingId == null ? "" : String(bookingId), body: String(bodyText || "").slice(0, 8000),
+      gmailId: gmailId || undefined });
     await sbRest("app_data", { method: "POST", prefer: "resolution=merge-duplicates",
       body: { key: EMAIL_LOG_KEY, value: log.slice(-500), updated_at: new Date().toISOString() } });
   } catch (e) { console.error("logEmail failed:", e.message); }
@@ -212,9 +224,9 @@ async function sealContract(contractId) {
     const vals = { firstName: firstName(s.name), event: ev.name || "your event", eventDate: ukLong(ev.date), portalUrl: PORTAL_URL, others: "" };
     const subject = fill(t.subject, vals);
     const text = fill(t.body, vals);
-    const r = await sendEmail(s.email, subject, text, { attachments: attachments });
+    const r = await sendEmail(s.email, subject, text, { attachments: attachments, copy: true });
     emails.push({ to: s.email, ok: r.ok, error: r.error });
-    if (r.ok) await logEmail(subject, s.email, "contract-signed", c.event_id, text);
+    if (r.ok) await logEmail(subject, s.email, "contract-signed", c.event_id, text, r.gmailId);
   }
   const officeText = "The booking form for " + (ev.name || "an event") + " (" + ukLong(ev.date) + ") has been signed by everyone.\n\n" +
     (c.signers || []).map(function (s) { return s.name + " — signed as “" + (s.signed_name || "") + "”"; }).join("\n") +

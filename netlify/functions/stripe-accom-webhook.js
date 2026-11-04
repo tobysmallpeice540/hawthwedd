@@ -23,6 +23,7 @@
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
+const GmailCopy = require("./mail-lib/gmail-copy.js");
 const SUPABASE_URL  = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 // The service key, not the anon key. Server-side code has no business
 // holding the same credential the public pages carry — and once app_data
@@ -153,10 +154,11 @@ function buildTokens(booking, property, extra) {
 
 // The body is stored alongside the subject so the sent email can be read back
 // in full from the app. Capped so a runaway template can't bloat the log row.
-async function logEmail(subject, to, type, bookingId, bodyText) {
+// gmailId: its copy in the farm Gmail's Sent — the archive reads that one.
+async function logEmail(subject, to, type, bookingId, bodyText, gmailId) {
   try {
     var log = (await sbGet(EMAIL_LOG_KEY)) || [];
-    log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(), subject: subject, to: to, template: type, bookingId: bookingId, body: String(bodyText || "").slice(0, 8000) });
+    log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(), subject: subject, to: to, template: type, bookingId: bookingId, body: String(bodyText || "").slice(0, 8000), gmailId: gmailId || undefined });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
   } catch (e) { console.error("logEmail failed:", e.message); }
 }
@@ -307,7 +309,13 @@ async function sendViaResend(to, subject, bodyText, payLink, payLabel) {
     body: JSON.stringify({ from: FROM_HEADER, to: to, subject: subject, html: html }),
   });
   if (!res.ok) return { ok: false, error: "Resend failed: " + await res.text() };
-  return { ok: true };
+  // It has gone (to a guest). Its copy in the farm Gmail's Sent while the
+  // webhook has time; fileSentCopy never throws.
+  var left = 8000 - (Date.now() - RUN_START);
+  var copy = left > 800 ? await GmailCopy.fileSentCopy({ to: to, subject: subject, html: html, text: bodyText,
+    resendId: await GmailCopy.resendIdOf(res), budgetMs: Math.min(3000, left) }) : { ok: false, why: "out of time" };
+  if (!copy.ok) console.warn("no copy in Gmail Sent: " + copy.why);
+  return { ok: true, gmailId: copy.ok ? copy.gmailId : null };
 }
 
 // Stripe's receipt page for a completed session. The session itself doesn't
@@ -346,7 +354,7 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
     var bcBody = fillTemplate(bcTmpl.body, bcTokens);
     var bcRes = await sendViaResend(booking.email, bcSubject, bcBody);
     if (bcRes.ok) {
-      await logEmail(bcSubject, booking.email, "booking_confirmed", booking.id, bcBody);
+      await logEmail(bcSubject, booking.email, "booking_confirmed", booking.id, bcBody, bcRes.gmailId);
     } else {
       console.error("booking_confirmed send failed:", bcRes.error);
       opts.result.bookingConfirmedFailed = true;
@@ -364,7 +372,7 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
     // as a button rather than only being visible in the office.
     var pcRes = await sendViaResend(booking.email, pcSubject, pcBody, opts.receiptUrl || "", "View your receipt");
     if (pcRes.ok) {
-      await logEmail(pcSubject, booking.email, "payment_confirmation", booking.id, pcBody);
+      await logEmail(pcSubject, booking.email, "payment_confirmation", booking.id, pcBody, pcRes.gmailId);
     } else {
       console.error("payment_confirmation send failed:", pcRes.error);
     }
@@ -374,7 +382,9 @@ async function sendPaymentEmails(booking, amountPaidPence, templates, properties
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
+var RUN_START = Date.now();
 exports.handler = async function(event) {
+  RUN_START = Date.now();
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method not allowed" };
   }

@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04e";
+const APP_BUILD = "2026-11-04f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -3838,8 +3838,8 @@ function AirbnbMailSettings() {
         Reads the Airbnb emails in the farm Gmail every hour and puts them on the Airbnb bookings: the guest's
         full name, the payout after Airbnb's fees, the guests, the star rating, the messages, and a warning when a guest
         cancels. Airbnb emails about trips where we are the guest are ignored. Enquiries that never become a booking are
-        not kept. The same connection keeps the email archive, checks Gmail before each enquiry follow-up, and sends the
-        follow-ups (as hello@hawthbushfarm.co.uk) if sending was allowed when it was connected.
+        not kept. The same connection keeps the email archive, checks Gmail before each enquiry follow-up, and files a
+        copy of every automated email to a customer in this Gmail's Sent folder (if that was allowed when it was connected).
       </div>
       {state === "loading" && <div style={{ fontSize:12, color:T.textLight }}>Loading…</div>}
       {state === "absent" && <div style={{ fontSize:12.5, color:T.amber }}>The database part is not installed yet (migration 2026-10-25q).</div>}
@@ -29212,7 +29212,7 @@ function AutomationsPanel() {
       });
       const data = await res.json().catch(function() { return {}; });
       if (!res.ok) throw new Error(data.error || ("status " + res.status));
-      setPreview({ due: data.due || [], waiting: data.waiting || [], freeze: data.freeze || [], gmail: data.gmail || null, sendVia: data.sendVia || null, today: data.today });
+      setPreview({ due: data.due || [], waiting: data.waiting || [], freeze: data.freeze || [], gmail: data.gmail || null, sentCopy: data.sentCopy || null, today: data.today });
     } catch (e) { setPreview({ error: e.message || String(e) }); }
   }
 
@@ -29223,8 +29223,8 @@ function AutomationsPanel() {
     <div>
       <div style={Object.assign({}, card, { background:T.tint })}>
         <div style={{ fontSize:13, color:T.textMid, lineHeight:1.6 }}>
-          Each email goes to a person once, ever, at about 9am, from the farm Gmail as hello@hawthbushfarm.co.uk
-          (Resend if Gmail cannot send), and shows in Recent Automated Emails.
+          Each email goes to a person once, ever, at about 9am, from hello@hawthbushfarm.co.uk, with a copy filed in
+          the farm Gmail's Sent folder, and shows in Recent Automated Emails.
           They all start <b>off</b>. “Activity” means anything logged in the contact log (any note you add there),
           a viewing that has happened, and email to or from the address. Each morning the run looks in the
           farm's Gmail (hawthbushfarm@gmail.com, connected under Lettings → Settings → Airbnb Sync) for the
@@ -29249,11 +29249,11 @@ function AutomationsPanel() {
             </span>
           )}
         </div>
-        {preview && preview.sendVia && (
-          <div style={{ marginTop:6, fontSize:12, color: preview.sendVia.via === "gmail" ? T.textLight : T.amber }}>
-            {preview.sendVia.via === "gmail"
-              ? "They would go from the farm Gmail as hello@hawthbushfarm.co.uk" + (preview.sendVia.relay ? " (through " + preview.sendVia.relay + ")" : "") + ", and show in its Sent folder."
-              : "They would go through Resend, not the farm Gmail" + (preview.sendVia.why ? " — " + preview.sendVia.why : "") + ". Still from hello@hawthbushfarm.co.uk, but not in Gmail's Sent."}
+        {preview && preview.sentCopy && (
+          <div style={{ marginTop:6, fontSize:12, color: preview.sentCopy.ok ? T.textLight : T.amber }}>
+            {preview.sentCopy.ok
+              ? "A copy of each would be filed in the farm Gmail's Sent folder."
+              : "They would go, but no copy would be filed in Gmail's Sent" + (preview.sentCopy.why ? " — " + preview.sentCopy.why : "") + "."}
           </div>
         )}
         {preview && preview.waiting && preview.waiting.length > 0 && (

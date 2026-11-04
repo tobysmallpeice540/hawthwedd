@@ -77,9 +77,9 @@ exports.handler = async function (event) {
         const vals = { firstName: L.firstName(s.name), event: c.event_name || "your event", eventDate: L.ukLong(c.event_date), portalUrl: L.PORTAL_URL, others: "" };
         const subject = L.fill(t.subject, vals);
         const text = L.fill(t.body, vals);
-        const r = await L.sendEmail(s.email, subject, text, { link: L.PORTAL_URL, button: t.button });
+        const r = await L.sendEmail(s.email, subject, text, { link: L.PORTAL_URL, button: t.button, copy: true });
         sends++;
-        if (r.ok) { sentTo.push(s.email); await L.logEmail(subject, s.email, "contract-reminder", c.event_id, text); }
+        if (r.ok) { sentTo.push(s.email); await L.logEmail(subject, s.email, "contract-reminder", c.event_id, text, r.gmailId); }
         else failedTo.push(s.email + " (" + r.error + ")");
       }
       if (sentTo.length) await L.sbRpc("ct_service_note", { p_contract: c.id, p_what: "Reminder emailed: " + sentTo.join(", "), p_who: "system" }).catch(function () {});

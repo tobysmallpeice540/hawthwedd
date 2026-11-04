@@ -181,9 +181,9 @@ const body = (r) => JSON.parse(r.body);
 
   r = await call("start", { authorization: "Bearer admin-session" });
   const url = new URL(body(r).url);
-  ok(url.hostname === "accounts.google.com" && url.searchParams.get("scope") === "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send"
+  ok(url.hostname === "accounts.google.com" && url.searchParams.get("scope") === "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.insert"
      && url.searchParams.get("access_type") === "offline" && url.searchParams.get("prompt") === "consent"
-     && url.searchParams.get("redirect_uri") === "https://hawthbushfarm.netlify.app/.netlify/functions/airbnb-mail", "T6 the Google sign-in asks to read Gmail and send (for the follow-ups), offline", body(r));
+     && url.searchParams.get("redirect_uri") === "https://hawthbushfarm.netlify.app/.netlify/functions/airbnb-mail", "T6 the Google sign-in asks to read Gmail and file in Sent (copies of the app emails), offline", body(r));
   r = await W.handler({ httpMethod: "GET", queryStringParameters: { code: "abc", state: "forged.state" } });
   ok(r.statusCode === 400 && /expired|not started/.test(r.body), "T7 a callback without our state is refused");
 

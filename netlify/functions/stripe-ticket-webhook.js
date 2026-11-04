@@ -66,6 +66,7 @@ const stripe = require("stripe")(process.env.STRIPE_TICKET_SECRET_KEY, {
   apiVersion: "2024-06-20"
 });
 
+const GmailCopy = require("./mail-lib/gmail-copy.js");
 const SUPABASE_URL   = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const ADMIN_TOKEN    = process.env.HBF_ADMIN_TOKEN;
@@ -278,6 +279,14 @@ async function barSend(to, subject, paragraphs, eventId) {
     });
     if (!res.ok) { console.error("bar email failed:", subject, (await res.text()).slice(0, 300)); return false; }
   } catch (e) { console.error("bar email threw:", subject, e.message); return false; }
+  // A couple's bar email (not the office's) is filed in the farm Gmail's
+  // Sent too; fileSentCopy never throws. Ticket emails never are (Toby).
+  var gmailId;
+  if (to !== OFFICE_EMAIL) {
+    var copy = await GmailCopy.fileSentCopy({ to: to, subject: subject, html: barEmailHtml(paragraphs),
+      text: paragraphs.join("\n\n").replace(/<[^>]+>/g, ""), resendId: await GmailCopy.resendIdOf(res), budgetMs: 3000 });
+    if (copy.ok) gmailId = copy.gmailId; else console.warn("bar email: no copy in Gmail Sent: " + copy.why);
+  }
   // Into Recent Automated Emails with everything else. Re-reads first: a
   // shared array written back from a stale copy is how records get lost.
   try {
@@ -285,7 +294,8 @@ async function barSend(to, subject, paragraphs, eventId) {
     var log = (rows && rows[0] && rows[0].value) || [];
     log.push({ id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), sentAt: new Date().toISOString(),
                subject: subject, to: Array.isArray(to) ? to.join(", ") : to, template: "bar_payment",
-               bookingId: String(eventId || ""), body: paragraphs.join("\n").replace(/<[^>]+>/g, "").slice(0, 4000) });
+               bookingId: String(eventId || ""), body: paragraphs.join("\n").replace(/<[^>]+>/g, "").slice(0, 4000),
+               gmailId: gmailId });
     await sbRest("app_data", { method: "POST", prefer: "resolution=merge-duplicates",
       body: { key: EMAIL_LOG_KEY, value: log.slice(-500), updated_at: new Date().toISOString() } });
   } catch (e) { console.error("bar email log failed:", e.message); }

@@ -71,8 +71,8 @@ exports.handler = async function (event) {
           (ev.name || "your event") + " (" + L.ukLong(ev.date) + ").\n\n" +
           (waiting.length ? "We are now waiting for " + waiting.join(" and ") + " to sign. " : "") +
           "As soon as everyone has signed, we will email you both a copy of the signed form.";
-        const sent = await L.sendEmail(user.email, "We have your signature — Hawthbush Farm", text);
-        if (sent.ok) await L.logEmail("We have your signature — Hawthbush Farm", user.email, "contract-thanks", c.event_id, text);
+        const sent = await L.sendEmail(user.email, "We have your signature — Hawthbush Farm", text, { copy: true });
+        if (sent.ok) await L.logEmail("We have your signature — Hawthbush Farm", user.email, "contract-thanks", c.event_id, text, sent.gmailId);
       } catch (e) { console.warn("signature note failed:", e.message); }
     }
     return L.ok({ signed: true, complete: !!r.complete, sealed: !!(sealed && sealed.sealed), sealError: sealError ? true : false });
