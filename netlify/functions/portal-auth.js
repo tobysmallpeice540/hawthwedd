@@ -352,3 +352,10 @@ exports.handler = async function (event) {
 
   return bad("Unknown action");
 };
+
+// Shared with the contract functions (contract-admin.js, which emails the
+// "ready to sign" invitation with a sign-in link). Same minting, same rules:
+// the link points at our own page, and it is a credential — never logged.
+exports.mintLink = mintLink;
+exports.ensureUser = ensureUser;
+exports.PORTAL_URL = PORTAL_URL;

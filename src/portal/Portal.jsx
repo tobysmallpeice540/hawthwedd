@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { supabase, rpc } from './supabase.js'
+import { supabase, rpc, isMissingFunction } from './supabase.js'
 import Guests from './Guests.jsx'
 import Checklist from './Checklist.jsx'
 import VenueForm from './VenueForm.jsx'
 import Contract from './Contract.jsx'
+import BookingForm from './BookingForm.jsx'
 import Suppliers from './Suppliers.jsx'
 import Timeline from './Timeline.jsx'
 import Money from './Money.jsx'
@@ -25,6 +26,7 @@ import Icon from './Icon.jsx'
 // is always first and always shown.
 const TABS = {
   overview:    { label: 'Overview' },
+  contract:    { label: 'Booking form' },
   guests:      { label: 'Guests' },
   food:        { label: 'Food' },
   drinks:      { label: 'Drinks' },
@@ -146,6 +148,23 @@ export default function Portal({ session }) {
   const [home, setHome] = useState(null)        // null = the newer functions are not there
   const [state, setState] = useState('loading') // loading | ready | no_access | error
   const [error, setError] = useState('')
+  // The booking form to sign (ct_my_contract), or null. Not one of the
+  // venue-chosen sections: when there is a contract it is always shown,
+  // because signing it is not optional.
+  const [ct, setCt] = useState(null)
+
+  async function loadCt() {
+    try {
+      const r = await rpc('ct_my_contract')
+      setCt(r)
+      return r
+    } catch (e) {
+      // Not fatal, and quiet if the database has not got contracts yet.
+      if (!isMissingFunction(e)) console.warn('ct_my_contract:', e.message || e)
+      setCt(null)
+      return null
+    }
+  }
 
   async function loadHome() {
     try { setHome(await rpc('wp_get_home')) }
@@ -169,6 +188,10 @@ export default function Portal({ session }) {
         if (cancelled) return
         await loadHome()
         if (cancelled) return
+        const c = await loadCt()
+        if (cancelled) return
+        // Straight to the form when it is waiting for this person's signature.
+        if (c && c.contract && c.contract.can_sign) setTab((t) => (t === 'overview' ? 'contract' : t))
         setEvent(data)
         setState('ready')
       } catch (e) {
@@ -235,7 +258,13 @@ export default function Portal({ session }) {
   const words = WORDS[kind]
   // Unknown keys are dropped rather than drawn: a section added in the database
   // before this bundle knows its name must not take the whole page down.
-  const visible = ['overview'].concat((home ? (home.visible || []) : LEGACY_TABS).filter((k) => TABS[k]))
+  const hasForm = !!(ct && ct.contract)
+  // "Booking form only" (set by the office when it sends the first contract):
+  // the rest of the planner stays hidden until they open it up.
+  const chosen = ct && ct.booking_form_only
+    ? ['documents']
+    : (home ? (home.visible || []) : LEGACY_TABS)
+  const visible = ['overview'].concat(hasForm ? ['contract'] : [], chosen.filter((k) => TABS[k] && k !== 'contract'))
   const current = visible.includes(tab) ? tab : 'overview'
   const sections = home ? (home.sections || []) : null
 
@@ -275,7 +304,8 @@ export default function Portal({ session }) {
 
         <main className="wrap">
           {current === 'overview'    && <Overview event={event} home={home} words={words} visible={visible}
-                                                  onGo={go} onHome={loadHome} />}
+                                                  onGo={go} onHome={loadHome} ct={ct} />}
+          {current === 'contract'    && <BookingForm data={ct} onChanged={loadCt} />}
           {current === 'guests'      && <Guests accommodation={event.accommodation} eventName={event.couple} eventDate={fmtDate(event.date)} />}
           {current === 'food'        && <Food onGo={visible.includes('bar') ? go : null} />}
           {current === 'drinks'      && <Drinks part="package" barTab={visible.includes('bar')} onGo={go} />}
@@ -292,7 +322,7 @@ export default function Portal({ session }) {
           {current === 'addons'      && <Addons />}
           {current === 'money'       && <Money />}
           {current === 'details'     && <VenueForm onGo={go} visible={visible} />}
-          {current === 'documents'   && <Contract />}
+          {current === 'documents'   && <Contract onGo={hasForm ? go : null} />}
           {current === 'inspiration' && <Pinterest />}
           {ready}
         </main>
@@ -343,7 +373,7 @@ function TabMark({ section, sections }) {
   return <Icon name="done" size={13} className="tab-tick" />
 }
 
-function Overview({ event, home, words, visible, onGo, onHome }) {
+function Overview({ event, home, words, visible, onGo, onHome, ct }) {
   const a = event.accommodation || {}
   const n = event.venue_numbers || {}
   const anyAccom = ['amly', 'hamlet', 'camping'].some((k) => a[k] === 'yes' || a[k] === 'hold')
@@ -397,6 +427,18 @@ function Overview({ event, home, words, visible, onGo, onHome }) {
           {cd && cd.past && <div className="countdown">{words.after}</div>}
         </div>
       </section>
+
+      {ct && ct.contract && ct.contract.can_sign && (
+        <section className="card">
+          <h3>Your booking form</h3>
+          <p className="muted" style={{ fontSize: 14.5 }}>
+            Your booking form is ready for you to read and sign.
+          </p>
+          <div className="actions" style={{ marginTop: 10 }}>
+            <button className="btn-small" onClick={() => onGo('contract')}>Read and sign</button>
+          </div>
+        </section>
+      )}
 
       {home && <ToDo home={home} tasks={showChecklist ? tasks : []} visible={visible} onGo={onGo} />}
 

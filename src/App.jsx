@@ -10,6 +10,10 @@ import "@fontsource/barlow-condensed/700.css";
 import { dayOrder } from "./shared/dayOrder.js";
 import { snapToNeighbours, boxesOverlap, tableFootprint } from "./shared/tableSnap.js";
 import { roleFirst, fullName, downloadGuestsCsv, printGuests, ACCOM_LABEL as GUEST_ACCOM_LABEL } from "./portal/guestSort.js";
+import ContractDocument from "./shared/ContractDocument.jsx";
+import { parseContractTemplate, resolveContractNodes, contractAccommodation, contractTitle, contractKindOf, contractValuesForReview,
+  htmlToContractMarkup, CONTRACT_FIELDS, CONTRACT_KINDS, CONTRACT_SYNTAX_HELP } from "./shared/contractDoc.js";
+import { DEFAULT_CONTRACT_TEMPLATE } from "./shared/contractTemplate.js";
 import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
@@ -2809,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04c";
+const APP_BUILD = "2026-11-04d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -11425,6 +11429,28 @@ export default function App({ role = "admin", onSignOut } = {}) {
     return next;
   }), []);
 
+  // Contracts signed in the app (4 Nov 2026): once at start-up, bring each
+  // event's contract record into line with the database (Completed / Voided)
+  // and file each signed copy as its Event Booking Form — so an event nobody
+  // has opened since the couple signed still turns green. One queued write,
+  // worked out again on the fresh copy (applyInAppContractStatuses), and only
+  // when something has actually changed. Admins only: the function refuses
+  // anyone else, and that refusal is not an error here.
+  const ctSyncedRef = useRef(false);
+  useEffect(function() {
+    if (!loaded || barOnly || cleanerOnly || ctSyncedRef.current) return;
+    if (SEED_FALLBACK[BOOKING_STORAGE]) return;
+    ctSyncedRef.current = true;
+    (async function() {
+      let r;
+      try { r = await sbRpcQuiet("ct_admin_statuses"); } catch (e) { return; }
+      const statuses = (r && r.contracts) || [];
+      if (!statuses.length || !applyInAppContractStatuses(bookings, statuses).changed) return;
+      try { await mutateBookings(function(base) { return applyInAppContractStatuses(base, statuses).events; }); }
+      catch (e) { console.warn("Signed contracts not filed on the events: " + (e.message || e)); }
+    })();
+  }, [loaded]);
+
   // Insert or update one event, leaving every other record exactly as the
   // server has it.
   // guard: an optional check run against the array the server actually holds,
@@ -12243,6 +12269,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
           onOpenLink={openChecklistLink} onSettings={function(){ setView("chkSettings"); }}/>}
         {view==="chkSettings" && <ChecklistSettings onOpenRun={goToChecklist}/>}
         {view==="whatsapp" && <WhatsAppPage/>}
+        {view==="contracts" && <ContractSettingsPage/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
         {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
         {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
@@ -17490,7 +17517,7 @@ const REPORT_TYPES = [
 ];
 const HIDDEN_REPORT_TYPES = ["calendar"];
 // The pages under Settings in the sidebar.
-const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails", "chkSettings", "whatsapp"];
+const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails", "contracts", "chkSettings", "whatsapp"];
 function openAccomReport(setView) { navClick("lettings", "report"); setView("lettings"); }
 
 // The sidebar's contents, worked out from where the app is. Each entry's `go`
@@ -17560,6 +17587,7 @@ function buildSidebarNav(o) {
         { label:"Staff", on: view === "staff", go: function() { setView("staff"); } },
         { label:"Activity", on: view === "activity", go: function() { setView("activity"); } },
         { label:"Email templates", on: view === "emails", go: function() { setView("emails"); } },
+        { label:"Contracts", on: view === "contracts", go: function() { setView("contracts"); } },
         { label:"Checklists", on: view === "chkSettings", go: function() { setView("chkSettings"); } },
         { label:"WhatsApp", on: view === "whatsapp", go: function() { setView("whatsapp"); } },
       ] },
@@ -21141,7 +21169,7 @@ function FormView({ formData, setFormData, onSubmit, onCancel, isEdit, staff, on
     if(s==="staffing") return ["setup",...STAFFING_FIELDS].filter(k=>(formData[k]||[]).length>0).length;
     if(s==="viewings") return (formData.viewings||[]).length;
     if(s==="files") return (formData.files||[]).length;
-    if(s==="contract") return (formData.contract||{}).documentId ? 1 : 0;
+    if(s==="contract") return ((formData.contract||{}).documentId || (formData.contract||{}).contractId) ? 1 : 0;
     if(s==="financials") return ["venueFee","deposit","corkage","barTakeGross","circaCommission","nonStandard","amlyBooked","hamletBooked","campingBooked"].filter(k=>formData[k]&&formData[k]!=="undecided").length;
     return TEXT_FIELDS.filter(f=>f.section===s&&formData[f.key]).length;
   };
@@ -29390,7 +29418,65 @@ const DEFAULT_PORTAL_EMAILS = [
     subject:"Coming up for your day at Hawthbush Farm", button:"Open your planner", on:false,
     body:"Hello {firstName},\n\nA quick note of what is coming up before your day with us on {eventDate}.\n\n{list}\n\nYou can do all of these in your planner — the button below takes you there. Tick off a checklist item, or mark a page as done, and it will not come up again.\n\nIf you have a question about any of it, just reply to this email.",
     fields:["{firstName}","{event}","{eventDate}","{list}","{portalUrl}"] },
+  // Contracts signed in the app (4 Nov 2026). Mirrors CONTRACT_EMAILS in
+  // netlify/functions/contract-lib/common.js, which falls back to it.
+  { id:"contract_invite", name:"Booking form to sign", when:"When a contract is sent for signing (and Email it again)",
+    subject:"Your booking form from Hawthbush Farm is ready to sign", button:"Read and sign",
+    body:"Hello {firstName},\n\nYour booking form for {event} on {eventDate} is ready for you to read and sign.\n\nThe button below signs you straight in — there is no password. Read it through, fill in the few boxes we need from you, and sign at the bottom by typing your name. {others}\n\nIf anything on it doesn't look right, just reply to this email and we will put it right before you sign.",
+    fields:["{firstName}","{event}","{eventDate}","{others}"] },
+  { id:"contract_reminder", name:"Booking form reminder", when:"Every few days while a booking form is unsigned (set below)",
+    subject:"A reminder: your booking form is waiting to be signed", button:"Open your planner", on:false, everyDays:7,
+    body:"Hello {firstName},\n\nJust a reminder that your booking form for {event} on {eventDate} is still waiting for your signature.\n\nGo to {portalUrl}, ask for a sign-in link, and you will find it under Booking form.\n\nIf you have a question about any of it, just reply to this email.",
+    fields:["{firstName}","{event}","{eventDate}","{portalUrl}"] },
+  { id:"contract_signed", name:"Signed booking form", when:"To each client when everyone has signed — the signed PDF is attached",
+    subject:"Your signed booking form — Hawthbush Farm", button:"",
+    body:"Hello {firstName},\n\nThank you — your booking form for {event} on {eventDate} has now been signed by everyone. A copy is attached for your records, and you can open it at any time from your planner.\n\nYour booking is confirmed once the deposit invoice has been paid.\n\nWe are looking forward to it.",
+    fields:["{firstName}","{event}","{eventDate}"] },
 ];
+
+// How often the booking form reminder goes. Module scope: it renders inputs.
+const CONTRACT_REMINDER_DAYS = [3, 5, 7, 10, 14, 21, 28];
+function ContractReminderControls({ on, everyDays, onChange }) {
+  const [preview, setPreview] = useState(null);
+  async function look() {
+    setPreview({ busy: true });
+    try {
+      const res = await fetch("/.netlify/functions/contract-reminders", {
+        method: "POST", headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
+        body: JSON.stringify({ dryRun: true })
+      });
+      const data = await res.json().catch(function() { return {}; });
+      if (!res.ok) throw new Error(/ct_service|PGRST202|could not find/i.test(String(data.error || "")) ? "this needs the 4 Nov database update (2026-11-04a-contracts.sql)" : (data.error || ("status " + res.status)));
+      setPreview({ due: data.due || [], every: data.everyDays });
+    } catch (e) { setPreview({ error: e.message || String(e) }); }
+  }
+  return (
+    <div style={{ background:T.tint, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", marginTop:12 }}>
+      <label style={{ display:"flex", gap:8, alignItems:"center", fontSize:13, fontWeight:700, color:T.text, cursor:"pointer", flexWrap:"wrap" }}>
+        <input type="checkbox" checked={on} onChange={function(e){ onChange({ on: e.target.checked }); }}/>
+        Send this every
+        <select value={everyDays} onChange={function(e){ onChange({ everyDays: Number(e.target.value) }); }}
+          style={{ fontFamily:"inherit", fontSize:13, padding:"3px 6px", borderRadius:6, border:`1px solid ${T.border}` }}>
+          {CONTRACT_REMINDER_DAYS.map(function(d) { return <option key={d} value={d}>{d} days</option>; })}
+        </select>
+        until it is signed
+      </label>
+      <div style={{ fontSize:12, color:T.textMid, lineHeight:1.6, marginTop:6 }}>
+        The same email each time, to every client who has not signed yet, counted from when the contract was sent or the last
+        reminder. Goes out at about 9.40am. It links to the planner's sign-in page, never a sign-in link. Save after changing it.
+      </div>
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginTop:8, flexWrap:"wrap" }}>
+        <button type="button" onClick={look} disabled={preview && preview.busy} style={btnQuiet}>
+          {preview && preview.busy ? "Looking…" : "Whose is due now?"}
+        </button>
+        {preview && preview.error && <span style={{ fontSize:12, color:T.red }}>Could not check: {preview.error}</span>}
+        {preview && preview.due && <span style={{ fontSize:12, color:T.textMid }}>
+          {preview.due.length === 0 ? "Nobody, as saved." : preview.due.map(function(d) { return (d.event_name || "event") + " (" + (d.unsigned || []).map(function(u) { return u.name; }).join(", ") + ")"; }).join(" · ")}
+        </span>}
+      </div>
+    </div>
+  );
+}
 
 // The deadline reminder's switch and preview. Module scope: it renders inputs.
 function nextMondayIso() {
@@ -29472,7 +29558,8 @@ function PortalEmailTemplatesPanel() {
       const merged = DEFAULT_PORTAL_EMAILS.map(function(d) {
         const s0 = (saved || []).find(function(x) { return x && x.id === d.id; });
         return s0 ? Object.assign({}, d, { subject: s0.subject, body: s0.body, button: s0.button },
-                                  d.id === "nudge" ? { on: s0.on === true } : {}) : d;
+                                  d.id === "nudge" ? { on: s0.on === true } : {},
+                                  d.id === "contract_reminder" ? { on: s0.on === true, everyDays: Number(s0.everyDays) > 0 ? Number(s0.everyDays) : d.everyDays } : {}) : d;
       });
       if (!off) setList(merged);
     })();
@@ -29482,7 +29569,7 @@ function PortalEmailTemplatesPanel() {
   const t = list[sel];
   function upd(k, v) { setList(list.map(function(x, i) { return i === sel ? Object.assign({}, x, { [k]: v }) : x; })); }
   // Back to the standard wording keeps the on/off switch where it is.
-  function reset() { const d = DEFAULT_PORTAL_EMAILS.find(function(x){ return x.id === t.id; }); setList(list.map(function(x, i) { return i === sel ? Object.assign({}, d, x.id === "nudge" ? { on: x.on } : {}) : x; })); }
+  function reset() { const d = DEFAULT_PORTAL_EMAILS.find(function(x){ return x.id === t.id; }); setList(list.map(function(x, i) { return i === sel ? Object.assign({}, d, x.id === "nudge" ? { on: x.on } : {}, x.id === "contract_reminder" ? { on: x.on, everyDays: x.everyDays } : {}) : x; })); }
   async function save() {
     try {
       // Re-read first and keep anything this screen does not know about (a
@@ -29491,6 +29578,7 @@ function PortalEmailTemplatesPanel() {
       const mine = list.map(function(x) {
         const o = { id:x.id, subject:x.subject, body:x.body, button:x.button };
         if (x.id === "nudge") o.on = x.on === true;
+        if (x.id === "contract_reminder") { o.on = x.on === true; o.everyDays = Number(x.everyDays) || 7; }
         return o;
       });
       const others = (Array.isArray(cur) ? cur : []).filter(function(x) { return x && !mine.some(function(m) { return m.id === x.id; }); });
@@ -29521,7 +29609,9 @@ function PortalEmailTemplatesPanel() {
           <textarea value={t.body} rows={11} onChange={function(e){ upd("body", e.target.value); }} style={Object.assign({}, inputCss, { fontFamily:"inherit", lineHeight:1.5 })}/>
         </Field>
         {t.id === "nudge" && <NudgeControls on={t.on === true} onChange={function(v){ upd("on", v); }}/>}
-        {!/^bar_/.test(t.id) && (
+        {t.id === "contract_reminder" && <ContractReminderControls on={t.on === true} everyDays={t.everyDays || 7}
+          onChange={function(p){ setList(list.map(function(x, i) { return i === sel ? Object.assign({}, x, p) : x; })); }}/>}
+        {!/^bar_/.test(t.id) && t.id !== "contract_signed" && (
           <>
             <div style={{ height:10 }}/>
             <Field label="Button" width={260}>
@@ -29532,6 +29622,9 @@ function PortalEmailTemplatesPanel() {
         <div style={{ fontSize:11.5, color:T.textLight, marginTop:10, lineHeight:1.6 }}>
           Filled in when it is sent: {t.fields.join(" · ")}.
           {t.id === "nudge" ? " {list} is where the list of what is due goes; if it is missing, the list goes after the first paragraph. The button opens the planner's sign-in page — never a sign-in link, which would sit in an inbox all week."
+            : t.id === "contract_reminder" ? " The button opens the planner's sign-in page — never a sign-in link."
+            : t.id === "contract_signed" ? " The signed PDF is attached. The office is sent its own copy."
+            : t.id === "contract_invite" ? " {others} says the other client will get their own email (or has signed). The sign-in link is always the button, with a code for the phone app — never in the text."
             : !/^bar_/.test(t.id) ? " The sign-in link itself is always added as the button — it is never written into the text." : " The office gets its own short note each time."}
           {" "}Left empty, a field falls back to the standard wording.
         </div>
@@ -29569,7 +29662,7 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
           they get the same pages as a row here. */}
       {!inSidebar && setView && (
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:18 }}>
-          {[["staff","Staff"],["activity","Activity"],["emails","Email templates"],["chkSettings","Checklists"],["whatsapp","WhatsApp"]].map(function(x){
+          {[["staff","Staff"],["activity","Activity"],["emails","Email templates"],["contracts","Contracts"],["chkSettings","Checklists"],["whatsapp","WhatsApp"]].map(function(x){
             return <button key={x[0]} onClick={function(){ setView(x[0]); }}
               style={{ background:"#fff", border:`1.5px solid ${T.border}`, color:T.midBlue, padding:"8px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>{x[1]} →</button>;
           })}
@@ -29619,8 +29712,8 @@ function SettingsView({ xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, 
         </div>
       </div>
 
-      {/* Contracts */}
-      <SignWellPanel/>
+      {/* Contracts moved into the app (Settings → Contracts, 4 Nov 2026). The
+          SignWell probe panel (SignWellPanel) is no longer shown. */}
 
 
       {/* Mailing lists. Not under Box Office: it syncs weddings, enquiries and
@@ -34531,7 +34624,9 @@ function initialContractFields(fd) {
   return out;
 }
 
-function ContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings, onUpdateAccomBookings }) {
+// The SignWell panel, kept for the contracts sent through SignWell before 4 Nov
+// 2026 (status, the signed PDF, the review). Nothing new is sent from here.
+function SignWellContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings, onUpdateAccomBookings }) {
   const saved = formData.contract || {};
   const [f, setF] = useState(function() {
     return initialContractFields(formData);
@@ -34914,12 +35009,11 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
     <div>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14, flexWrap:"wrap" }}>
         <div>
-          <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Booking form</div>
+          <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Booking form — SignWell</div>
           <div style={{ fontSize:12.5, color:T.textLight, marginTop:3 }}>
-            Prefilled from the event. Change anything before sending — what is on screen is what goes out.
+            Sent through SignWell before contracts moved into the app.
           </div>
         </div>
-        <BoxBtn tone="ghost" onClick={reset}>Restore prefills</BoxBtn>
       </div>
 
       {sent && (
@@ -35142,68 +35236,1008 @@ function ContractSection({ formData, update, onAutoSave, accomProperties, accomB
       {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{err}</div>}
       {msg && <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{msg}</div>}
 
-      <div style={row}>
-        <CField f={f} up={up} label="Event name" k="eventName"/>
-        <CField f={f} up={up} label="Event type" k="eventType"/>
-        <CField f={f} up={up} label="Event date" k="eventDate" type="date"/>
-        <CField f={f} up={up} label="Max guests" k="maxGuests"/>
-        <CMoneyField f={f} up={up} label="Venue fee (inc VAT)" k="venueFee" hint="Saved to the event's Financials."/>
+    </div>
+  );
+}
+
+
+// ─── CONTRACTS SIGNED IN THE APP (4 Nov 2026) ───────────────────────────────
+// Replaces SignWell for every new contract. The wording is a template edited
+// in Settings → Contracts (one per kind of event, or the same for all); the
+// Contract tab fills it in from the event, freezes it, and sends it. The couple
+// read, fill in and sign it in the portal (src/portal/BookingForm.jsx) by
+// typing their name and ticking that they agree. The last signature seals it:
+// netlify/functions/contract-sign.js makes the PDF and emails it to everyone.
+//
+// Where things live:
+//   · templates          app_data hbf_contract_templates_v1  [{id, name, body, savedAt, savedBy, history}]
+//   · which for which    app_data hbf_contract_settings_v1   {byKind: {wedding, party, wake, other}}
+//   · the contracts      ct_ tables (supabase/2026-11-04a-contracts.sql), through ct_ functions only
+//   · on the event       event.contract = {provider:"hawthbush", contractId, version, status
+//                        "Pending"|"Completed"|"Voided", sentAt, signedAt, fields, templateId, ...}
+//                        — the same keys the SignWell record used, so the wedding pipeline,
+//                        the badges and the portal's paperwork page work unchanged.
+// The four SignWell contracts still out when this went live finish in SignWell:
+// an event holding a live SignWell contract shows the old panel (status and
+// review only) above the new one.
+
+const CONTRACT_TEMPLATES_STORAGE = "hbf_contract_templates_v1";
+const CONTRACT_SETTINGS_STORAGE = "hbf_contract_settings_v1";
+const STANDARD_CONTRACT_ID = "standard";
+const STANDARD_CONTRACT = { id: STANDARD_CONTRACT_ID, name: "Standard booking form", body: DEFAULT_CONTRACT_TEMPLATE, builtIn: true };
+
+function contractTemplateList(saved) {
+  const list = (Array.isArray(saved) ? saved : []).filter(function(t) { return t && t.id && typeof t.body === "string"; });
+  return list.some(function(t) { return t.id === STANDARD_CONTRACT_ID; }) ? list : [STANDARD_CONTRACT].concat(list);
+}
+function contractTemplateFor(kind, templates, settings) {
+  const id = settings && settings.byKind ? settings.byKind[kind] : null;
+  return templates.find(function(t) { return t.id === id; })
+    || templates.find(function(t) { return t.id === STANDARD_CONTRACT_ID; }) || templates[0];
+}
+
+// The templates and the per-kind choice. A failed read is an ERROR, never "no
+// templates": sending the built-in wording because Toby's edited wording could
+// not be read would send the wrong contract.
+function useContractTemplates() {
+  const [state, setState] = useState({ loaded:false, error:"", templates:[STANDARD_CONTRACT], saved:[], settings:{ byKind:{} } });
+  const reload = useCallback(async function() {
+    try {
+      const t = await sbGetStrict(CONTRACT_TEMPLATES_STORAGE);
+      const s = await sbGetStrict(CONTRACT_SETTINGS_STORAGE);
+      setState({ loaded:true, error:"", templates: contractTemplateList(t), saved: Array.isArray(t) ? t : [],
+        settings: (s && typeof s === "object" && !Array.isArray(s)) ? s : { byKind:{} } });
+    } catch (e) {
+      setState(function(p) { return Object.assign({}, p, { loaded:true, error: e.message || String(e) }); });
+    }
+  }, []);
+  useEffect(function() { reload(); }, [reload]);
+  return [state, reload];
+}
+
+// Template + event → the frozen body that is sent (see src/shared/contractDoc.js).
+function buildInAppContract(o) {
+  const parsed = parseContractTemplate(o.template.body);
+  const f = o.f || {};
+  const fd = o.fd || {};
+  const offered = parsed.blocks.accommodation ? contractAccommodation(f) : [];
+  const start = f.eventDate || fd.date || "";
+  const endDate = (isValidEventDate(fd.endDate) && fd.endDate > start) ? fd.endDate : "";
+  const r = resolveContractNodes(parsed.nodes, {
+    fields: f, custom: o.custom || {}, event: { id: fd.id, endDate: endDate }, one: !!o.one,
+    hasAccommodation: offered.length > 0, today: londonToday(),
+  });
+  // The couple see the body, so their email addresses stay out of it (they are
+  // on the signers, which only the office and the signing function read).
+  const data = Object.assign({}, f);
+  delete data.client1Email; delete data.client2Email;
+  data.custom = o.custom || {};
+  return {
+    parsed: parsed, empty: r.empty,
+    body: {
+      format: 1, title: contractTitle(parsed.nodes),
+      template: { id: o.template.id, name: o.template.name, savedAt: o.template.savedAt || null },
+      event: { id: fd.id, name: f.eventName || fd.couple || "", type: f.eventType || fd.eventType || "", date: start, endDate: endDate },
+      blocks: r.blocks, data: data, accommodation: offered,
+      parties: { one: !!o.one, client1: f.client1Name || "", client2: o.one ? null : (f.client2Name || "") },
+    },
+  };
+}
+
+async function contractAdminCall(payload) {
+  const res = await fetch("/.netlify/functions/contract-admin", {
+    method: "POST", headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(function() { return {}; });
+  if (!res.ok) throw new Error(data.error || ("status " + res.status));
+  return data;
+}
+async function openPdfBase64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+  window.open(url, "_blank", "noopener");
+  setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+}
+
+// The signed copy as a file on the event: the Event Booking Form, which is what
+// turns the EBF square green and what the portal's paperwork page lists.
+function inAppContractFile(ev, s) {
+  return { name: "Booking form — " + ((ev && ev.couple) || "event") + " (signed" + (s.version > 1 ? ", v" + s.version : "") + ").pdf",
+    url: storageUrl(s.pdf_path), path: s.pdf_path, type: "application/pdf", docType: "Event Booking Form",
+    uploadedAt: String(s.signed_at || "").slice(0, 10) || londonToday(), source: "contract", ctContractId: s.id };
+}
+function inAppContractFiled(ev, s) {
+  return (ev && ev.files || []).some(function(f) { return f && (f.ctContractId === s.id || (s.pdf_path && f.path === s.pdf_path)); });
+}
+
+// What the start-up pass changes on each event: the status of its in-app
+// contract, and the signed copy filed. Only an event whose contract record
+// names that very contract is touched. Pure, and run again on the fresh copy
+// inside mutateBookings, so it never writes from a stale list.
+function applyInAppContractStatuses(events, statuses) {
+  const byId = {};
+  (statuses || []).forEach(function(s) { if (s && s.id) byId[s.id] = s; });
+  let changed = 0;
+  const next = (events || []).map(function(ev) {
+    const c = ev && ev.contract;
+    if (!c || c.provider !== "hawthbush" || !c.contractId) return ev;
+    const s = byId[c.contractId];
+    if (!s) return ev;
+    let out = ev;
+    if (s.status === "signed" && c.status !== "Completed") {
+      out = Object.assign({}, out, { contract: Object.assign({}, c, { status: "Completed", signedAt: s.signed_at || null }) });
+    } else if (s.status === "void" && c.status !== "Voided") {
+      out = Object.assign({}, out, { contract: Object.assign({}, c, { status: "Voided" }) });
+    }
+    if (s.status === "signed" && s.pdf_path && !inAppContractFiled(out, s)) {
+      out = Object.assign({}, out, { files: (out.files || []).concat([inAppContractFile(out, s)]) });
+    }
+    if (out !== ev) changed++;
+    return out;
+  });
+  return { events: next, changed: changed };
+}
+
+// ── Review of what came back (an in-app contract) ───────────────────────────
+// The same decisions as the SignWell panel — details onto the event (asking
+// where they would replace something typed), stays into lettings (updating a
+// linked booking rather than doubling it) — on the same pure helpers.
+function InAppContractReview({ values, formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings, onUpdateAccomBookings, onApplied, requirements }) {
+  const latestRef = useRef(formData);
+  latestRef.current = formData;
+  const [accept, setAccept] = useState(function() {
+    const wb = contractWriteback(values, formData);
+    const chosen = {};
+    wb.forEach(function(r) { chosen[r.key] = r.state === "fill" || r.state === "add"; });
+    return { list: wb, chosen: chosen };
+  });
+  const [rows, setRows] = useState(function() {
+    return contractStays(values).map(function(st) {
+      const propertyId = guessProperty(st.match, accomProperties);
+      return Object.assign({}, st, { include: true, propertyId: propertyId }, matchContractStay(st, propertyId, formData.id, accomBookings));
+    });
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [force, setForce] = useState(false);
+
+  function setRowProperty(i, propertyId) {
+    setRows(function(prev) {
+      return prev.map(function(r, j) {
+        return j !== i ? r : Object.assign({}, r, { propertyId: propertyId }, matchContractStay(r, propertyId, formData.id, accomBookings));
+      });
+    });
+  }
+
+  async function apply() {
+    setBusy(true); setErr("");
+    try {
+      const patch = {};
+      accept.list.forEach(function(r) { if (accept.chosen[r.key]) patch[r.key] = r.incoming; });
+      const wanted = rows.filter(function(r) { return r.include && r.propertyId; });
+      const missing = rows.filter(function(r) { return r.include && !r.propertyId; });
+      if (missing.length) throw new Error("Choose a property for " + missing.map(function(r) { return r.label; }).join(" and ") + " first.");
+      const prop = function(id) { return (accomProperties || []).find(function(p) { return p.id === id; }); };
+      const toUpdate = wanted.filter(function(r) { return r.target; });
+      const toCreate = wanted.filter(function(r) { return !r.target; });
+      let made = 0, updated = 0;
+      if (toCreate.length) {
+        const res = await onCreateAccomBookings(toCreate.map(function(r) {
+          const p = prop(r.propertyId);
+          const stay = { propertyId: r.propertyId, propertyName: p ? p.name : "", checkIn: r.checkIn, checkOut: r.checkOut,
+            nights: nightsBetween(r.checkIn, r.checkOut) || r.nights || null, guestCount: "", value: r.value, maybe: r.maybe };
+          return {
+            propertyId: r.propertyId, propertyName: p ? p.name : "", propertyIds: [r.propertyId],
+            guestName: patch.client1Name || formData.couple || "", email: formData.email || "", phone: patch.phone || formData.phone || "",
+            checkIn: r.checkIn, checkOut: r.checkOut, nights: stay.nights, guestCount: "",
+            source: "contract", status: "confirmed", bookingType: /wedding/i.test(formData.eventType || "") ? "Wedding" : "",
+            linkedEventId: formData.id || null, value: r.value, estimated: false,
+            extras: [], breakage: 0, breakageStripeId: "", discountCode: "", discountAmount: 0, schedule: [],
+            notes: "From the signed booking form — " + r.label + " answered “" + r.answer + "”.",
+            createdAt: new Date().toISOString().slice(0, 10), stays: [stay],
+          };
+        }), force);
+        made = res.length;
+      }
+      if (toUpdate.length) {
+        const res2 = await onUpdateAccomBookings(toUpdate.map(function(r) {
+          const p = prop(r.propertyId);
+          return { id: r.target.id, propertyId: r.propertyId, propertyName: p ? p.name : "", checkIn: r.checkIn, checkOut: r.checkOut,
+            value: r.value, maybe: r.maybe, label: r.label, answer: r.answer };
+        }));
+        updated = res2.length;
+      }
+      Object.keys(patch).forEach(function(k) { update(k, patch[k]); });
+      const rec = Object.assign({}, latestRef.current.contract || {}, { appliedAt: new Date().toISOString() });
+      update("contract", rec);
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, patch, { contract: rec }));
+      const bits = [];
+      if (Object.keys(patch).length) bits.push(Object.keys(patch).length + " detail" + (Object.keys(patch).length === 1 ? "" : "s") + " written to the event");
+      if (updated) bits.push(updated + " lettings booking" + (updated === 1 ? "" : "s") + " updated");
+      if (made) bits.push(made + " lettings booking" + (made === 1 ? "" : "s") + " created");
+      if (onApplied) onApplied(bits.length ? bits.join(", ") + "." : "Nothing selected, so nothing changed.");
+    } catch (e) {
+      setErr(e.message || String(e));
+      if (e.clashes) setForce(true);
+    }
+    setBusy(false);
+  }
+
+  const nothing = !accept.list.length && !rows.length;
+  return (
+    <div style={{ marginTop:14, borderTop:`2px solid ${T.border}`, paddingTop:14 }}>
+      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:4 }}>Back from the clients</div>
+      <p style={{ fontSize:12.5, color:T.textLight, margin:"0 0 12px", lineHeight:1.6 }}>
+        {nothing ? "Nothing on the signed form differs from the event." : "Nothing below has been saved yet. Anything that clashes with what the event already holds is left unticked until you decide."}
+      </p>
+      {requirements && (
+        <div style={{ fontSize:12.5, color:T.text, background:T.amberBg, border:"1px solid #fde68a", borderRadius:7, padding:"9px 11px", marginBottom:12, whiteSpace:"pre-line" }}>
+          <strong>Special requirements:</strong> {requirements}
+        </div>
+      )}
+      {accept.list.map(function(r) {
+        const on = !!accept.chosen[r.key];
+        const clash = r.state === "conflict";
+        return (
+          <label key={r.key} style={{ display:"flex", gap:10, alignItems:"flex-start", padding:"9px 11px", borderRadius:7, marginBottom:6, cursor:"pointer",
+            background: clash ? T.amberBg : T.bgInput, border:`1px solid ${clash ? "#fde68a" : T.border}` }}>
+            <input type="checkbox" checked={on} style={{ marginTop:2, width:15, height:15, accentColor:T.accent, cursor:"pointer" }}
+              onChange={function(e) { const v = e.target.checked; setAccept(function(p) { return Object.assign({}, p, { chosen: Object.assign({}, p.chosen, { [r.key]: v }) }); }); }}/>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:12.5, fontWeight:700, color:T.text }}>{r.label}
+                {clash && <span style={{ marginLeft:7, fontSize:10, fontWeight:700, letterSpacing:.5, textTransform:"uppercase", color:"#92400e" }}>already filled in</span>}
+              </div>
+              <div style={{ fontSize:12.5, color:T.text, wordBreak:"break-word" }}>{showVal(r, r.incoming)}</div>
+              {clash && <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>replaces <span style={{ textDecoration:"line-through" }}>{showVal(r, r.current)}</span></div>}
+              {r.state === "add" && <div style={{ fontSize:11.5, color:T.textLight, marginTop:2 }}>adds {r.added.join(", ")}</div>}
+            </div>
+          </label>
+        );
+      })}
+      {rows.length > 0 && (
+        <div style={{ margin:"10px 0 14px" }}>
+          <div style={{ fontSize:12, fontWeight:700, color:T.textMid, marginBottom:7 }}>Accommodation they asked for</div>
+          {rows.map(function(r, i) {
+            return (
+              <div key={i} style={{ padding:"10px 11px", borderRadius:7, marginBottom:6, background:T.bgInput, border:`1px solid ${T.border}` }}>
+                <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+                  <input type="checkbox" checked={r.include} style={{ width:15, height:15, accentColor:T.accent, cursor:"pointer" }}
+                    onChange={function(e) { const v = e.target.checked; setRows(function(p) { return p.map(function(x, j) { return j === i ? Object.assign({}, x, { include: v }) : x; }); }); }}/>
+                  <span style={{ fontSize:13, fontWeight:700, color:T.text }}>{r.label}</span>
+                  {r.maybe && <span style={{ fontSize:10, fontWeight:700, letterSpacing:.5, textTransform:"uppercase", background:T.amberBg, color:"#92400e", border:"1px solid #fde68a", borderRadius:4, padding:"1px 6px" }}>held — books as maybe</span>}
+                  <span style={{ fontSize:12, color:T.textLight, marginLeft:"auto" }}>
+                    {r.checkIn && r.checkOut ? fmtDate(r.checkIn) + " – " + fmtDate(r.checkOut) : "dates missing"}{r.value ? " · £" + r.value : ""}
+                  </span>
+                </div>
+                <div style={{ marginTop:7, display:"flex", gap:8, alignItems:"center" }}>
+                  <span style={{ fontSize:11.5, color:T.textLight }}>Book into</span>
+                  <select value={r.propertyId} onChange={function(e) { setRowProperty(i, e.target.value); }}
+                    style={{ background:"#fff", border:`1.5px solid ${r.propertyId ? T.border : T.red}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:12.5, padding:"5px 8px" }}>
+                    <option value="">Choose a property…</option>
+                    {(accomProperties || []).map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
+                  </select>
+                </div>
+                {r.propertyId && (
+                  <div style={{ marginTop:8, paddingTop:8, borderTop:`1px dashed ${T.border}`, fontSize:12, color:T.textMid }}>
+                    {r.target
+                      ? <span><strong style={{ color:T.midBlue }}>Updates this event’s existing booking</strong> — {(r.target.guestName || "no name") + " (" + r.target.id + ")"}</span>
+                      : <span><strong style={{ color:T.green }}>Creates a new lettings booking</strong> — this event has nothing booked at that property yet.</span>}
+                  </div>
+                )}
+                {(r.clashes || []).length > 0 && (
+                  <div style={{ marginTop:8, padding:"8px 10px", borderRadius:6, background:T.amberBg, border:"1px solid #fde68a", fontSize:12, color:"#92400e", lineHeight:1.7 }}>
+                    <strong>Already let to somebody else on these nights.</strong>
+                    {r.clashes.map(function(c, k) { return <div key={k}>{(c.booking.guestName || "(no name)") + " (" + accomSourceLabel(c.booking) + ") · " + fmtDate(c.stay.checkIn) + " – " + fmtDate(c.stay.checkOut)}</div>; })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:10 }}>{err}</div>}
+      <BoxBtn onClick={apply} disabled={busy} tone={force ? "danger" : "primary"}>
+        {busy ? "Saving…" : force ? "Double book it anyway" : nothing ? "Mark as dealt with" : "Apply to this event"}
+      </BoxBtn>
+    </div>
+  );
+}
+
+// ── One custom {{field}} on the Contract tab ─────────────────────────────────
+function CustomContractField({ label, value, onChange }) {
+  return (
+    <BoxField label={label} hint="A field of this template's own.">
+      <BoxInput value={value} onChange={onChange}/>
+    </BoxField>
+  );
+}
+
+function ctWhen(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (isNaN(d)) return "";
+  return d.toLocaleString("en-GB", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit", timeZone:"Europe/London" });
+}
+
+const CT_ERRORS = {
+  client1_needed: "Client 1 needs a name and an email address.",
+  client2_needed: "Client 2 needs a name and an email address — or tick “One client signs”.",
+  same_email: "The two clients need different email addresses — each signs from their own.",
+  already_out: "A contract is already out for signing on this event. Void it first to send a new version.",
+  event_not_found: "Save the event first.",
+  empty_contract: "The template has nothing in it.",
+  too_long: "That contract is too long to send.",
+  not_admin: "Only an admin can send contracts.",
+};
+
+// ── The Contract tab, for contracts signed in the app ───────────────────────
+function InAppContractSection({ formData, update, onAutoSave, accomProperties, accomBookings, onCreateAccomBookings, onUpdateAccomBookings }) {
+  const saved = formData.contract || {};
+  const [f, setF] = useState(function() { return initialContractFields(formData); });
+  const [tpl] = useContractTemplates();
+  const [srv, setSrv] = useState({ loading: true });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [preview, setPreview] = useState(false);
+  const [voiding, setVoiding] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [showLog, setShowLog] = useState(false);
+  const [onlyForm, setOnlyForm] = useState(null);
+  const latestRef = useRef(formData);
+  latestRef.current = formData;
+  const eventId = /^\d+$/.test(String(formData.id || "")) ? Number(formData.id) : null;
+
+  const draft = saved.draft || {};
+  const custom = draft.custom || saved.custom || {};
+  const one = draft.oneSigner != null ? !!draft.oneSigner : (saved.oneSigner != null ? !!saved.oneSigner : !String(f.client2Email || "").trim());
+  const kind = contractKindOf(f.eventType || formData.eventType);
+  const chosenTplId = draft.templateId || saved.templateId || null;
+  const template = chosenTplId ? (tpl.templates.find(function(t) { return t.id === chosenTplId; }) || contractTemplateFor(kind, tpl.templates, tpl.settings))
+    : contractTemplateFor(kind, tpl.templates, tpl.settings);
+
+  // The same draft mechanism as before: edits are kept on the event as an
+  // unsent draft, and the event's own values (fees) are the event's.
+  function up(k, v) {
+    setF(function(p) { return Object.assign({}, p, { [k]: v }); });
+    if (CONTRACT_EVENT_KEYS[k]) { update(CONTRACT_EVENT_KEYS[k], v); return; }
+    setDraft(k, v);
+  }
+  function setDraft(k, v) {
+    const c = latestRef.current.contract || {};
+    const d = Object.assign({}, c.draft || {});
+    if (k === "custom" || k === "oneSigner" || k === "templateId") d[k] = v;
+    else {
+      const base = initialContractFields(Object.assign({}, latestRef.current, { contract: Object.assign({}, c, { draft: {} }) }));
+      if (v === base[k]) delete d[k]; else d[k] = v;
+    }
+    update("contract", Object.assign({}, c, { draft: d }));
+  }
+  function reset() {
+    const c = Object.assign({}, formData.contract || {});
+    delete c.draft;
+    setF(initialContractFields(Object.assign({}, formData, { contract: c })));
+    update("contract", c);
+    setMsg("Prefills restored.");
+  }
+
+  const load = useCallback(async function() {
+    if (eventId == null) { setSrv({ loading:false, contracts:[] }); return null; }
+    try {
+      const r = await sbRpcQuiet("ct_admin_for_event", { p_event_id: eventId });
+      setSrv({ loading:false, contracts: r.contracts || [], bookingFormOnly: !!r.booking_form_only });
+      return r;
+    } catch (e) {
+      setSrv({ loading:false, contracts:[], error: e.status === 404 ? "missing" : (e.message || String(e)) });
+      return null;
+    }
+  }, [eventId]);
+  useEffect(function() { load(); }, [load]);
+
+  // Default for "show only the booking form": on when nobody on this event has
+  // a portal login yet, so a couple meeting the portal for the first time
+  // through their contract is not shown a planner the office has not set up.
+  useEffect(function() {
+    if (eventId == null || onlyForm !== null) return;
+    sbRpcQuiet("wp_list_access", { p_event_id: eventId })
+      .then(function(r) { setOnlyForm(!((r && r.access) || []).some(function(a) { return !a.revoked_at; })); })
+      .catch(function() { setOnlyForm(true); });
+  }, [eventId]);
+
+  const contracts = srv.contracts || [];
+  const cur = contracts[0] || null;
+  const live = cur && (cur.status === "out" || cur.status === "signed") ? cur : null;
+
+  // Bring the event's record into line with the server, and file the signed
+  // copy, as soon as the tab sees it (the start-up pass does the same for
+  // events nobody opens).
+  useEffect(function() {
+    if (!cur || !saved.contractId || saved.contractId !== cur.id) return;
+    const r = applyInAppContractStatuses([latestRef.current], [cur]);
+    if (!r.changed) return;
+    const ev = r.events[0];
+    update("contract", ev.contract);
+    if (ev.files !== latestRef.current.files) update("files", ev.files);
+    if (onAutoSave) onAutoSave(Object.assign({}, latestRef.current, { contract: ev.contract, files: ev.files })).catch(function() {});
+  }, [cur && cur.id, cur && cur.status, cur && cur.pdf_path]);
+
+  const built = tpl.loaded && !tpl.error ? buildInAppContract({ template: template, fd: formData, f: f, custom: custom, one: one }) : null;
+  const customLabels = built ? built.parsed.custom : [];
+
+  async function send() {
+    setErr(""); setMsg("");
+    if (eventId == null) { setErr("Save the event first."); return; }
+    if (tpl.error) { setErr("The contract templates could not be read, so nothing was sent: " + tpl.error); return; }
+    const e1 = String(f.client1Email || "").trim().toLowerCase();
+    const e2 = String(f.client2Email || "").trim().toLowerCase();
+    if (!String(f.client1Name || "").trim() || !e1) { setErr(CT_ERRORS.client1_needed); return; }
+    if (!one && (!String(f.client2Name || "").trim() || !e2)) { setErr(CT_ERRORS.client2_needed); return; }
+    if (!one && e1 === e2) { setErr(CT_ERRORS.same_email); return; }
+    setBusy(true);
+    let issued = null;
+    try {
+      issued = await sbRpc("ct_admin_issue", {
+        p_event_id: eventId, p_body: built.body, p_one_signer: one,
+        p_client1: { name: f.client1Name, email: e1 }, p_client2: one ? null : { name: f.client2Name, email: e2 },
+        p_prefill: { client1Name: f.client1Name || "", client2Name: one ? "" : (f.client2Name || ""),
+          client1Mobile: formData.phone || "", client2Mobile: one ? "" : (formData.phone2 || ""), address: formData.address || "" },
+        p_booking_form_only: onlyForm === true,
+      });
+    } catch (e) {
+      setErr(CT_ERRORS[e.code] || ("The contract was not sent: " + (e.message || e)));
+      setBusy(false);
+      return;
+    }
+    const record = { provider: "hawthbush", contractId: issued.id, version: issued.version, status: "Pending", testMode: false,
+      sentAt: issued.sent_at || new Date().toISOString(), sentBy: issued.venue_name || "", fields: f, custom: custom,
+      oneSigner: one, templateId: template.id, templateName: template.name };
+    update("contract", record);
+    try { if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, { contract: record })); }
+    catch (e) { setErr("The contract was created, but saving the event failed: " + (e.message || e) + " — reload before doing anything else."); }
+    // The emails are a second step, reported on their own.
+    try {
+      const r = await contractAdminCall({ action: "invite", contractId: issued.id });
+      const bad = (r.results || []).filter(function(x) { return !x.ok; });
+      setMsg(bad.length ? "" : "Sent for signing — emailed to " + (r.results || []).map(function(x) { return x.email; }).join(" and ") + ".");
+      if (bad.length) setErr("The contract is ready, but the email did not go to " + bad.map(function(x) { return x.email; }).join(", ") + " (" + (bad[0].error || "") + "). Press “Email it again”.");
+    } catch (e) {
+      setErr("The contract is ready, but the emails did not go: " + (e.message || e) + ". Press “Email it again”.");
+    }
+    await load();
+    setBusy(false);
+  }
+
+  async function emailAgain(kindOfEmail) {
+    if (!live) return;
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const r = await contractAdminCall({ action: kindOfEmail, contractId: live.id });
+      const ok = (r.results || []).filter(function(x) { return x.ok; }).map(function(x) { return x.email; });
+      const bad = (r.results || []).filter(function(x) { return !x.ok; });
+      if (ok.length) setMsg("Emailed to " + ok.join(" and ") + ".");
+      if (bad.length) setErr("Not sent to " + bad.map(function(x) { return x.email + " (" + x.error + ")"; }).join(", "));
+      if (!ok.length && !bad.length) setMsg("Everyone has signed — nobody to email.");
+      await load();
+    } catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  }
+
+  async function doVoid() {
+    if (!live || !voidReason.trim()) return;
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      await sbRpc("ct_admin_void", { p_contract: live.id, p_reason: voidReason.trim() });
+      const rec = Object.assign({}, latestRef.current.contract || {}, { status: "Voided", voidedAt: new Date().toISOString() });
+      update("contract", rec);
+      if (onAutoSave) await onAutoSave(Object.assign({}, latestRef.current, { contract: rec }));
+      setVoiding(false); setVoidReason("");
+      setMsg("Voided. Change what you need below and send the new version.");
+      await load();
+    } catch (e) { setErr(e.code === "not_out" ? "Only a contract still out for signing can be voided." : (e.message || String(e))); }
+    setBusy(false);
+  }
+
+  async function seal() {
+    if (!live) return;
+    setBusy(true); setErr(""); setMsg("");
+    try { const r = await contractAdminCall({ action: "seal", contractId: live.id }); setMsg(r.sealed ? "Signed copy made, filed and emailed." : "The signed copy was already made."); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  }
+
+  async function pdfPreview() {
+    if (!built) return;
+    setBusy(true); setErr("");
+    try { const r = await contractAdminCall({ action: "preview", body: built.body, oneSigner: one }); await openPdfBase64(r.pdf); }
+    catch (e) { setErr("Could not make the preview: " + (e.message || e)); }
+    setBusy(false);
+  }
+
+  async function setOnlyFormLive(v) {
+    try { await sbRpc("ct_admin_set_booking_form_only", { p_event_id: eventId, p_on: v }); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  }
+
+  const row = { display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(0, 1fr)", gap:12, marginBottom:12 };
+  const head = { fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" };
+
+  if (eventId == null) {
+    return <div style={{ fontSize:13, color:T.textMid }}>Save the event first — the booking form is sent from a saved event.</div>;
+  }
+  if (srv.error === "missing") {
+    return (
+      <div style={{ background:T.amberBg, border:"1px solid #fde68a", color:"#92400e", borderRadius:8, padding:"12px 14px", fontSize:13, lineHeight:1.6 }}>
+        Contracts in the app need the database update <code>2026-11-04a-contracts.sql</code>, which has not been applied yet.
+      </div>
+    );
+  }
+
+  const signers = live ? (live.signers || []) : [];
+  const history = contracts.filter(function(c) { return !live || c.id !== live.id; });
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14, flexWrap:"wrap" }}>
+        <div>
+          <div style={{ fontSize:13, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Booking form</div>
+          <div style={{ fontSize:12.5, color:T.textLight, marginTop:3 }}>
+            Signed by the couple in their planner. The wording is edited in Settings → Contracts.
+          </div>
+        </div>
+        {!live && <BoxBtn tone="ghost" onClick={reset}>Restore prefills</BoxBtn>}
       </div>
 
-      {/* Full width — these run to a few lines and are the one place the
-          standard terms get varied. */}
-      <BoxField label="Non standard terms"
-        hint="From Non-Standard / Extras on the Financials tab. Anything typed here goes on the contract without changing the event.">
-        <textarea value={f.nonStandard} rows={3}
-          onChange={function(e){ up("nonStandard", e.target.value); }}
-          style={Object.assign({}, boxInput, { resize:"vertical", lineHeight:1.5 })}/>
-      </BoxField>
+      {srv.loading && <div style={{ fontSize:12.5, color:T.textLight, marginBottom:10 }}>Loading…</div>}
+      {srv.error && srv.error !== "missing" && <div style={{ fontSize:12.5, color:T.red, marginBottom:10 }}>Could not read this event's contracts: {srv.error}</div>}
+      {err && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{err}</div>}
+      {msg && <div style={{ background:T.greenBg, border:"1px solid #86efac", color:T.green, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>{msg}</div>}
 
-      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Grain Store Access</div>
-      <div style={row}>
-        <CField f={f} up={up} label="Day before" k="accessBefore"/>
-        <CField f={f} up={up} label="Event day" k="accessDay"/>
-        <CField f={f} up={up} label="Day after" k="accessAfter"/>
+      {live && (
+        <div style={{ background: live.status === "signed" ? T.greenBg : T.midBlueBg, border:`1px solid ${T.border}`, borderRadius:9, padding:"13px 15px", marginBottom:16 }}>
+          <div style={{ fontSize:13.5, fontWeight:700, color: live.status === "signed" ? T.green : T.midBlue }}>
+            {live.status === "signed" ? "Signed by everyone" + (live.signed_at ? " · " + ctWhen(live.signed_at) : "") : "Out for signing"}
+            <span style={{ fontWeight:500, color:T.textMid }}> · version {live.version} · sent {ctWhen(live.sent_at)}{live.sent_by_name ? " by " + live.sent_by_name : ""}</span>
+          </div>
+          <div style={{ marginTop:8, display:"grid", gap:4 }}>
+            {signers.map(function(s) {
+              return (
+                <div key={s.role} style={{ display:"flex", flexWrap:"wrap", gap:8, fontSize:12.5, color:T.text }}>
+                  <strong>{s.name}</strong><span style={{ color:T.textLight }}>{s.email}</span>
+                  <span style={{ color: s.signed_at ? T.green : T.textMid }}>
+                    {s.signed_at ? "signed " + ctWhen(s.signed_at) + " as “" + s.signed_name + "”" : s.first_opened_at ? "opened " + ctWhen(s.first_opened_at) + ", not signed yet" : "not opened yet"}
+                  </span>
+                </div>
+              );
+            })}
+            {live.reminders_sent > 0 && <div style={{ fontSize:12, color:T.textLight }}>{live.reminders_sent} reminder{live.reminders_sent === 1 ? "" : "s"} sent, the last {ctWhen(live.last_reminded_at)}</div>}
+          </div>
+          <div style={{ marginTop:10, display:"flex", gap:8, flexWrap:"wrap" }}>
+            <BoxBtn tone="ghost" onClick={function() { setPreview(!preview); }}>{preview ? "Hide the form" : "Show the form"}</BoxBtn>
+            {live.status === "out" && <BoxBtn tone="ghost" onClick={function() { emailAgain("remind"); }} disabled={busy}>Send a reminder</BoxBtn>}
+            {live.status === "out" && <BoxBtn tone="ghost" onClick={function() { emailAgain("invite"); }} disabled={busy}>Email it again</BoxBtn>}
+            {live.status === "out" && <BoxBtn tone="danger" onClick={function() { setVoiding(!voiding); }} disabled={busy}>Void…</BoxBtn>}
+            {live.status === "signed" && live.pdf_path && <BoxBtn tone="dark" onClick={function() { openStoredFile({ path: live.pdf_path }); }}>Open the signed copy</BoxBtn>}
+            {live.status === "signed" && !live.pdf_path && <BoxBtn tone="dark" onClick={seal} disabled={busy}>Make the signed copy</BoxBtn>}
+            <BoxBtn tone="ghost" onClick={load} disabled={busy}>Refresh</BoxBtn>
+          </div>
+          {(srv.bookingFormOnly || live.status === "out") && (
+            <div style={{ marginTop:10 }}>
+              <BoxCheck checked={srv.bookingFormOnly} onChange={setOnlyFormLive}
+                label="Show them only the booking form in their planner"
+                hint="Untick to open up the rest of the planner for this event."/>
+            </div>
+          )}
+          {voiding && (
+            <div style={{ marginTop:12, padding:"10px 12px", background:"#fff", border:`1px solid ${T.border}`, borderRadius:8 }}>
+              <div style={{ fontSize:12.5, color:T.text, marginBottom:6 }}>
+                Voiding cancels this version: nobody can sign it, and any signature on it is set aside. It is kept, with your reason, and you can send a corrected version straight after.
+              </div>
+              <BoxInput value={voidReason} onChange={setVoidReason} placeholder="Why — e.g. wrong venue fee"/>
+              <div style={{ display:"flex", gap:8, marginTop:8 }}>
+                <BoxBtn tone="danger" onClick={doVoid} disabled={busy || !voidReason.trim()}>Void this version</BoxBtn>
+                <BoxBtn tone="ghost" onClick={function() { setVoiding(false); }}>Keep it</BoxBtn>
+              </div>
+            </div>
+          )}
+          {preview && (
+            <div style={{ marginTop:14, background:"#fff", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 18px", maxHeight:"70vh", overflowY:"auto" }}>
+              <ContractDocument body={live.body} answers={live.answers} oneSigner={live.one_signer}
+                signers={signers.map(function(s) { return { role:s.role, name:s.name, signed: !!s.signed_at, signed_at:s.signed_at, signed_name:s.signed_name }; })}/>
+            </div>
+          )}
+          {live.status === "signed" && saved.contractId === live.id && !(saved.appliedAt) && (
+            <InAppContractReview key={live.id} values={contractValuesForReview(live.body, live.answers)} formData={formData} update={update} onAutoSave={onAutoSave}
+              accomProperties={accomProperties} accomBookings={accomBookings} onCreateAccomBookings={onCreateAccomBookings}
+              onUpdateAccomBookings={onUpdateAccomBookings} requirements={(live.answers || {}).requirements}
+              onApplied={function(m) { setMsg(m); }}/>
+          )}
+          <div style={{ marginTop:10 }}>
+            <button onClick={function() { setShowLog(!showLog); }}
+              style={{ background:"none", border:"none", color:T.accent, fontFamily:"inherit", fontSize:12.5, fontWeight:600, cursor:"pointer", padding:0 }}>
+              {showLog ? "Hide" : "Show"} the signing record
+            </button>
+            {showLog && (
+              <div style={{ marginTop:6, fontSize:12, color:T.textMid }}>
+                <div>Fingerprint as sent: <code style={{ wordBreak:"break-all" }}>{live.body_sha256}</code></div>
+                {live.final_sha256 && <div>Fingerprint as signed: <code style={{ wordBreak:"break-all" }}>{live.final_sha256}</code></div>}
+                {(live.log || []).map(function(l, i) {
+                  return <div key={i} style={{ padding:"3px 0", borderTop:`1px solid ${T.border}` }}>{ctWhen(l.at)} · {l.what}{l.who ? " · " + l.who : ""}{l.ip ? " · " + l.ip : ""}</div>;
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!live && (
+        <>
+          {tpl.error && <div style={{ background:T.redBg, border:"1px solid #fca5a5", color:T.red, borderRadius:7, padding:"9px 12px", fontSize:12.5, marginBottom:12 }}>
+            The contract templates could not be read ({tpl.error}). Nothing can be sent until they can — reload the page.</div>}
+
+          <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap", marginBottom:12 }}>
+            <BoxField label="Contract" width={320} hint={"The " + (CONTRACT_KINDS.find(function(k) { return k[0] === kind; }) || ["", "event"])[1].toLowerCase() + " contract is chosen unless you pick another."}>
+              <select value={template.id} onChange={function(e) { setDraft("templateId", e.target.value); }} style={boxInput}>
+                {tpl.templates.map(function(t) { return <option key={t.id} value={t.id}>{t.name}</option>; })}
+              </select>
+            </BoxField>
+          </div>
+
+          <div style={row}>
+            <CField f={f} up={up} label="Event name" k="eventName"/>
+            <CField f={f} up={up} label="Event type" k="eventType"/>
+            <CField f={f} up={up} label="Event date" k="eventDate" type="date"/>
+            <CField f={f} up={up} label="Max guests" k="maxGuests"/>
+            <CMoneyField f={f} up={up} label="Venue fee (inc VAT)" k="venueFee" hint="Saved to the event's Financials."/>
+          </div>
+          <BoxField label="Non standard terms" hint="From Non-Standard / Extras on the Financials tab. Anything typed here goes on the contract without changing the event. Left empty, the contract says N/A.">
+            <textarea value={f.nonStandard} rows={3} onChange={function(e) { up("nonStandard", e.target.value); }}
+              style={Object.assign({}, boxInput, { resize:"vertical", lineHeight:1.5 })}/>
+          </BoxField>
+
+          <div style={head}>Grain Store access</div>
+          <div style={row}>
+            <CField f={f} up={up} label="Day before" k="accessBefore"/>
+            <CField f={f} up={up} label="Event day" k="accessDay"/>
+            <CField f={f} up={up} label="Day after" k="accessAfter"/>
+          </div>
+
+          {customLabels.length > 0 && (
+            <>
+              <div style={head}>This contract's own fields</div>
+              <div style={row}>
+                {customLabels.map(function(l) {
+                  return <CustomContractField key={l} label={l} value={custom[l] || ""}
+                    onChange={function(v) { setDraft("custom", Object.assign({}, custom, { [l]: v })); }}/>;
+                })}
+              </div>
+            </>
+          )}
+
+          <div style={head}>Accommodation offered</div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(3, minmax(0, 1fr))", gap:12, marginBottom:8 }}>
+            <CField f={f} up={up} label="Amly from" k="amlyFrom" type="date"/>
+            <CField f={f} up={up} label="Amly to" k="amlyTo" type="date"/>
+            <CMoneyField f={f} up={up} label="Amly fee" k="amlyFee" hint="Saved to the event."/>
+            <CField f={f} up={up} label="Hamlet from" k="hamletFrom" type="date"/>
+            <CField f={f} up={up} label="Hamlet to" k="hamletTo" type="date"/>
+            <CMoneyField f={f} up={up} label="Hamlet fee" k="hamletFee" hint="Saved to the event."/>
+            <CField f={f} up={up} label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
+            <CField f={f} up={up} label="Glamping, 1 night — to" k="glampingTo" type="date"/>
+            <CMoneyField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Saved to the event."/>
+            <CField f={f} up={up} label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
+            <CField f={f} up={up} label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
+            <CMoneyField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Saved to the event."/>
+          </div>
+          <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
+            Only a property with a fee is offered. The couple answer Yes, Hold or No to each; glamping is one question showing both prices,
+            and they pick one night or two. {built && !built.body.accommodation.length ? "With no fees here, the accommodation page and Part C are left out of the contract." : ""}
+          </div>
+
+          <div style={head}>Who signs</div>
+          <div style={{ marginBottom:10 }}>
+            <BoxCheck checked={one} onChange={function(v) { setDraft("oneSigner", v); }} label="One client signs"
+              hint="For a wake or a party booked by one person. Otherwise both clients sign, each from their own email."/>
+          </div>
+          <div style={row}>
+            <CField f={f} up={up} label="Client 1 name" k="client1Name"/>
+            <CField f={f} up={up} label="Client 1 email" k="client1Email"/>
+            {!one && <CField f={f} up={up} label="Client 2 name" k="client2Name"/>}
+            {!one && <CField f={f} up={up} label="Client 2 email" k="client2Email" hint="Must differ from Client 1 — each signs from their own."/>}
+          </div>
+          <BoxCheck checked={onlyForm === true} onChange={setOnlyForm} label="Show them only the booking form in their planner"
+            hint="On unless somebody on this event already has a planner login. Sending the contract gives each client a login."/>
+
+          {built && (built.empty.length > 0 || built.parsed.warnings.length > 0) && (
+            <div style={{ background:T.amberBg, border:"1px solid #fde68a", color:"#92400e", borderRadius:7, padding:"9px 12px", fontSize:12.5, margin:"12px 0", lineHeight:1.6 }}>
+              {built.empty.length > 0 && <div>Blank on the contract: {built.empty.join(", ")}.</div>}
+              {built.parsed.warnings.map(function(w, i) { return <div key={i}>{w}</div>; })}
+            </div>
+          )}
+
+          <div style={{ borderTop:`1px solid ${T.border}`, marginTop:18, paddingTop:16, display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+            <BoxBtn tone="ghost" onClick={function() { setPreview(!preview); }} disabled={!built}>{preview ? "Hide preview" : "Preview"}</BoxBtn>
+            <BoxBtn tone="ghost" onClick={pdfPreview} disabled={!built || busy}>Preview the PDF</BoxBtn>
+            <div style={{ flex:1 }}/>
+            <BoxBtn tone="primary" onClick={send} disabled={busy || !built || !!tpl.error || !tpl.loaded}>
+              {busy ? "Sending…" : cur && cur.status === "void" ? "Send version " + (cur.version + 1) + " for signing" : "Send for signing"}
+            </BoxBtn>
+          </div>
+          {preview && built && (
+            <div style={{ marginTop:14, background:"#fff", border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 18px", maxHeight:"70vh", overflowY:"auto" }}>
+              <ContractDocument body={Object.assign({}, built.body, { venue: null })} answers={{ client1Name: f.client1Name, client2Name: f.client2Name,
+                client1Mobile: formData.phone, client2Mobile: formData.phone2, address: formData.address }} oneSigner={one} signers={[]}/>
+            </div>
+          )}
+        </>
+      )}
+
+      {history.length > 0 && (
+        <div style={{ marginTop:18, fontSize:12.5, color:T.textMid }}>
+          <div style={head}>Earlier versions</div>
+          {history.map(function(h) {
+            return (
+              <div key={h.id} style={{ padding:"5px 0", borderTop:`1px solid ${T.border}` }}>
+                Version {h.version} · sent {ctWhen(h.sent_at)} · {h.status === "void" ? "voided " + ctWhen(h.voided_at) + (h.voided_by_name ? " by " + h.voided_by_name : "") + (h.void_reason ? " — “" + h.void_reason + "”" : "") : h.status}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The Contract tab. Every new contract is made here, in the app. An event that
+// still has a SignWell contract out (the four sent before 4 Nov 2026) shows that
+// one's panel — status and the review of what came back, no sending — above.
+function ContractSection(props) {
+  const c = props.formData.contract || {};
+  const st = String(c.status || "").toLowerCase();
+  const signWellLive = !!c.documentId && !c.testMode && c.provider !== "hawthbush"
+    && ["declined", "voided", "expired", "canceled", "cancelled"].indexOf(st) === -1;
+  if (signWellLive) {
+    return (
+      <div>
+        <SignWellContractSection {...props}/>
+        <div style={{ fontSize:12.5, color:T.textLight, marginTop:16, lineHeight:1.6 }}>
+          This event's contract was sent through SignWell before contracts moved into the app, so it finishes there.
+          If it needs replacing, void it in SignWell; a new contract is then sent from here.
+        </div>
+      </div>
+    );
+  }
+  return <InAppContractSection {...props}/>;
+}
+
+// ── Settings → Contracts ────────────────────────────────────────────────────
+const CONTRACT_SAMPLE_FIELDS = {
+  eventName: "Sam & Alex", eventType: "Wedding (Peak)", eventDate: "2027-09-18",
+  accessBefore: CONTRACT_ACCESS.before, accessDay: CONTRACT_ACCESS.day, accessAfter: CONTRACT_ACCESS.after,
+  maxGuests: "200", venueFee: "5670", nonStandard: "", client1Name: "Sam Smith", client2Name: "Alex Jones",
+  amlyFee: "1050", amlyFrom: "2027-09-17", amlyTo: "2027-09-19", hamletFee: "", glampingFeePd: "1750",
+  glampingFrom: "2027-09-18", glampingTo: "2027-09-19", glamping2Fee: "2675", glamping2From: "2027-09-17", glamping2To: "2027-09-19",
+};
+
+function ContractTemplateEditor({ t, onChange, onInsertRef }) {
+  return (
+    <textarea ref={onInsertRef} value={t.body} spellCheck={true}
+      onChange={function(e) { onChange(e.target.value); }}
+      style={Object.assign({}, inputCss, { minHeight:520, fontFamily:"Menlo, Consolas, monospace", fontSize:12.5, lineHeight:1.55, resize:"vertical" })}/>
+  );
+}
+
+function ContractSettingsPage() {
+  const [tpl, reload] = useContractTemplates();
+  const [list, setList] = useState(null);
+  const [settings, setSettings] = useState(null);
+  const [sel, setSel] = useState(STANDARD_CONTRACT_ID);
+  const [flash, setFlash] = useState("");
+  const [sampleAccom, setSampleAccom] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const taRef = useRef(null);
+  const fileRef = useRef(null);
+
+  useEffect(function() {
+    if (!tpl.loaded || tpl.error) return;
+    setList(function(p) { return p || tpl.templates.map(function(t) { return Object.assign({}, t); }); });
+    setSettings(function(p) { return p || Object.assign({ byKind:{} }, tpl.settings); });
+  }, [tpl]);
+
+  if (!tpl.loaded) return <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}><PageHeader title="Contracts"/><div style={quietText}>Loading…</div></div>;
+  if (tpl.error) return <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}><PageHeader title="Contracts"/><ErrBanner text={"The contract templates could not be read: " + tpl.error}/></div>;
+  if (!list || !settings) return null;
+
+  const t = list.find(function(x) { return x.id === sel; }) || list[0];
+  const dirty = JSON.stringify(list) !== JSON.stringify(tpl.templates);
+  const parsed = parseContractTemplate(t.body);
+  const sampleF = Object.assign({}, CONTRACT_SAMPLE_FIELDS, sampleAccom ? {} : { amlyFee:"", hamletFee:"", glampingFeePd:"", glamping2Fee:"" });
+  const built = buildInAppContract({ template: t, fd: { id: 0, couple: sampleF.eventName, eventType: sampleF.eventType, date: sampleF.eventDate },
+    f: sampleF, custom: {}, one: false });
+
+  function upd(patch) { setList(list.map(function(x) { return x.id === t.id ? Object.assign({}, x, patch) : x; })); }
+  function insert(text) {
+    const ta = taRef.current;
+    const body = t.body;
+    if (!ta) { upd({ body: body + text }); return; }
+    const a = ta.selectionStart, b = ta.selectionEnd;
+    upd({ body: body.slice(0, a) + text + body.slice(b) });
+    setTimeout(function() { ta.focus(); ta.selectionStart = ta.selectionEnd = a + text.length; }, 0);
+  }
+  async function save() {
+    setFlash("");
+    try {
+      const me = (await sbRpcQuiet("my_profile").catch(function() { return null; })) || {};
+      const now = new Date().toISOString();
+      const before = tpl.templates;
+      const after = list.map(function(x) {
+        const was = before.find(function(y) { return y.id === x.id; });
+        const clean = { id: x.id, name: x.name, body: x.body, savedAt: x.savedAt || null, savedBy: x.savedBy || "", history: x.history || [] };
+        if (was && was.body === x.body && was.name === x.name) return clean;
+        // The wording it replaces goes into its history (the last ten).
+        const history = (clean.history.concat(was && !was.builtIn ? [{ body: was.body, savedAt: was.savedAt || null, savedBy: was.savedBy || "" }] : [])).slice(-10);
+        return Object.assign(clean, { savedAt: now, savedBy: me.name || me.email || "", history: history });
+      });
+      // Merged against what was READ (not what is on screen), so another
+      // tab's template is kept and only this screen's changes are applied.
+      await saveArrayMerged(CONTRACT_TEMPLATES_STORAGE, tpl.saved, after);
+      await saveObjectMerged(CONTRACT_SETTINGS_STORAGE, tpl.settings, settings);
+      setFlash("Saved");
+      // Start again from what is now saved, so "Save" reflects real changes.
+      setList(null); setSettings(null);
+      await reload();
+    } catch (e) { setFlash("Save failed — " + (e.message || e)); }
+  }
+  function addTemplate(copyOf) {
+    const id = "t" + Date.now().toString(36);
+    const name = copyOf ? copyOf.name + " (copy)" : "New contract";
+    setList(list.concat([{ id: id, name: name, body: copyOf ? copyOf.body : "# Booking form\n\nType the contract here.\n\n[[Signatures]]\n" }]));
+    setSel(id);
+  }
+  function remove() {
+    if (t.id === STANDARD_CONTRACT_ID) return;
+    const used = Object.keys(settings.byKind || {}).filter(function(k) { return settings.byKind[k] === t.id; });
+    if (used.length) { setFlash("Not deleted — it is the contract for " + used.join(", ") + ". Choose another for them first."); return; }
+    if (!window.confirm("Delete “" + t.name + "”? Contracts already sent with it keep their wording.")) return;
+    setList(list.filter(function(x) { return x.id !== t.id; }));
+    setSel(STANDARD_CONTRACT_ID);
+  }
+  async function importDocx(file) {
+    if (!file) return;
+    setBusy(true); setFlash("");
+    try {
+      const mod = await import("mammoth/mammoth.browser.min.js");
+      const mammoth = mod.default || mod;
+      const r = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() });
+      const markup = htmlToContractMarkup(r.value);
+      const id = "t" + Date.now().toString(36);
+      setList(list.concat([{ id: id, name: file.name.replace(/\.docx$/i, ""), body: markup + "\n[[Signatures]]\n" }]));
+      setSel(id);
+      setFlash("Imported. Put the {{fields}} and [[blocks]] where they go, then Save.");
+    } catch (e) { setFlash("Could not read that document — " + (e.message || e)); }
+    setBusy(false);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+  async function pdf() {
+    setBusy(true);
+    try { const r = await contractAdminCall({ action: "preview", body: built.body }); await openPdfBase64(r.pdf); }
+    catch (e) { setFlash("Could not make the PDF — " + (e.message || e)); }
+    setBusy(false);
+  }
+
+  const card = { background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 20px", boxShadow:T.shadowCard, marginBottom:16 };
+  return (
+    <div style={{ paddingTop: UI_CLASSIC ? 28 : 0, maxWidth:1200 }}>
+      <PageHeader title="Contracts" sub="The booking forms couples sign in their planner"
+        actions={<div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          {flash && <span style={{ fontSize:12, color: flash === "Saved" || /^Imported/.test(flash) ? T.green : T.red, fontWeight:700 }}>{flash}</span>}
+          <BoxBtn onClick={save} disabled={!dirty && JSON.stringify(settings) === JSON.stringify(tpl.settings)}>Save</BoxBtn>
+        </div>}/>
+
+      <div style={card}>
+        <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700, marginBottom:10 }}>Which contract each kind of event gets</div>
+        <div style={{ display:"flex", gap:14, flexWrap:"wrap" }}>
+          {CONTRACT_KINDS.map(function(k) {
+            const v = (settings.byKind || {})[k[0]] || STANDARD_CONTRACT_ID;
+            return (
+              <BoxField key={k[0]} label={k[1]} width={230}>
+                <select value={v} onChange={function(e) { setSettings(Object.assign({}, settings, { byKind: Object.assign({}, settings.byKind, { [k[0]]: e.target.value }) })); }} style={boxInput}>
+                  {list.map(function(x) { return <option key={x.id} value={x.id}>{x.name}</option>; })}
+                </select>
+              </BoxField>
+            );
+          })}
+        </div>
+        <div style={{ fontSize:12, color:T.textLight, marginTop:10, lineHeight:1.6 }}>
+          A contract already sent keeps the wording it was sent with — changing a template only affects contracts sent from now on.
+          The Contract tab can still pick a different template for one event.
+        </div>
       </div>
 
-      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Accommodation</div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
-        <CField f={f} up={up} label="Amly from" k="amlyFrom" type="date"/>
-        <CField f={f} up={up} label="Amly to" k="amlyTo" type="date"/>
-        <CMoneyField f={f} up={up} label="Amly fee" k="amlyFee" hint="Saved to the event."/>
-        <CField f={f} up={up} label="Hamlet from" k="hamletFrom" type="date"/>
-        <CField f={f} up={up} label="Hamlet to" k="hamletTo" type="date"/>
-        <CMoneyField f={f} up={up} label="Hamlet fee" k="hamletFee" hint="Saved to the event."/>
-        <CField f={f} up={up} label="Glamping, 1 night — from" k="glampingFrom" type="date" hint="Arrives on the day."/>
-        <CField f={f} up={up} label="Glamping, 1 night — to" k="glampingTo" type="date"/>
-        <CMoneyField f={f} up={up} label="Glamping, 1 night — fee" k="glampingFeePd" hint="Total for the one night. Saved to the event."/>
-        <CField f={f} up={up} label="Glamping, 2 nights — from" k="glamping2From" type="date" hint="Arrives the day before."/>
-        <CField f={f} up={up} label="Glamping, 2 nights — to" k="glamping2To" type="date"/>
-        <CMoneyField f={f} up={up} label="Glamping, 2 nights — fee" k="glamping2Fee" hint="Total for the two nights. Saved to the event."/>
-      </div>
-      <div style={{ fontSize:12, color:T.textLight, marginBottom:14, lineHeight:1.6 }}>
-        All four choices — Amly, Hamlet, and the two glamping options — are the client's to make on the form.
-        The dates and fees above are ours, and are what they will be agreeing to. They should say yes to one
-        glamping option and no to the other; if they hold both, that is taken as two nights.
-      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"minmax(0, 200px) minmax(0, 1.25fr) minmax(0, 1fr)", gap:16, alignItems:"start" }}>
+        <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
+          {list.map(function(x) {
+            const on = x.id === t.id;
+            return (
+              <button key={x.id} onClick={function() { setSel(x.id); }}
+                style={{ display:"block", width:"100%", textAlign:"left", padding:"11px 14px", background: on ? T.tint : "none", border:"none",
+                  borderLeft: on ? `3px solid ${T.accent}` : "3px solid transparent", borderBottom:`1px solid ${T.border}`,
+                  color: on ? T.accent : T.textMid, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight: on ? 700 : 400 }}>
+                {x.name}
+                <div style={{ fontSize:10.5, opacity:.7, marginTop:2 }}>{x.savedAt ? "saved " + ctWhen(x.savedAt) + (x.savedBy ? " · " + x.savedBy : "") : x.builtIn ? "standard wording" : "not saved yet"}</div>
+              </button>
+            );
+          })}
+          <div style={{ padding:10, display:"grid", gap:6 }}>
+            <button style={smallBtn} onClick={function() { addTemplate(t); }}>Copy this one</button>
+            <button style={smallBtn} onClick={function() { addTemplate(null); }}>New, blank</button>
+            <button style={smallBtn} onClick={function() { fileRef.current && fileRef.current.click(); }} disabled={busy}>Import a Word document…</button>
+            <input ref={fileRef} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style={{ display:"none" }}
+              onChange={function(e) { importDocx(e.target.files && e.target.files[0]); }}/>
+          </div>
+        </div>
 
-      <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.midBlue, fontWeight:700, margin:"18px 0 8px" }}>Who signs</div>
-      <div style={row}>
-        <CField f={f} up={up} label="Client 1 name" k="client1Name"/>
-        <CField f={f} up={up} label="Client 1 email" k="client1Email"/>
-        <CField f={f} up={up} label="Client 2 name" k="client2Name"/>
-        <CField f={f} up={up} label="Client 2 email" k="client2Email"
-           hint="Required, and must differ from Client 1 — the template has three signers and SignWell rejects a repeated address."/>
-      </div>
+        <div style={card}>
+          <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", marginBottom:10 }}>
+            <BoxField label="Name" width={260}><BoxInput value={t.name} onChange={function(v) { upd({ name: v }); }}/></BoxField>
+            <select value="" onChange={function(e) { if (e.target.value) insert("{{" + e.target.value + "}}"); }} style={Object.assign({}, boxInput, { width:180 })}>
+              <option value="">Insert a field…</option>
+              {CONTRACT_FIELDS.map(function(x) { return <option key={x.label} value={x.label}>{x.label}</option>; })}
+            </select>
+            <select value="" onChange={function(e) { if (e.target.value) insert("\n" + e.target.value + "\n"); }} style={Object.assign({}, boxInput, { width:200 })}>
+              <option value="">Insert a section…</option>
+              {["[[Accommodation]]", "[[Invoicing]]", "[[Special requirements]]", "[[Signatures]]", "[[Page break]]", "[[If accommodation]]\n\n[[End if]]"].map(function(x) {
+                return <option key={x} value={x}>{x.replace(/\n+/g, " … ")}</option>;
+              })}
+            </select>
+          </div>
+          <ContractTemplateEditor t={t} onChange={function(v) { upd({ body: v }); }} onInsertRef={taRef}/>
+          {parsed.warnings.length > 0 && (
+            <div style={{ background:T.amberBg, border:"1px solid #fde68a", color:"#92400e", borderRadius:7, padding:"8px 11px", fontSize:12, marginTop:8 }}>
+              {parsed.warnings.map(function(w, i) { return <div key={i}>{w}</div>; })}
+            </div>
+          )}
+          {parsed.custom.length > 0 && (
+            <div style={{ fontSize:12, color:T.textMid, marginTop:8 }}>Its own fields (a box on the Contract tab): {parsed.custom.join(", ")}</div>
+          )}
+          <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
+            <button style={btnQuiet} onClick={function() { setShowHelp(!showHelp); }}>{showHelp ? "Hide" : "How to write a contract"}</button>
+            {t.id === STANDARD_CONTRACT_ID && t.body !== DEFAULT_CONTRACT_TEMPLATE && (
+              <button style={btnQuiet} onClick={function() { if (window.confirm("Put the standard wording back? Your edits to it are kept in its history once saved.")) upd({ body: DEFAULT_CONTRACT_TEMPLATE }); }}>Back to the standard wording</button>
+            )}
+            {(t.history || []).length > 0 && (
+              <select value="" onChange={function(e) { const h = t.history[Number(e.target.value)]; if (h && window.confirm("Load the version saved " + ctWhen(h.savedAt) + "? Save to keep it.")) upd({ body: h.body }); }}
+                style={Object.assign({}, boxInput, { width:220 })}>
+                <option value="">Earlier versions…</option>
+                {t.history.map(function(h, i) { return <option key={i} value={i}>{(ctWhen(h.savedAt) || "unknown") + (h.savedBy ? " · " + h.savedBy : "")}</option>; }).reverse()}
+              </select>
+            )}
+            {t.id !== STANDARD_CONTRACT_ID && <button style={Object.assign({}, btnQuiet, { color:T.red })} onClick={remove}>Delete</button>}
+          </div>
+          {showHelp && (
+            <div style={{ marginTop:10, fontSize:12.5, color:T.textMid }}>
+              {CONTRACT_SYNTAX_HELP.map(function(h) {
+                return <div key={h[0]} style={{ display:"flex", gap:12, padding:"5px 0", borderTop:`1px solid ${T.border}` }}>
+                  <code style={{ minWidth:190, color:T.text }}>{h[0]}</code><span>{h[1]}</span></div>;
+              })}
+            </div>
+          )}
+        </div>
 
-      <div style={{ borderTop:`1px solid ${T.border}`, marginTop:18, paddingTop:16, display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
-        <BoxCheck checked={testMode} onChange={setTestMode}
-          label="Test mode"
-          hint="Creates the contract in SignWell without emailing anyone, and without using one of the 25 a month."/>
-        <div style={{ flex:1 }}/>
-        <BoxBtn tone={testMode ? "ghost" : "primary"} onClick={send} disabled={busy}>
-          {busy ? "Sending…" : testMode ? "Create test contract" : "Send contract for signing"}
-        </BoxBtn>
+        <div style={card}>
+          <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginBottom:10 }}>
+            <div style={{ fontSize:11, letterSpacing:1.2, textTransform:"uppercase", color:T.midBlue, fontWeight:700 }}>Preview, with an example wedding</div>
+            <div style={{ flex:1 }}/>
+            <BoxCheck checked={sampleAccom} onChange={setSampleAccom} label="With accommodation"/>
+            <BoxBtn tone="ghost" onClick={pdf} disabled={busy}>PDF</BoxBtn>
+          </div>
+          <div style={{ maxHeight:640, overflowY:"auto", borderTop:`1px solid ${T.border}`, paddingTop:10 }}>
+            <ContractDocument body={built.body} answers={{ client1Name:"Sam Smith", client2Name:"Alex Jones" }} signers={[]}/>
+          </div>
+        </div>
       </div>
     </div>
   );

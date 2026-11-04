@@ -19,7 +19,8 @@ Almost all UI lives in one file: `src/App.jsx` — ~19,000 lines, 1.2MB.
 | `src/App.jsx` | Everything. Inline-styled React. |
 | `src/main.jsx` | Entry point, plus the global stylesheet (the whole mobile layer). |
 | `portal.html` + `src/portal/` | The client portal — a **second Vite entry**, its own bundle. A wedding client downloads none of the staff app; verified at build time by checking `dist/portal.html` never references `main-*.js`. |
-| `netlify/functions/` | 30 functions — Stripe, SignWell, Brevo, Xero, box office, iCal, backups. |
+| `netlify/functions/` | 30 functions — Stripe, SignWell, Brevo, Xero, box office, iCal, backups. `contract-lib/` is shared code for the contract functions, not a function. |
+| `src/shared/` | Code both bundles use — `contractDoc.js`, `ContractDocument.jsx`, `contractTemplate.js` (contracts), and smaller helpers. |
 | `supabase/` | Box office schema, the seven security-phase migrations, their `.mjs` test suites. |
 | `tests/` | Node suites (`.cjs`) run against a real Postgres and real pages. |
 
@@ -1098,6 +1099,83 @@ own header.
   `script.estate_alert` (`rest_command.estate_whatsapp`), which every alert
   automation uses.
 - Test: `tests/ha-link-test.cjs`. Migration `supabase/2026-11-03a-ha-link.sql`.
+
+### Contracts signed in the app (4 Nov 2026, migration 2026-11-04a)
+
+- **SignWell is retired for new contracts.** The four sent before 4 Nov finish
+  there: an event whose `contract` has a live SignWell `documentId` shows the
+  old panel (`SignWellContractSection` — status, PDF filing, review; no
+  sending). Everything else uses `InAppContractSection`. When the last
+  SignWell one is done: drop the `check-contracts` schedule, `signwell.js`,
+  `SignWellPanel`, `SIGNWELL_API_KEY`.
+- **Templates** are text with light markup (`src/shared/contractDoc.js`:
+  `#` headings, `- ` bullets, `| a | b |` tables, `**bold**`, `{{Field}}`,
+  `[[Accommodation]]`, `[[Invoicing]]`, `[[Special requirements]]`,
+  `[[Signatures]]`, `[[Page break]]`, `[[If accommodation]] … [[End if]]`).
+  A `{{label}}` that is not in `CONTRACT_FIELDS` is the template's own field
+  and becomes a box on the Contract tab (kept in `contract.draft.custom`).
+  Stored in `app_data` `hbf_contract_templates_v1` (with the last ten wordings
+  in `history`), which template each kind of event gets in
+  `hbf_contract_settings_v1` (`byKind`: wedding / party / wake / other).
+  The built-in `standard` template (`src/shared/contractTemplate.js`) is the
+  SignWell "Booking Form v3" wording as signed, laid out event page →
+  accommodation page (only if offered) → declaration and signatures → Parts
+  A, B, C (C only if accommodation is offered). Settings → Contracts edits
+  them, previews with an example wedding (and as a PDF), and imports a .docx
+  (mammoth, loaded only there).
+- **Sending freezes it.** `buildInAppContract` fills every field and decides
+  every condition; `ct_admin_issue` stores that body, adds the venue's
+  signature (the sending admin's name — Hawthbush signs at sending, shown in
+  the signature block at the end) and its SHA-256, gives each client portal
+  access, and records `booking_form_only`. The emails are a separate call
+  (`contract-admin` `invite`, reported separately). A sent contract is never
+  edited: **Void and reissue** (reason required, a new version, everyone signs
+  again). A signed one cannot be voided.
+- **The body never holds email addresses** (the couple read it). Signers'
+  emails live in `ct_signers`.
+- **The couple sign in the portal** (`src/portal/BookingForm.jsx`, tab
+  "Booking form", always shown when they have a contract; with
+  `booking_form_only` the planner shows only Overview, Booking form and
+  Documents). Answers save themselves (`ct_save_answers`, cleaned by
+  `ct_clean_answers`); what is still needed is `ct_missing` in the database
+  (enforced) and `contractMissing` in JS (shown) — keep the two in step. The
+  FIRST signature locks the details for both, so the first signer fills in
+  both names and mobiles. Signing: typed full name + tick →
+  `contract-sign.js` (verifies the user with Supabase, reads the IP) →
+  `ct_sign_service` (service only).
+- **The last signature seals it** in the same request (`contract-lib/common.js`
+  `sealContract`): PDF (`contract-lib/pdf.js`, pdf-lib, standard fonts — every
+  string through `safe()`, an emoji is dropped, never thrown), stored at
+  `booking-files/bookings/<event>/…`, `ct_service_set_pdf` (FIRST RUN WINS —
+  a second run deletes its spare and emails nobody), emailed to each client
+  and the office with the PDF attached. A failed seal is retried by the daily
+  `contract-reminders` run, or "Make the signed copy" on the Contract tab.
+- **The event record** (`event.contract`) for an in-app contract:
+  `{ provider: "hawthbush", contractId, version, status "Pending" | "Completed"
+  | "Voided", sentAt, signedAt, fields, custom, oneSigner, templateId,
+  appliedAt }` — the SignWell keys, so `eventContractStage`, the badges and
+  `wp_my_documents` work unchanged. The app files the signed PDF on the event
+  (EBF, `source: "contract"`, `ctContractId`) at start-up for every admin
+  (`applyInAppContractStatuses`, one queued `mutateBookings`) and when the
+  Contract tab opens — a background function never writes the events array.
+- **The review of what came back** reuses `contractWriteback` /
+  `contractStays` through `contractValuesForReview`, which gives the answers
+  in SignWell's field names (dates DD/MM/YYYY). Special requirements are shown
+  on the review, not written anywhere.
+- **Emails** are editable under Settings → Email templates → Client portal:
+  `contract_invite` (button = sign-in link + code), `contract_reminder`
+  (`on`, `everyDays` 3–28; daily at 09:40 UTC by `contract-reminders-cron`;
+  marked BEFORE sending, `ct_service_mark_reminded` refuses a contract another
+  run has just reminded; links to `/portal`, never a sign-in link),
+  `contract_signed` (PDF attached). The standard wording is in
+  `contract-lib/common.js` `CONTRACT_EMAILS` and `DEFAULT_PORTAL_EMAILS`.
+- `portal-auth.js` exports `mintLink`, `ensureUser`, `PORTAL_URL` for these.
+- The portal's Documents page no longer links `/terms.html` (that page is the
+  ACCOMMODATION terms; event terms are part of the booking form).
+- Tests: `supabase/2026-11-04a-contracts-test.sql` (scratch Postgres, after
+  `tests/contracts/standins.sql`), `tests/contracts-test.cjs` (model, PDF,
+  the three functions faked at fetch), `tests/contracts-e2e.cjs` (portal
+  signing, Contract tab, Settings → Contracts, .docx import).
 
 ## Working in this folder from a Claude session
 

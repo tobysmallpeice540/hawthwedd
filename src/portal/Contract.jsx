@@ -8,7 +8,7 @@ function fmt(iso) {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
-export default function Contract() {
+export default function Contract({ onGo } = {}) {
   const [data, setData] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
@@ -70,16 +70,19 @@ export default function Contract() {
 
       <VenueDocs />
 
+      {/* The terms for an event are part of its booking form. This used to link
+          to /terms.html, which holds the ACCOMMODATION terms — and says so —
+          so couples were sent to the wrong terms (found 4 Nov 2026). */}
       <section className="card">
         <h3>Terms and conditions</h3>
         <p className="muted" style={{ fontSize: 14 }}>
-          The terms that go with your booking.
+          The terms and conditions for your booking are part of your booking form{onGo ? '' : ' — your signed copy is above once it is filed'}.
         </p>
-        <div className="actions">
-          <a className="btn-small ghost" href="/terms.html" target="_blank" rel="noreferrer">
-            Read the terms
-          </a>
-        </div>
+        {onGo && (
+          <div className="actions">
+            <button className="btn-small ghost" onClick={() => onGo('contract')}>Open your booking form</button>
+          </div>
+        )}
       </section>
 
     </>

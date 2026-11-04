@@ -26,6 +26,7 @@ const PATHS = {
   alert:       'M12 4 2.5 20h19zM12 10v4.5M12 17.5h.01',
   done:        'M4.5 12.5 9.5 17.5 19.5 6.5',
   arrow:       'M5 12h14M13 6l6 6-6 6',
+  contract:    'M6 3h8l4 4v8M14 3v4h4M6 3v18h7M9 11h6M9 15h3M15 20.5l5-5 1.5 1.5-5 5H15z',
 }
 
 export default function Icon({ name, size = 18, className }) {
