@@ -51,7 +51,17 @@
 //   POST, Authorization: Bearer <admin JWT>    { dryRun: true } only — the
 //                                              "What would go today" preview
 //
-// Required env vars: SUPABASE_SERVICE_KEY, RESEND_API_KEY, HBF_ADMIN_TOKEN
+// Sending (4 Nov 2026, Toby): through the farm Gmail, as hello@ (a verified
+// "Send mail as" address there), each a fresh email with its own subject, so
+// it sits in Gmail's Sent. Only when the connection was given gmail.send AND
+// hello@ is a verified send-as address — otherwise Gmail would quietly send it
+// as hawthbushfarm@gmail.com — else through Resend, as before. A Gmail send
+// refused outright (401/403: certainly not sent) moves the rest of the run to
+// Resend; any other failure is unmarked and retried next run, never re-sent
+// another way in the same run, because it may have gone.
+//
+// Required env vars: SUPABASE_SERVICE_KEY, HBF_ADMIN_TOKEN; RESEND_API_KEY for
+// the fallback
 
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
@@ -79,7 +89,7 @@ const EMAIL_LOG_KEY  = "hbf_email_log_v1";
 const FROM_EMAIL  = "hello@hawthbushfarm.co.uk";
 const FROM_HEADER = "Hawthbush Farm <" + FROM_EMAIL + ">";
 const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
-const FN_BUILD    = "2026-10-28b";
+const FN_BUILD    = "2026-11-04a";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
 // At most this many addresses looked up in Gmail a run (two reads each), and
 // only while the run is young: Netlify stops a function at 10 seconds, so the
@@ -402,7 +412,10 @@ async function logEmails(entries) {
       log.push({
         id: "el" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
         sentAt: x.at, subject: x.subject, to: x.to, template: "auto_" + x.kind, bookingId: x.refId,
-        body: String(x.text || "").slice(0, 8000)
+        body: String(x.text || "").slice(0, 8000),
+        // Sent through the farm Gmail: the archive reads the real copy from
+        // Gmail's Sent, so it does not copy this entry in as well.
+        via: x.via || "resend", gmailId: x.gmailId || undefined
       });
     });
     await sbSet(EMAIL_LOG_KEY, log.slice(-500));
@@ -435,7 +448,67 @@ async function farmGmailAccess() {
   });
   const data = await t.json().catch(function () { return {}; });
   if (!t.ok || !data.access_token) throw new Error("Google refused the stored access (" + (data.error || t.status) + ")");
-  return { access: data.access_token, account: row.account_email || "" };
+  return { access: data.access_token, account: row.account_email || "", scope: String(data.scope || "") };
+}
+// ─── Sending through the farm Gmail ──────────────────────────────────────────
+const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+// Whether this access may send as FROM_EMAIL: { ok, why }.
+async function gmailSendReady(g) {
+  if (!g || !g.access) return { ok: false, why: "the farm Gmail could not be reached" };
+  if (String(g.scope || "").split(" ").indexOf(GMAIL_SEND_SCOPE) === -1) {
+    return { ok: false, why: "sending was not allowed when Gmail was connected" };
+  }
+  const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs", { headers: { Authorization: "Bearer " + g.access } });
+  if (!r.ok) return { ok: false, why: "could not read Gmail's send-as addresses (" + r.status + ")" };
+  const list = ((await r.json().catch(function () { return {}; })).sendAs) || [];
+  const mine = list.find(function (a) { return a && String(a.sendAsEmail || "").toLowerCase() === FROM_EMAIL; });
+  if (!mine) return { ok: false, why: FROM_EMAIL + " is not a \"Send mail as\" address in the farm Gmail" };
+  if (!mine.isPrimary && mine.verificationStatus !== "accepted") return { ok: false, why: FROM_EMAIL + " is not verified in the farm Gmail" };
+  return { ok: true };
+}
+// RFC 2047 for a header that may hold non-ASCII (a dash, a name with an accent).
+function mimeWord(s) {
+  s = String(s || "");
+  return /^[\x20-\x7e]*$/.test(s) ? s : "=?UTF-8?B?" + Buffer.from(s, "utf8").toString("base64") + "?=";
+}
+function b64Lines(s) { return Buffer.from(String(s || ""), "utf8").toString("base64").replace(/.{76}/g, "$&\r\n"); }
+// A whole email, text and HTML, as Gmail's API takes it (base64url).
+function buildMime(o) {
+  const boundary = "hbf-" + crypto.randomBytes(12).toString("hex");
+  const head = [
+    "From: " + mimeWord(o.fromName) + " <" + o.from + ">",
+    "To: " + o.to.join(", "),
+    "Subject: " + mimeWord(o.subject),
+    "MIME-Version: 1.0",
+    "Content-Type: multipart/alternative; boundary=\"" + boundary + "\""
+  ];
+  const part = function (type, body) {
+    return "--" + boundary + "\r\nContent-Type: " + type + "; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + b64Lines(body) + "\r\n";
+  };
+  const raw = head.join("\r\n") + "\r\n\r\n" + part("text/plain", o.text) + part("text/html", o.html) + "--" + boundary + "--\r\n";
+  return Buffer.from(raw, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function sendViaGmail(access, d, r) {
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST", headers: { Authorization: "Bearer " + access, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw: buildMime({ from: FROM_EMAIL, fromName: "Hawthbush Farm", to: d.to, subject: r.subject, html: r.html, text: r.text }) })
+  });
+  if (!res.ok) {
+    const err = new Error("Gmail " + res.status + ": " + (await res.text()).slice(0, 200));
+    err.refused = res.status === 401 || res.status === 403;    // certainly not sent
+    throw err;
+  }
+  const out = await res.json().catch(function () { return {}; });
+  return out.id || null;
+}
+async function sendViaResend(d, r) {
+  if (!RESEND_KEY) throw new Error("RESEND_API_KEY is not set");
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: FROM_HEADER, to: d.to, reply_to: FROM_EMAIL, subject: r.subject, html: r.html, text: r.text })
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 300));
 }
 // The newest message from or to an address, as a London date (null: none).
 async function lastEmailWith(access, addr) {
@@ -467,7 +540,7 @@ async function checkFarmGmail(addrs, deadline) {
     }));
   }
   return { seen: out, account: g.account, checked: Object.keys(out).length, failed: failed,
-    skipped: Math.max(0, addrs.length - Object.keys(out).length - failed) };
+    skipped: Math.max(0, addrs.length - Object.keys(out).length - failed), access: g };
 }
 // The run's view of email: the farm Gmail's answer where it has one (newest
 // date of the two, checked now), the app's cache otherwise.
@@ -575,9 +648,11 @@ exports.handler = async function (event) {
   first.due.forEach(function (d) { d.to.forEach(function (a) { if (addrs.indexOf(a) === -1) addrs.push(a); }); });
   first.waiting.concat(first.freeze).forEach(function (w) { if (w.addr && addrs.indexOf(w.addr) === -1) addrs.push(w.addr); });
   let gmail = { source: "app", checked: 0 };
+  let farm = null;                                   // the farm Gmail's access, for sending too
   if (addrs.length) {
     try {
       const g = await checkFarmGmail(addrs, t0 + GMAIL_BUDGET_MS);
+      farm = g.access;
       input.emailSeen = mergeSeen(emailSeen || {}, g.seen);
       gmail = { source: "farm", account: g.account, checked: g.checked, failed: g.failed, skipped: g.skipped };
     } catch (e) {
@@ -587,8 +662,18 @@ exports.handler = async function (event) {
   }
   const plan = addrs.length ? planAutomations(input) : first;
 
+  // How today's emails would go: the farm Gmail if it may send as hello@,
+  // otherwise Resend. Asked only when something is due.
+  let route = { via: "resend", why: "" };
+  if (plan.due.length) {
+    try {
+      const ready = await gmailSendReady(farm);
+      route = ready.ok ? { via: "gmail" } : { via: "resend", why: ready.why };
+    } catch (e) { route = { via: "resend", why: String(e.message || e) }; }
+  }
+
   if (body.dryRun) {
-    return reply(200, { ok: true, today: today, dryRun: true,
+    return reply(200, { ok: true, today: today, dryRun: true, sendVia: plan.due.length ? route : null,
       due: plan.due.map(function (d) { const r = renderEmail(d, plan.cfg); return { kind: d.kind, to: d.to, who: d.who, subject: r.subject }; }),
       waiting: plan.waiting,
       freeze: plan.freeze.map(function (f) { return { who: f.who, after: f.after }; }), gmail: gmail });
@@ -613,7 +698,7 @@ exports.handler = async function (event) {
   }
 
   if (!plan.due.length) return reply(freezeError ? 207 : 200, { ok: !freezeError, today: today, sent: 0, frozen: frozen.length, freezeError: freezeError, gmail: gmail });
-  if (!RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length, frozen: frozen.length });
+  if (route.via === "resend" && !RESEND_KEY) return reply(500, { error: "RESEND_API_KEY is not set", due: plan.due.length, frozen: frozen.length });
 
   // Marked BEFORE sending, in one write. If the run is cut off part way, the
   // worst outcome is that somebody marked is not emailed — never that
@@ -641,14 +726,21 @@ exports.handler = async function (event) {
     if (Date.now() - t0 > SEND_BUDGET_MS) { failed.push({ kind: d.kind, ref: d.refId, mark: d.mark, error: "out of time — next run", held: true }); heldForTime++; continue; }
     const r = renderEmail(d, plan.cfg);
     try {
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { Authorization: "Bearer " + RESEND_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({ from: FROM_HEADER, to: d.to, reply_to: FROM_EMAIL, subject: r.subject, html: r.html, text: r.text })
-      });
-      if (!res.ok) throw new Error((await res.text()).slice(0, 300));
-      sent.push({ kind: d.kind, ref: d.refId });
-      logged.push({ at: new Date().toISOString(), subject: r.subject, to: d.to.join(", "), kind: d.kind, refId: d.refId, text: r.text });
+      let via = route.via, gmailId = null;
+      if (via === "gmail") {
+        try { gmailId = await sendViaGmail(farm.access, d, r); }
+        catch (e) {
+          // Refused outright: nothing went, so this one and the rest of the
+          // run go by Resend. Anything else may have gone: retried next run.
+          if (!e.refused || !RESEND_KEY) throw e;
+          console.error("[automations] Gmail refused sending, Resend for the rest:", e.message);
+          route = { via: "resend", why: e.message };
+          via = "resend";
+        }
+      }
+      if (via === "resend") await sendViaResend(d, r);
+      sent.push({ kind: d.kind, ref: d.refId, via: via });
+      logged.push({ at: new Date().toISOString(), subject: r.subject, to: d.to.join(", "), kind: d.kind, refId: d.refId, text: r.text, via: via, gmailId: gmailId });
     } catch (e) {
       failed.push({ kind: d.kind, ref: d.refId, mark: d.mark, error: String(e.message || e) });
     }
@@ -668,7 +760,7 @@ exports.handler = async function (event) {
   console.log("[automations] " + today + " sent " + sent.length + ", failed " + failed.length +
               (plan.due.length > MAX_SENDS_PER_RUN ? ", " + (plan.due.length - MAX_SENDS_PER_RUN) + " held to tomorrow" : ""));
   return reply(failed.length || freezeError ? 207 : 200, { ok: !failed.length && !freezeError, today: today, sent: sent, failed: failed,
-    held: Math.max(0, plan.due.length - MAX_SENDS_PER_RUN) + heldForTime, frozen: frozen.length, freezeError: freezeError, gmail: gmail });
+    held: Math.max(0, plan.due.length - MAX_SENDS_PER_RUN) + heldForTime, frozen: frozen.length, freezeError: freezeError, gmail: gmail, sendVia: route });
 };
 
-exports._test = { planAutomations, freezeEnquiries, mergeSeen, openSealedToken, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, DEFAULTS, STEPS };
+exports._test = { buildMime, gmailSendReady, planAutomations, freezeEnquiries, mergeSeen, openSealedToken, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, DEFAULTS, STEPS };

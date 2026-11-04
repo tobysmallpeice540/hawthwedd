@@ -267,7 +267,9 @@ function buildRow(msg) {
 function appLogId(e) { return "app:" + (e.id || ((e.sentAt || "") + "|" + (e.to || ""))); }
 function logRows(log, upto) {
   return (Array.isArray(log) ? log : []).filter(function (e) {
-    return e && e.sentAt && e.to && (!upto || String(e.sentAt) >= String(upto));
+    // An entry sent through the farm Gmail (gmailId) arrives from Gmail's Sent
+    // as the real email; copying the log entry too would show it twice.
+    return e && e.sentAt && e.to && !e.gmailId && (!upto || String(e.sentAt) >= String(upto));
   }).map(function (e) {
     return scrubDeep(logRow(e));
   }).filter(function (r) { return r.addrs.length || r.ref; });

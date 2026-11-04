@@ -8,7 +8,11 @@
 //   · "mark Freezing" sets that one enquiry's temperature, written only if
 //     the list is unchanged since it was read;
 //   · if the farm Gmail cannot be reached it falls back to the app's cache —
-//     and an address that cache never checked is not emailed.
+//     and an address that cache never checked is not emailed;
+//   · sending (4 Nov 2026): through the farm Gmail as hello@ when the
+//     connection may send and hello@ is a verified send-as address, else
+//     Resend; a Gmail refusal (403) moves the run to Resend, any other Gmail
+//     failure is retried next run and never re-sent by Resend the same run.
 //
 //   node tests/automations-run-test.cjs
 
@@ -47,7 +51,7 @@ function world(opts) {
     hbf_automation_sent_v1: { ["enq:" + E3.id]: { followup: plus(-57) + "T09:00:00Z", second: plus(-10) + "T09:00:00Z" } },
     hbf_email_log_v1: []
   };
-  const calls = { gmailQ: [], sends: [], patches: [], token: 0 };
+  const calls = { gmailQ: [], sends: [], gmailSends: [], patches: [], token: 0 };
   global.fetch = async (url, init) => {
     const method = (init && init.method) || "GET";
     const json = (v, status) => ({ ok: (status || 200) < 300, status: status || 200, json: async () => v, text: async () => JSON.stringify(v) });
@@ -62,13 +66,25 @@ function world(opts) {
     if (/oauth2\.googleapis\.com\/token/.test(url)) {
       calls.token++;
       const p = new URLSearchParams(init.body);
-      return p.get("refresh_token") === "refresh-123" ? json({ access_token: "acc" }) : json({ error: "invalid_grant" }, 400);
+      return p.get("refresh_token") === "refresh-123"
+        ? json({ access_token: "acc", scope: "https://www.googleapis.com/auth/gmail.readonly" + (o.canSend ? " https://www.googleapis.com/auth/gmail.send" : "") })
+        : json({ error: "invalid_grant" }, 400);
     }
     if ((m = /gmail\/v1\/users\/me\/messages\?maxResults=1&q=(.*)$/.exec(url))) {
       const q = decodeURIComponent(m[1]); calls.gmailQ.push(q);
       return json(/replied@example\.com/.test(q) ? { messages: [{ id: "m2" }] } : {});
     }
     if (/gmail\/v1\/users\/me\/messages\/m2\?format=minimal/.test(url)) return json({ internalDate: String(Date.parse(plus(-1) + "T12:00:00Z")) });
+    if (/gmail\/v1\/users\/me\/settings\/sendAs$/.test(url)) {
+      return json({ sendAs: [{ sendAsEmail: "hawthbushfarm@gmail.com", isPrimary: true, verificationStatus: "accepted" }]
+        .concat(o.helloStatus ? [{ sendAsEmail: "hello@hawthbushfarm.co.uk", verificationStatus: o.helloStatus }] : []) });
+    }
+    if (/gmail\/v1\/users\/me\/messages\/send$/.test(url) && method === "POST") {
+      const raw = Buffer.from(JSON.parse(init.body).raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+      calls.gmailSends.push(raw);
+      if (o.gmailSendStatus) return json({ error: { code: o.gmailSendStatus } }, o.gmailSendStatus);
+      return json({ id: "g" + calls.gmailSends.length });
+    }
     if (/api\.resend\.com\/emails/.test(url)) { calls.sends.push(JSON.parse(init.body)); return json({ id: "r" + calls.sends.length }); }
     throw new Error("unexpected fetch " + method + " " + url);
   };
@@ -111,6 +127,58 @@ const run = () => fn.handler({ httpMethod: "POST", headers: { "x-admin-token": "
     ok("nor frozen", w.db.hbf_enquiries_v1.every((e) => e.temperature === "cold"));
   }
 
+  console.log("sending through the farm Gmail");
+  {
+    const w = world({ canSend: true, helloStatus: "accepted" });
+    const res = await run();
+    const body = JSON.parse(res.body);
+    ok("ran cleanly", res.statusCode === 200, res.body);
+    ok("sent by Gmail, not Resend", w.calls.gmailSends.length === 1 && w.calls.sends.length === 0, JSON.stringify(body));
+    const raw = w.calls.gmailSends[0] || "";
+    const head = raw.split("\r\n\r\n")[0];
+    ok("from hello@, to the enquirer", /^From: Hawthbush Farm <hello@hawthbushfarm\.co\.uk>$/m.test(head) && /^To: quiet@example\.com$/m.test(head), head);
+    ok("a fresh email with the template's subject (not a reply)", /^Subject: /m.test(head) && !/^Subject: Re:/m.test(head) && !/In-Reply-To|References/i.test(head), head);
+    const subj = (/^Subject: (.*)$/m.exec(head) || [])[1] || "";
+    const decoded = /^=\?UTF-8\?B\?(.*)\?=$/.exec(subj);
+    ok("subject survives its dash", (decoded ? Buffer.from(decoded[1], "base64").toString("utf8") : subj) === "Following up on your enquiry — Hawthbush Farm", subj);
+    ok("text and HTML both", /Content-Type: text\/plain; charset=UTF-8/.test(raw) && /Content-Type: text\/html; charset=UTF-8/.test(raw));
+    ok("reported as Gmail", body.sendVia && body.sendVia.via === "gmail" && body.sent[0].via === "gmail", JSON.stringify(body.sendVia));
+    const log = w.db.hbf_email_log_v1;
+    ok("logged with its Gmail id, so the archive does not copy it twice", log.length === 1 && log[0].gmailId === "g1" && log[0].via === "gmail", JSON.stringify(log));
+  }
+  {
+    const w = world({ canSend: true });                            // hello@ not set up as send-as
+    const body = JSON.parse((await run()).body);
+    ok("hello@ not a send-as address: Resend, never Gmail's own address", w.calls.gmailSends.length === 0 && w.calls.sends.length === 1
+      && body.sendVia.via === "resend" && /Send mail as/.test(body.sendVia.why), JSON.stringify(body.sendVia));
+  }
+  {
+    const w = world({ canSend: true, helloStatus: "pending" });
+    const body = JSON.parse((await run()).body);
+    ok("hello@ not yet verified: Resend", w.calls.gmailSends.length === 0 && w.calls.sends.length === 1 && /not verified/.test(body.sendVia.why));
+  }
+  {
+    const w = world({ helloStatus: "accepted" });                  // connected read only
+    const body = JSON.parse((await run()).body);
+    ok("no send permission: Resend, and says why", w.calls.sends.length === 1 && w.calls.gmailSends.length === 0
+      && /sending was not allowed/.test(body.sendVia.why), JSON.stringify(body.sendVia));
+    ok("a Resend entry is copied by the archive as before", !w.db.hbf_email_log_v1[0].gmailId);
+  }
+  {
+    const w = world({ canSend: true, helloStatus: "accepted", gmailSendStatus: 403 });
+    const body = JSON.parse((await run()).body);
+    ok("Gmail refuses (403): that one goes by Resend instead", w.calls.gmailSends.length === 1 && w.calls.sends.length === 1
+      && body.sent.length === 1 && body.sent[0].via === "resend", JSON.stringify(body));
+  }
+  {
+    const w = world({ canSend: true, helloStatus: "accepted", gmailSendStatus: 500 });
+    const res = await run();
+    const body = JSON.parse(res.body);
+    ok("Gmail fails another way: not re-sent by Resend (it may have gone)", w.calls.sends.length === 0 && body.failed.length === 1, JSON.stringify(body));
+    const marks = w.db.hbf_automation_sent_v1["enq:" + w.E1.id];
+    ok("and unmarked, for the next run", !marks || !marks.followup, JSON.stringify(marks));
+  }
+
   console.log("dry run (the Settings preview)");
   {
     const w = world();
@@ -124,6 +192,7 @@ const run = () => fn.handler({ httpMethod: "POST", headers: { "x-admin-token": "
     ok("preview lists the email and the freeze", body.due.length === 1 && body.freeze.length === 1 && body.freeze[0].after === "second", res.body.slice(0, 400));
     ok("preview sends and writes nothing", w.calls.sends.length === 0 && w.calls.patches.length === 0);
     ok("preview says Gmail was checked", body.gmail && body.gmail.source === "farm");
+    ok("preview says how they would be sent", body.sendVia && body.sendVia.via === "resend" && /sending was not allowed/.test(body.sendVia.why), JSON.stringify(body.sendVia));
   }
 
   console.log("\n" + pass + " passed, " + fail + " failed");

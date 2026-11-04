@@ -292,6 +292,21 @@ own header.
   `tests/automations-test.cjs` (rules), `tests/automations-run-test.cjs` (the
   whole run, faked at fetch), `money-and-day-test.cjs` (app and function
   defaults agree).
+  **Sent through the farm Gmail as hello@** (4 Nov 2026, Toby): a fresh email
+  with the template's subject (not a reply in the enquiry's thread — Toby's
+  choice), multipart text + HTML (`buildMime`), so it sits in Gmail's Sent.
+  Only when the connection was given `gmail.send` (the Airbnb-mail connect now
+  asks for readonly + send; send is optional) AND hello@ is a verified "Send
+  mail as" address (`gmailSendReady` reads `settings/sendAs` — otherwise Gmail
+  would silently send as hawthbushfarm@gmail.com); else Resend as before. A
+  Gmail send refused outright (401/403) moves that email and the rest of the
+  run to Resend; any other Gmail failure is unmarked and retried next run,
+  NEVER re-sent by Resend in the same run (it may have gone). The log entry
+  carries `via` and `gmailId`; the email archive skips log entries with a
+  `gmailId` (`logRows`), because Gmail's Sent copy arrives as the real email.
+  The preview says which way they would go (`sendVia`). Our own follow-up now
+  shows to `lastEmailWith` as email exchanged on the day it went — the same
+  date the chain already counts from, so no rule moves.
 - **Web addresses in emails become links with or without `https://`**
   (`linkifyEscaped` / `LINK_RE`, copied into every function that builds an
   email body — `_email-shell.js` is the master copy). Bare domains need a

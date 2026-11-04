@@ -115,5 +115,14 @@ ok("a stray NUL in UTF-8 is dropped", P.decodeData(Buffer.from("a\u0000b").toStr
 ok("every string in a row is scrubbed", JSON.stringify(P.scrubDeep({ s: "x\u0000", a: ["\u0000y"], n: 3, z: null })) === JSON.stringify({ s: "x", a: ["y"], n: 3, z: null }));
 ok("the app's own log too", !/\u0000/.test(JSON.stringify(P.logRows([{ id: "N", sentAt: "2025-01-01T00:00:00Z", to: "amy@x.com", subject: "S\u0000", body: "B\u0000" }], null))));
 
+console.log("\n— an email the follow-ups sent through Gmail is not copied from the log —");
+{
+  const rows = P.logRows([
+    { id: "a", sentAt: "2026-11-04T09:00:00Z", to: "x@example.com", subject: "s", body: "b", template: "auto_followup", via: "resend" },
+    { id: "b", sentAt: "2026-11-04T09:00:01Z", to: "y@example.com", subject: "s", body: "b", template: "auto_followup", via: "gmail", gmailId: "g1" }
+  ], null);
+  ok("only the Resend one is copied (Gmail's Sent has the other)", rows.length === 1 && rows[0].gmail_id === "app:a");
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
