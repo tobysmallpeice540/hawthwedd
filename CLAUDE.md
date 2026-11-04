@@ -582,12 +582,21 @@ own header.
 - **Setup cleans** (`setupCleanItems`): a "Setup clean" tick box on the letting
   form, the event form and the box office event editor (`SetupCleanToggle`,
   saved to its own key `hbf_setup_cleans_v1` — `{ id: "setup:<kind>:<refId>" }` —
-  so no booking save path and no box office column is involved). **Listed on
-  the arrival / event day only** (3 Nov, Toby — it used to open up to a week
-  ahead and then sat red on Still to sign off every day until signed): job
-  `start` = `due` = that day, `readyBy` = check-in − 2h / the event's start
-  (shown "by HH:MM" on Live, "ready by" on Bookings). The window opens earlier
-  that day only if the place is freed that morning (`unitUsages`). Sign-off id
+  so no booking save path and no box office column is involved). **A
+  letting's is listed on the arrival day only** (3 Nov, Toby — it used to open
+  up to a week ahead and then sat red on Still to sign off every day until
+  signed): job `start` = `due` = that day, `readyBy` = check-in − 2h (shown
+  "by HH:MM" on Live, "ready by" on Bookings); earlier that day only if the
+  place is freed that morning (`unitUsages`). **A Grain Store one (diary or
+  box office) can be done up to `SETUP_CLEAN_LEAD_DAYS` (7) before the
+  event, never before the event ahead of it has finished** (4 Nov, Toby):
+  `start` = when it opens, `due` = `eventStart` = the event's day, `readyBy` =
+  a ticketed event's start − 2h. `changeoverState` makes a setup job To clean
+  (never Guests) from `start`, so it is signable early. Live lists it on its
+  first day and again on the event's day only while unsigned (signed, it read
+  as the Grain Store's clean twice on the day); Bookings says "By <day> · can
+  be done from <day>"; Upcoming files it in the week it opens, "by <day>". The
+  tile goes red, and Still to sign off takes it, only from the event's day. Sign-off id
   `setup:<kind>:<refId>:<unit>`, kind `setup`, `setupOf` the record's kind. Red
   on its day; an unsigned one after that is on Still to sign off but no longer
   turns the tile red. Draft box office events are not in housekeeping, so their

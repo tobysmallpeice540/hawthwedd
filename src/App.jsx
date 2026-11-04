@@ -2809,7 +2809,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04b";
+const APP_BUILD = "2026-11-04c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8225,12 +8225,20 @@ function changeoverJobs(properties, accom, events, boxEvents, setups) {
 // refId, at }. Its sign-off is an ordinary record in CHANGEOVERS_STORAGE, id
 // "setup:<kind>:<refId>:<unit>" — one per property for a multi-stay letting.
 //
-// It is listed on the day the guests arrive or the event is on — not before
-// (3 Nov, Toby: a clean a week ahead sat on the housekeepers' list every day
-// until it was signed off). It is ready by check-in less the early-arrival
-// allowance, or the event's start. If the place is freed earlier that same day
-// (a check-out that morning) the window opens then.
+// A letting's is listed on the day the guests arrive — not before (3 Nov,
+// Toby: a clean a week ahead sat on the housekeepers' list every day until it
+// was signed off). It is ready by check-in less the early-arrival allowance.
+// If the place is freed earlier that same day (a check-out that morning) the
+// window opens then.
+//
+// The Grain Store's (diary and box office events) can be done up to
+// SETUP_CLEAN_LEAD_DAYS before the event, but never before the event ahead of
+// it has finished (4 Nov, Toby). From that day it is To clean and can be signed
+// off; it is due on the event's day (ready by a ticketed event's start less
+// the allowance). It turns the Grain Store tile red, and goes on Still to sign
+// off, only from the event's day — the 3 Nov complaint was a week of red.
 const SETUP_CLEANS_STORAGE = "hbf_setup_cleans_v1";
+const SETUP_CLEAN_LEAD_DAYS = 7;
 // The same key also holds notes to the housekeepers (28 Oct):
 //   { id: "note:<kind>:<refId>", kind: "note", of, refId, text, at }
 // A letting's note is about getting ready for THOSE guests, so it goes on the
@@ -8355,15 +8363,18 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
   const use = unitUsages(properties, accom, events, boxEvents);
   const propOf = function(id) { return (properties || []).find(function(p) { return p.id === id; }) || null; };
   const add = function(req, unitId, unitName, unitShort, begins, closes, who, suffix, occ, note) {
-    // The place freed earlier the same day (a check-out that morning), if so.
+    // Lettings: the same day only. The Grain Store: up to a week ahead.
+    const earliest = unitId === GRAIN_STORE_UNIT.id ? addDaysIso(begins.date, -SETUP_CLEAN_LEAD_DAYS) : begins.date;
+    // When the place was last freed before this (a check-out that morning, the
+    // event before it finishing), if that is inside the window.
     const prev = (use[unitId] || []).filter(function(u) {
-      return u.key !== req.kind + ":" + req.refId && ptKey(u.frees) <= ptKey(begins) && u.frees.date === begins.date;
+      return u.key !== req.kind + ":" + req.refId && ptKey(u.frees) <= ptKey(begins) && u.frees.date >= earliest;
     }).sort(function(a, z) { return ptKey(a.frees) < ptKey(z.frees) ? 1 : -1; })[0];
-    const opens = prev ? prev.frees : { date: begins.date, time: null };
+    const opens = prev ? prev.frees : { date: earliest, time: null };
     const id = "setup:" + req.kind + ":" + req.refId + ":" + unitId + (suffix || "");
     out.push({
       job: { id: id, kind: "setup", setupOf: req.kind, refId: req.refId, unitId: unitId, unitName: unitName,
-        start: begins.date, due: begins.date, eventStart: begins.date, readyBy: closes.time || "",
+        start: opens.date, due: begins.date, eventStart: begins.date, readyBy: closes.time || "",
         who: "Extra clean · " + who, note: note || "" },
       window: { id: id, unitId: unitId, unitName: unitName, unitShort: unitShort, start: opens, end: closes,
         outWho: "Extra clean", inWho: who, setup: true, tight: false, occ: occ || "" }
@@ -8393,7 +8404,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
       if (!ev || !isValidEventDate(ev.date) || ev.status === "Cancelled") return;
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
         { date: ev.date, time: null }, { date: ev.date, time: null }, ev.couple || "Event", "",
-        fmtDayShort(ev.date) + ((eventEndDate(ev) || ev.date) > ev.date ? " – " + fmtDayShort(eventEndDate(ev)) : ""),
+        "by " + fmtDayShort(ev.date),
         hkNoteForEvent(ev.couple || "Event", ev.date, hkNote(setups, "event", ev.id)));
     } else if (req.kind === "box") {
       const bx = (boxEvents || []).find(function(x) { return String(x.id) === String(req.refId); });
@@ -8402,7 +8413,7 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
       const t = londonClockOf(bx.starts_at);
       add(req, GRAIN_STORE_UNIT.id, GRAIN_STORE_UNIT.name, GRAIN_STORE_UNIT.short,
         { date: d, time: t }, { date: d, time: t ? addMinutesHHMM(t, -CHANGEOVER_GRACE_MIN) : null }, bx.name || "Ticketed event", "",
-        fmtDayShort(d) + (t ? " · " + t : ""), hkNoteForEvent(bx.name || "Ticketed event", d, hkNote(setups, "box", bx.id)));
+        "by " + fmtDayShort(d) + (t ? " · " + addMinutesHHMM(t, -CHANGEOVER_GRACE_MIN) : ""), hkNoteForEvent(bx.name || "Ticketed event", d, hkNote(setups, "box", bx.id)));
     }
   });
   return out;
@@ -8848,7 +8859,8 @@ function changeoverRecordMap(recs) {
 function changeoverState(job, rec, today) {
   if (rec) return "done";
   if (today < job.start) return "upcoming";
-  if (today < job.due) return "inuse";
+  // An extra clean has no guests in: once it can be done it is To clean.
+  if (today < job.due && job.kind !== "setup") return "inuse";
   if (job.due < CHANGEOVER_FROM) return "untracked";
   return "due";
 }
@@ -8875,10 +8887,12 @@ function changeoverHoursText(rec) {
 function unitStatuses(units, jobs, recMap, today) {
   return (units || []).map(function(u) {
     const mine = (jobs || []).filter(function(j) { return j.unitId === u.id; });
-    // A setup clean is red on its day; one nobody signed off by then stays on
-    // the to-do list, but no longer turns the tile red over the guests.
+    // A setup clean is red on its day only: before it (a Grain Store one can
+    // be done up to a week ahead) it is To clean on its own row but the tile
+    // stays quiet; one nobody signed off by then stays on the to-do list, but
+    // no longer turns the tile red over the guests.
     const due = mine.filter(function(j) {
-      return changeoverState(j, recMap[j.id], today) === "due" && !(j.kind === "setup" && today > j.eventStart);
+      return changeoverState(j, recMap[j.id], today) === "due" && !(j.kind === "setup" && today !== j.eventStart);
     });
     const inuse = mine.filter(function(j) { return changeoverState(j, recMap[j.id], today) === "inuse"; });
     const done = mine.filter(function(j) { return !!recMap[j.id]; })
@@ -9477,12 +9491,21 @@ function CleanerHome({ properties, accom, events, boxEvents, setups, jobs, recMa
     });
   });
 
-  // Setup cleans, on the day of the arrival or event they are for.
+  // Setup cleans: a letting's on the arrival day. A Grain Store one can be
+  // done up to a week ahead: it is listed on the first day it can be done, and
+  // again on the event's day only if nobody has signed it off by then — a
+  // signed one would read as the Grain Store's clean twice (4 Nov, Toby).
   (jobs || []).forEach(function(j) {
     if (j.kind !== "setup") return;
-    add(j.start, { kind: "setup", rank: propRank(j.unitId) === 900 ? 999 : propRank(j.unitId), label: j.unitName,
-      time: j.readyBy ? "by " + j.readyBy : "",
-      detail: j.who.replace(/^(Setup|Extra clean) · /, "Before "), job: j });
+    const item = function(early) {
+      return { kind: "setup", rank: propRank(j.unitId) === 900 ? 999 : propRank(j.unitId), label: j.unitName,
+        time: early ? "by " + fmtDayShort(j.eventStart).slice(0, -3) + (j.readyBy ? " " + j.readyBy : "")
+          : j.readyBy ? "by " + j.readyBy : "",
+        detail: j.who.replace(/^(Setup|Extra clean) · /, "Before "), job: j };
+    };
+    const early = !!j.eventStart && j.start < j.eventStart;
+    add(j.start, item(early));
+    if (early && !recMap[j.id]) add(j.eventStart, item(false));
   });
 
   const days = Object.keys(byDay).sort();
@@ -9710,10 +9733,12 @@ function CleanerBookings({ properties, accom, events, boxEvents, boxErr, setups,
     return {
       key: j.id, jobId: j.id, unitId: j.unitId, unitShort: p ? shortPropLabel(p) : GRAIN_STORE_UNIT.short,
       unitColour: p ? p.colour : "#ef4444",
-      start: j.start, end: j.eventStart, name: j.who.replace(/^(Setup|Extra clean) · /, ""),
-      when: fmtDayShort(j.eventStart) + (j.readyBy ? " · ready by " + j.readyBy : ""),
+      start: j.start, end: j.eventStart, name: j.who.replace(/^(Setup|Extra clean) · /, "Before "),
+      // A Grain Store one can be done on any day from when it opens (4 Nov).
+      when: (j.start < j.eventStart ? "By " : "") + fmtDayShort(j.eventStart) + (j.readyBy ? " · ready by " + j.readyBy : "") +
+        (j.start < j.eventStart ? " · can be done from " + fmtDayShort(j.start) : ""),
       source: "Extra clean", sourceMeta: { bg: T.tint, text: T.midBlue },
-      status: "Before arrival", statusMeta: { bg: T.bgInput, text: T.textMid }
+      status: j.unitId === GRAIN_STORE_UNIT.id ? "Before the event" : "Before arrival", statusMeta: { bg: T.bgInput, text: T.textMid }
     };
   });
   const all = housekeepingRows(properties, accom, events, boxEvents).concat(setupRows)

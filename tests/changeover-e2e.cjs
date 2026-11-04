@@ -400,9 +400,12 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
   } catch (e) { fails.push('sunday run: ' + e.message) }
 
   // ── Setup cleans ─────────────────────────────────────────────────────────
-  // Listed on the arrival / event day only (3 Nov, Toby) — never days ahead,
-  // so it is not red, nor on Still to sign off, before then. Ready by
-  // check-in − 2h / the event's start.
+  // A letting's is listed on the arrival day only (3 Nov, Toby). A Grain Store
+  // one can be done up to 7 days ahead, never before the event ahead of it
+  // has finished (4 Nov): To clean from then, listed on Live on its first day
+  // and on the event's day if still unsigned; red on the tile, and on Still to
+  // sign off, only from the event's day. Ready by check-in − 2h / the
+  // ticketed event's start − 2h.
   try {
     const wd = (d) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()]
     const setupApp = () => {
@@ -455,10 +458,13 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       const dayCard = async (d) => { const l = pg.locator('[data-day="' + d + '"]'); return (await l.count()) ? await l.innerText() : '' }
       const t0 = await dayCard(plus(0)), t5 = await dayCard(plus(5))
       check('setup: today card has the extra clean for today', /Before Party Prep/.test(t0) && !/Before Later Do/.test(t0), t0)
-      check('setup: a later extra clean is on its own day', /Before Later Do/.test(t5), t5)
+      check('setup: a later extra clean is on its own day while unsigned', /Before Later Do/.test(t5), t5)
+      // Later Do's opens the day after Party Prep (the event before it), not 7 days ahead.
+      const t1 = await dayCard(plus(1))
+      check('setup: and on the first day it can be done (the day after the event before)', /Before Later Do/.test(t1) && new RegExp('by ' + dshort(plus(5)).slice(0, -3)).test(t1), t1)
       let others = ''
-      for (const n of [1, 2, 3, 4]) others += await dayCard(plus(n))
-      check('setup: and on no day before it', !/Before Later Do/.test(others), others.slice(0, 600))
+      for (const n of [2, 3, 4]) others += await dayCard(plus(n))
+      check('setup: and on no day in between', !/Before Later Do/.test(others), others.slice(0, 600))
 
       await pg.getByRole('tab', { name: 'Upcoming', exact: true }).click()
       await pg.getByText(/This week/).waitFor({ timeout: 5000 })
@@ -474,13 +480,17 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       await pg.getByRole('button', { name: 'Back to this week' }).click()
       up += await pg.locator('body').innerText()
       check('setup: Amly setup listed', up.indexOf('Extra clean before Amly Arrivals') !== -1)
-      check('setup: box office setup shows the event date and time', /Extra clean before Late Supper/.test(up) && up.indexOf(dshort(plus(12)) + ' · ' + new Date(plus(12) + 'T18:30:00Z').toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })) !== -1, up.slice(0, 1500))
+      const lateStart = new Date(plus(12) + 'T18:30:00Z').toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })
+      const lateReady = String(Number(lateStart.slice(0, 2)) - 2).padStart(2, '0') + lateStart.slice(2)
+      check('setup: box office setup says the day and time it is needed by', /Extra clean before Late Supper/.test(up) && up.indexOf('by ' + dshort(plus(12)) + ' · ' + lateReady) !== -1, up.slice(0, 1500))
 
       await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
       await pg.getByText('Second Family').first().waitFor({ timeout: 5000 })
       const bk = await pg.locator('body').innerText()
       check('setup: five extra-clean cards on Bookings', (bk.match(/Extra clean/g) || []).length === 5, String((bk.match(/Extra clean/g) || []).length))
-      check('setup: Bookings says the day, not a week ahead', !/From .* · by /.test(bk) && bk.indexOf(dshort(plus(5))) !== -1, bk.slice(0, 600))
+      check('setup: a letting extra clean is its day only', bk.indexOf(dshort(plus(6)) + ' · ready by') !== -1 && !new RegExp(dshort(plus(6)) + ' · ready by [0-9:]+ · can be done').test(bk), bk.slice(0, 900))
+      check('setup: a Grain Store one says by when and from when', bk.indexOf('By ' + dshort(plus(5)) + ' · can be done from ' + dshort(plus(1))) !== -1, bk.slice(0, 1500))
+      check('setup: Grain Store card reads before the event', /Before Later Do/.test(bk) && /Before the event/.test(bk), bk.slice(0, 900))
 
       // Sign off the event's setup clean.
       await pg.getByRole('tab', { name: 'Live', exact: true }).click()
@@ -495,6 +505,38 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
       check('setup: sign-off saved under its own id', r && r.kind === 'setup' && r.setupOf === 'event' && r.hours.edita === 1.5, JSON.stringify(hk.hbf_changeovers_v1))
       check('setup: Grain St. no longer red after the sign-off (the party is on)', (await pillT('Grain St.')) === 'Guests', await pillT('Grain St.'))
       check('setup: no page errors (housekeeping)', c.errors.length === 0, c.errors.join(' | '))
+    } finally { await c.close() }
+
+    // A Grain Store extra clean a few days ahead, nothing before it: To clean
+    // and signable now, the tile quiet, and once signed it is not on the
+    // event's day a second time (4 Nov, Toby: "Tue 10th shows Grain Store
+    // clean twice").
+    const early = freshApp()
+    early.hawthbush_bookings_v6 = [{ id: 905, couple: 'Soon Party', date: plus(3), status: 'Confirmed', eventType: 'Party' }]
+    early.hbf_changeovers_v1 = []
+    early.hbf_setup_cleans_v1 = [{ id: 'setup:event:905', kind: 'event', refId: 905 }]
+    c = await openWith(early, cleanerRpc)
+    try {
+      const pg = c.page
+      await pg.getByText('Before Soon Party').first().waitFor({ timeout: 15000 })
+      const pillT = async (n) => pg.locator('span[title]', { hasText: n }).first().getAttribute('title')
+      check('early: Grain St. tile not red ahead of the event', (await pillT('Grain St.')) !== 'To clean', await pillT('Grain St.'))
+      await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
+      const card = pg.locator('div', { hasText: 'Before Soon Party' }).filter({ has: pg.getByRole('button', { name: 'To clean' }) }).last()
+      check('early: To clean on Bookings days ahead', (await card.count()) > 0)
+      await card.getByRole('button', { name: 'To clean' }).click()
+      await pg.getByText('Edita hours').waitFor({ timeout: 5000 })
+      await pg.locator('input[type=number]').nth(0).fill('2')
+      await pg.getByRole('button', { name: 'Done — ready' }).click()
+      await pg.getByText('Edita hours').waitFor({ state: 'detached', timeout: 5000 })
+      const r = (early.hbf_changeovers_v1 || []).find((x) => x.id === 'setup:event:905:grainstore')
+      check('early: signed off ahead of the event', r && r.hours.edita === 2, JSON.stringify(early.hbf_changeovers_v1))
+      await pg.getByRole('tab', { name: 'Live', exact: true }).click()
+      const l = pg.locator('[data-day="' + plus(3) + '"]')
+      await l.waitFor({ timeout: 5000 })
+      const t3 = await l.innerText()
+      check('early: the event day lists the Grain Store once', /Soon Party/.test(t3) && !/Before Soon Party/.test(t3), t3)
+      check('early: no page errors', c.errors.length === 0, c.errors.join(' | '))
     } finally { await c.close() }
 
     // Admin: the tick box on the event, and on a letting.
