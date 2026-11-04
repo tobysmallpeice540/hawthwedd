@@ -101,7 +101,7 @@ const called = (s, fn) => s.calls.filter((c) => c.fn === fn)
     check('no Todoist box on home', (await page.getByText('Nothing due in the next week.').count()) === 0)
     await page.getByText('Lager keg nearly empty').waitFor({ timeout: 5000 })
     check('note from a list on home', true)
-    await page.getByRole('button', { name: 'Read' }).first().click()
+    await page.getByRole('button', { name: 'Noted' }).first().click()
     await page.waitForTimeout(300)
     check('Read marks the note seen', called(s, 'chk_seen').length === 1 && called(s, 'chk_seen')[0].args.p_items[0] === 'I9')
 

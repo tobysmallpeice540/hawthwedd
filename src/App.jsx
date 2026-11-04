@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { Fragment, useState, useEffect, useLayoutEffect, useCallback, useRef, createContext, useContext } from "react";
 import "@fontsource/barlow/400.css";
 import "@fontsource/barlow/500.css";
 import "@fontsource/barlow/600.css";
@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04d";
+const APP_BUILD = "2026-11-04e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -6562,7 +6562,7 @@ function ChecklistCards({ runs, onOpen, nowMs }) {
 }
 
 // Home: the live cards, and for the office the notes left on ticked items and
-// lists that were ignored or missed — each until someone presses Read.
+// lists that were ignored or missed — each until someone presses Noted.
 function ChecklistsHomePanel({ admin, onOpen, onAll }) {
   const live = useChecklistsLive();
   const [busy, setBusy] = useState(false);
@@ -6592,40 +6592,27 @@ function ChecklistsHomePanel({ admin, onOpen, onAll }) {
         <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 14px", marginTop:12 }}>
           <div style={{ fontSize:11, letterSpacing:1.1, textTransform:"uppercase", color:T.textMid, fontWeight:700, marginBottom:6 }}>From checklists</div>
           {notes.map(function(n) {
+            const body = (n.state === "na" ? "Not applicable: " : "") + (n.comment || "");
             return (
-              <div key={n.item_id} style={{ display:"flex", flexWrap:"nowrap", gap:10, alignItems:"flex-start", padding:"7px 0", borderTop:`1px solid ${T.border}` }}>
-                <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ onOpen(n.run_id); }}>
-                  <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:8, fontSize:13 }}>
-                    <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:T.text }}>
-                      <b>{n.title}</b> <span style={{ color:T.textLight }}>· {n.run_title}{n.context ? " · " + n.context : ""}</span>
-                    </span>
-                    <span style={{ fontSize:11.5, color:T.textLight, flexShrink:0, whiteSpace:"nowrap" }}>{n.by} · {chkWhen(n.at)}</span>
-                  </div>
-                  <div style={{ fontSize:13, color:T.text, marginTop:2 }}>{n.state === "na" ? "Not applicable: " : ""}{n.comment}</div>
-                </div>
-                <button type="button" disabled={busy} onClick={function(){ seen([n.item_id], []); }}
-                  style={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12, flexShrink:0 })}>Read</button>
-              </div>
+              <HomeNoteRow key={n.item_id} measureKey={body}
+                head={<><b>{n.title}</b> <span style={{ color:T.textLight }}>· {n.run_title}{n.context ? " · " + n.context : ""}</span></>}
+                aside={n.by + " · " + chkWhen(n.at)}
+                body={body}
+                onOpen={function(){ onOpen(n.run_id); }}
+                onNoted={function(){ seen([n.item_id], []); }} disabled={busy} noted="Noted"
+                notedStyle={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12 })}/>
             );
           })}
           {closed.map(function(c) {
+            const body = c.status === "ignored" ? (c.by || "Someone") + (c.reason ? ": " + c.reason : "") : c.left + " left undone \u2014 the next one has started";
             return (
-              <div key={c.run_id} style={{ display:"flex", flexWrap:"nowrap", gap:10, alignItems:"flex-start", padding:"7px 0", borderTop:`1px solid ${T.border}` }}>
-                <div style={{ flex:1, minWidth:0, cursor:"pointer" }} onClick={function(){ onOpen(c.run_id); }}>
-                  <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"baseline", gap:8, fontSize:13 }}>
-                    <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:T.text }}>
-                      <b>{c.title}</b> {c.status === "ignored" ? "was ignored" : "was not finished"}
-                      <span style={{ color:T.textLight }}>{c.context ? " · " + c.context : ""}</span>
-                    </span>
-                    <span style={{ fontSize:11.5, color:T.textLight, flexShrink:0, whiteSpace:"nowrap" }}>{chkWhen(c.at)}</span>
-                  </div>
-                  <div style={{ fontSize:12.5, color:T.textMid, marginTop:2 }}>
-                    {c.status === "ignored" ? (c.by || "Someone") + (c.reason ? ": " + c.reason : "") : c.left + " left undone — the next one has started"}
-                  </div>
-                </div>
-                <button type="button" disabled={busy} onClick={function(){ seen([], [c.run_id]); }}
-                  style={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12, flexShrink:0 })}>Read</button>
-              </div>
+              <HomeNoteRow key={c.run_id} measureKey={body}
+                head={<><b>{c.title}</b> {c.status === "ignored" ? "was ignored" : "was not finished"}<span style={{ color:T.textLight }}>{c.context ? " · " + c.context : ""}</span></>}
+                aside={chkWhen(c.at)}
+                body={<span style={{ color:T.textMid }}>{body}</span>}
+                onOpen={function(){ onOpen(c.run_id); }}
+                onNoted={function(){ seen([], [c.run_id]); }} disabled={busy} noted="Noted"
+                notedStyle={Object.assign({}, btnQuiet, { padding:"5px 11px", fontSize:12 })}/>
             );
           })}
         </div>
@@ -9231,7 +9218,7 @@ function ChangeoverRecordPanel({ kind, refId }) {
 
 // ─── HOUSEKEEPING FEEDBACK ON THE ADMIN HOME ─────────────────────────────────
 // Every sign-off with comments or lost property sits at the top of Home until
-// someone in the office presses Read. What was read is kept in its own key, by
+// someone in the office presses Noted. What was read is kept in its own key, by
 // sign-off id, with the wording read — so a sign-off whose comments or lost
 // property are changed later comes back. The cleaners' records are never
 // written from here.
@@ -9344,6 +9331,50 @@ function SyncHealthBanner({ onFix }) {
   );
 }
 
+// One note on the admin home ("From housekeeping", "From checklists"), 4 Nov
+// 2026, Toby: on a phone the line was cut off with "..." and there was no way
+// to see the rest before pressing Read, which itself read as "read the
+// message". So: the heading stays on one line and the note on two until
+// "More" opens it out in full ("Less" closes it); "Noted" is the
+// acknowledgement that takes it off the home page. "More" only appears when
+// something is actually cut off (measured, and again on resize). Tapping the
+// text still opens the record.
+const HOME_NOTE_CLAMP = { display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" };
+function HomeNoteRow({ head, aside, body, extra, measureKey, onOpen, onNoted, noted, disabled, notedStyle }) {
+  const [open, setOpen] = useState(false);
+  const [cut, setCut]   = useState(false);
+  const headRef = useRef(null), bodyRef = useRef(null);
+  useLayoutEffect(function() {
+    if (open) return undefined;
+    function measure() {
+      const h = headRef.current, b = bodyRef.current;
+      setCut(!!((h && h.scrollWidth > h.clientWidth + 1) || (b && b.scrollHeight > b.clientHeight + 1)));
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return function() { window.removeEventListener("resize", measure); };
+  }, [open, measureKey]);
+  const small = { background:"none", border:"none", padding:"2px 4px", color:T.midBlue, fontFamily:"inherit", fontSize:12.5, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" };
+  return (
+    <div style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"7px 0", borderTop:"1px solid " + T.border, flexWrap:"nowrap" }}>
+      <div onClick={onOpen} style={{ flex:1, minWidth:0, cursor: onOpen ? "pointer" : "default", fontSize:13, lineHeight:1.5, color:T.text }}>
+        <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap: open ? "wrap" : "nowrap" }}>
+          <span ref={headRef} style={open ? { flex:1, minWidth:0 } : { flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{head}</span>
+          {aside ? <span style={{ fontSize:11.5, color:T.textLight, flexShrink:0, whiteSpace:"nowrap" }}>{aside}</span> : null}
+        </div>
+        {body ? <div ref={bodyRef} style={open ? { whiteSpace:"pre-wrap", overflowWrap:"anywhere" } : Object.assign({ whiteSpace:"pre-wrap", overflowWrap:"anywhere" }, HOME_NOTE_CLAMP)}>{body}</div> : null}
+        {extra}
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"stretch", gap:4, flexShrink:0 }}>
+        <button type="button" disabled={disabled} onClick={onNoted} title="I have read this: take it off the home page" style={notedStyle}>{noted}</button>
+        {(cut || open) && (
+          <button type="button" aria-expanded={open} onClick={function() { setOpen(!open); }} style={small}>{open ? "Less" : "More"}</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HousekeepingFeedback({ recs, seen, onRead, onOpen }) {
   const [busy, setBusy] = useState("");
   const [err, setErr]   = useState("");
@@ -9360,21 +9391,16 @@ function HousekeepingFeedback({ recs, seen, onRead, onOpen }) {
       {list.map(function(r) {
         const unit = r.unitName || (r.unitId === GRAIN_STORE_UNIT.id ? GRAIN_STORE_UNIT.name : r.unitId);
         return (
-          <div key={r.id} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"7px 0", borderTop:"1px solid " + T.border, flexWrap:"nowrap" }}>
-            <div onClick={function() { onOpen(r); }} style={{ flex:1, minWidth:0, cursor:"pointer", fontSize:13, lineHeight:1.5, color:T.text }}>
-              <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                <strong>{unit}</strong>
-                <span style={{ color:T.textMid }}> · {changeoverFeedbackWho(r)} · ready {fmtDoneAt(r.doneAt)}</span>
-              </div>
-              {r.comments && <div style={{ whiteSpace:"pre-wrap" }}>{r.comments}</div>}
-              {r.lostProperty && <div style={{ color:T.red, fontWeight:700 }}>Lost property: <span style={{ fontWeight:600 }}>{r.lostProperty}</span></div>}
-            </div>
-            <button type="button" disabled={!!busy} onClick={function() { read(r); }}
-              style={{ background:"#fff", color:T.red, border:"1.5px solid " + T.red, borderRadius:8, padding:"6px 14px",
-                fontFamily:"inherit", fontSize:12.5, fontWeight:800, cursor: busy ? "default" : "pointer", flexShrink:0, whiteSpace:"nowrap" }}>
-              {busy === r.id ? "…" : "Read"}
-            </button>
-          </div>
+          <HomeNoteRow key={r.id}
+            measureKey={(r.comments || "") + "|" + (r.lostProperty || "")}
+            head={<><strong>{unit}</strong><span style={{ color:T.textMid }}> · {changeoverFeedbackWho(r)} · ready {fmtDoneAt(r.doneAt)}</span></>}
+            body={r.comments || ""}
+            extra={r.lostProperty ? <div style={{ color:T.red, fontWeight:700, overflowWrap:"anywhere" }}>Lost property: <span style={{ fontWeight:600 }}>{r.lostProperty}</span></div> : null}
+            onOpen={function() { onOpen(r); }}
+            onNoted={function() { read(r); }} disabled={!!busy}
+            noted={busy === r.id ? "\u2026" : "Noted"}
+            notedStyle={{ background:"#fff", color:T.red, border:"1.5px solid " + T.red, borderRadius:8, padding:"6px 14px",
+              fontFamily:"inherit", fontSize:12.5, fontWeight:800, cursor: busy ? "default" : "pointer", whiteSpace:"nowrap" }}/>
         );
       })}
       {err && <div style={{ fontSize:12, color:T.red, fontWeight:600, marginTop:6 }}>{err}</div>}
