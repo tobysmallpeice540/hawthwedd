@@ -694,7 +694,16 @@ own header.
   never read for housekeeping pay. `employment`: "PAYE" (the default when
   missing) or "Self-employed". Role **Housekeeping** is left out of rota
   pickers. A cleaner key maps to the staff record with role Housekeeping and
-  that first name (`housekeepingStaffFor`).
+  that first name (`housekeepingStaffFor` → `cleanerKeyForName`, which also
+  takes `aliases` — Edita's login is spelled "Edyta").
+  **A login is not a staff record** (4 Nov, Toby could not find where to put
+  the cleaners' rates — neither had a record). The Staff page now says which
+  housekeepers have none, with "+ Add <name>" opening the form filled in (role,
+  the WhatsApp summary number as phone, a first rate line from
+  `CHANGEOVER_FROM`). The summary numbers on Settings → WhatsApp are still
+  their own list, separate from `profiles.mobile`: a cleaner login with no
+  mobile is offered the summary number ("Use 07…", `useWaSummaryMobiles`).
+  Test: `tests/staff-housekeepers-e2e.cjs`.
 - **Reports → Housekeeping Hours is the weekly pay sheet**
   (`HousekeepingPayReport`, `housekeepingWeek`): per week, changeover hours by
   the day each was ready plus Karina's House hours, each priced at the rate on

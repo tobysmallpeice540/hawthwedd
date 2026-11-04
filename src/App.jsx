@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04f";
+const APP_BUILD = "2026-11-04g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8073,7 +8073,7 @@ const CHANGEOVER_FROM = "2026-10-05";
 // Two cleaners on different pay rates, so hours are recorded per person. The
 // key is what is stored; the label is only what is shown.
 const CHANGEOVER_CLEANERS = [
-  { key: "edita",  label: "Edita" },
+  { key: "edita",  label: "Edita", aliases: ["edyta"] },   // her login is spelled Edyta
   { key: "karina", label: "Karina" }
 ];
 const GRAIN_STORE_UNIT = { id: "grainstore", name: "Grain Store", short: "Grain St." };
@@ -10071,11 +10071,41 @@ function staffRateOn(st, iso) {
   list.forEach(function(r) { if (r.from <= iso) rate = Number(r.rate); });
   return rate;
 }
+// Which cleaner a name is, by its first word: the key, the label, or another
+// spelling ("Edyta" on her login, "Edita" in the app). Null for anyone else.
+function cleanerKeyForName(name) {
+  const w = String(name || "").trim().split(/\s+/)[0].toLowerCase();
+  if (!w) return null;
+  const c = CHANGEOVER_CLEANERS.find(function(x) {
+    return x.key === w || x.label.toLowerCase() === w || (x.aliases || []).indexOf(w) !== -1;
+  });
+  return c ? c.key : null;
+}
 // The staff record for a cleaner key: role Housekeeping, first name matching.
 function housekeepingStaffFor(staff, key) {
   return (staff || []).find(function(s) {
-    return s && s.role === "Housekeeping" && String(s.name || "").trim().split(/\s+/)[0].toLowerCase() === key;
+    return s && s.role === "Housekeeping" && cleanerKeyForName(s.name) === key;
   }) || null;
+}
+// The housekeepers' numbers typed on Settings → WhatsApp (the weekly summary),
+// by cleaner key — offered on the Staff page so nobody types them twice.
+// An optional read: no settings = nothing offered.
+function useWaSummaryMobiles() {
+  const [m, setM] = useState({});
+  useEffect(function() {
+    let off = false;
+    sbGet(WA_SETTINGS_KEY).then(function(v) {
+      if (off) return;
+      const out = {};
+      (((v || {}).summary || {}).recipients || []).forEach(function(r) {
+        const k = r && cleanerKeyForName(r.name);
+        if (k && String(r.mobile || "").trim() && !out[k]) out[k] = String(r.mobile).trim();
+      });
+      setM(out);
+    }).catch(function() {});
+    return function() { off = true; };
+  }, []);
+  return m;
 }
 
 // Everything owed for one week: changeover hours per cleaner (by the day each
@@ -21617,6 +21647,21 @@ function staffRateSummary(st) {
 function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNew, onEdit, onDelete, onSubmit, onCancel, onPurgeOrphan }) {
   const updateForm = (k,v) => setStaffForm(f=>({...f,[k]:v}));
   const [purging, setPurging] = useState(null);
+  const hkMobiles = useWaSummaryMobiles();
+  // Housekeeping pay is priced from a staff record (role Housekeeping, first
+  // name Edita / Karina). Without one their hours have no rate, and nothing on
+  // this page used to say so.
+  const hkMissing = CHANGEOVER_CLEANERS.filter(function(c) { return !housekeepingStaffFor(staff, c.key); });
+  const addHousekeeper = function(c) {
+    const taken = {}; staff.forEach(function(x) { taken[String(x.id).toUpperCase()] = true; });
+    let id = c.label.slice(0, 2).toUpperCase(), n = 2;
+    while (taken[id.toUpperCase()]) id = c.label.slice(0, 2).toUpperCase() + (n++);
+    onNew();
+    // A first rate from the first signed-off week, so every week is priced.
+    setStaffForm(function(f) { return Object.assign({}, f, { id: id, name: c.label, role: "Housekeeping",
+      phone: hkMobiles[c.key] || "", rates: [{ from: CHANGEOVER_FROM, rate: "", holidayRollup: false }] }); });
+    setTimeout(function() { const el = document.getElementById("staff-form"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 50);
+  };
   const [wages, setWages]     = useState(MIN_WAGE_DEFAULTS);
   const [wageSaved, setWageSaved] = useState(false);
 
@@ -21665,6 +21710,27 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
       {/* Logins live beside the staff records, because they are the same
           people and the two go out of step otherwise. */}
       <StaffLogins/>
+
+      {hkMissing.length > 0 && (
+        <div style={{ background:T.amberBg, border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 18px", marginBottom:22 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:T.amber, marginBottom:4 }}>
+            Housekeeping pay: {hkMissing.map(function(c) { return c.label; }).join(" and ")} {hkMissing.length === 1 ? "has" : "have"} no staff record yet
+          </div>
+          <div style={{ fontSize:12.5, color:T.textMid, marginBottom:10, lineHeight:1.5 }}>
+            A login is not a staff record. Pay rates go on the staff record, so their hours can't be priced until it exists.
+          </div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            {hkMissing.map(function(c) {
+              return (
+                <button key={c.key} type="button" onClick={function(){ addHousekeeper(c); }}
+                  style={{ background:T.midBlue, color:"#fff", border:"none", padding:"8px 16px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>
+                  + Add {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Minimum wage bands — include rolled-up holiday pay, and change each April */}
       <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 20px", marginBottom:22, boxShadow:T.shadowCard }}>
@@ -21726,7 +21792,7 @@ function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNe
       )}
 
       {staffForm && (
-        <div style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:26, marginBottom:26, boxShadow:`0 4px 16px rgba(${T.accentRgb},.1)` }}>
+        <div id="staff-form" style={{ background:"#fff", border:`2px solid ${T.accentMid}`, borderRadius:10, padding:26, marginBottom:26, boxShadow:`0 4px 16px rgba(${T.accentRgb},.1)` }}>
           <h3 style={{ margin:"0 0 18px", color:T.midBlue, fontWeight:700, fontSize:16 }}>{editStaffId?"Edit Staff Member":"New Staff Member"}</h3>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"14px 22px" }}>
             {[{k:"id",l:"Initials / Code",required:true,hint:"e.g. TM, BeW"},{k:"name",l:"Full Name",required:true},{k:"email",l:"Email"},{k:"phone",l:"Phone"},{k:"rate",l:"Pay Rate"}].map(({k,l,required,hint})=>(
@@ -33744,6 +33810,7 @@ function StaffLogins() {
   const [adding, setAdding] = useState(false);
   const [form, setForm]     = useState({ name:"", email:"", role:"bar", password:"", mobile:"" });
   const [confirmOff, setConfirmOff] = useState(null);
+  const hkMobiles = useWaSummaryMobiles();
 
   async function load() {
     setErr("");
@@ -33868,6 +33935,13 @@ function StaffLogins() {
 
             {u.active !== false && u.role !== "client" && (
               <MobileCell user={u} onSaved={function(){ flash("Mobile saved."); load(); }} onError={setErr}/>
+            )}
+            {u.active !== false && u.role === "cleaner" && !u.mobile && hkMobiles[cleanerKeyForName(u.name)] && (
+              <BoxBtn tone="ghost" disabled={busy === u.id} title="The number on Settings → WhatsApp for the weekly summary"
+                onClick={function(){ const m = hkMobiles[cleanerKeyForName(u.name)];
+                  act(u.id, function() { return userAdmin("users.setMobile", { id: u.id, mobile: m }); }, "Mobile saved."); }}>
+                Use {hkMobiles[cleanerKeyForName(u.name)]}
+              </BoxBtn>
             )}
 
             <select value={u.role} disabled={busy === u.id || u.active === false}
