@@ -52,10 +52,12 @@
 //                                              "What would go today" preview
 //
 // Sending (4 Nov 2026, Toby): through the farm Gmail, as hello@ (a verified
-// "Send mail as" address there), each a fresh email with its own subject, so
-// it sits in Gmail's Sent. Only when the connection was given gmail.send AND
-// hello@ is a verified send-as address — otherwise Gmail would quietly send it
-// as hawthbushfarm@gmail.com — else through Resend, as before. A Gmail send
+// "Send mail as" address there, set to go out through an SMTP relay — Brevo),
+// each a fresh email with its own subject, so it sits in Gmail's Sent. Only
+// when the connection was given gmail.send AND hello@ is a verified send-as
+// address (otherwise Gmail would quietly send as hawthbushfarm@gmail.com) AND
+// it sends through a relay (Gmail's own servers fail the domain's DMARC) —
+// else through Resend, as before. A Gmail send
 // refused outright (401/403: certainly not sent) moves the rest of the run to
 // Resend; any other failure is unmarked and retried next run, never re-sent
 // another way in the same run, because it may have gone.
@@ -464,7 +466,12 @@ async function gmailSendReady(g) {
   const mine = list.find(function (a) { return a && String(a.sendAsEmail || "").toLowerCase() === FROM_EMAIL; });
   if (!mine) return { ok: false, why: FROM_EMAIL + " is not a \"Send mail as\" address in the farm Gmail" };
   if (!mine.isPrimary && mine.verificationStatus !== "accepted") return { ok: false, why: FROM_EMAIL + " is not verified in the farm Gmail" };
-  return { ok: true };
+  // Sent through Google's own servers, mail "from" a non-Google domain fails
+  // that domain's DMARC and is bounced by Yahoo and others (Toby, 4 Nov). Only
+  // use Gmail when the alias goes out through an SMTP relay (Brevo), which
+  // signs for hawthbushfarm.co.uk.
+  if (!mine.smtpMsa || !mine.smtpMsa.host) return { ok: false, why: FROM_EMAIL + " is set to send through Gmail's own servers, not an SMTP relay such as Brevo" };
+  return { ok: true, relay: String(mine.smtpMsa.host) };
 }
 // RFC 2047 for a header that may hold non-ASCII (a dash, a name with an accent).
 function mimeWord(s) {
@@ -668,7 +675,7 @@ exports.handler = async function (event) {
   if (plan.due.length) {
     try {
       const ready = await gmailSendReady(farm);
-      route = ready.ok ? { via: "gmail" } : { via: "resend", why: ready.why };
+      route = ready.ok ? { via: "gmail", relay: ready.relay } : { via: "resend", why: ready.why };
     } catch (e) { route = { via: "resend", why: String(e.message || e) }; }
   }
 

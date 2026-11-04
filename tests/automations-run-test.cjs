@@ -77,7 +77,8 @@ function world(opts) {
     if (/gmail\/v1\/users\/me\/messages\/m2\?format=minimal/.test(url)) return json({ internalDate: String(Date.parse(plus(-1) + "T12:00:00Z")) });
     if (/gmail\/v1\/users\/me\/settings\/sendAs$/.test(url)) {
       return json({ sendAs: [{ sendAsEmail: "hawthbushfarm@gmail.com", isPrimary: true, verificationStatus: "accepted" }]
-        .concat(o.helloStatus ? [{ sendAsEmail: "hello@hawthbushfarm.co.uk", verificationStatus: o.helloStatus }] : []) });
+        .concat(o.helloStatus ? [Object.assign({ sendAsEmail: "hello@hawthbushfarm.co.uk", verificationStatus: o.helloStatus },
+          o.noRelay ? {} : { smtpMsa: { host: "smtp-relay.brevo.com", port: 587, securityMode: "starttls" } })] : []) });
     }
     if (/gmail\/v1\/users\/me\/messages\/send$/.test(url) && method === "POST") {
       const raw = Buffer.from(JSON.parse(init.body).raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
@@ -142,7 +143,7 @@ const run = () => fn.handler({ httpMethod: "POST", headers: { "x-admin-token": "
     const decoded = /^=\?UTF-8\?B\?(.*)\?=$/.exec(subj);
     ok("subject survives its dash", (decoded ? Buffer.from(decoded[1], "base64").toString("utf8") : subj) === "Following up on your enquiry — Hawthbush Farm", subj);
     ok("text and HTML both", /Content-Type: text\/plain; charset=UTF-8/.test(raw) && /Content-Type: text\/html; charset=UTF-8/.test(raw));
-    ok("reported as Gmail", body.sendVia && body.sendVia.via === "gmail" && body.sent[0].via === "gmail", JSON.stringify(body.sendVia));
+    ok("reported as Gmail, through the relay", body.sendVia && body.sendVia.via === "gmail" && body.sendVia.relay === "smtp-relay.brevo.com" && body.sent[0].via === "gmail", JSON.stringify(body.sendVia));
     const log = w.db.hbf_email_log_v1;
     ok("logged with its Gmail id, so the archive does not copy it twice", log.length === 1 && log[0].gmailId === "g1" && log[0].via === "gmail", JSON.stringify(log));
   }
@@ -151,6 +152,12 @@ const run = () => fn.handler({ httpMethod: "POST", headers: { "x-admin-token": "
     const body = JSON.parse((await run()).body);
     ok("hello@ not a send-as address: Resend, never Gmail's own address", w.calls.gmailSends.length === 0 && w.calls.sends.length === 1
       && body.sendVia.via === "resend" && /Send mail as/.test(body.sendVia.why), JSON.stringify(body.sendVia));
+  }
+  {
+    const w = world({ canSend: true, helloStatus: "accepted", noRelay: true });
+    const body = JSON.parse((await run()).body);
+    ok("hello@ going out through Gmail's own servers (DMARC fails): Resend", w.calls.gmailSends.length === 0 && w.calls.sends.length === 1
+      && /not an SMTP relay/.test(body.sendVia.why), JSON.stringify(body.sendVia));
   }
   {
     const w = world({ canSend: true, helloStatus: "pending" });

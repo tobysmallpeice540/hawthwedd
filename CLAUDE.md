@@ -298,7 +298,10 @@ own header.
   Only when the connection was given `gmail.send` (the Airbnb-mail connect now
   asks for readonly + send; send is optional) AND hello@ is a verified "Send
   mail as" address (`gmailSendReady` reads `settings/sendAs` — otherwise Gmail
-  would silently send as hawthbushfarm@gmail.com); else Resend as before. A
+  would silently send as hawthbushfarm@gmail.com) AND that alias goes out
+  through an SMTP relay (`smtpMsa`, Brevo's smtp-relay.brevo.com) — through
+  Google's own servers a non-Google From fails the domain's DMARC and Yahoo
+  bounces it (Toby's experience); else Resend as before. A
   Gmail send refused outright (401/403) moves that email and the rest of the
   run to Resend; any other Gmail failure is unmarked and retried next run,
   NEVER re-sent by Resend in the same run (it may have gone). The log entry

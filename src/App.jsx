@@ -2809,7 +2809,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04a";
+const APP_BUILD = "2026-11-04b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -29173,7 +29173,7 @@ function AutomationsPanel() {
         {preview && preview.sendVia && (
           <div style={{ marginTop:6, fontSize:12, color: preview.sendVia.via === "gmail" ? T.textLight : T.amber }}>
             {preview.sendVia.via === "gmail"
-              ? "They would go from the farm Gmail as hello@hawthbushfarm.co.uk, and show in its Sent folder."
+              ? "They would go from the farm Gmail as hello@hawthbushfarm.co.uk" + (preview.sendVia.relay ? " (through " + preview.sendVia.relay + ")" : "") + ", and show in its Sent folder."
               : "They would go through Resend, not the farm Gmail" + (preview.sendVia.why ? " — " + preview.sendVia.why : "") + ". Still from hello@hawthbushfarm.co.uk, but not in Gmail's Sent."}
           </div>
         )}
