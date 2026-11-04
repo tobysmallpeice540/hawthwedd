@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04h";
+const APP_BUILD = "2026-11-04i";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -30188,7 +30188,10 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
 
   const filtered = enquiries.filter(e => {
     if (filter !== "all" && e.outcome !== filter) return false;
-    if (tempFilter === "current" && e.temperature === "freezing") return false;
+    // Brochure requests have their own button (Toby, 4 Nov) — Current is the
+    // people actually being worked, so it leaves out Brochure and Freezing.
+    if (tempFilter === "current" && (e.temperature === "freezing" || e.temperature === "brochure")) return false;
+    if (tempFilter === "brochure" && e.temperature !== "brochure") return false;
     if (tempFilter === "freezing" && e.temperature !== "freezing") return false;
     if (search) {
       const q = search.toLowerCase();
@@ -30230,9 +30233,9 @@ function EnquiriesView({ gmailToken, onConvertToBooking, focusEnquiryId, clearFo
         </div>
         <div style={{ width:1, height:24, background:T.border }}/>
         {/* Temperature filter */}
-        {[["current","Current"],["freezing","Freezing"],["all","All"]].map(([v,l])=>(
+        {[["current","Current"],["brochure","Brochure"],["freezing","Freezing"],["all","All"]].map(([v,l])=>(
           <button key={v} onClick={()=>setTempFilter(v)}
-            title={v==="current" ? "Everything except Freezing" : v==="freezing" ? "Only Freezing" : "Everything"}
+            title={v==="current" ? "Everything except Brochure and Freezing" : v==="brochure" ? "Only brochure requests" : v==="freezing" ? "Only Freezing" : "Everything"}
             style={{ background:tempFilter===v?(TEMP_CONFIG[v]?.bg||T.midBlue):"#fff", color:tempFilter===v?(TEMP_CONFIG[v]?.text||"#fff"):T.textMid, border:`1.5px solid ${tempFilter===v?(TEMP_CONFIG[v]?.border||T.midBlue):T.border}`, padding:"6px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:tempFilter===v?700:400 }}>{l}</button>
         ))}
         <div style={{ flex:1 }}/>
