@@ -700,10 +700,8 @@ own header.
   the cleaners' rates — neither had a record). The Staff page now says which
   housekeepers have none, with "+ Add <name>" opening the form filled in (role,
   the WhatsApp summary number as phone, a first rate line from
-  `CHANGEOVER_FROM`). The summary numbers on Settings → WhatsApp are still
-  their own list, separate from `profiles.mobile`: a cleaner login with no
-  mobile is offered the summary number ("Use 07…", `useWaSummaryMobiles`).
-  Test: `tests/staff-housekeepers-e2e.cjs`.
+  `CHANGEOVER_FROM`). The phone it offers is her login's mobile
+  (`useHousekeeperMobiles`). Test: `tests/staff-housekeepers-e2e.cjs`.
 - **Reports → Housekeeping Hours is the weekly pay sheet**
   (`HousekeepingPayReport`, `housekeepingWeek`): per week, changeover hours by
   the day each was ready plus Karina's House hours, each priced at the rate on
@@ -904,8 +902,9 @@ own header.
   tabs Setup / Messages / Sent, 30 Oct). Setup: the sending number and its
   name review; whether the WhatsApp account is linked to the app
   (`/{WABA}/subscribed_apps` — a verified callback URL alone does NOT bring
-  messages in; "Link it now"); a test box; who gets what (staff mobiles, the
-  housekeepers' summary numbers, summary day/hour, arrival hour); Check now.
+  messages in; "Link it now"); a test box; who gets what (office logins'
+  mobiles, the housekeeping logins' mobiles — both read-only here, set on
+  Settings → Staff — summary day/hour, arrival hour); Check now.
   Messages: every template — an On / Off switch (`role="switch"`, the word
   under it; 31 Oct;
   Off stops every automatic send of it, but the manual Send WhatsApp on a
@@ -931,8 +930,8 @@ own header.
 - **Settings object** `app_data` `hbf_whatsapp_settings_v1`: `templates[name]
   {on, body}`, `checklists[<chk template id>] {live, overdue}` (the two ticks
   on each checklist — kept HERE, not on `chk_templates`, because changing a
-  template's trigger moves when it fires), `summary {day, hour, recipients
-  [{name, mobile}]}` (default Sunday 8am, Edita + Karina), `arrival {hour}`
+  template's trigger moves when it fires), `summary {day, hour}` (default
+  Sunday 8am), `arrival {hour}`
   (default 9). Every writer re-reads and changes only its part
   (`saveWaSettings`).
 - **The sender** (`whatsapp-reminders/`, every 15 min at 7/22/37/52 via
@@ -1061,7 +1060,13 @@ own header.
 - **Every staff login may have a mobile** (`profiles.mobile`, international
   digits, written only by `user-admin.js` `users.create` / `users.setMobile`;
   edited in place on Settings → Staff, `MobileCell`). Optional for everyone:
-  blank = no WhatsApps.
+  blank = no WhatsApps. **It is the only place a person's number lives** (4 Nov,
+  Toby): the weekly changeover summary goes to every housekeeping login that
+  is switched on and has a mobile (`plan.summaryRecipients`, read by the sender
+  and by `whatsapp-send` status as `housekeepers`). The old
+  `summary.recipients` list may still be stored and is never read; its two
+  numbers were copied onto Edyta's and Karina's logins by SQL on 4 Nov (the
+  one exception to "written only by user-admin.js").
 - `wa_reminders_sent` (migration w) is unused and empty — replaced by
   `wa_sent_marks` (migration x); drop it when convenient.
 - Tests: `tests/whatsapp-reminders-test.cjs` (templates, plans, the run),
