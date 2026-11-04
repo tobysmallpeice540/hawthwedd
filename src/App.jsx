@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04g";
+const APP_BUILD = "2026-11-04h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -10087,19 +10087,19 @@ function housekeepingStaffFor(staff, key) {
     return s && s.role === "Housekeeping" && cleanerKeyForName(s.name) === key;
   }) || null;
 }
-// The housekeepers' numbers typed on Settings → WhatsApp (the weekly summary),
-// by cleaner key — offered on the Staff page so nobody types them twice.
-// An optional read: no settings = nothing offered.
-function useWaSummaryMobiles() {
+// The housekeeping logins' mobiles by cleaner key — the one place a
+// housekeeper's number lives (4 Nov) — so the staff form can offer it.
+// An optional read: nothing found = nothing offered.
+function useHousekeeperMobiles() {
   const [m, setM] = useState({});
   useEffect(function() {
     let off = false;
-    sbGet(WA_SETTINGS_KEY).then(function(v) {
+    userAdmin("users.list").then(function(r) {
       if (off) return;
       const out = {};
-      (((v || {}).summary || {}).recipients || []).forEach(function(r) {
-        const k = r && cleanerKeyForName(r.name);
-        if (k && String(r.mobile || "").trim() && !out[k]) out[k] = String(r.mobile).trim();
+      ((r && r.users) || []).forEach(function(u) {
+        const k = u && u.role === "cleaner" && u.active !== false && u.mobile && cleanerKeyForName(u.name);
+        if (k && !out[k]) out[k] = prettyMobile(u.mobile);
       });
       setM(out);
     }).catch(function() {});
@@ -19801,7 +19801,8 @@ const WA_DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Sa
 // The WhatsApp settings are one object (app_data hbf_whatsapp_settings_v1):
 //   templates:  { <name>: { on, body } } — switched on, and wording being edited
 //   checklists: { <checklist template id>: { live, overdue } } — per-list ticks
-//   summary:    { day, hour, recipients: [{ name, mobile }] }
+//   summary:    { day, hour }  (recipients: the housekeeping logins' mobiles since 4 Nov;
+//               an old recipients list may still be stored and is not read)
 //   arrival:    { hour }
 // Every save re-reads it and changes only its own part.
 async function saveWaSettings(mutate) {
@@ -19941,8 +19942,14 @@ function WhatsAppPage() {
           <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Housekeepers — weekly changeover summary</div>
           {settings === null ? <div style={{ fontSize:12, color:T.textLight }}>Loading…</div> : (<>
             <WaSummaryWhen summary={summary} busy={!!busy} onSave={saveSummaryWhen}/>
-            <WaRecipients list={summary.recipients} busy={!!busy}
-              onSave={function(list){ return save(function(x){ x.summary = Object.assign({}, summary, x.summary || {}, { recipients: list }); return x; }, "Housekeepers' numbers saved."); }}/>
+            <div style={{ fontSize:12.5, color:T.textMid, lineHeight:1.6, marginTop:6 }}>
+              {st.housekeepersError ? <span style={{ color:T.red }}>Could not read the housekeeping logins.</span>
+                : !(st.housekeepers || []).length ? <span style={{ color:T.amber }}>No housekeeping logins switched on.</span>
+                : (st.housekeepers || []).map(function(p, i) {
+                    return <span key={i}>{i ? " · " : ""}{p.name} {p.hasMobile ? <span style={{ color:T.green }}>✓ mobile</span> : <span style={{ color:T.amber }}>no mobile</span>}</span>;
+                  })}
+              <span> — every housekeeping login with a mobile gets it. Set mobiles under Settings → Staff.</span>
+            </div>
           </>)}
 
           <div style={{ fontSize:13, fontWeight:700, color:T.text, margin:"16px 0 4px" }}>Guests — pre-arrival</div>
@@ -20138,36 +20145,6 @@ function WaArrivalSettings({ arrival, busy, hosted, onSave }) {
           onSave({ gateCode: gate.trim(), packs: clean }, "Gate code and arrival packs saved.");
         }}>Save gate code and packs</button>
         {err && <span style={{ fontSize:12, color:T.red, marginLeft:8 }}>{err}</span>}</div>
-    </div>
-  );
-}
-
-// The housekeepers who get the weekly summary: name + mobile rows. At module
-// scope: it renders inputs.
-function WaRecipients({ list, busy, onSave }) {
-  const fresh = function() {
-    const l = (list || []).map(function(r){ return { name: r.name || "", mobile: r.mobile || "" }; });
-    return l.length ? l : CHANGEOVER_CLEANERS.map(function(c){ return { name: c.label, mobile: "" }; });
-  };
-  const [rows, setRows] = useState(fresh);
-  useEffect(function() { setRows(fresh()); }, [JSON.stringify(list || [])]);
-  const inp = { background:T.bgInput, border:`1.5px solid ${T.border}`, borderRadius:6, color:T.text, fontFamily:"inherit", fontSize:13, padding:"6px 9px", boxSizing:"border-box" };
-  const set = function(i, k, v) { setRows(rows.map(function(r, j){ return j === i ? Object.assign({}, r, { [k]: v }) : r; })); };
-  return (
-    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-      {rows.map(function(r, i) {
-        return (
-          <div key={i} style={{ display:"flex", flexWrap:"nowrap", gap:6, alignItems:"center" }}>
-            <input value={r.name} placeholder="Name" onChange={function(e){ set(i, "name", e.target.value); }} style={{ ...inp, flex:"1 1 40%", minWidth:0 }}/>
-            <input type="tel" value={r.mobile} placeholder="Mobile" onChange={function(e){ set(i, "mobile", e.target.value); }} style={{ ...inp, flex:"1 1 45%", minWidth:0, borderColor: r.mobile ? undefined : T.amber }}/>
-            <button type="button" title="Remove" onClick={function(){ setRows(rows.filter(function(_, j){ return j !== i; })); }} style={{ ...smallBtn, padding:"5px 9px" }}>×</button>
-          </div>
-        );
-      })}
-      <div style={{ display:"flex", gap:8 }}>
-        <button type="button" onClick={function(){ setRows(rows.concat([{ name:"", mobile:"" }])); }} style={{ ...smallBtn, fontWeight:500 }}>+ Add</button>
-        <button type="button" disabled={busy} onClick={function(){ onSave(rows.filter(function(r){ return r.name.trim() || r.mobile.trim(); }).map(function(r){ return { name: r.name.trim(), mobile: r.mobile.trim() }; })); }} style={smallBtn}>Save numbers</button>
-      </div>
     </div>
   );
 }
@@ -21647,7 +21624,7 @@ function staffRateSummary(st) {
 function StaffView({ staff, bookings, staffForm, setStaffForm, editStaffId, onNew, onEdit, onDelete, onSubmit, onCancel, onPurgeOrphan }) {
   const updateForm = (k,v) => setStaffForm(f=>({...f,[k]:v}));
   const [purging, setPurging] = useState(null);
-  const hkMobiles = useWaSummaryMobiles();
+  const hkMobiles = useHousekeeperMobiles();
   // Housekeeping pay is priced from a staff record (role Housekeeping, first
   // name Edita / Karina). Without one their hours have no rate, and nothing on
   // this page used to say so.
@@ -33810,7 +33787,6 @@ function StaffLogins() {
   const [adding, setAdding] = useState(false);
   const [form, setForm]     = useState({ name:"", email:"", role:"bar", password:"", mobile:"" });
   const [confirmOff, setConfirmOff] = useState(null);
-  const hkMobiles = useWaSummaryMobiles();
 
   async function load() {
     setErr("");
@@ -33935,13 +33911,6 @@ function StaffLogins() {
 
             {u.active !== false && u.role !== "client" && (
               <MobileCell user={u} onSaved={function(){ flash("Mobile saved."); load(); }} onError={setErr}/>
-            )}
-            {u.active !== false && u.role === "cleaner" && !u.mobile && hkMobiles[cleanerKeyForName(u.name)] && (
-              <BoxBtn tone="ghost" disabled={busy === u.id} title="The number on Settings → WhatsApp for the weekly summary"
-                onClick={function(){ const m = hkMobiles[cleanerKeyForName(u.name)];
-                  act(u.id, function() { return userAdmin("users.setMobile", { id: u.id, mobile: m }); }, "Mobile saved."); }}>
-                Use {hkMobiles[cleanerKeyForName(u.name)]}
-              </BoxBtn>
             )}
 
             <select value={u.role} disabled={busy === u.id || u.active === false}

@@ -25,7 +25,8 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
     const reply = (o, st) => route.fulfill({ status: st || 200, contentType: 'application/json', body: JSON.stringify(o) })
     if (name === 'whatsapp-send' && body.action === 'status') return reply({ configured: true,
       number: { display: '+44 1825 000000', name: 'Hawthbush Farm', nameStatus: 'APPROVED' }, numberOnAccount: true,
-      linkedApps: linked ? ['Netlify HF app'] : [], templates: [], catalogue, staff: [{ name: 'Lisa', hasMobile: false }, { name: 'Toby', hasMobile: true }] })
+      linkedApps: linked ? ['Netlify HF app'] : [], templates: [], catalogue, staff: [{ name: 'Lisa', hasMobile: false }, { name: 'Toby', hasMobile: true }],
+      housekeepers: [{ name: 'Edyta cleaner', hasMobile: true }, { name: 'Karina Cleaner', hasMobile: false }] })
     if (name === 'whatsapp-send' && body.action === 'subscribe') { linked = true; return reply({ ok: true }) }
     if (name === 'whatsapp-send' && body.action === 'submit') return reply({ ok: true, status: 'PENDING', edited: false })
     if (name === 'whatsapp-send' && body.action === 'log') return reply({ ok: true,
@@ -49,13 +50,12 @@ const DIST = process.env.DIST || path.join(process.env.HOME, 'dist-check')
   await page.getByText('Sending from').waitFor({ timeout: 10000 })
   await page.getByRole('button', { name: 'Link it now' }).click()
   await page.getByText('Replies reach the app').waitFor({ timeout: 5000 })
-  // Housekeepers start as Edita and Karina with no numbers; save one.
-  const mobiles = page.getByPlaceholder('Mobile', { exact: true })
-  assert.strictEqual(await mobiles.count(), 2)
-  await mobiles.nth(1).fill('07111 222333')
-  await page.getByRole('button', { name: 'Save numbers' }).click()
-  await page.getByText("Housekeepers' numbers saved.").waitFor({ timeout: 5000 })
-  assert.ok(/"recipients":\[\{"name":"Edita","mobile":""\},\{"name":"Karina","mobile":"07111 222333"\}\]/.test(writes()), writes().slice(-300))
+  // Housekeepers: the housekeeping logins and whether each has a mobile — no
+  // second list of numbers to keep here (4 Nov).
+  assert.strictEqual(await page.getByPlaceholder('Mobile', { exact: true }).count(), 0, 'no numbers typed on this page')
+  await page.getByText('every housekeeping login with a mobile gets it').waitFor({ timeout: 5000 })
+  const setupText = await page.locator('body').innerText()
+  assert.ok(/Edyta cleaner ✓ mobile · Karina Cleaner no mobile/.test(setupText), setupText.slice(0, 1500))
 
   // Pre-arrival: day, gate code, a pack per property.
   await page.locator('select').filter({ hasText: 'the arrival day' }).selectOption('1')

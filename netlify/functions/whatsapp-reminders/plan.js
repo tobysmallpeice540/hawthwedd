@@ -382,6 +382,14 @@ function weekCap(fixedLen) {
   return Math.max(200, Math.min(900, 1024 - (fixedLen || 0) - 40));
 }
 
+// Who gets the weekly summary: every housekeeping login that is switched on
+// (4 Nov 2026, Toby — one number per person, the login's mobile, instead of a
+// second list on the WhatsApp page). One with no mobile is reported skipped.
+function summaryRecipients(profiles) {
+  return (profiles || []).filter(function (p) { return p && p.role === "cleaner" && p.active !== false; })
+    .map(function (p) { return { name: p.name || p.email || "", mobile: p.mobile || "" }; });
+}
+
 // The plan page's link ends in "<from day>-<key>" (templates.js planSuffix);
 // the caller passes planSuffix(from) since this file holds no secret.
 function planSummary(input) {
@@ -406,6 +414,6 @@ function planSummary(input) {
   return { send: send, skipped: skipped };
 }
 
-module.exports = { planChecklists, planArrivals, arrivalMessage, planSummary, summaryItems, itemWords, weekText, weekCap, SUMMARY_DAYS,
+module.exports = { planChecklists, planArrivals, arrivalMessage, planSummary, summaryRecipients, summaryItems, itemWords, weekText, weekCap, SUMMARY_DAYS,
   isQuiet, dueWords, itemsList, normaliseNumber, guestAgreed, arrivalPackFor, londonDate, londonHour, londonWeekday, clock12,
   dayShort, dayLong, addDays, stayTimes, CATCH_UP_H };

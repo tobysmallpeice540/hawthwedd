@@ -277,6 +277,14 @@ exports.handler = async (event) => {
       if (!r.ok) throw new Error("profiles " + r.status);
       out.staff = (await r.json()).map(function (p) { return { name: p.name || p.email, hasMobile: !!p.mobile }; });
     } catch (e) { out.staffError = e.message; }
+    // Who gets the weekly summary: the housekeeping logins switched on (the
+    // sender reads the same rows).
+    try {
+      const r = await fetch(SUPABASE_URL + "/rest/v1/profiles?role=eq.cleaner&active=eq.true&select=id,name,email,mobile&order=name.asc",
+        { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+      if (!r.ok) throw new Error("profiles " + r.status);
+      out.housekeepers = (await r.json()).map(function (p) { return { name: p.name || p.email, hasMobile: !!p.mobile }; });
+    } catch (e) { out.housekeepersError = e.message; }
     return json(200, out);
   }
 

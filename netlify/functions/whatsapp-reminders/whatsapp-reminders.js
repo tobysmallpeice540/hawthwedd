@@ -156,7 +156,9 @@ async function planNow(now) {
       const words = sub && sub.body ? sub.body : T.TEMPLATES.changeover_summary.body;
       const fixedLen = words.replace(/\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}/g, "").length;
       const secret = process.env.HBF_ADMIN_TOKEN;
-      const p = plan.planSummary(Object.assign({ settings: s, now: now, fixedLen: fixedLen,
+      // The housekeeping logins' own mobiles (Settings → Staff), not a list here.
+      const recipients = plan.summaryRecipients(await rest("profiles?role=eq.cleaner&select=name,mobile,active,role"));
+      const p = plan.planSummary(Object.assign({ settings: Object.assign({}, s, { recipients: recipients }), now: now, fixedLen: fixedLen,
         planSuffix: secret ? function (from) { return T.planSuffix(from, secret); } : null }, data));
       all.push.apply(all, p.send); skipped.push.apply(skipped, p.skipped);
     }

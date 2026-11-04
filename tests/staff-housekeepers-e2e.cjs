@@ -5,11 +5,10 @@
 // Housekeeping pay is priced from a STAFF record (role Housekeeping, first
 // name Edita / Karina) — a cleaner login is not one, and the page said nothing.
 //   · a missing housekeeper gets "+ Add <name>", which opens the form filled
-//     in: name, role Housekeeping, the WhatsApp summary number, a first rate
+//     in: name, role Housekeeping, her login's mobile, a first rate
 //     from CHANGEOVER_FROM waiting for its £
 //   · saved, the record prices her and the prompt goes
 //   · "Edyta" (her login's spelling) counts as Edita
-//   · a cleaner login with no mobile is offered the summary number
 //
 //   npx vite build --outDir "$HOME/dist-check" --emptyOutDir && node tests/staff-housekeepers-e2e.cjs
 
@@ -31,7 +30,7 @@ const check = (n, ok, d) => { if (ok) passes++; else fails.push(n + (d ? ': ' + 
       hbf_whatsapp_settings_v1: { summary: { day: 0, hour: 8, recipients: [{ name: 'Edita', mobile: '07700 900123' }, { name: 'Karina', mobile: '07700 900456' }] } },
     }
     const users = [
-      { id: 'u-ed', email: 'edyta@test.invalid', name: 'Edyta cleaner', role: 'cleaner', active: true, mobile: null },
+      { id: 'u-ed', email: 'edyta@test.invalid', name: 'Edyta cleaner', role: 'cleaner', active: true, mobile: '447700900123' },
       { id: 'u-ka', email: 'karina@test.invalid', name: 'Karina Cleaner', role: 'cleaner', active: true, mobile: '447700900456' },
       { id: 'u-to', email: 'toby@test.invalid', name: 'Toby Cleaner', role: 'cleaner', active: true, mobile: null },
     ]
@@ -60,15 +59,7 @@ const check = (n, ok, d) => { if (ok) passes++; else fails.push(n + (d ? ': ' + 
       await pg.getByText(/Housekeeping pay: Edita and Karina have no staff record yet/).waitFor({ timeout: 5000 })
       passes++
 
-      // Logins: Edyta has no mobile and is offered Edita's summary number; Karina
-      // already has one; Toby's test login is nobody's.
-      const useBtn = pg.getByRole('button', { name: 'Use 07700 900123' })
-      check('logins: Edyta offered the summary number', (await useBtn.count()) === 1)
-      check('logins: no offer for a login that has a mobile or is not a housekeeper', (await pg.getByRole('button', { name: /^Use 0/ }).count()) === 1)
-      await useBtn.click()
-      await pg.waitForTimeout(500)
-      const sm = adminCalls.find((x) => x.action === 'users.setMobile')
-      check('logins: setMobile sent for Edyta with the number', sm && JSON.stringify(sm).indexOf('u-ed') !== -1 && JSON.stringify(sm).indexOf('07700 900123') !== -1, JSON.stringify(sm))
+      check('logins: no number-copying button any more', (await pg.getByRole('button', { name: /^Use 0/ }).count()) === 0)
 
       // Add Edita: the form comes up filled in.
       await pg.getByRole('button', { name: '+ Add Edita' }).click()
@@ -77,7 +68,7 @@ const check = (n, ok, d) => { if (ok) passes++; else fails.push(n + (d ? ': ' + 
       const vals = await form.locator('input').evaluateAll((els) => els.map((e) => e.value))
       check('form: initials suggested and not clashing', vals.indexOf('ED2') !== -1, JSON.stringify(vals))
       check('form: name Edita', vals.indexOf('Edita') !== -1, JSON.stringify(vals))
-      check('form: phone from WhatsApp settings', vals.indexOf('07700 900123') !== -1, JSON.stringify(vals))
+      check('form: phone from her login', vals.indexOf('07700 900123') !== -1, JSON.stringify(vals))
       check('form: role Housekeeping', (await form.locator('select').first().inputValue()) === 'Housekeeping')
       check('form: one rate line from 5 Oct', (await pg.getByLabel('Rate starts').count()) === 1 && (await pg.getByLabel('Rate starts').inputValue()) === '2026-10-05')
       await pg.getByLabel('Pounds an hour').fill('15')

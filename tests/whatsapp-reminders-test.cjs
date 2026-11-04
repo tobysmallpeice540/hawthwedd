@@ -231,6 +231,18 @@ assert.strictEqual(T.planLinkDay(p.send[0].urlSuffix, "sek"), "2026-11-01");
 assert.deepStrictEqual(p.skipped, [{ name: "Edita", why: "no mobile" }]);
 p = P.planSummary(Object.assign({ now: at("2026-11-02T08:15:00Z") }, sumIn));    // Monday
 assert.strictEqual(p.send.length, 0, "only on the chosen day");
+// Recipients are the housekeeping logins switched on (4 Nov): not admins, not
+// switched-off logins; one with no mobile is listed and then skipped.
+assert.deepStrictEqual(P.summaryRecipients([
+  { name: "Karina Cleaner", role: "cleaner", active: true, mobile: "447111222333" },
+  { name: "Karina Cleaner", role: "cleaner", active: false, mobile: "447000000009" },
+  { name: "Edyta cleaner", role: "cleaner", active: true, mobile: null },
+  { name: "Toby", role: "admin", active: true, mobile: "447900000000" }]),
+  [{ name: "Karina Cleaner", mobile: "447111222333" }, { name: "Edyta cleaner", mobile: "" }]);
+p = P.planSummary(Object.assign({}, sumIn, { now: at("2026-11-01T08:15:00Z"),
+  settings: { day: 0, hour: 8, recipients: P.summaryRecipients([{ name: "Karina Cleaner", role: "cleaner", active: true, mobile: "447111222333" }]) } }));
+assert.strictEqual(p.send.length, 1);
+assert.strictEqual(p.send[0].values.name, "Karina", "first name from the login");
 
 // The plan page: escapes everything, busy days only, quiet days named.
 const HP = require("../netlify/functions/hk-plan.js")._test;
