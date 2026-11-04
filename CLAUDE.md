@@ -561,7 +561,8 @@ own header.
 
 - **The cleaners sign off every check-out and every confirmed event** — diary
   events and box office (ticketed) events alike — on the housekeeping login:
-  Live / Upcoming / Calendar / Bookings / House, plus an App button by Sign out.
+  Live / House / Upcoming / Calendar / Bookings / Checklists (that order —
+  Toby, 4 Nov), plus an App button by Sign out.
   State is worked out from dates;
   only the sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id,
   saved with `useMergedSave` — the cleaner login writes nothing else).

@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04i";
+const APP_BUILD = "2026-11-04j";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -10559,7 +10559,8 @@ function CleanerView({ isAdmin }) {
     return saveRecs(function(prev) { return (prev || []).filter(function(r) { return r.id !== id; }); });
   };
 
-  const tabs = [["home","Live"],["checklists","Checklists"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["house","House"]];
+  // Order: Toby, 4 Nov — House second, Checklists last.
+  const tabs = [["home","Live"],["house","House"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["checklists","Checklists"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
