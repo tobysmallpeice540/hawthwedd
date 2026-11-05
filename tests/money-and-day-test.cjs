@@ -49,7 +49,7 @@ function liftConst(name) {
 
 const CONSTS = ["XERO_ACCOUNT_EVENTS", "XERO_ACCOUNT_ACCOM", "INVOICE_STAGE_LABELS", "INVOICE_FIRST_EVENT_YEAR",
                 "DAMAGE_DEPOSIT_STATES", "STATEMENT_STAGE_LABELS", "VAT_CATEGORIES", "STAFFING_FIELDS",
-                "STAFFING_LABELS", "BAR_USAGE_LABEL", "DEFAULT_AUTOMATIONS", "AIRBNB_ESTIMATE_PCT"];
+                "STAFFING_LABELS", "BAR_USAGE_LABEL", "AUTOMATION_BROCHURE_TEXT", "DEFAULT_AUTOMATIONS", "AIRBNB_ESTIMATE_PCT"];
 const NAMES = ["round2", "parseMoney", "isValidEventDate", "addDaysIso", "fmtDateLong", "fmtWeekdayLong", "eventTypeLabel",
                "eventAccomStays", "eventAccomExtras", "accomLineDescription", "invoiceStageDates",
                "computeEventInvoiceStages", "findPushedInvoice", "isInvoiceableYear", "fmtMoney", "hhmm",
@@ -280,6 +280,8 @@ console.log("follow-up settings: the app and the function agree");
      Object.keys(A.DEFAULTS).map(k => [A.DEFAULTS[k].subject, A.DEFAULTS[k].body]));
   eq("same days and Freezing defaults", Object.keys(ctx.DEFAULT_AUTOMATIONS).map(k => [ctx.DEFAULT_AUTOMATIONS[k].days, !!ctx.DEFAULT_AUTOMATIONS[k].freezeOn, ctx.DEFAULT_AUTOMATIONS[k].freezeDays || null]),
      Object.keys(A.DEFAULTS).map(k => [A.DEFAULTS[k].days, !!A.DEFAULTS[k].freezeOn, A.DEFAULTS[k].freezeDays || null]));
+  eq("same brochure-link defaults", Object.keys(ctx.DEFAULT_AUTOMATIONS).map(k => [ctx.DEFAULT_AUTOMATIONS[k].brochureOn, ctx.DEFAULT_AUTOMATIONS[k].brochureText]),
+     Object.keys(A.DEFAULTS).map(k => [A.DEFAULTS[k].brochureOn, A.DEFAULTS[k].brochureText]));
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

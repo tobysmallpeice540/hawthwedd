@@ -226,6 +226,52 @@ console.log("who is left out");
   eq("two enquiries, one address: one email", dup.due.length, 1);
 }
 
+console.log("the brochure link (5 Nov)");
+{
+  // A request that came in by the website (brochure emailed), one by phone,
+  // an older one matched only by address, and one whose brochure email failed.
+  const web = enq("bw", "2026-10-20", { brochureRequests: ["br1"] });
+  const phone = enq("bp", "2026-10-20", { contacts: [{ date: "2026-10-20", method: "phone" }] });
+  const byAddr = enq("ba", "2026-10-20");
+  const unsent = enq("bu", "2026-10-20", { brochureRequests: ["br3"] });
+  const requests = [
+    { id: "br1", email: web.email, emailSent: true },
+    { id: "br2", email: byAddr.email.toUpperCase(), emailSent: true },
+    { id: "br3", email: unsent.email, emailSent: false },
+  ];
+  const r = P({ settings: ON, today: TODAY, enquiries: [web, phone, byAddr, unsent], brochureRequests: requests,
+    brochureSettings: { brochureUrl: "https://www.hawthbushfarm.co.uk/brochure-2027" } });
+  const byRef = {}; r.due.forEach((d) => { byRef[d.refId] = A.renderEmail(d, r.cfg); });
+  const has = (id) => byRef[id].text.indexOf("hawthbushfarm.co.uk/brochure-2027") !== -1;
+  eq("all four are followed up", r.due.length, 4);
+  ok("brochure emailed (by id): no link", !has(web.id));
+  ok("brochure emailed (older, by address): no link", !has(byAddr.id));
+  ok("came in by phone: the link", has(phone.id));
+  ok("brochure email never went: the link", has(unsent.id));
+  ok("the link uses the brochure email's own setting, and is a link", byRef[phone.id].html.indexOf('<a href="https://www.hawthbushfarm.co.uk/brochure-2027"') !== -1);
+  const paras = byRef[phone.id].text.split("\n\n");
+  ok("after the opening paragraph", /^Hello Jane,$/.test(paras[0]) && /^Thank you again/.test(paras[1]) && /our brochure is here/.test(paras[2]));
+  eq("without it, the wording is exactly as written", byRef[web.id].text, A.DEFAULTS.followup.body.replace("{firstName}", "Jane"));
+
+  eq("off for the second and third as standard", [A.DEFAULTS.followup.brochureOn, A.DEFAULTS.second.brochureOn, A.DEFAULTS.third.brochureOn], [true, false, false]);
+  const saved = A.mergeSettings({ followup: { on: true, body: "Hi" } });
+  ok("settings saved before the tick existed get the standard", saved.followup.brochureOn === true && saved.followup.brochureText === A.BROCHURE_TEXT);
+  ok("ticked off stays off", A.mergeSettings({ followup: { brochureOn: false } }).followup.brochureOn === false);
+  const off = A.renderEmail(Object.assign({}, r.due.find((d) => d.refId === phone.id)), A.mergeSettings({ followup: { on: true, brochureOn: false } }));
+  ok("switched off: no link for anyone", off.text.indexOf("brochure") === -1);
+
+  const placed = A.mergeSettings({ followup: { body: "Hello {firstName},\n\nOne.\n\nTwo.\n\n{brochure}\n\nBye", brochureText: "Brochure: {brochureUrl}" } });
+  placed.brochureUrl = "https://x.co.uk/b";
+  eq("{brochure} puts it where it is", A.renderEmail({ kind: "followup", tokens: { firstName: "Jo" }, brochure: true }, placed).text,
+    "Hello Jo,\n\nOne.\n\nTwo.\n\nBrochure: https://x.co.uk/b\n\nBye");
+  eq("{brochure} leaves no gap when it is not wanted", A.renderEmail({ kind: "followup", tokens: { firstName: "Jo" }, brochure: false }, placed).text,
+    "Hello Jo,\n\nOne.\n\nTwo.\n\nBye");
+  eq("a one-paragraph wording gets it at the end", A.withBrochure("Hi", "B"), "Hi\n\nB");
+
+  ok("request list unreadable: the enquiry's own ids decide", A.hadBrochure(web, null) === true && A.hadBrochure(phone, null) === false);
+  eq("a link that is not a web address falls back", [A.brochureUrlOf({ brochureUrl: "javascript:alert(1)" }), A.brochureUrlOf(null)], [A.DEFAULT_BROCHURE_URL, A.DEFAULT_BROCHURE_URL]);
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

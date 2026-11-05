@@ -22,6 +22,16 @@
 // (app_data.updated_at), re-planned on a clash. A Freezing enquiry is never
 // emailed. Toby can warm one up again by hand; it is not frozen twice.
 //
+// The brochure link (5 Nov 2026, Toby): each email can carry a paragraph
+// with the brochure link, added ONLY for an enquiry that has not had the
+// brochure email — one that came in by phone, email or by hand. "Had it" =
+// a brochure request whose email went (emailSent in hbf_brochure_requests_v1),
+// matched by the ids on the enquiry (brochureRequests) or by address; if that
+// list cannot be read, the enquiry's own brochureRequests decide. The
+// paragraph sits where {brochure} is in the wording, else straight after the
+// opening paragraph. {brochureUrl} is the link set on the brochure email.
+// On for the first follow-up, off for the second and third, until changed.
+//
 // Each email goes to a person once, ever. What was sent (and frozen) is
 // recorded in its own key, hbf_automation_sent_v1 ({ "enq:<id>": { followup,
 // second, third, frozen } }), which nothing else writes. Every send is logged
@@ -81,11 +91,16 @@ const ENQUIRIES_KEY  = "hbf_enquiries_v1";
 const EVENTS_KEY     = "hawthbush_bookings_v6";
 const EMAIL_SEEN_KEY = "hbf_enquiry_email_seen_v1";
 const EMAIL_LOG_KEY  = "hbf_email_log_v1";
+const BROCHURE_REQUESTS_KEY = "hbf_brochure_requests_v1";
+const BROCHURE_SETTINGS_KEY = "hbf_brochure_settings_v1";
+// Used when the brochure settings hold no usable link (mirrors the brochure
+// email's own default in App.jsx).
+const DEFAULT_BROCHURE_URL = "https://www.hawthbushfarm.co.uk/brochure";
 
 const FROM_EMAIL  = "hello@hawthbushfarm.co.uk";
 const FROM_HEADER = "Hawthbush Farm <" + FROM_EMAIL + ">";
 const SITE_ORIGIN = "https://hawthbushfarm.netlify.app";
-const FN_BUILD    = "2026-11-04a";
+const FN_BUILD    = "2026-11-05a";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "631658172216-bh6vocim7t41lf8nhr21bdpb2ss2n1mm.apps.googleusercontent.com";
 // At most this many addresses looked up in Gmail a run (two reads each), and
 // only while the run is young: Netlify stops a function at 10 seconds, so the
@@ -101,18 +116,24 @@ const COPY_DEADLINE_MS = 8800;
 // A bad day (a data import, a clock problem) must not become a mass mailing.
 const MAX_SENDS_PER_RUN = 15;
 
+// The brochure paragraph's standard wording (mirrors App.jsx).
+const BROCHURE_TEXT = "If you would like to see more of the farm, our brochure is here: {brochureUrl}";
+
 // Mirrors DEFAULT_AUTOMATIONS in App.jsx. A field left blank in Settings falls
 // back to this wording, field by field, so an empty email is never sent.
 const DEFAULTS = {
   followup: { on: false, days: 3,
     subject: "Following up on your enquiry — Hawthbush Farm",
-    body: "Hello {firstName},\n\nThank you again for getting in touch about Hawthbush Farm. I wanted to check that everything reached you, and to see whether you have any questions at all.\n\nIf you would like to come and see the farm, just reply with a few dates that suit you and we will arrange a viewing.\n\nAnd if you would rather we did not follow up, just say so — we will not mind in the least.\n\nWarm regards,\nHawthbush Farm" },
+    body: "Hello {firstName},\n\nThank you again for getting in touch about Hawthbush Farm. I wanted to check that everything reached you, and to see whether you have any questions at all.\n\nIf you would like to come and see the farm, just reply with a few dates that suit you and we will arrange a viewing.\n\nAnd if you would rather we did not follow up, just say so — we will not mind in the least.\n\nWarm regards,\nHawthbush Farm",
+    brochureOn: true, brochureText: BROCHURE_TEXT },
   second: { on: false, days: 21, freezeOn: false, freezeDays: 7,
     subject: "Still thinking about Hawthbush Farm?",
-    body: "Hello {firstName},\n\nWe have not heard from you for a little while, so I wanted to check in. Dates do go, so if you are still thinking about Hawthbush Farm it is worth letting us know which ones you have in mind.\n\nAnd if you have found your venue elsewhere, congratulations — a one-line reply saying so would help us a great deal, and we will not email again.\n\nWarm regards,\nHawthbush Farm" },
+    body: "Hello {firstName},\n\nWe have not heard from you for a little while, so I wanted to check in. Dates do go, so if you are still thinking about Hawthbush Farm it is worth letting us know which ones you have in mind.\n\nAnd if you have found your venue elsewhere, congratulations — a one-line reply saying so would help us a great deal, and we will not email again.\n\nWarm regards,\nHawthbush Farm",
+    brochureOn: false, brochureText: BROCHURE_TEXT },
   third: { on: false, days: 14, freezeOn: false, freezeDays: 7,
     subject: "A last note from Hawthbush Farm",
-    body: "Hello {firstName},\n\nI will not keep emailing, but I did not want your enquiry to slip through the cracks. If you are still looking, we would love to help — just reply with the dates you have in mind, or a good time to call.\n\nIf your plans have moved on, we wish you all the very best.\n\nWarm regards,\nHawthbush Farm" }
+    body: "Hello {firstName},\n\nI will not keep emailing, but I did not want your enquiry to slip through the cracks. If you are still looking, we would love to help — just reply with the dates you have in mind, or a good time to call.\n\nIf your plans have moved on, we wish you all the very best.\n\nWarm regards,\nHawthbush Farm",
+    brochureOn: false, brochureText: BROCHURE_TEXT }
 };
 // The three emails, in order. Each is sent once; the next only after it.
 const STEPS = ["followup", "second", "third"];
@@ -137,7 +158,10 @@ function mergeSettings(saved) {
       on: v.on === true,
       days: num(v.days, d.days),
       subject: String(v.subject || "").trim() || d.subject,
-      body: String(v.body || "").trim() || d.body
+      body: String(v.body || "").trim() || d.body,
+      // Saved before 5 Nov there is no tick: the standard applies.
+      brochureOn: typeof v.brochureOn === "boolean" ? v.brochureOn : d.brochureOn,
+      brochureText: String(v.brochureText || "").trim() || d.brochureText
     });
     if (k === "second" || k === "third") {
       out[k].freezeOn = v.freezeOn === true;
@@ -145,6 +169,37 @@ function mergeSettings(saved) {
     }
   });
   return out;
+}
+
+// The brochure link to give: the one set on the brochure email, if it is a
+// web address, else the standard one.
+function brochureUrlOf(brochureSettings) {
+  const u = String((brochureSettings && brochureSettings.brochureUrl) || "").trim();
+  return /^https?:\/\/\S+$/i.test(u) ? u : DEFAULT_BROCHURE_URL;
+}
+// Has this enquiry had the brochure email? `requests` is the brochure request
+// list, or null when it could not be read — then the ids on the enquiry decide.
+function hadBrochure(e, requests) {
+  const ids = Array.isArray(e && e.brochureRequests) ? e.brochureRequests.map(String) : [];
+  if (!Array.isArray(requests)) return ids.length > 0;
+  const em = validEmail(e && e.email);
+  return requests.some(function (r) {
+    if (!r || r.emailSent !== true) return false;
+    return ids.indexOf(String(r.id)) !== -1 || (!!em && validEmail(r.email) === em);
+  });
+}
+// Put the brochure paragraph in (para = text) or take its place out
+// (para = ""): where {brochure} is, else after the opening paragraph.
+function withBrochure(body, para) {
+  const text = String(body || "").replace(/\r\n/g, "\n");
+  if (/\{brochure\}/.test(text)) {
+    return text.replace(/\{brochure\}/g, para).replace(/\n{3,}/g, "\n\n").trim();
+  }
+  if (!para) return text;
+  const paras = text.split(/\n{2,}/);
+  // Greeting, opening paragraph, then the brochure (or at the end of a short one).
+  paras.splice(Math.min(2, paras.length), 0, para);
+  return paras.join("\n\n");
 }
 
 // When the enquiry arrived: its id is minted as enq_<epoch>; otherwise the
@@ -197,6 +252,8 @@ function fill(str, tokens) {
 // Everything that is due today, without sending anything.
 function planAutomations(o) {
   const cfg = mergeSettings(o.settings);
+  cfg.brochureUrl = brochureUrlOf(o.brochureSettings);
+  const requests = Array.isArray(o.brochureRequests) ? o.brochureRequests : null;
   const today = o.today;
   const marks = o.marks || {};
   const seen = o.emailSeen || {};
@@ -232,6 +289,7 @@ function planAutomations(o) {
     const viewing = hasViewingToCome(e, today);
     const checked = gmailCheckedOn(e, seen);
     const tokens = { firstName: firstName(e.name, e.email), name: String(e.name || "").trim() };
+    const brochure = !hadBrochure(e, requests);
     let planned = false;
 
     // Every gap is counted to the day Gmail last looked, not to today: three
@@ -244,7 +302,7 @@ function planAutomations(o) {
       // "No contact since it arrived": nothing later than the day it came in.
       if (age >= cfg.followup.days && last && last <= received) {
         if (verified >= cfg.followup.days) {
-          out.push({ kind: "followup", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens });
+          out.push({ kind: "followup", mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, brochure: brochure });
           planned = true; used[to] = true;
         } else {
           waiting.push({ kind: "followup", who: e.name || to, addr: to, verified: verified, needed: cfg.followup.days, checked: checked });
@@ -266,7 +324,7 @@ function planAutomations(o) {
       const verified = verifiedQuietDays(touched, checked);
       if (idle >= c.days) {
         if (verified >= c.days) {
-          out.push({ kind: step, mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched });
+          out.push({ kind: step, mark: "enq:" + e.id, refId: e.id, to: [to], who: e.name || to, tokens: tokens, basedOn: touched, brochure: brochure });
           planned = true; used[to] = true;
         } else {
           waiting.push({ kind: step, who: e.name || to, addr: to, verified: verified, needed: c.days, checked: checked });
@@ -297,10 +355,14 @@ function planAutomations(o) {
   return { cfg: cfg, due: out, waiting: waiting, freeze: freeze };
 }
 
+// Whether this email carries the brochure paragraph.
+function withBrochureLink(item, cfg) { return !!(item.brochure && cfg[item.kind] && cfg[item.kind].brochureOn); }
 function renderEmail(item, cfg) {
   const t = cfg[item.kind];
-  const subject = fill(t.subject, item.tokens);
-  const body = fill(t.body, item.tokens);
+  const tokens = Object.assign({}, item.tokens, { brochureUrl: cfg.brochureUrl || DEFAULT_BROCHURE_URL });
+  const subject = fill(t.subject, tokens);
+  const para = withBrochureLink(item, cfg) ? fill(t.brochureText, tokens).trim() : "";
+  const body = fill(withBrochure(t.body, para), tokens);
   return { subject: subject, text: body, html: buildEmailHtml(body, {}) };
 }
 
@@ -585,9 +647,16 @@ exports.handler = async function (event) {
     // "everybody to email". Stop.
     return reply(500, { error: e.message });
   }
+  // Who has had the brochure, and its link. Neither may stop the run: without
+  // the request list the enquiry's own ids decide, without the settings the
+  // standard link is used.
+  const [brochureRequests, brochureSettings] = await Promise.all([BROCHURE_REQUESTS_KEY, BROCHURE_SETTINGS_KEY].map(function (k) {
+    return sbGet(k).catch(function (e) { console.error("[automations] " + e.message); return undefined; });
+  }));
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
   const input = { settings: settings, enquiries: Array.isArray(enquiries) ? enquiries : [],
-    events: Array.isArray(events) ? events : [], emailSeen: emailSeen || {}, marks: marks || {}, today: today };
+    events: Array.isArray(events) ? events : [], emailSeen: emailSeen || {}, marks: marks || {}, today: today,
+    brochureRequests: Array.isArray(brochureRequests) ? brochureRequests : null, brochureSettings: brochureSettings || null };
   // A first plan on the app's cache says which addresses matter today; the
   // farm Gmail is asked about just those, and the plan is made again on what
   // it says.
@@ -613,7 +682,7 @@ exports.handler = async function (event) {
     // something would go.
     const sentCopy = plan.due.length ? await GmailCopy.copyReady() : null;
     return reply(200, { ok: true, today: today, dryRun: true, sentCopy: sentCopy,
-      due: plan.due.map(function (d) { const r = renderEmail(d, plan.cfg); return { kind: d.kind, to: d.to, who: d.who, subject: r.subject }; }),
+      due: plan.due.map(function (d) { const r = renderEmail(d, plan.cfg); return { kind: d.kind, to: d.to, who: d.who, subject: r.subject, brochure: withBrochureLink(d, plan.cfg) }; }),
       waiting: plan.waiting,
       freeze: plan.freeze.map(function (f) { return { who: f.who, after: f.after }; }), gmail: gmail });
   }
@@ -696,4 +765,5 @@ exports.handler = async function (event) {
     copyMisses: copyMisses.length ? copyMisses : undefined });
 };
 
-exports._test = { planAutomations, freezeEnquiries, mergeSeen, openSealedToken, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, DEFAULTS, STEPS };
+exports._test = { planAutomations, freezeEnquiries, mergeSeen, openSealedToken, gmailCheckedOn, verifiedQuietDays, mergeSettings, renderEmail, receivedDate, lastActivity, firstName, DEFAULTS, STEPS,
+  hadBrochure, withBrochure, brochureUrlOf, BROCHURE_TEXT, DEFAULT_BROCHURE_URL };

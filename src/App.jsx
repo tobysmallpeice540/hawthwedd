@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-04j";
+const APP_BUILD = "2026-11-05a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -29166,16 +29166,23 @@ function BrochureSettingsPanel() {
 // function in AUTOMATION_SENT_KEY, which only the function writes.
 const AUTOMATIONS_STORAGE = "hbf_automations_v1";
 const AUTOMATION_SENT_KEY = "hbf_automation_sent_v1";
+// The brochure paragraph (5 Nov 2026, Toby): added only for an enquiry that
+// has not had the brochure email — where {brochure} is in the wording, else
+// after the opening paragraph. {brochureUrl} is the brochure email's link.
+const AUTOMATION_BROCHURE_TEXT = "If you would like to see more of the farm, our brochure is here: {brochureUrl}";
 const DEFAULT_AUTOMATIONS = {
   followup: { on: false, days: 3,
     subject: "Following up on your enquiry — Hawthbush Farm",
-    body: "Hello {firstName},\n\nThank you again for getting in touch about Hawthbush Farm. I wanted to check that everything reached you, and to see whether you have any questions at all.\n\nIf you would like to come and see the farm, just reply with a few dates that suit you and we will arrange a viewing.\n\nAnd if you would rather we did not follow up, just say so — we will not mind in the least.\n\nWarm regards,\nHawthbush Farm" },
+    body: "Hello {firstName},\n\nThank you again for getting in touch about Hawthbush Farm. I wanted to check that everything reached you, and to see whether you have any questions at all.\n\nIf you would like to come and see the farm, just reply with a few dates that suit you and we will arrange a viewing.\n\nAnd if you would rather we did not follow up, just say so — we will not mind in the least.\n\nWarm regards,\nHawthbush Farm",
+    brochureOn: true, brochureText: AUTOMATION_BROCHURE_TEXT },
   second: { on: false, days: 21, freezeOn: false, freezeDays: 7,
     subject: "Still thinking about Hawthbush Farm?",
-    body: "Hello {firstName},\n\nWe have not heard from you for a little while, so I wanted to check in. Dates do go, so if you are still thinking about Hawthbush Farm it is worth letting us know which ones you have in mind.\n\nAnd if you have found your venue elsewhere, congratulations — a one-line reply saying so would help us a great deal, and we will not email again.\n\nWarm regards,\nHawthbush Farm" },
+    body: "Hello {firstName},\n\nWe have not heard from you for a little while, so I wanted to check in. Dates do go, so if you are still thinking about Hawthbush Farm it is worth letting us know which ones you have in mind.\n\nAnd if you have found your venue elsewhere, congratulations — a one-line reply saying so would help us a great deal, and we will not email again.\n\nWarm regards,\nHawthbush Farm",
+    brochureOn: false, brochureText: AUTOMATION_BROCHURE_TEXT },
   third: { on: false, days: 14, freezeOn: false, freezeDays: 7,
     subject: "A last note from Hawthbush Farm",
-    body: "Hello {firstName},\n\nI will not keep emailing, but I did not want your enquiry to slip through the cracks. If you are still looking, we would love to help — just reply with the dates you have in mind, or a good time to call.\n\nIf your plans have moved on, we wish you all the very best.\n\nWarm regards,\nHawthbush Farm" }
+    body: "Hello {firstName},\n\nI will not keep emailing, but I did not want your enquiry to slip through the cracks. If you are still looking, we would love to help — just reply with the dates you have in mind, or a good time to call.\n\nIf your plans have moved on, we wish you all the very best.\n\nWarm regards,\nHawthbush Farm",
+    brochureOn: false, brochureText: AUTOMATION_BROCHURE_TEXT }
 };
 function automationDays(v, d) { const n = Number(v); return isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : d; }
 // JSON with every object's keys sorted. The database stores app_data values
@@ -29319,7 +29326,7 @@ function AutomationsPanel() {
         {preview && preview.due && preview.due.length > 0 && (
           <div style={{ marginTop:8, display:"grid", gap:3 }}>
             {preview.due.map(function(d, i) {
-              return <div key={i} style={{ fontSize:12, color:T.textMid }}>· <b>{d.who}</b> — {(AUTOMATION_CARDS.find(function(c){ return c.id === d.kind; }) || {}).title} — “{d.subject}”</div>;
+              return <div key={i} style={{ fontSize:12, color:T.textMid }}>· <b>{d.who}</b> — {(AUTOMATION_CARDS.find(function(c){ return c.id === d.kind; }) || {}).title} — “{d.subject}”{d.brochure ? " · with the brochure link" : ""}</div>;
             })}
           </div>
         )}
@@ -29374,6 +29381,22 @@ function AutomationsPanel() {
             <textarea rows={8} value={a.body || ""} onChange={function(e){ set(c.id, "body", e.target.value); }} style={Object.assign({}, inp, { resize:"vertical", lineHeight:1.5 })}/>
             <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
               Fills in: {c.fields.join(" ")}. Leave a box empty to use the standard wording.
+            </div>
+            <div style={{ marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}` }}>
+              <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700, color:T.text, cursor:"pointer", marginBottom:6 }}>
+                <input type="checkbox" checked={!!a.brochureOn} onChange={function(e){ set(c.id, "brochureOn", e.target.checked); }}
+                  style={{ width:16, height:16, accentColor:T.accent }}/>
+                Add the brochure link for enquiries that have not had the brochure
+              </label>
+              <div style={{ opacity: a.brochureOn ? 1 : .5 }}>
+                <textarea rows={2} value={a.brochureText || ""} disabled={!a.brochureOn} aria-label="Brochure paragraph"
+                  onChange={function(e){ set(c.id, "brochureText", e.target.value); }}
+                  style={Object.assign({}, inp, { resize:"vertical", lineHeight:1.5 })}/>
+                <div style={{ fontSize:11, color:T.textLight, marginTop:4 }}>
+                  Only for enquiries that came in another way (phone, email, typed in) — anyone sent the brochure email gets the wording above without it.
+                  It goes after the opening paragraph, or wherever you put {"{brochure}"} in the wording. Fills in: {"{brochureUrl}"} (the link set under Brochure request).
+                </div>
+              </div>
             </div>
           </div>
         );

@@ -294,6 +294,18 @@ own header.
   whole run, faked at fetch), `money-and-day-test.cjs` (app and function
   defaults agree).
   They go through Resend, and each is filed in the farm Gmail's Sent (below).
+  **The brochure link** (5 Nov 2026, Toby): each step has `brochureOn` and
+  `brochureText` (standard: on for the first, off for the second and third;
+  settings saved before then get the standard). The paragraph is added ONLY
+  for an enquiry that has not had the brochure email (`hadBrochure`: a request
+  in `hbf_brochure_requests_v1` with `emailSent`, matched by the enquiry's
+  `brochureRequests` ids or by address; if that list cannot be read, the ids
+  alone decide) — where `{brochure}` sits in the wording, else after the
+  opening paragraph (`withBrochure`). `{brochureUrl}` is the brochure email's
+  own link (`hbf_brochure_settings_v1`), else the standard one. Neither read
+  can stop the run. The preview marks "with the brochure link". Pinned in
+  `tests/automations-test.cjs`, `automations-run-test.cjs`,
+  `money-and-day-test.cjs` (defaults agree) and `followups-brochure-e2e.cjs`.
 - **Copies of the app's customer emails in the farm Gmail's Sent** (4 Nov 2026,
   Toby — replaced a same-day attempt to SEND through Gmail as hello@, which
   needed an SMTP relay to pass DMARC). Resend still delivers everything;

@@ -59,6 +59,7 @@ function world(opts) {
     const json = (v, status) => ({ ok: (status || 200) < 300, status: status || 200, json: async () => v, text: async () => JSON.stringify(v) });
     let m;
     if ((m = /\/rest\/v1\/app_data\?key=eq\.(\w+)&select=value,updated_at$/.exec(url))) return json([{ value: db[m[1]], updated_at: "2026-01-01T00:00:00Z" }]);
+    if ((m = /\/rest\/v1\/app_data\?key=eq\.(\w+)&select=value$/.exec(url)) && (o.failKeys || []).indexOf(m[1]) !== -1) return json({ message: "boom" }, 500);
     if ((m = /\/rest\/v1\/app_data\?key=eq\.(\w+)&select=value$/.exec(url))) return json(db[m[1]] === undefined ? [] : [{ value: db[m[1]] }]);
     if (/\/rest\/v1\/app_data\?key=eq\.hbf_enquiries_v1&updated_at=eq\./.test(url) && method === "PATCH") {
       const body = JSON.parse(init.body); calls.patches.push(url); db.hbf_enquiries_v1 = body.value; return json([{}]);
@@ -113,6 +114,31 @@ const run = () => fn.handler({ httpMethod: "POST", headers: { "x-admin-token": "
     w.calls.sends.length = 0;
     const again = JSON.parse((await run()).body);
     ok("next run: nothing twice", w.calls.sends.length === 0 && !again.frozen, JSON.stringify(again));
+  }
+
+  console.log("the brochure link (5 Nov)");
+  {
+    // No brochure request on record: the link goes in.
+    const w = world();
+    w.db.hbf_brochure_settings_v1 = { brochureUrl: "https://www.hawthbushfarm.co.uk/brochure" };
+    await run();
+    ok("an enquiry with no brochure gets the link", w.calls.sends.length === 1 && /hawthbushfarm\.co\.uk\/brochure/.test(w.calls.sends[0].text), JSON.stringify(w.calls.sends.map((s) => s.text)));
+    ok("and the log keeps it", /our brochure is here/.test((w.db.hbf_email_log_v1[0] || {}).body || ""));
+    // The same enquiry, but the brochure email went: no link.
+    const w2 = world();
+    w2.db.hbf_brochure_requests_v1 = [{ id: "br9", email: "QUIET@example.com", emailSent: true }];
+    await run();
+    ok("one that had the brochure email does not", w2.calls.sends.length === 1 && !/brochure/.test(w2.calls.sends[0].text), JSON.stringify(w2.calls.sends.map((s) => s.text)));
+    // The brochure reads fail: the run still goes, with the standard link.
+    const w3 = world({ failKeys: ["hbf_brochure_requests_v1", "hbf_brochure_settings_v1"] });
+    const res3 = await run();
+    ok("a failed brochure read does not stop the run", res3.statusCode === 200 && w3.calls.sends.length === 1, res3.body);
+    ok("and falls back to the standard link", /https:\/\/www\.hawthbushfarm\.co\.uk\/brochure/.test((w3.calls.sends[0] || {}).text || ""));
+    // The preview says which carry it.
+    world();
+    const dry = await fn.handler({ httpMethod: "POST", headers: { "x-admin-token": "office-token" }, body: JSON.stringify({ dryRun: true }) });
+    const d = JSON.parse(dry.body);
+    ok("the preview marks it", d.due && d.due.length === 1 && d.due[0].brochure === true, dry.body);
   }
 
   console.log("farm Gmail not connected: the app's cache");
