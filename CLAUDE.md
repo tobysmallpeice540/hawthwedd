@@ -573,8 +573,29 @@ own header.
 
 - **The cleaners sign off every check-out and every confirmed event** — diary
   events and box office (ticketed) events alike — on the housekeeping login:
-  Live / House / Upcoming / Calendar / Bookings / Checklists (that order —
-  Toby, 4 Nov), plus an App button by Sign out.
+  **Upcoming / House / Calendar / Checklists** (6 Nov, Toby: Upcoming where
+  Live was; Live and Bookings taken out because all three showed the same
+  cleans), plus an App button by Sign out. `CleanerHome` (Live) and
+  `CleanerBookings` are still in App.jsx, unused, and the Live/Bookings parts
+  of `tests/changeover-e2e.cjs` are stale; `tests/upcoming-e2e.cjs` pins the
+  cleaner screens now.
+- **Upcoming's lozenge** (6 Nov, Toby — `upcomingCleanInfo`,
+  `UpcomingCleanButton`; the rest of the app still uses `changeoverMeta`):
+  grey and inert until the clean can be done, reading "≥ 16/11" over
+  "≤ 20/11" — from: a letting's check-out day (same-day cleans), the Grain
+  Store the day AFTER the event, an extra clean the day it opens; by: the next
+  check-in day, the next timed Grain Store event's day, the day before an
+  untimed diary event, an extra clean's own day. "Guests" (info colours) only
+  from the check-in TIME to the check-out time (`window.guests`), so a
+  morning-of-arrival view is still grey. Amber "To clean ≤ by" once it can
+  be done — **amber means it can be cleaned now**; red once `by` has passed;
+  green Ready. The clock is re-read every minute. An extra clean is listed in
+  the week of what it is for, just before it (`forDay`, `changeoverWeekOf`),
+  not the week it opens. Unsigned cleans from earlier weeks are listed at the
+  top under **Still to sign off** (Live used to hold them). Housekeeper notes
+  are behind a red **Note** button per row (`UpcomingNoteToggle` /
+  `UpcomingNoteBubble`, one open at a time): "Note on this let/event" =
+  `job.prevNote`, "For the next let/event" = `job.note`.
   State is worked out from dates;
   only the sign-off is stored, in `app_data` `hbf_changeovers_v1` (array, by id,
   saved with `useMergedSave` — the cleaner login writes nothing else).

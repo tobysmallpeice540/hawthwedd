@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-05a";
+const APP_BUILD = "2026-11-06a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -8368,7 +8368,10 @@ function setupCleanItems(properties, accom, events, boxEvents, setups) {
         start: opens.date, due: begins.date, eventStart: begins.date, readyBy: closes.time || "",
         who: "Extra clean · " + who, note: note || "" },
       window: { id: id, unitId: unitId, unitName: unitName, unitShort: unitShort, start: opens, end: closes,
-        outWho: "Extra clean", inWho: who, setup: true, tight: false, occ: occ || "" }
+        outWho: "Extra clean", inWho: who, setup: true, tight: false, occ: occ || "",
+        // Upcoming lists it just before what it is for (6 Nov, Toby), in that
+        // week — not in the week it can first be done.
+        forDay: begins.date, forTime: begins.time || null }
     });
   };
   setups.forEach(function(req) {
@@ -9850,6 +9853,8 @@ function addMinutesHHMM(hhmm, mins) {
 // and is cleaned on the Monday), unless the next guests arrive that same
 // Sunday, when it has to be done that day. Toby's rule.
 function changeoverWeekOf(x) {
+  // An extra clean belongs to the week of the arrival or event it is for.
+  if (x.setup && x.forDay) return mondayOf(x.forDay);
   const d = x.start.date;
   const sunday = new Date(d + "T00:00:00Z").getUTCDay() === 0;
   if (sunday && !(x.end && x.end.date === d)) return addDaysIso(d, 1);
@@ -9898,6 +9903,8 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
         id: st.jobId, unitId: pid, unitName: p ? p.name : pid, unitShort: p ? shortPropLabel(p) : pid,
         start: start, end: end, outWho: st.who, inWho: next ? next.who : "",
         occ: fmtDayShort(st.checkIn) + " – " + fmtDayShort(st.checkOut),
+        // When the guests are actually in (check-in to check-out times).
+        guests: { from: { date: st.checkIn, time: st.inTime }, to: { date: st.checkOut, time: st.outTime } },
         tight: !!(end && end.date === start.date && start.time && end.time && end.time <= start.time)
       });
     });
@@ -9909,7 +9916,7 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
     const last = eventEndDate(ev) || ev.date;
     // A diary event has no times: it is cleaned from the morning after.
     gs.push({ jobId: "event:" + ev.id, from: { date: ev.date, time: null },
-      after: { date: addDaysIso(last, 1), time: null }, who: (ev.couple || "Event") + " · " + eventTypeLabel(ev),
+      after: { date: addDaysIso(last, 1), time: null }, untilClean: { date: addDaysIso(last, 1), time: null }, who: (ev.couple || "Event") + " · " + eventTypeLabel(ev),
       occ: fmtDayShort(ev.date) + (last > ev.date ? " – " + fmtDayShort(last) : "") });
   });
   (boxEvents || []).forEach(function(bx) {
@@ -9917,7 +9924,9 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
     if (!d) return;
     const e = londonDateOf(bx.ends_at) || d;
     gs.push({ jobId: "box:" + bx.id, from: { date: d, time: londonClockOf(bx.starts_at) },
-      after: { date: e, time: bx.ends_at ? londonClockOf(bx.ends_at) : null }, who: (bx.name || "Ticketed event") + " · Box office",
+      after: { date: e, time: bx.ends_at ? londonClockOf(bx.ends_at) : null },
+      // The Grain Store is cleaned from the day after (6 Nov, Toby).
+      untilClean: { date: addDaysIso(e > d ? e : d, 1), time: null }, who: (bx.name || "Ticketed event") + " · Box office",
       occ: fmtDayShort(d) + (londonClockOf(bx.starts_at) ? " · " + londonClockOf(bx.starts_at) : "") });
   });
   gs.sort(function(a, z) {
@@ -9932,24 +9941,187 @@ function changeoverWindows(properties, accom, events, boxEvents, setups) {
       id: ev.jobId, unitId: GRAIN_STORE_UNIT.id, unitName: GRAIN_STORE_UNIT.name, unitShort: GRAIN_STORE_UNIT.short,
       start: ev.after,
       end: next ? { date: next.from.date, time: next.from.time ? addMinutesHHMM(next.from.time, -CHANGEOVER_GRACE_MIN) : null } : null,
-      outWho: ev.who, inWho: next ? next.who : "", tight: false, occ: ev.occ
+      outWho: ev.who, inWho: next ? next.who : "", tight: false, occ: ev.occ,
+      guests: { from: ev.from, to: ev.untilClean }
     });
   });
   for (let i = out.length - 1; i >= 0; i--) if (noExitClean(setups, out[i].id)) out.splice(i, 1);
   setupCleanItems(properties, accom, events, boxEvents, setups).forEach(function(x) { out.push(x.window); });
+  // In order of when each can be cleaned — but an extra clean sits just
+  // before the arrival or event it is for.
+  const sortAt = function(r) {
+    return r.setup && r.forDay ? r.forDay + (r.forTime || "") : r.start.date + (r.start.time || "");
+  };
   out.sort(function(a, z) {
-    const x = a.start.date + (a.start.time || ""), y = z.start.date + (z.start.time || "");
+    const x = sortAt(a), y = sortAt(z);
     return x < y ? -1 : x > y ? 1 : 0;
   });
   return out;
 }
 
+// The lozenge on an Upcoming row (6 Nov, Toby). Grey, with the dates it can
+// be done between, until it can be done; "Guests" only while they are really
+// in (check-in to check-out TIMES); amber "To clean" once it can be done —
+// so anything amber can be cleaned now; red once its last day has gone;
+// green once signed off.
+//   from: a letting the check-out day; the Grain Store the day after the
+//         event; an extra clean the day it opens.
+//   by:   the next check-in day (or the next timed Grain Store event's day;
+//         the day before an untimed diary event); an extra clean's own day.
+function upcomingCleanInfo(x, job, rec, nowIso) {
+  if (!job) return null;
+  const today = nowIso.slice(0, 10);
+  const nowK = today + " " + (nowIso.slice(11, 16) || "00:00");
+  const setup = job.kind === "setup";
+  const from = setup ? job.start : job.due;
+  let by = null;
+  if (setup) by = job.due;
+  else if (x && x.end) by = x.end.time ? x.end.date : addDaysIso(x.end.date, -1);
+  if (by && by < from) by = from;
+  if (rec) return { state: "done", from: from, by: by };
+  if (job.due < CHANGEOVER_FROM) return null;
+  let state;
+  if (setup) state = today < from ? "upcoming" : "due";
+  else {
+    const k = function(pt, dflt) { return pt.date + " " + (pt.time || dflt); };
+    const g = x && x.guests;
+    const inK = g ? k(g.from, "00:00") : job.start + " 00:00";
+    const outK = g ? k(g.to, "00:00") : from + " 00:00";
+    state = nowK < inK ? "upcoming" : nowK < outK ? "inuse" : "due";
+  }
+  if (state === "due" && by && today > by) state = "late";
+  return { state: state, from: from, by: by };
+}
+function dayMonth(iso) {
+  return iso ? Number(iso.slice(8, 10)) + "/" + Number(iso.slice(5, 7)) : "";
+}
+function upcomingCleanMeta(state) {
+  if (state === "done")  return { label: "Ready",    bg: T.greenBg, fg: T.green,    bd: T.green };
+  if (state === "inuse") return { label: "Guests",   bg: T.infoBg,  fg: T.infoText, bd: T.infoBorder };
+  if (state === "due")   return { label: "To clean", bg: T.amberBg, fg: T.amber,    bd: T.amber };
+  if (state === "late")  return { label: "To clean", bg: T.redBg,   fg: T.red,      bd: T.red };
+  return { label: "", bg: T.bgInput, fg: T.textLight, bd: T.border };
+}
+function UpcomingCleanButton({ x, job, rec, nowIso, onOpen }) {
+  const info = upcomingCleanInfo(x, job, rec, nowIso);
+  if (!info) return null;
+  const m = upcomingCleanMeta(info.state);
+  const live = info.state !== "upcoming";
+  const fromTxt = "≥ " + dayMonth(info.from), byTxt = info.by ? "≤ " + dayMonth(info.by) : "";
+  let top = m.label, sub = "";
+  // A one-day window (a letting's extra clean) is just the date.
+  if (info.state === "upcoming") { top = info.by === info.from ? dayMonth(info.from) : fromTxt; sub = info.by === info.from ? "" : byTxt; }
+  else if (info.state === "due" || info.state === "late") sub = byTxt;
+  const words = "can be cleaned from " + fmtDayShort(info.from) + (info.by ? " to " + fmtDayShort(info.by) : "");
+  return (
+    <button type="button" disabled={!live}
+      onClick={function(e) { e.stopPropagation(); if (live) onOpen(job); }}
+      aria-label={(info.state === "upcoming" ? "Not yet, " : m.label + ", ") + words}
+      title={info.state === "done" ? "Signed off " + fmtDoneAt(rec.doneAt) + " — tap to change the hours or notes"
+        : info.state === "inuse" ? "Guests are in — tap if it is already cleaned"
+        : info.state === "upcoming" ? "Not yet — " + words
+        : "Tap when it is cleaned and ready (" + words + ")"}
+      style={{ background: m.bg, color: m.fg, border: "1.5px solid " + m.bd, borderRadius: 8,
+        padding: sub ? "3px 10px" : "5px 12px", fontFamily: "inherit", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap",
+        lineHeight: 1.2, cursor: live ? "pointer" : "default", flexShrink: 0, minWidth: 80, textAlign: "center" }}>
+      <div>{top}</div>
+      {sub && <div style={{ fontSize: 11, fontWeight: 700 }}>{sub}</div>}
+    </button>
+  );
+}
+
+// A small Note button on an Upcoming row that opens the housekeeper notes in
+// a bubble under the row (6 Nov, Toby), so notes do not crowd the list.
+function UpcomingNoteToggle({ open, onToggle }) {
+  return (
+    <button type="button" onClick={function(e) { e.stopPropagation(); onToggle(); }} aria-expanded={open}
+      aria-label={open ? "Hide note" : "Show note"} title="Note from the office"
+      style={{ background: open ? T.red : T.redBg, color: open ? "#fff" : T.red, border: "1.5px solid " + T.red,
+        borderRadius: 14, padding: "3px 8px", fontFamily: "inherit", fontSize: 11, fontWeight: 800,
+        cursor: "pointer", flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6"
+        strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      Note
+    </button>
+  );
+}
+function UpcomingNoteBubble({ job, onClose }) {
+  const what = changeoverNoteWord(job);
+  const parts = [];
+  if (job.prevNote) parts.push(["Note on this " + what, job.prevNote]);
+  if (job.note) parts.push(["For the next " + what, job.note]);
+  return (
+    <div role="note" style={{ position: "relative", margin: "2px 0 8px", background: T.redBg, border: "1.5px solid " + T.red,
+      borderRadius: 10, padding: "8px 30px 8px 10px", fontSize: 12.5, color: T.text, lineHeight: 1.45 }}>
+      <span aria-hidden="true" style={{ position: "absolute", top: -7, right: 112, width: 12, height: 12, background: T.redBg,
+        borderLeft: "1.5px solid " + T.red, borderTop: "1.5px solid " + T.red, transform: "rotate(45deg)" }}/>
+      <button type="button" onClick={onClose} aria-label="Close note"
+        style={{ position: "absolute", top: 4, right: 6, background: "none", border: "none", color: T.red,
+          fontSize: 18, fontWeight: 800, lineHeight: 1, cursor: "pointer", fontFamily: "inherit", padding: 2 }}>×</button>
+      {parts.map(function(p, i) {
+        return (
+          <div key={i} style={{ marginTop: i ? 6 : 0, whiteSpace: "pre-wrap" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: T.red }}>{p[0]}</div>
+            {p[1]}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, recMap, today, onOpenJob }) {
   const WEEKS = 4;
   const [from, setFrom] = useState(mondayOf(today));
+  const [noteOpen, setNoteOpen] = useState(null);
+  // The lozenges follow the clock (Guests from the check-in time), so look
+  // again every minute.
+  const [nowIso, setNowIso] = useState(londonNowInput());
+  useEffect(function() {
+    const t = setInterval(function() { setNowIso(londonNowInput()); }, 60000);
+    return function() { clearInterval(t); };
+  }, []);
+  useEffect(function() { setNowIso(londonNowInput()); }, [today]);
   const jobById = {};
   (jobs || []).forEach(function(j) { jobById[j.id] = j; });
   const windows = changeoverWindows(properties, accom, events, boxEvents, setups);
+  // Live used to carry "Still to sign off": with Live gone (6 Nov) anything
+  // from an earlier week not yet signed off is listed above the weeks, so it
+  // is not lost behind the ‹ button.
+  const thisMonday = mondayOf(nowIso.slice(0, 10));
+  const overdue = windows.filter(function(x) {
+    const job = jobById[x.id];
+    if (!job || x.start.date < CHANGEOVER_FROM || changeoverWeekOf(x) >= thisMonday) return false;
+    const info = upcomingCleanInfo(x, job, recMap[job.id], nowIso);
+    return !!info && (info.state === "due" || info.state === "late");
+  });
+  const row = function(x, keyPre) {
+    const job = jobById[x.id] || null;
+    const key = keyPre + x.id;
+    const hasNote = !!(job && (job.note || job.prevNote));
+    const open = noteOpen === key;
+    return (
+      <div key={key} style={{ borderTop:"1px solid " + T.tint }}>
+        <div style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, padding:"8px 0" }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:13.5, fontWeight:700, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+              {x.unitShort}
+              {x.setup && <span style={{ fontSize:10.5, fontWeight:800, color:T.midBlue, background:T.tint, borderRadius:6, padding:"1px 6px", marginLeft:6 }}>Extra clean</span>}
+              <span style={{ fontWeight:700, color:T.accent, marginLeft:8 }}>{x.occ}</span>
+            </div>
+            <div style={{ fontSize:11.5, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+              {x.setup ? "Extra clean before " + x.inWho : x.outWho}
+            </div>
+          </div>
+          {hasNote && <UpcomingNoteToggle open={open} onToggle={function(){ setNoteOpen(open ? null : key); }}/>}
+          {job && <UpcomingCleanButton x={x} job={job} rec={recMap[job.id]} nowIso={nowIso} onOpen={onOpenJob}/>}
+        </div>
+        {hasNote && open && <UpcomingNoteBubble job={job} onClose={function(){ setNoteOpen(null); }}/>}
+      </div>
+    );
+  };
   const weeks = [];
   for (let i = 0; i < WEEKS; i++) weeks.push(addDaysIso(from, 7 * i));
   const last = addDaysIso(from, 7 * WEEKS - 1);
@@ -9971,6 +10143,16 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, r
         <button type="button" onClick={function(){ setFrom(addDaysIso(from, 7 * WEEKS)); }} style={navBtn} aria-label="Later weeks">›</button>
       </div>
 
+      {overdue.length > 0 && (
+        <div style={{ background:"#fff", border:"1.5px solid " + T.red, borderRadius:10, padding:"12px 14px", marginBottom:12 }}>
+          <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"nowrap", marginBottom:8 }}>
+            <span style={{ fontSize:14, fontWeight:800, color:T.red, whiteSpace:"nowrap" }}>Still to sign off</span>
+            <span style={{ marginLeft:"auto", fontSize:12, color:T.textMid, whiteSpace:"nowrap" }}>From earlier weeks</span>
+          </div>
+          {overdue.map(function(x) { return row(x, "overdue|"); })}
+        </div>
+      )}
+
       {weeks.map(function(w) {
         const end = addDaysIso(w, 6);
         const items = windows.filter(function(x) { return changeoverWeekOf(x) === w && x.start.date >= CHANGEOVER_FROM; });
@@ -9988,24 +10170,7 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, r
                 {items.length ? items.length + " changeover" + (items.length === 1 ? "" : "s") : "None"}
               </span>
             </div>
-            {items.map(function(x) {
-              const job = jobById[x.id] || null;
-              return (
-                <div key={x.id} style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:10, padding:"8px 0", borderTop:"1px solid " + T.tint }}>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:13.5, fontWeight:700, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                      {x.unitShort}
-                      {x.setup && <span style={{ fontSize:10.5, fontWeight:800, color:T.midBlue, background:T.tint, borderRadius:6, padding:"1px 6px", marginLeft:6 }}>Extra clean</span>}
-                      <span style={{ fontWeight:700, color:T.accent, marginLeft:8 }}>{x.occ}</span>
-                    </div>
-                    <div style={{ fontSize:11.5, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                      {x.setup ? "Extra clean before " + x.inWho : x.outWho}
-                    </div>
-                  </div>
-                  {job && <ChangeoverButton job={job} rec={recMap[job.id]} today={today} onOpen={onOpenJob}/>}
-                </div>
-              );
-            })}
+            {items.map(function(x) { return row(x, w + "|"); })}
           </div>
         );
       })}
@@ -10489,8 +10654,8 @@ function CleanerView({ isAdmin }) {
   const [sheets, setSheets]         = useState([]);          // the House timesheets
   const [paidWeeks, setPaidWeeks]   = useState([]);          // weeks the office has paid (locks the timesheet)
   const [loaded, setLoaded]         = useState(false);
-  const [tab, setTab]               = useState("home");
-  const [chkFocus, setChkFocus]     = useState(null);      // a checklist opened from Live
+  const [tab, setTab]               = useState("upcoming");
+  const [chkFocus, setChkFocus]     = useState(null);      // a checklist to open on Checklists
   const [cursor, setCursor]         = useState(new Date());
   const [openJob, setOpenJob]       = useState(null);
   const openJobRef = useRef(null);
@@ -10559,8 +10724,9 @@ function CleanerView({ isAdmin }) {
     return saveRecs(function(prev) { return (prev || []).filter(function(r) { return r.id !== id; }); });
   };
 
-  // Order: Toby, 4 Nov — House second, Checklists last.
-  const tabs = [["home","Live"],["house","House"],["upcoming","Upcoming"],["calendar","Calendar"],["list","Bookings"],["checklists","Checklists"]];
+  // Toby, 6 Nov: Upcoming where Live was; Live and Bookings taken out — the
+  // three showed the same cleans. (4 Nov: House second, Checklists last.)
+  const tabs = [["upcoming","Upcoming"],["house","House"],["calendar","Calendar"],["checklists","Checklists"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
@@ -10568,14 +10734,13 @@ function CleanerView({ isAdmin }) {
     <div>
       <TabStrip tabs={tabs} value={tab} onChange={setTab}/>
 
-      {/* Live checklists for housekeeping, at the top of Live. */}
-      {tab === "home" && <div style={{ marginTop:12 }}><ChecklistsHomePanel onOpen={function(id){ setChkFocus(id); setTab("checklists"); }}/></div>}
-      {tab === "home" && <CleanerHome properties={properties} accom={accom} events={events} boxEvents={boxEvents} setups={setups}
-        jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
       {tab === "checklists" && (
         <div style={{ marginTop:14 }}>
           <ChecklistsPage role={isAdmin ? "admin" : "cleaner"} compact focusRunId={chkFocus} clearFocus={function(){ setChkFocus(null); }}/>
         </div>
+      )}
+      {tab === "upcoming" && boxErr && (
+        <div style={{ marginTop:10, fontSize:12.5, color:T.red }}>Box office events could not be loaded just now — ticketed events may be missing.</div>
       )}
       {tab === "upcoming" && <CleanerUpcoming properties={properties} accom={accom} events={events} boxEvents={boxEvents} setups={setups}
         jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>}
@@ -10585,13 +10750,6 @@ function CleanerView({ isAdmin }) {
       {tab === "calendar" && (
         <AccomCalendar properties={properties} bookings={accom} events={calEvents}
           cursor={cursor} setCursor={setCursor} onOpen={function(){}} onViewEventsCalendar={null} readOnly/>
-      )}
-      {/* Lettings and Grain Store events on one page, filtered by property.
-          Nothing here opens a booking: the only thing a cleaner changes is
-          the sign-off. */}
-      {tab === "list" && (
-        <CleanerBookings properties={properties} accom={accom} events={events} boxEvents={boxEvents} boxErr={boxErr} setups={setups}
-          jobs={jobs} recMap={recMap} today={today} onOpenJob={setOpenJob}/>
       )}
 
       {openJob && (

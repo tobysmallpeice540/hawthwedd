@@ -1,5 +1,9 @@
 // tests/changeover-e2e.cjs
 //
+// STALE IN PART (6 Nov 2026): the housekeeping login no longer has Live or
+// Bookings — runs that wait for them fail. tests/upcoming-e2e.cjs covers
+// the cleaner screens now; the admin, pay and House runs here still apply.
+//
 // The housekeeping sign-off, end to end. Built app, Supabase faked
 // (tests/portal-harness.cjs → openStaff), box-admin faked here:
 //   · the cleaner login has Live / Upcoming / Calendar / Bookings / House, and
