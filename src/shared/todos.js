@@ -1,7 +1,7 @@
 // The to-do list's rules, kept apart from the screens so they can be tested
 // on their own (tests/todos-test.cjs). Nothing here touches the network.
 //
-// A to-do (app_data hbf_todos_v1, one array, saved by id):
+// A to-do (the todo_items table, migration 2026-11-06b, as todo_get sends it):
 //   { id, title, detail, who, whoLabel, area, project, priority, setOn,
 //     deadline, photos: [{ path, name }], state, comment,
 //     doneAt, doneBy, doneById, createdAt, createdBy, createdById, updatedAt }
@@ -16,12 +16,15 @@
 // · private: true = seen only by whoever wrote it (createdById) and, when it
 //   is for a named person, that person.
 //
-// A project (hbf_todo_projects_v1): { id, name, hidden, private, ownerId }.
+// A project (todo_lists): { id, name, hidden, private, mine, uses }.
 // A private project, and every to-do in it, is seen only by its owner.
 // Areas are places, and always shared.
 //
-// "Seen only by" is what the app SHOWS. The lists are app_data rows every
-// staff login can read, so this keeps things out of the way, not secret.
+// The DATABASE enforces who sees what (todo_visible in the migration) and
+// sends each login only that. todoVisibleTo / todoListVisibleTo below are the
+// same rules in JavaScript, kept so the two can be checked against each other
+// (tests/todos-test.cjs); the app does not filter with them. Likewise the
+// database works out due_on, and todoDueOn must agree with it.
 
 export const TODO_PRIORITY_DAYS = { day: 1, week: 7, month: 28, eventually: null };
 export const TODO_PRIORITY_ORDER = ["day", "week", "month", "eventually"];

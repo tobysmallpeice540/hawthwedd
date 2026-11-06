@@ -414,6 +414,42 @@ function planSummary(input) {
   return { send: send, skipped: skipped };
 }
 
-module.exports = { planChecklists, planArrivals, arrivalMessage, planSummary, summaryRecipients, summaryItems, itemWords, weekText, weekCap, SUMMARY_DAYS,
+// ── To-dos ───────────────────────────────────────────────────────────────────
+// items:  [{ id, title, person, dueOn }] from todo_worker_overdue(yesterday,
+//         today) — open, for a NAMED person who may see them, due yesterday,
+//         so overdue as of today. The database has already left out groups,
+//         private ones the person may not see and logins that have left.
+// people: { <uuid>: { name, mobile, active } }
+// One message per person per day, from TODO_HOUR; a to-do is due on one day
+// only, so it is in one message at most.
+const TODO_HOUR = 9;
+function todoCount(n) { return n === 1 ? "1 to-do" : n + " to-dos"; }
+function planTodos(input) {
+  const now = input.now;
+  if (londonHour(now) < TODO_HOUR) return { send: [], noMobile: [] };
+  const today = londonDate(now);
+  const byPerson = {};
+  (input.items || []).forEach(function (it) {
+    const id = String((it && it.person) || "").toLowerCase();
+    if (!/^[0-9a-f-]{36}$/.test(id) || !it.title) return;
+    (byPerson[id] = byPerson[id] || []).push(it);
+  });
+  const send = [], noMobile = [];
+  Object.keys(byPerson).sort().forEach(function (pid) {
+    const items = byPerson[pid];
+    const key = "todo|" + pid + "@" + today;
+    if (input.sent && input.sent.has(key)) return;
+    const p = (input.people || {})[pid];
+    if (!p || p.active === false) return;
+    if (!p.mobile) { noMobile.push({ key: key, name: p.name || "" }); return; }
+    send.push({ template: "todo_overdue", key: key, to: p.mobile, toName: p.name || "",
+      record: { kind: "todo", id: items[0].id, name: "To-do list" },
+      values: { name: firstName(p.name), count: todoCount(items.length),
+        items: itemsList(items.map(function (i) { return i.title; }), 500) } });
+  });
+  return { send: send, noMobile: noMobile };
+}
+
+module.exports = { planChecklists, planTodos, TODO_HOUR, planArrivals, arrivalMessage, planSummary, summaryRecipients, summaryItems, itemWords, weekText, weekCap, SUMMARY_DAYS,
   isQuiet, dueWords, itemsList, normaliseNumber, guestAgreed, arrivalPackFor, londonDate, londonHour, londonWeekday, clock12,
   dayShort, dayLong, addDays, stayTimes, CATCH_UP_H };

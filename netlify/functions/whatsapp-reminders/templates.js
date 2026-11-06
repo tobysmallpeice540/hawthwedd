@@ -76,6 +76,23 @@ const TEMPLATES = {
     body: "Hi {{name}}, {{count}} on the {{list}} checklist are now overdue: {{items}}. Please tick them off in the Hawthbush Farm app once done.",
     button: { text: "Open the app", url: APP_URL }
   },
+  // To-dos (6 Nov, Toby): the morning a named person's to-dos fall overdue,
+  // one message listing them. Once per to-do per due day — moving its
+  // priority or deadline gives it a new one. Groups are never messaged, and
+  // nobody is told about a to-do they may not see (private ones).
+  todo_overdue: {
+    label: "To-dos overdue",
+    audience: "Staff (named on a to-do)",
+    when: "From 9am on the day a named person's to-dos fall overdue: one message listing those that did, once each. To-dos for Office, Bar, Housekeeping or Everyone are never sent.",
+    category: "UTILITY", language: "en_GB",
+    fields: [
+      { key: "name", label: "Their first name", example: "Rosanna" },
+      { key: "count", label: "How many", example: "2 to-dos" },
+      { key: "items", label: "The to-dos", example: "Fix the wood store latch · Order more logs" }
+    ],
+    body: "Hi {{name}}, {{count}} on your Hawthbush Farm to-do list became overdue today: {{items}}. Please tick them off in the app once done, or change their priority.",
+    button: { text: "Open the app", url: APP_URL }
+  },
   changeover_summary: {
     label: "Weekly changeover summary",
     audience: "Housekeepers (the numbers set below)",

@@ -1,7 +1,8 @@
 // netlify/functions/whatsapp-reminders/whatsapp-reminders.js
 //
 // Sends the scheduled WhatsApps (rules in plan.js, wording in templates.js):
-// checklist live / overdue, pre-arrival, and the weekly changeover summary.
+// checklist live / overdue, to-dos overdue, pre-arrival, and the weekly
+// changeover summary.
 //
 //   POST, x-admin-token: HBF_ADMIN_TOKEN     the 15-minute shim (whatsapp-reminders-cron.js)
 //   POST, Authorization: Bearer <admin JWT>  Settings → WhatsApp → "Check now"
@@ -120,6 +121,18 @@ async function planNow(now) {
     const c = await loadChecklists(now);
     const p = plan.planChecklists({ runs: c.runs, items: c.items, people: c.people, ticks: settings.checklists || {},
       on: { live: isOn("checklist_live"), overdue: isOn("checklist_overdue") }, now: now });
+    all.push.apply(all, p.send); noMobile.push.apply(noMobile, p.noMobile);
+  }
+  if (isOn("todo_overdue") && plan.londonHour(now) >= plan.TODO_HOUR) {
+    const today = plan.londonDate(now);
+    // Due yesterday = overdue as of today. The database decides who may see
+    // what, so a private to-do is never named to someone it is hidden from.
+    const items = await rest("rpc/todo_worker_overdue", { method: "POST",
+      body: JSON.stringify({ p_from: plan.addDays(today, -1), p_before: today }) });
+    const profiles = await rest("profiles?select=id,name,mobile,active");
+    const people = {};
+    profiles.forEach(function (p) { people[String(p.id).toLowerCase()] = { name: p.name, mobile: p.mobile, active: p.active }; });
+    const p = plan.planTodos({ items: Array.isArray(items) ? items : [], people: people, now: now });
     all.push.apply(all, p.send); noMobile.push.apply(noMobile, p.noMobile);
   }
   if (isOn("pre_arrival")) {

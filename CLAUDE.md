@@ -1246,39 +1246,61 @@ own header.
   the three functions faked at fetch), `tests/contracts-e2e.cjs` (portal
   signing, Contract tab, Settings → Contracts, .docx import).
 
-### To-do list (6 Nov 2026)
+### To-do list (6 Nov 2026, migration 2026-11-06b)
 
 - **Longer-term jobs, separate from checklists.** View `todo` (sidebar after
-  Checklists, with a count of the signed-in person's overdue ones), and a
-  **To-do** tab on the bar and housekeeping logins. **"+ To-do"** sits in the
-  top bar on every office page (`TodoQuickAdd`, both layouts). The rules are
-  pure in `src/shared/todos.js` (pinned by `tests/todos-test.cjs`); the screens
-  by `tests/todos-e2e.cjs` (office desktop + phone, and the housekeeping login).
-- `app_data` `hbf_todos_v1` (array by id), `hbf_todo_areas_v1` (standard areas
-  written on first open, fixed ids), `hbf_todo_projects_v1`. All three live in
-  one module store (`todoStore`, `useTodoStore`); every write is
-  `todoSaveList` → `saveArrayMerged` over a fresh read. No SQL.
-- **Priority is a scope counted from `setOn`** (1 day / 7 days / 1 month = 28
-  days / Eventually); changing it restarts the count. An optional `deadline`
-  wins when earlier (`todoDueOn`). Overdue only once the due day has passed;
-  "by priority" puts every overdue one in an Overdue group first.
-- `who`: the checklists' values (`person:<id>`, `role:admin|bar|cleaner`,
-  `anyone` = Everyone), people from `chk_people`; `whoLabel` is a snapshot.
-  States: open / done / note (done with a comment) / na. Untick: whoever
-  ticked, or an admin. The bar and housekeeping logins see what is for their
-  group or Everyone, plus what they wrote, and can change only what they
-  wrote (the sheet is a disabled fieldset otherwise).
-- **Private** (Toby): a to-do with `private` is shown only to its writer and,
-  if it is for a named person, that person; a project with `private` +
-  `ownerId` — and every to-do in it — only to its owner (`todoVisibleTo`,
-  `todoListVisibleTo`). **This is hiding, not security**: the lists are
-  `app_data` rows any staff login can read through the API, and photos sit
-  in `booking-files` like every other file. Real privacy needs a table behind
-  `SECURITY DEFINER` functions, like checklists.
-- Photos: shrunk to 1600px JPEG in the browser (`todoShrinkImage`), stored at
-  `booking-files/todos/<todo id>/<random>.<ext>`, up to 6. Removed ones are
-  deleted only after the to-do saves; Cancel on the sheet deletes what it
-  uploaded. Areas and projects in use can be hidden/archived, never deleted.
+  Checklists, with a count of the signed-in person's overdue ones), a
+  **To-do for you** card on the admin home (`TodoHomeCard`: theirs by name,
+  their group's and Everyone's, overdue or due within 7 days, tickable; one
+  quiet line when there are none), a **To-do** tab on the bar and
+  housekeeping logins, and **"+ To-do"** in the top bar on every office page
+  (`TodoQuickAdd`, both layouts).
+- **In the database, not app_data** (Toby asked for real privacy): tables
+  `todo_items` and `todo_lists` (areas and projects, keyed `(kind, id)`), RLS
+  on, no policies, revoked from anon/authenticated. Everything through
+  `todo_get`, `todo_upsert`, `todo_set_state`, `todo_delete`,
+  `todo_save_list`, `todo_delete_list` (authenticated) and
+  `todo_worker_overdue` (service role). The rules are `todo_visible` /
+  `todo_can_edit` in SQL; `src/shared/todos.js` mirrors them for tests only —
+  **the app does not filter**, it shows what `todo_get` sends. A to-do the
+  database refuses as `not_found` is dropped from the screen.
+  The build-06c `app_data` keys `hbf_todo*_v1` were copied in by the
+  migration and are no longer read.
+- **Who sees what:** a `private` to-do — its writer and, if it names a
+  person, that person; a to-do in a private project — the project's owner
+  only (not even its writer, not even the office); otherwise the office sees
+  everything, bar and housekeeping see their group's, Everyone's and what they
+  wrote. Change / delete: the office or the writer. Tick: anyone who can see
+  it; untick: whoever ticked, or the office. Areas are always shared; areas
+  and projects are the office's to add and change; only a project's owner
+  makes it private or public. One in use cannot be deleted (`uses` counts
+  every to-do, seen or not).
+- **Priority is a scope counted from `set_on`** (1 day / 7 days / 1 month =
+  28 days / Eventually); the database resets `set_on` when the priority
+  changes. `due_on` is a generated column — the scope or the deadline,
+  whichever is earlier — and `todoDueOn` in JS must agree. Overdue only once
+  the due day has passed.
+- Who labels and who wrote / ticked it are the database's
+  (`chk_person_label`, so the bar and housekeeping logins read "Bar" /
+  "Housekeeping", as on checklists).
+- **Photos: the private `todo-photos` bucket**, path `<todo id>/<file>`,
+  shrunk to 1600px JPEG in the browser first, up to 6. Storage policies call
+  `todo_photo_can_see` (read: whoever may see the to-do, or whoever uploaded
+  it) and `todo_photo_can_change` (put up / take down: whoever may change the
+  to-do, or any staff while it has not been saved yet). Removed photos are
+  taken down only after the save; Cancel takes down what the sheet put up.
+  Paths starting `todos/` are from build 06c, in `booking-files`.
+- **WhatsApp `todo_overdue`** (UTILITY, off until switched on and approved,
+  Settings → WhatsApp → Messages): from 9am (`plan.TODO_HOUR`) one message per
+  named person per day listing their to-dos that fell overdue that day (due
+  yesterday — `todo_worker_overdue(yesterday, today)`), so each to-do is in
+  one message at most; key `todo|<person>@<day>`. Groups are never messaged,
+  nobody is told of a to-do they may not see, no mobile = reported.
+- Tests: `supabase/2026-11-06b-todos-test.sql` (scratch Postgres, after
+  `tests/contracts/standins.sql`, `tests/todos/standins.sql`,
+  `tests/todos/seed-app-data.sql`), `tests/todos-test.cjs` (JS rules),
+  `tests/todos-e2e.cjs` (screens, with `tests/todos/fake-db.cjs` standing in
+  for the functions), the to-do parts of `tests/whatsapp-reminders-test.cjs`.
 
 ## Working in this folder from a Claude session
 

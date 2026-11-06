@@ -253,6 +253,37 @@ assert.ok(/Sunday 1 November/.test(html) && /arriving After 9pm/.test(html) && /
 assert.strictEqual(HP.PAGE_DAYS, 10, "the page looks 10 days ahead; the WhatsApp 7");
 assert.strictEqual(P.SUMMARY_DAYS, 7);
 
+// ── To-dos overdue ───────────────────────────────────────────────────────────
+(function () {
+  const ROS = "00000000-0000-4000-8000-0000000000a2", KAR = "00000000-0000-4000-8000-0000000000c1", OLD = "00000000-0000-4000-8000-0000000000d1";
+  const ppl = {}; ppl[ROS] = { name: "Rosanna Greenwood", mobile: "447700900111", active: true };
+  ppl[KAR] = { name: "Karina", mobile: "", active: true }; ppl[OLD] = { name: "Left", mobile: "447700900999", active: false };
+  const its = [
+    { id: "td_1", title: "Fix the wood store latch", person: ROS, dueOn: "2026-11-05" },
+    { id: "td_2", title: "Order more logs", person: ROS.toUpperCase(), dueOn: "2026-11-05" },
+    { id: "td_3", title: "Hamlet shower", person: KAR, dueOn: "2026-11-05" },
+    { id: "td_4", title: "From before they left", person: OLD, dueOn: "2026-11-05" },
+    { id: "td_5", title: "", person: ROS, dueOn: "2026-11-05" },
+    { id: "td_6", title: "A group's", person: "role:admin", dueOn: "2026-11-05" },
+  ];
+  // 08:55 London (GMT in November): not yet.
+  assert.strictEqual(P.planTodos({ items: its, people: ppl, now: at("2026-11-06T08:55:00Z") }).send.length, 0, "not before 9am");
+  const p = P.planTodos({ items: its, people: ppl, now: at("2026-11-06T09:00:00Z") });
+  assert.strictEqual(p.send.length, 1, "one message, to the one named person with a mobile");
+  const m = p.send[0];
+  assert.strictEqual(m.template, "todo_overdue");
+  assert.strictEqual(m.key, "todo|" + ROS + "@2026-11-06", "one a person a day");
+  assert.strictEqual(m.to, "447700900111");
+  assert.deepStrictEqual(m.values, { name: "Rosanna", count: "2 to-dos", items: "Fix the wood store latch · Order more logs" });
+  assert.deepStrictEqual(p.noMobile.map(function (x) { return x.name; }), ["Karina"], "no mobile: reported, not sent");
+  const again = P.planTodos({ items: its, people: ppl, now: at("2026-11-06T12:00:00Z"), sent: new Set([m.key]) });
+  assert.strictEqual(again.send.length, 0, "not twice in a day");
+  assert.strictEqual(P.planTodos({ items: [its[0]], people: ppl, now: at("2026-11-06T09:00:00Z") }).send[0].values.count, "1 to-do");
+  const chk = T.checkBody("todo_overdue", T.TEMPLATES.todo_overdue.body);
+  assert.ok(chk.ok, JSON.stringify(chk));
+  assert.strictEqual(T.TEMPLATES.todo_overdue.category, "UTILITY");
+})();
+
 console.log("whatsapp plans and templates: all tests passed");
 
 // ── The sending run, fetch faked ─────────────────────────────────────────────
@@ -327,7 +358,48 @@ console.log("whatsapp plans and templates: all tests passed");
   r = await _test.runOnce(at("2026-10-31T09:50:00Z"));
   assert.strictEqual(sent.length, before);
   console.log("whatsapp sending run: all tests passed");
-})().then(planLinkButton).catch(function (e) { console.error(e); process.exit(1); });
+})().then(planLinkButton).then(todoRun).catch(function (e) { console.error(e); process.exit(1); });
+
+// ── The to-do step of a run: asks the database for yesterday's, sends once ───
+async function todoRun() {
+  process.env.SUPABASE_SERVICE_KEY = "svc"; process.env.WHATSAPP_TOKEN = "tok";
+  const { _test } = require("../netlify/functions/whatsapp-reminders/whatsapp-reminders.js");
+  const ROS = "00000000-0000-4000-8000-0000000000a2";
+  const marks = new Set(); const sent = []; let asked = null;
+  const realFetch = global.fetch;
+  global.fetch = async function (url, o) {
+    o = o || {};
+    const ok = function (b) { return { ok: true, status: 200, json: async () => b, text: async () => JSON.stringify(b) }; };
+    const key = (/app_data\?key=eq\.([^&]+)/.exec(url) || [])[1];
+    if (key === "hbf_whatsapp_settings_v1") return ok([{ value: { templates: { todo_overdue: { on: true } } } }]);
+    if (key === "hbf_whatsapp_submitted_v1") return ok([{ value: {} }]);
+    if (url.includes("/rpc/todo_worker_overdue")) { asked = JSON.parse(o.body);
+      return ok([{ id: "td_1", title: "Fix the wood store latch", person: ROS, dueOn: "2026-11-05" }]); }
+    if (url.includes("/profiles?")) return ok([{ id: ROS, name: "Rosanna Greenwood", mobile: "447700900111", active: true }]);
+    if (url.includes("/wa_sent_marks?kind=eq.") && (!o.method || o.method === "GET")) {
+      const kind = decodeURIComponent(/kind=eq\.([^&]+)/.exec(url)[1]);
+      return ok([...marks].filter(function (m) { return m.startsWith(kind + "|"); }).map(function (m) { return { ref: m.slice(kind.length + 1) }; }));
+    }
+    if (url.includes("/wa_sent_marks?on_conflict")) { const r = JSON.parse(o.body)[0]; const k = r.kind + "|" + r.ref;
+      if (marks.has(k)) return ok([]); marks.add(k); return ok([r]); }
+    if (url.includes("/wa_sent_marks?kind=eq.") || url.includes("/wa_messages")) return ok(null);
+    if (url.includes("graph.facebook.com")) { sent.push(JSON.parse(o.body)); return ok({ messages: [{ id: "wamid.t" + sent.length }] }); }
+    throw new Error("unexpected " + url);
+  };
+  try {
+    let r = await _test.runOnce(at("2026-11-06T08:50:00Z"));
+    assert.strictEqual(sent.length, 0, "before 9am nothing"); assert.strictEqual(asked, null, "and the database is not asked");
+    r = await _test.runOnce(at("2026-11-06T09:07:00Z"));
+    assert.deepStrictEqual(asked, { p_from: "2026-11-05", p_before: "2026-11-06" }, "asks for those due yesterday");
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].template.name, "todo_overdue");
+    assert.deepStrictEqual(sent[0].template.components[0].parameters.map(function (x) { return x.text; }),
+      ["Rosanna", "1 to-do", "Fix the wood store latch"]);
+    r = await _test.runOnce(at("2026-11-06T09:22:00Z"));
+    assert.strictEqual(sent.length, 1, "once a day");
+  } finally { global.fetch = realFetch; }
+  console.log("whatsapp to-dos run: all tests passed");
+}
 
 // ── The summary's plan link goes out as the URL button's value ───────────────
 // Run after the sending run, which fakes fetch too.

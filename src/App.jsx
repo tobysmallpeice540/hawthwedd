@@ -14,8 +14,8 @@ import ContractDocument from "./shared/ContractDocument.jsx";
 import { parseContractTemplate, resolveContractNodes, contractAccommodation, contractTitle, contractKindOf, contractValuesForReview,
   htmlToContractMarkup, CONTRACT_FIELDS, CONTRACT_KINDS, CONTRACT_SYNTAX_HELP } from "./shared/contractDoc.js";
 import { DEFAULT_CONTRACT_TEMPLATE } from "./shared/contractTemplate.js";
-import { TODO_DEFAULT_AREAS, TODO_PRIORITY_ORDER, TODO_PRIORITY_LABEL, todoAddDays, todoDueOn, todoTiming, todoIsOpen, todoIsFor,
-  todoVisibleTo, todoListVisibleTo, todoGroups, todoRecentlyDone, todoSlug, todoUses } from "./shared/todos.js";
+import { TODO_PRIORITY_ORDER, TODO_PRIORITY_LABEL, todoAddDays, todoDueOn, todoTiming, todoIsOpen, todoIsFor,
+  todoGroups, todoRecentlyDone, todoCompare } from "./shared/todos.js";
 import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
@@ -2819,7 +2819,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-06c";
+const APP_BUILD = "2026-11-06d";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -17742,18 +17742,18 @@ function PhoneAppPanel() {
 // Eventually — with an optional deadline. Ticked like a checklist item: Done,
 // Done with a comment, or Not applicable. The rules are in src/shared/todos.js.
 //
-// Stored in app_data, saved by id through saveArrayMerged (a fresh read, only
-// this screen's difference applied), so two phones never undo each other:
-//   hbf_todos_v1, hbf_todo_areas_v1, hbf_todo_projects_v1.
-// Photos go to booking-files/todos/<todo id>/<random>.jpg, shrunk on the
-// phone first.
+// Stored in the database (migration 2026-11-06b: todo_items, todo_lists),
+// read and written only through todo_ functions, which decide who sees what —
+// a private to-do, or anything in someone else's private project, never
+// reaches this page for anyone else. Each change is one row, so two phones
+// never undo each other. Photos go to the private todo-photos bucket at
+// <todo id>/<random>.jpg, shrunk on the phone first; the bucket's policies
+// let only those who may see the to-do read them.
 //
-// One small module store holds all three lists, so the To-do page, the
-// sidebar's count and the "+ To-do" button on every page agree.
-const TODO_KEY = "hbf_todos_v1";
-const TODO_AREAS_KEY = "hbf_todo_areas_v1";
-const TODO_PROJECTS_KEY = "hbf_todo_projects_v1";
+// One small module store holds everything, so the To-do page, the home card,
+// the sidebar's count and the "+ To-do" button on every page agree.
 const TODO_MAX_PHOTOS = 6;
+const TODO_BUCKET = "todo-photos";
 
 const todoStore = { todos: null, areas: null, projects: null, people: null, me: null, err: "", loadedAt: 0 };
 const todoSubs = new Set();
@@ -17761,27 +17761,37 @@ let todoLoading = null;
 function todoNotify() { todoSubs.forEach(function(f) { f(); }); }
 function todoPatch(p) { Object.assign(todoStore, p); todoNotify(); }
 
-// Reads all three lists strictly — a failed read shows an error and leaves
-// what was on screen, never an empty list that a save could then write back.
+// The database's refusals, in words.
+const TODO_ERRORS = {
+  not_staff: "This login cannot use the to-do list.",
+  not_found: "That is no longer there — it may have been deleted, or made private.",
+  not_yours: "Only the office, or whoever added it, can change that.",
+  not_your_tick: "Only whoever ticked it, or the office, can untick it.",
+  not_your_project: "Only whoever made that project can make it private or public.",
+  office_only: "Only the office can change areas and projects.",
+  in_use: "It is in use, so it can be hidden but not deleted.",
+  no_title: "Give it a heading.", title_too_long: "The heading is too long.",
+  comment_needed: "Write a comment first.", bad_project: "That project cannot be chosen.",
+  bad_area: "That area is no longer there.", bad_who: "That person can no longer be given to-dos.",
+  areas_are_shared: "Areas are shared; only projects can be private.",
+};
+function todoErrorText(e) {
+  if (e && e.code && TODO_ERRORS[e.code]) return TODO_ERRORS[e.code];
+  if (e && e.status === 404) return "The to-do list needs this week's database update, which has not been applied yet.";
+  return (e && e.message) || "That did not save.";
+}
+
+// Everything this login may see, read fresh. A failed read shows an error
+// and leaves what was on screen.
 function todoLoad() {
   if (todoLoading) return todoLoading;
   todoLoading = (async function() {
     try {
-      const got = await Promise.all([sbGetStrict(TODO_KEY), sbGetStrict(TODO_AREAS_KEY), sbGetStrict(TODO_PROJECTS_KEY)]);
-      if (got[0] != null && !Array.isArray(got[0])) throw new Error("The to-do list is not in the expected shape.");
-      let areas = Array.isArray(got[1]) ? got[1] : null;
-      // The first time anybody opens it, the standard areas are written.
-      // Their ids are fixed, so two first opens at once agree.
-      if (!areas) {
-        try { areas = await saveArrayMerged(TODO_AREAS_KEY, [], TODO_DEFAULT_AREAS); }
-        catch (e) { areas = null; }
-      }
-      todoPatch({ todos: got[0] || [], areas: areas, projects: Array.isArray(got[2]) ? got[2] : [], err: "", loadedAt: Date.now() });
+      const r = await sbRpcQuiet("todo_get", {});
+      todoPatch({ todos: r.items || [], areas: r.areas || [], projects: r.projects || [],
+        me: r.me || todoStore.me, err: "", loadedAt: Date.now() });
     } catch (e) {
-      todoPatch({ err: (e && e.message) || "The to-do list could not be read." });
-    }
-    if (!todoStore.me) {
-      try { const me = await sbRpcQuiet("my_profile"); if (me && me.id) todoPatch({ me: me }); } catch (e) {}
+      todoPatch({ err: todoErrorText(e) });
     }
     if (!todoStore.people) {
       try {
@@ -17810,38 +17820,82 @@ function useTodoStore(autoLoad) {
   return todoStore;
 }
 
-// Show the change at once, save only the difference over a fresh read, then
-// show what the server holds. A failed save puts the screen back and throws.
-async function todoSaveList(field, key, updater) {
-  if (!todoStore[field]) throw new Error("The list has not loaded yet, so nothing was saved. Try again in a moment.");
-  const before = todoStore[field];
-  const next = updater(before);
-  const p = {}; p[field] = next; todoPatch(p);
+// Put the database's copy of one to-do (or list) into the store.
+function todoPut(field, rec) {
+  const list = todoStore[field] || [];
+  const has = list.some(function(x) { return x.id === rec.id; });
+  const p = {};
+  p[field] = has ? list.map(function(x) { return x.id === rec.id ? rec : x; }) : list.concat([rec]);
+  todoPatch(p);
+}
+function todoDrop(field, id) {
+  const p = {}; p[field] = (todoStore[field] || []).filter(function(x) { return x.id !== id; }); todoPatch(p);
+}
+async function todoCall(fn, args) {
+  try { return await sbRpcQuiet(fn, args); }
+  catch (e) { const err = new Error(todoErrorText(e)); err.code = e && e.code; throw err; }
+}
+async function todoSaveItem(rec) {
+  const r = await todoCall("todo_upsert", { p: rec });
+  todoPut("todos", r.item);
+  return r.item;
+}
+// A tick shows at once; a refusal puts it back.
+async function todoSetStateDb(todo, state, comment) {
+  const before = todo;
+  todoPut("todos", Object.assign({}, todo, state === "open"
+    ? { state: "open", comment: null, doneAt: null, doneBy: null, doneById: null }
+    : { state: state, comment: state === "done" ? null : comment, doneAt: new Date().toISOString(),
+        doneBy: todoMeLabel(todoStore.me), doneById: todoStore.me && todoStore.me.id }));
   try {
-    const merged = await saveArrayMerged(key, before, next);
-    if (todoStore[field] === next) { const q = {}; q[field] = merged; todoPatch(q); }
-    return merged;
+    const r = await todoCall("todo_set_state", { p_id: todo.id, p_state: state, p_comment: comment || null });
+    todoPut("todos", r.item);
+    return r.item;
   } catch (e) {
-    if (todoStore[field] === next) { const q = {}; q[field] = before; todoPatch(q); }
+    todoPut("todos", before);
+    // Gone or made private meanwhile: take it off this screen too.
+    if (e.code === "not_found") todoDrop("todos", todo.id);
     throw e;
   }
 }
-function todoSaveTodos(updater) { return todoSaveList("todos", TODO_KEY, updater); }
-function todoUpdate(id, fields) {
-  return todoSaveTodos(function(list) {
-    return list.map(function(t) { return t.id === id ? Object.assign({}, t, fields, { updatedAt: new Date().toISOString() }) : t; });
+async function todoDeleteDb(todo) {
+  const r = await todoCall("todo_delete", { p_id: todo.id });
+  todoDrop("todos", todo.id);
+  (r.photos || []).forEach(function(p) { todoDeletePhoto(p.path).catch(function() {}); });
+}
+// kind "area" | "project"; p = { id?, name?, hidden?, private? }.
+async function todoSaveListDb(kind, p) {
+  const r = await todoCall("todo_save_list", { p_kind: kind, p: p });
+  todoPut(kind === "area" ? "areas" : "projects", r.list);
+  return r.list;
+}
+async function todoDeleteListDb(kind, id) {
+  await todoCall("todo_delete_list", { p_kind: kind, p_id: id });
+  todoDrop(kind === "area" ? "areas" : "projects", id);
+}
+
+// Photos: the private todo-photos bucket. Paths from before the move to the
+// database start "todos/" and live in booking-files.
+function todoPhotoUrl(path) {
+  if (/^todos\//.test(path)) return storageUrl(path);
+  return SUPABASE_URL + "/storage/v1/object/authenticated/" + TODO_BUCKET + "/" + path;
+}
+async function todoUploadPhoto(path, file) {
+  const res = await fetch(SUPABASE_URL + "/storage/v1/object/" + TODO_BUCKET + "/" + path, {
+    method: "POST",
+    headers: Object.assign(sbAuthHeaders(), { "Content-Type": file.type || "image/jpeg", "x-upsert": "true" }),
+    body: file,
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 160) || ("upload failed (" + res.status + ")"));
+}
+async function todoDeletePhoto(path) {
+  if (/^todos\//.test(path)) return sbDeleteFile(path);
+  await fetch(SUPABASE_URL + "/storage/v1/object/" + TODO_BUCKET, {
+    method: "DELETE",
+    headers: Object.assign(sbAuthHeaders(), { "Content-Type": "application/json" }),
+    body: JSON.stringify({ prefixes: [path] }),
   });
 }
-// Areas: if the standard ones never got written, write them first, or an
-// edit to one of them would be read as a change to something not there.
-async function todoSaveAreas(updater) {
-  if (!todoStore.areas) {
-    const seeded = await saveArrayMerged(TODO_AREAS_KEY, [], TODO_DEFAULT_AREAS);
-    todoPatch({ areas: seeded });
-  }
-  return todoSaveList("areas", TODO_AREAS_KEY, updater);
-}
-function todoSaveProjects(updater) { return todoSaveList("projects", TODO_PROJECTS_KEY, updater); }
 
 function todoRandomId() {
   try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch (e) {}
@@ -17882,9 +17936,11 @@ function todoPriorityStyle(p) {
   if (p === "month") return { color: T.infoText, background: T.infoBg };
   return { color: T.textMid, background: T.bgInput };
 }
+// The database says (canEdit); the guess is for a row it has not sent yet.
 function todoCanEdit(t, me) {
-  if (!me) return false;
-  return me.role === "admin" || (!!me.id && t.createdById === me.id);
+  if (!t) return false;
+  if (typeof t.canEdit === "boolean") return t.canEdit;
+  return !!me && (me.role === "admin" || (!!me.id && t.createdById === me.id));
 }
 
 // Phone photos are several megabytes; 1600px across is plenty to see a
@@ -17912,7 +17968,7 @@ function TodoPhoto({ path, size, onOpen }) {
   useEffect(function() {
     if (TODO_IMG_CACHE[path]) { setUrl(TODO_IMG_CACHE[path]); return; }
     let gone = false;
-    fetch(storageUrl(path), { headers: sbAuthHeaders() })
+    fetch(todoPhotoUrl(path), { headers: sbAuthHeaders() })
       .then(function(r) { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
       .then(function(b) { const u = URL.createObjectURL(b); TODO_IMG_CACHE[path] = u; if (!gone) setUrl(u); })
       .catch(function() { if (!gone) setBad(true); });
@@ -17989,8 +18045,8 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
   // change only what they wrote themselves.
   const canEdit = isNew || todoCanEdit(todo, me);
   const people = store.people || [];
-  const areas = (store.areas || TODO_DEFAULT_AREAS).filter(function(a) { return !a.hidden || a.id === d.area; });
-  const projects = (store.projects || []).filter(function(p) { return todoListVisibleTo(p, me) && (!p.hidden || p.id === d.project); });
+  const areas = (store.areas || []).filter(function(a) { return !a.hidden || a.id === d.area; });
+  const projects = (store.projects || []).filter(function(p) { return !p.hidden || p.id === d.project; });
   const inPrivateProject = !!d.project && (store.projects || []).some(function(p) { return p.id === d.project && p.private; });
   function set(k, v) { setD(function(x) { const y = Object.assign({}, x); y[k] = v; return y; }); }
 
@@ -18003,8 +18059,8 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
       try {
         const small = await todoShrinkImage(f);
         const ext = small.type === "image/jpeg" ? "jpg" : (String(f.name || "").split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || "jpg";
-        const path = "todos/" + d.id + "/" + todoRandomId() + "." + ext;
-        await sbUploadFile(path, small);
+        const path = d.id + "/" + todoRandomId().replace(/[^A-Za-z0-9-]/g, "") + "." + ext;
+        await todoUploadPhoto(path, small);
         uploadedRef.current.push(path);
         setD(function(x) { return Object.assign({}, x, { photos: x.photos.concat([{ path: path, name: f.name || "photo" }]) }); });
       } catch (e) { setErr("A photo did not upload (" + ((e && e.message) || "error").slice(0, 120) + ")."); }
@@ -18016,7 +18072,7 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
   }
   function cancel() {
     // Photos put up in this sheet and not kept are taken down again.
-    uploadedRef.current.forEach(function(p) { sbDeleteFile(p).catch(function() {}); });
+    uploadedRef.current.forEach(function(p) { todoDeletePhoto(p).catch(function() {}); });
     onClose();
   }
   async function newListItem(kind) {
@@ -18024,16 +18080,9 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
     if (!name) return;
     setErr("");
     try {
-      let id = null;
       // A project made from a private to-do starts private too.
-      const make = function(list) {
-        id = todoSlug(name, list);
-        const rec = { id: id, name: name, createdAt: new Date().toISOString(), ownerId: (me && me.id) || null };
-        if (kind === "project" && d.private) rec.private = true;
-        return list.concat([rec]);
-      };
-      if (kind === "area") await todoSaveAreas(make); else await todoSaveProjects(make);
-      set(kind, id);
+      const made = await todoSaveListDb(kind, kind === "project" && d.private ? { name: name, private: true } : { name: name });
+      set(kind, made.id);
     } catch (e) { setErr((e && e.message) || "That did not save."); }
   }
   async function save() {
@@ -18041,36 +18090,30 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
     if (!title) { setErr("Give it a heading."); if (titleRef.current) titleRef.current.focus(); return; }
     if (uploading) { setErr("Wait for the photos to finish."); return; }
     setBusy(true); setErr("");
-    const now = new Date().toISOString();
-    const priorityChanged = !todo || todo.priority !== d.priority;
-    const rec = Object.assign({}, d, {
-      title: title, detail: String(d.detail || "").trim(),
-      whoLabel: todoWhoLabel(d.who, people, todo && todo.whoLabel),
-      area: d.area || null, project: d.project || null, deadline: d.deadline || null, private: !!d.private,
-      setOn: priorityChanged ? londonToday() : (todo.setOn || londonToday()),
-      updatedAt: now,
-    });
-    if (isNew) Object.assign(rec, { createdAt: now, createdBy: todoMeLabel(me), createdById: (me && me.id) || null, state: "open" });
+    // Only what the person chose; who wrote it, when, and the labels are the
+    // database's to set.
+    const rec = { id: d.id, title: title, detail: String(d.detail || "").trim(), who: d.who || "anyone",
+      area: d.area || null, project: d.project || null, priority: d.priority, deadline: d.deadline || null,
+      private: !!d.private, photos: d.photos.map(function(p) { return { path: p.path, name: p.name }; }) };
     try {
-      await todoSaveTodos(function(list) {
-        return isNew ? list.concat([rec]) : list.map(function(t) { return t.id === rec.id ? Object.assign({}, t, rec) : t; });
-      });
+      const saved = await todoSaveItem(rec);
       // Photos that were on it and are not now: take them down after the save.
       if (todo) {
         const keep = {}; rec.photos.forEach(function(p) { keep[p.path] = true; });
-        (todo.photos || []).forEach(function(p) { if (!keep[p.path]) sbDeleteFile(p.path).catch(function() {}); });
+        (todo.photos || []).forEach(function(p) { if (!keep[p.path]) todoDeletePhoto(p.path).catch(function() {}); });
       }
       uploadedRef.current = [];
       setBusy(false);
-      if (onSaved) onSaved(rec, isNew);
+      if (onSaved) onSaved(saved, isNew);
       onClose();
     } catch (e) { setBusy(false); setErr((e && e.message) || "That did not save."); }
   }
   async function del() {
     setBusy(true); setErr("");
     try {
-      await todoSaveTodos(function(list) { return list.filter(function(t) { return t.id !== todo.id; }); });
-      (todo.photos || []).concat(d.photos).forEach(function(p) { sbDeleteFile(p.path).catch(function() {}); });
+      await todoDeleteDb(todo);
+      // Photos put up in this sheet and not yet saved on it.
+      uploadedRef.current.forEach(function(p) { todoDeletePhoto(p).catch(function() {}); });
       setBusy(false); onClose();
     } catch (e) { setBusy(false); setErr((e && e.message) || "That did not delete."); }
   }
@@ -18285,7 +18328,9 @@ function TodoRow({ todo, today, ctx, showWho, showArea, showProject, busy, canUn
 }
 
 // Areas or projects: rename, hide, delete (only when nothing uses it), add.
-function TodoListEditor({ title, field, list, todos, onSave, hideWord, me }) {
+// onSave(p) with { id?, name?, hidden?, private? }; onDelete(id). The
+// database counts the uses (`uses`) and says whose a project is (`mine`).
+function TodoListEditor({ title, field, list, onSave, onDelete, hideWord }) {
   const privacy = field === "project";
   const [rows, setRows] = useState(function() { return (list || []).map(function(x) { return Object.assign({}, x); }); });
   const [name, setName] = useState("");
@@ -18296,24 +18341,21 @@ function TodoListEditor({ title, field, list, todos, onSave, hideWord, me }) {
   // boxes being typed in.
   const listKey = JSON.stringify(list || []);
   useEffect(function() { setRows((list || []).map(function(x) { return Object.assign({}, x); })); }, [listKey]);
-  async function apply(fn, msg) {
+  async function apply(run, msg) {
     setErr(""); setNote("");
-    try { await onSave(fn); if (msg) setNote(msg); } catch (e) { setErr((e && e.message) || "That did not save."); }
+    try { await run(); if (msg) setNote(msg); } catch (e) { setErr((e && e.message) || "That did not save."); }
   }
   function rename(id, v) {
     const n = String(v || "").trim();
     const was = (list || []).filter(function(x) { return x.id === id; })[0];
     if (!n || !was || was.name === n) { setRows((list || []).map(function(x) { return Object.assign({}, x); })); return; }
-    apply(function(l) { return l.map(function(x) { return x.id === id ? Object.assign({}, x, { name: n }) : x; }); }, "Saved.");
+    apply(function() { return onSave({ id: id, name: n }); }, "Saved.");
   }
   function add() {
     const n = name.trim();
     if (!n) return;
-    apply(function(l) {
-      const rec = { id: todoSlug(n, l), name: n, createdAt: new Date().toISOString(), ownerId: (me && me.id) || null };
-      if (privacy && onlyMe) rec.private = true;
-      return l.concat([rec]);
-    }, "Added " + n + (privacy && onlyMe ? " (private)." : "."));
+    const priv = privacy && onlyMe;
+    apply(function() { return onSave(priv ? { name: n, private: true } : { name: n }); }, "Added " + n + (priv ? " (private)." : "."));
     setName(""); setOnlyMe(false);
   }
   return (
@@ -18322,7 +18364,7 @@ function TodoListEditor({ title, field, list, todos, onSave, hideWord, me }) {
       {err && <ErrBanner text={err}/>}
       {note && <div style={{ fontSize: 12.5, color: T.green, marginBottom: 6 }}>{note}</div>}
       {rows.map(function(x) {
-        const uses = todoUses(todos, field, x.id);
+        const uses = Number(x.uses) || 0;
         // Labelled by the SAVED name, so the label does not change while typing.
         const saved = (list || []).filter(function(y) { return y.id === x.id; })[0];
         const savedName = saved ? saved.name : x.name;
@@ -18333,21 +18375,21 @@ function TodoListEditor({ title, field, list, todos, onSave, hideWord, me }) {
               onBlur={function(e) { rename(x.id, e.target.value); }}
               style={Object.assign({}, inputCss, { flex: 1, minWidth: 0, fontSize: 15, opacity: x.hidden ? 0.55 : 1 })}/>
             <span style={{ fontSize: 11.5, color: T.textLight, whiteSpace: "nowrap", minWidth: 44, textAlign: "right" }}>{uses ? uses + " use" + (uses === 1 ? "" : "s") : ""}</span>
-            {privacy && me && x.ownerId === me.id && (
+            {privacy && x.mine && (
               <button type="button" aria-pressed={x.private ? "true" : "false"} title={x.private ? "Only you see it. Press to share it with everyone." : "Everyone sees it. Press to keep it to yourself."}
                 style={Object.assign({}, btnQuiet, { padding: "7px 10px", fontSize: 12.5, whiteSpace: "nowrap", color: x.private ? T.text : T.textMid, fontWeight: x.private ? 700 : 500 })}
-                onClick={function() { apply(function(l) { return l.map(function(y) { return y.id === x.id ? Object.assign({}, y, { private: !x.private }) : y; }); }, x.private ? "Now shared with everyone." : "Now private to you."); }}>
+                onClick={function() { apply(function() { return onSave({ id: x.id, private: !x.private }); }, x.private ? "Now shared with everyone." : "Now private to you."); }}>
                 {x.private ? "Private" : "Public"}
               </button>
             )}
             <button type="button" style={Object.assign({}, btnQuiet, { padding: "7px 10px", fontSize: 12.5, whiteSpace: "nowrap" })}
-              onClick={function() { apply(function(l) { return l.map(function(y) { return y.id === x.id ? Object.assign({}, y, { hidden: !x.hidden }) : y; }); }); }}>
+              onClick={function() { apply(function() { return onSave({ id: x.id, hidden: !x.hidden }); }); }}>
               {x.hidden ? "Show" : hideWord}
             </button>
             <button type="button" disabled={uses > 0} title={uses ? "In use — " + hideWord.toLowerCase() + " it instead" : "Delete"}
               aria-label={"Delete " + savedName}
               style={Object.assign({}, btnQuiet, { padding: "7px 10px", fontSize: 12.5, color: uses ? T.textLight : T.red, cursor: uses ? "default" : "pointer" })}
-              onClick={function() { if (uses) return; if (!window.confirm("Delete " + savedName + "?")) return; apply(function(l) { return l.filter(function(y) { return y.id !== x.id; }); }, "Deleted."); }}>
+              onClick={function() { if (uses) return; if (!window.confirm("Delete " + savedName + "?")) return; apply(function() { return onDelete(x.id); }, "Deleted."); }}>
               &times;
             </button>
           </div>
@@ -18383,9 +18425,10 @@ function TodoListsSheet({ onClose }) {
         Change a name and it changes on every to-do. One in use can be hidden from the choices but not deleted.
         A private project, and everything in it, is seen only by whoever made it.
       </div>
-      <TodoListEditor title="Projects" field="project" me={store.me} todos={store.todos} onSave={todoSaveProjects} hideWord="Archive"
-        list={(store.projects || []).filter(function(p) { return todoListVisibleTo(p, store.me); })}/>
-      <TodoListEditor title="Areas" field="area" me={store.me} list={store.areas || TODO_DEFAULT_AREAS} todos={store.todos} onSave={todoSaveAreas} hideWord="Hide"/>
+      <TodoListEditor title="Projects" field="project" hideWord="Archive" list={store.projects || []}
+        onSave={function(p) { return todoSaveListDb("project", p); }} onDelete={function(id) { return todoDeleteListDb("project", id); }}/>
+      <TodoListEditor title="Areas" field="area" hideWord="Hide" list={store.areas || []}
+        onSave={function(p) { return todoSaveListDb("area", p); }} onDelete={function(id) { return todoDeleteListDb("area", id); }}/>
       <button type="button" onClick={onClose}
         style={{ width: "100%", padding: "12px", marginTop: 16, background: "none", border: `1.5px solid ${T.border}`, borderRadius: 10, color: T.text, fontFamily: "inherit", fontSize: 14, cursor: "pointer" }}>Done</button>
     </ChecklistSheetFrame>
@@ -18419,17 +18462,14 @@ function TodoPage({ compact }) {
 
   async function setState(todo, state, comment) {
     setBusyId(todo.id); setErr("");
-    const fields = state === "open"
-      ? { state: "open", comment: null, doneAt: null, doneBy: null, doneById: null }
-      : { state: state, comment: String(comment || "").trim() || null, doneAt: new Date().toISOString(), doneBy: todoMeLabel(me), doneById: (me && me.id) || null };
-    try { await todoUpdate(todo.id, fields); setMore(null); }
+    try { await todoSetStateDb(todo, state, String(comment || "").trim() || null); setMore(null); }
     catch (e) { setErr((e && e.message) || "That did not save."); }
     setBusyId(null);
   }
 
-  const ctx = { today: today, me: me, people: store.people || [], areas: store.areas || TODO_DEFAULT_AREAS,
-    projects: (store.projects || []).filter(function(p) { return todoListVisibleTo(p, me); }) };
-  const all = (store.todos || []).filter(function(t) { return todoVisibleTo(t, me, store.projects); });
+  // The database sends only what this login may see.
+  const ctx = { today: today, me: me, people: store.people || [], areas: store.areas || [], projects: store.projects || [] };
+  const all = store.todos || [];
   const shown = mine ? all.filter(function(t) { return todoIsFor(t, me); }) : all;
   const groups = todoGroups(shown, by, ctx);
   const openCount = shown.filter(todoIsOpen).length;
@@ -18535,12 +18575,77 @@ function TodoQuickAdd({ open, onClose, onView }) {
   );
 }
 
+// Home: the signed-in person's to-dos that are overdue or due in the next
+// seven days — theirs by name, their group's and Everyone's — tickable in
+// place. Nothing due: one quiet line, so the way in is always there. Hidden
+// entirely while the list cannot be read (before the migration, or offline).
+const TODO_HOME_MAX = 6;
+function TodoHomeCard({ onAll }) {
+  const store = useTodoStore();
+  const me = store.me;
+  const [today, setToday] = useState(londonToday());
+  const [edit, setEdit] = useState(null);
+  const [more, setMore] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(function() {
+    const t = setInterval(function() { setToday(londonToday()); todoLoad(); }, 120000);
+    return function() { clearInterval(t); };
+  }, []);
+  if (!store.todos || !me) return null;
+  const horizon = todoAddDays(today, 7);
+  const mine = store.todos.filter(function(t) {
+    if (!todoIsOpen(t) || !todoIsFor(t, me)) return false;
+    const due = todoDueOn(t);
+    return !!due && due <= horizon;
+  }).sort(todoCompare);
+  const overdue = mine.filter(function(t) { return todoTiming(t, today) === "overdue"; }).length;
+  const shown = mine.slice(0, TODO_HOME_MAX);
+  const ctx = { today: today, me: me, people: store.people || [], areas: store.areas || [], projects: store.projects || [] };
+  async function setState(todo, state, comment) {
+    setBusyId(todo.id); setErr("");
+    try { await todoSetStateDb(todo, state, comment); setMore(null); }
+    catch (e) { setErr((e && e.message) || "That did not save."); }
+    setBusyId(null);
+  }
+  return (
+    <section aria-label="To-do for you" style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+        <span style={{ fontSize: 11, letterSpacing: 1.1, textTransform: "uppercase", color: T.textMid, fontWeight: 700, whiteSpace: "nowrap" }}>To-do for you</span>
+        {overdue > 0 && <span style={{ fontSize: 10.5, fontWeight: 800, color: "#fff", background: T.red, borderRadius: 6, padding: "2px 7px", whiteSpace: "nowrap" }}>{overdue} OVERDUE</span>}
+        <button type="button" onClick={onAll}
+          style={{ marginLeft: "auto", background: "none", border: "none", color: T.midBlue, fontFamily: "inherit", fontSize: 12.5, cursor: "pointer", padding: 0, whiteSpace: "nowrap" }}>All to-dos</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 10, padding: "2px 12px 4px" }}>
+        {err && <div style={{ marginTop: 8 }}><ErrBanner text={err}/></div>}
+        {!shown.length && (
+          <div style={{ fontSize: 13.5, color: T.textLight, padding: "11px 0" }}>Nothing due for you this week.</div>
+        )}
+        {shown.map(function(t) {
+          return <TodoRow key={t.id} todo={t} today={today} ctx={ctx} busy={busyId === t.id} showWho={false} showArea showProject
+            canUntick={false} onTick={setState} onMore={setMore} onOpen={function(x) { setEdit({ todo: x }); }}/>;
+        })}
+        {mine.length > shown.length && (
+          <button type="button" onClick={onAll}
+            style={{ background: "none", border: "none", padding: "9px 0", fontFamily: "inherit", fontSize: 13, color: T.midBlue, cursor: "pointer" }}>
+            {mine.length - shown.length} more due this week
+          </button>
+        )}
+      </div>
+      {edit && <TodoEditSheet key={edit.todo ? edit.todo.id : "new"} todo={edit.todo || null} preset={edit.preset}
+        onClose={function() { setEdit(null); }}/>}
+      {more && <TodoMoreSheet todo={more} onClose={function() { setMore(null); }} onState={setState}
+        onEdit={function() { const t = more; setMore(null); setEdit({ todo: t }); }}/>}
+    </section>
+  );
+}
+
 // The sidebar's number: overdue to-dos for the person signed in.
 function useTodoOverdueForMe() {
   const store = useTodoStore();
   const today = londonToday();
   return (store.todos || []).filter(function(t) {
-    return todoIsOpen(t) && todoIsFor(t, store.me) && todoVisibleTo(t, store.me, store.projects) && todoTiming(t, today) === "overdue";
+    return todoIsOpen(t) && todoIsFor(t, store.me) && todoTiming(t, today) === "overdue";
   }).length;
 }
 
@@ -24971,6 +25076,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
           they are things somebody should be doing now. */}
       <ChecklistsHomePanel admin onOpen={function(id){ if (onOpenChecklist) onOpenChecklist(id); else setView("checklists"); }}
         onAll={function(){ setView("checklists"); }}/>
+
+      {/* The person's own to-dos due this week (6 Nov). */}
+      <TodoHomeCard onAll={function(){ setView("todo"); }}/>
 
       {/* Payment status can only come from Xero — say so rather than letting an
           empty list read as "nothing outstanding". */}
