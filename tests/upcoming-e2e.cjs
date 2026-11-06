@@ -4,12 +4,12 @@
 // Bookings gone. Built app, Supabase faked (portal-harness → openStaff), the
 // browser clock fixed so the lozenges can be checked at set moments:
 //   · tabs Upcoming | House | Calendar | Checklists, Upcoming open;
-//   · before it can be cleaned a lozenge is grey and inert, showing
-//     "≥ from" over "≤ by": a letting from its check-out day, the Grain Store
+//   · before it can be cleaned a lozenge is grey and inert, one line
+//     "Su 8 – Tu 10" (two-letter day, no month): a letting from its check-out day, the Grain Store
 //     from the day after the event, by the next check-in day (the next timed
 //     event's day; the day before an untimed diary event);
 //   · "Guests" only from the check-in TIME to the check-out time;
-//   · amber "To clean ≤ by" once it can be done; red after its last day;
+//   · amber "To clean" over "by Tu 10" once it can be done; red after its last day;
 //   · an extra clean is listed in the week of what it is for, just before it,
 //     and turns amber when it opens (a week ahead in the Grain Store);
 //   · a Note button opens the housekeeper notes in a bubble, × closes it;
@@ -101,32 +101,32 @@ const weekCard = (page, title) => page.locator('div[style*="border-radius: 10px"
       check('no Live, no Bookings', (await pg.getByRole('tab', { name: 'Live' }).count()) === 0 && (await pg.getByRole('tab', { name: 'Bookings' }).count()) === 0)
 
       const h = lozenge(rowOf(pg, 'Harrison'))
-      check('before check-in: grey dates, not Guests', (await h.innerText()).replace(/\s+/g, ' ') === '≥ 8/11 ≤ 10/11', await h.innerText())
+      check('before check-in: grey dates, not Guests', (await h.innerText()).replace(/\s+/g, ' ') === 'Su 8 – Tu 10', await h.innerText())
       check('before check-in: inert', await h.isDisabled())
       check('before check-in: says so', /^Not yet, can be cleaned from Sun 8 Nov 26 to Tue 10 Nov 26/.test(await h.getAttribute('aria-label')), await h.getAttribute('aria-label'))
 
       const party = lozenge(rowOf(pg, 'Lister · Party'))
-      check('Grain Store: from the day after, by the next timed event', (await party.innerText()).replace(/\s+/g, ' ') === '≥ 11/11 ≤ 20/11', await party.innerText())
+      check('Grain Store: from the day after, by the next timed event', (await party.innerText()).replace(/\s+/g, ' ') === 'We 11 – Fr 20', await party.innerText())
       const hardy = lozenge(rowOf(pg, 'Hardy'))
-      check('letting: same day, by the next check-in', (await hardy.innerText()).replace(/\s+/g, ' ') === '≥ 16/11 ≤ 20/11', await hardy.innerText())
+      check('letting: same day, by the next check-in', (await hardy.innerText()).replace(/\s+/g, ' ') === 'Mo 16 – Fr 20', await hardy.innerText())
       const supper = lozenge(rowOf(pg, 'Supper Club · Box office'))
-      check('untimed diary event next: by the day before', (await supper.innerText()).replace(/\s+/g, ' ') === '≥ 21/11 ≤ 29/11', await supper.innerText())
+      check('untimed diary event next: by the day before', (await supper.innerText()).replace(/\s+/g, ' ') === 'Sa 21 – Su 29', await supper.innerText())
 
       // The supper club's extra clean opens on the 13th but is listed in the
       // week of the 20th, just before the supper club.
       const wk9 = await weekCard(pg, 'Week of Mon 9 Nov 26').innerText()
       const wk16 = await weekCard(pg, 'Week of Mon 16 Nov 26').innerText()
-      check('extra clean not in the week it opens', !/Extra clean before Supper Club/.test(wk9), wk9)
-      check('extra clean in the week of its event, just before it', /Extra clean before Supper Club[\s\S]*Supper Club · Box office/.test(wk16) && !/Hardy[\s\S]*Extra clean before Supper Club[\s\S]*Lawrence/.test(wk16), wk16)
-      const ex = lozenge(rowOf(pg, 'Extra clean before Supper Club'))
-      check('extra clean: grey with its dates until it opens', (await ex.innerText()).replace(/\s+/g, ' ') === '≥ 13/11 ≤ 20/11' && await ex.isDisabled(), await ex.innerText())
-      check('signed extra clean: Ready', (await lozenge(rowOf(pg, 'Extra clean before Lister')).innerText()) === 'Ready')
+      check('extra clean not in the week it opens', !/Before Supper Club/.test(wk9), wk9)
+      check('extra clean in the week of its event, just before it', /Before Supper Club · by 16:00[\s\S]*Supper Club · Box office/.test(wk16) && !/Hardy[\s\S]*Before Supper Club[\s\S]*Lawrence/.test(wk16), wk16)
+      const ex = lozenge(rowOf(pg, 'Before Supper Club'))
+      check('extra clean: grey with its dates until it opens', (await ex.innerText()).replace(/\s+/g, ' ') === 'Fr 13 – Fr 20' && await ex.isDisabled(), await ex.innerText())
+      check('signed extra clean: Ready', (await lozenge(rowOf(pg, 'Before Lister')).innerText()) === 'Ready')
       check('no Still to sign off', (await pg.getByText('Still to sign off').count()) === 0)
 
       // Notes: a button, the text only in the bubble.
       check('note text not in the list', !/floor and toilets/.test(await pg.locator('body').innerText()))
       check('no note button where there is no note', (await rowOf(pg, 'Hardy').getByRole('button', { name: 'Show note' }).count()) === 0)
-      await rowOf(pg, 'Extra clean before Supper Club').getByRole('button', { name: 'Show note' }).click()
+      await rowOf(pg, 'Before Supper Club').getByRole('button', { name: 'Show note' }).click()
       const bubble = pg.getByRole('note')
       await bubble.waitFor({ timeout: 5000 })
       check('bubble: the note', /For Supper Club, on Fri 20 Nov 26: floor and toilets beforehand/.test(await bubble.innerText()), await bubble.innerText())
@@ -156,7 +156,7 @@ const weekCard = (page, title) => page.locator('div[style*="border-radius: 10px"
     const s = await open('2026-11-08T11:00:00Z'); const pg = s.page
     try {
       const h = lozenge(rowOf(pg, 'Harrison'))
-      check('after check-out: amber To clean, by the next check-in', (await h.innerText()).replace(/\s+/g, ' ') === 'To clean ≤ 10/11', await h.innerText())
+      check('after check-out: amber To clean, by the next check-in', (await h.innerText()).replace(/\s+/g, ' ') === 'To clean by Tu 10', await h.innerText())
       const col = await h.evaluate((b) => getComputedStyle(b).borderTopColor)
       check('amber', col === 'rgb(217, 119, 6)', col)
       const party = lozenge(rowOf(pg, 'Lister · Party'))
@@ -169,10 +169,10 @@ const weekCard = (page, title) => page.locator('div[style*="border-radius: 10px"
   {
     const s = await open('2026-11-13T09:00:00Z'); const pg = s.page
     try {
-      const ex = lozenge(rowOf(pg, 'Extra clean before Supper Club'))
-      check('extra clean opens a week ahead: amber', (await ex.innerText()).replace(/\s+/g, ' ') === 'To clean ≤ 20/11' && !(await ex.isDisabled()), await ex.innerText())
+      const ex = lozenge(rowOf(pg, 'Before Supper Club'))
+      check('extra clean opens a week ahead: amber', (await ex.innerText()).replace(/\s+/g, ' ') === 'To clean by Fr 20' && !(await ex.isDisabled()), await ex.innerText())
       const party = lozenge(rowOf(pg, 'Lister · Party'))
-      check('Grain Store the days after the event: amber', (await party.innerText()).replace(/\s+/g, ' ') === 'To clean ≤ 20/11', await party.innerText())
+      check('Grain Store the days after the event: amber', (await party.innerText()).replace(/\s+/g, ' ') === 'To clean by Fr 20', await party.innerText())
     } catch (e) { fails.push('Fri 13 run: ' + e.message) }
     await s.close()
   }
@@ -185,7 +185,7 @@ const weekCard = (page, title) => page.locator('div[style*="border-radius: 10px"
       const box = weekCard(pg, 'Still to sign off')
       const txt = await box.innerText()
       check('Still to sign off lists last week', /Harrison/.test(txt) && /Lister · Party/.test(txt), txt)
-      check('a signed one is not listed', !/Extra clean before Lister/.test(txt), txt)
+      check('a signed one is not listed', !/Before Lister/.test(txt), txt)
       const h = lozenge(rowOf(box, 'Harrison'))
       const col = await h.evaluate((b) => getComputedStyle(b).borderTopColor)
       check('past its last day: red', col === 'rgb(220, 38, 38)', col)

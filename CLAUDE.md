@@ -581,19 +581,20 @@ own header.
   cleaner screens now.
 - **Upcoming's lozenge** (6 Nov, Toby — `upcomingCleanInfo`,
   `UpcomingCleanButton`; the rest of the app still uses `changeoverMeta`):
-  grey and inert until the clean can be done, reading "≥ 16/11" over
-  "≤ 20/11" — from: a letting's check-out day (same-day cleans), the Grain
+  grey and inert until the clean can be done, one line "Mo 16 – Fr 20"
+  (two-letter day, no month — Toby; one-day window "Fr 20", nobody after
+  "from Su 22") — from: a letting's check-out day (same-day cleans), the Grain
   Store the day AFTER the event, an extra clean the day it opens; by: the next
   check-in day, the next timed Grain Store event's day, the day before an
   untimed diary event, an extra clean's own day. "Guests" (info colours) only
   from the check-in TIME to the check-out time (`window.guests`), so a
-  morning-of-arrival view is still grey. Amber "To clean ≤ by" once it can
+  morning-of-arrival view is still grey. Amber "To clean" over "by Fr 20" once it can
   be done — **amber means it can be cleaned now**; red once `by` has passed;
   green Ready. The clock is re-read every minute. An extra clean is listed in
   the week of what it is for, just before it (`forDay`, `changeoverWeekOf`),
   not the week it opens. Unsigned cleans from earlier weeks are listed at the
   top under **Still to sign off** (Live used to hold them). Housekeeper notes
-  are behind a red **Note** button per row (`UpcomingNoteToggle` /
+  are behind a small red speech-bubble button per row (no word — Toby) (`UpcomingNoteToggle` /
   `UpcomingNoteBubble`, one open at a time): "Note on this let/event" =
   `job.prevNote`, "For the next let/event" = `job.note`.
   State is worked out from dates;

@@ -2813,7 +2813,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-06a";
+const APP_BUILD = "2026-11-06b";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -9992,8 +9992,11 @@ function upcomingCleanInfo(x, job, rec, nowIso) {
   if (state === "due" && by && today > by) state = "late";
   return { state: state, from: from, by: by };
 }
-function dayMonth(iso) {
-  return iso ? Number(iso.slice(8, 10)) + "/" + Number(iso.slice(5, 7)) : "";
+// "Su 8": two-letter day and the date, no month (6 Nov, Toby: you know
+// which month a week is in).
+const DAY2 = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+function dayShort2(iso) {
+  return iso ? DAY2[new Date(iso + "T00:00:00Z").getUTCDay()] + " " + Number(iso.slice(8, 10)) : "";
 }
 function upcomingCleanMeta(state) {
   if (state === "done")  return { label: "Ready",    bg: T.greenBg, fg: T.green,    bd: T.green };
@@ -10007,11 +10010,15 @@ function UpcomingCleanButton({ x, job, rec, nowIso, onOpen }) {
   if (!info) return null;
   const m = upcomingCleanMeta(info.state);
   const live = info.state !== "upcoming";
-  const fromTxt = "≥ " + dayMonth(info.from), byTxt = info.by ? "≤ " + dayMonth(info.by) : "";
+  // Grey: one line, "Su 8 – Tu 10" (a one-day window is just "Fr 20"; with
+  // nobody after, "from Su 22"). Amber / red: "To clean" over "by Tu 10".
   let top = m.label, sub = "";
-  // A one-day window (a letting's extra clean) is just the date.
-  if (info.state === "upcoming") { top = info.by === info.from ? dayMonth(info.from) : fromTxt; sub = info.by === info.from ? "" : byTxt; }
-  else if (info.state === "due" || info.state === "late") sub = byTxt;
+  if (info.state === "upcoming") {
+    top = !info.by ? "from " + dayShort2(info.from)
+      : info.by === info.from ? dayShort2(info.from)
+      : dayShort2(info.from) + " – " + dayShort2(info.by);
+  }
+  else if ((info.state === "due" || info.state === "late") && info.by) sub = "by " + dayShort2(info.by);
   const words = "can be cleaned from " + fmtDayShort(info.from) + (info.by ? " to " + fmtDayShort(info.by) : "");
   return (
     <button type="button" disabled={!live}
@@ -10023,7 +10030,7 @@ function UpcomingCleanButton({ x, job, rec, nowIso, onOpen }) {
         : "Tap when it is cleaned and ready (" + words + ")"}
       style={{ background: m.bg, color: m.fg, border: "1.5px solid " + m.bd, borderRadius: 8,
         padding: sub ? "3px 10px" : "5px 12px", fontFamily: "inherit", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap",
-        lineHeight: 1.2, cursor: live ? "pointer" : "default", flexShrink: 0, minWidth: 80, textAlign: "center" }}>
+        lineHeight: 1.2, cursor: live ? "pointer" : "default", flexShrink: 0, minWidth: 104, textAlign: "center" }}>
       <div>{top}</div>
       {sub && <div style={{ fontSize: 11, fontWeight: 700 }}>{sub}</div>}
     </button>
@@ -10037,13 +10044,13 @@ function UpcomingNoteToggle({ open, onToggle }) {
     <button type="button" onClick={function(e) { e.stopPropagation(); onToggle(); }} aria-expanded={open}
       aria-label={open ? "Hide note" : "Show note"} title="Note from the office"
       style={{ background: open ? T.red : T.redBg, color: open ? "#fff" : T.red, border: "1.5px solid " + T.red,
-        borderRadius: 14, padding: "3px 8px", fontFamily: "inherit", fontSize: 11, fontWeight: 800,
-        cursor: "pointer", flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6"
+        borderRadius: 14, width: 30, height: 26, padding: 0, fontFamily: "inherit",
+        cursor: "pointer", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+      {/* Just the speech bubble (6 Nov, Toby) — the word made the row too tight. */}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6"
         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
       </svg>
-      Note
     </button>
   );
 }
@@ -10055,7 +10062,7 @@ function UpcomingNoteBubble({ job, onClose }) {
   return (
     <div role="note" style={{ position: "relative", margin: "2px 0 8px", background: T.redBg, border: "1.5px solid " + T.red,
       borderRadius: 10, padding: "8px 30px 8px 10px", fontSize: 12.5, color: T.text, lineHeight: 1.45 }}>
-      <span aria-hidden="true" style={{ position: "absolute", top: -7, right: 112, width: 12, height: 12, background: T.redBg,
+      <span aria-hidden="true" style={{ position: "absolute", top: -7, right: 121, width: 12, height: 12, background: T.redBg,
         borderLeft: "1.5px solid " + T.red, borderTop: "1.5px solid " + T.red, transform: "rotate(45deg)" }}/>
       <button type="button" onClick={onClose} aria-label="Close note"
         style={{ position: "absolute", top: 4, right: 6, background: "none", border: "none", color: T.red,
@@ -10109,10 +10116,12 @@ function CleanerUpcoming({ properties, accom, events, boxEvents, setups, jobs, r
             <div style={{ fontSize:13.5, fontWeight:700, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
               {x.unitShort}
               {x.setup && <span style={{ fontSize:10.5, fontWeight:800, color:T.midBlue, background:T.tint, borderRadius:6, padding:"1px 6px", marginLeft:6 }}>Extra clean</span>}
-              <span style={{ fontWeight:700, color:T.accent, marginLeft:8 }}>{x.occ}</span>
+              {/* An extra clean's dates are in its lozenge; its ready-by time
+                  goes on the line below, where there is room on a phone. */}
+              {!x.setup && <span style={{ fontWeight:700, color:T.accent, marginLeft:8 }}>{x.occ}</span>}
             </div>
             <div style={{ fontSize:11.5, color:T.textMid, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-              {x.setup ? "Extra clean before " + x.inWho : x.outWho}
+              {x.setup ? "Before " + x.inWho + (job && job.readyBy ? " · by " + job.readyBy : "") : x.outWho}
             </div>
           </div>
           {hasNote && <UpcomingNoteToggle open={open} onToggle={function(){ setNoteOpen(open ? null : key); }}/>}
