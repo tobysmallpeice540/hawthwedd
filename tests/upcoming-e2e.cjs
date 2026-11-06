@@ -96,7 +96,7 @@ const weekCard = (page, title) => page.locator('div[style*="border-radius: 10px"
     const s = await open('2026-11-06T05:30:00Z'); const pg = s.page
     try {
       const tabs = await pg.getByRole('tab').allInnerTexts()
-      check('tabs', tabs.join('|') === 'Upcoming|House|Calendar|Checklists', tabs.join('|'))
+      check('tabs', tabs.join('|') === 'Upcoming|House|Calendar|Checklists|To-do', tabs.join('|'))
       check('Upcoming open', (await pg.getByRole('tab', { name: 'Upcoming', exact: true }).getAttribute('aria-selected')) === 'true')
       check('no Live, no Bookings', (await pg.getByRole('tab', { name: 'Live' }).count()) === 0 && (await pg.getByRole('tab', { name: 'Bookings' }).count()) === 0)
 

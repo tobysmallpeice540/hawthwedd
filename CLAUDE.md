@@ -1246,6 +1246,40 @@ own header.
   the three functions faked at fetch), `tests/contracts-e2e.cjs` (portal
   signing, Contract tab, Settings → Contracts, .docx import).
 
+### To-do list (6 Nov 2026)
+
+- **Longer-term jobs, separate from checklists.** View `todo` (sidebar after
+  Checklists, with a count of the signed-in person's overdue ones), and a
+  **To-do** tab on the bar and housekeeping logins. **"+ To-do"** sits in the
+  top bar on every office page (`TodoQuickAdd`, both layouts). The rules are
+  pure in `src/shared/todos.js` (pinned by `tests/todos-test.cjs`); the screens
+  by `tests/todos-e2e.cjs` (office desktop + phone, and the housekeeping login).
+- `app_data` `hbf_todos_v1` (array by id), `hbf_todo_areas_v1` (standard areas
+  written on first open, fixed ids), `hbf_todo_projects_v1`. All three live in
+  one module store (`todoStore`, `useTodoStore`); every write is
+  `todoSaveList` → `saveArrayMerged` over a fresh read. No SQL.
+- **Priority is a scope counted from `setOn`** (1 day / 7 days / 1 month = 28
+  days / Eventually); changing it restarts the count. An optional `deadline`
+  wins when earlier (`todoDueOn`). Overdue only once the due day has passed;
+  "by priority" puts every overdue one in an Overdue group first.
+- `who`: the checklists' values (`person:<id>`, `role:admin|bar|cleaner`,
+  `anyone` = Everyone), people from `chk_people`; `whoLabel` is a snapshot.
+  States: open / done / note (done with a comment) / na. Untick: whoever
+  ticked, or an admin. The bar and housekeeping logins see what is for their
+  group or Everyone, plus what they wrote, and can change only what they
+  wrote (the sheet is a disabled fieldset otherwise).
+- **Private** (Toby): a to-do with `private` is shown only to its writer and,
+  if it is for a named person, that person; a project with `private` +
+  `ownerId` — and every to-do in it — only to its owner (`todoVisibleTo`,
+  `todoListVisibleTo`). **This is hiding, not security**: the lists are
+  `app_data` rows any staff login can read through the API, and photos sit
+  in `booking-files` like every other file. Real privacy needs a table behind
+  `SECURITY DEFINER` functions, like checklists.
+- Photos: shrunk to 1600px JPEG in the browser (`todoShrinkImage`), stored at
+  `booking-files/todos/<todo id>/<random>.<ext>`, up to 6. Removed ones are
+  deleted only after the to-do saves; Cancel on the sheet deletes what it
+  uploaded. Areas and projects in use can be hidden/archived, never deleted.
+
 ## Working in this folder from a Claude session
 
 The repo is reached through a mount that does not allow deletion, and two

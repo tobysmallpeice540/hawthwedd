@@ -14,6 +14,8 @@ import ContractDocument from "./shared/ContractDocument.jsx";
 import { parseContractTemplate, resolveContractNodes, contractAccommodation, contractTitle, contractKindOf, contractValuesForReview,
   htmlToContractMarkup, CONTRACT_FIELDS, CONTRACT_KINDS, CONTRACT_SYNTAX_HELP } from "./shared/contractDoc.js";
 import { DEFAULT_CONTRACT_TEMPLATE } from "./shared/contractTemplate.js";
+import { TODO_DEFAULT_AREAS, TODO_PRIORITY_ORDER, TODO_PRIORITY_LABEL, todoAddDays, todoDueOn, todoTiming, todoIsOpen, todoIsFor,
+  todoVisibleTo, todoListVisibleTo, todoGroups, todoRecentlyDone, todoSlug, todoUses } from "./shared/todos.js";
 import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
@@ -736,6 +738,7 @@ const NAV_ICON_PATHS = {
   close:     ["M6 6l12 12", "M18 6 6 18"],
   back:      ["M14.5 6 8.5 12l6 6"],
   housekeeping: ["M5 9.5h14l-1.6 10.5H6.6z", "M8 9.5V7a4 4 0 0 1 8 0v2.5"],
+  todo:      ["M4.5 4.5h15v15h-15z", "m8.2 12.2 2.6 2.6 5-5.6"],
   checklists: ["M9.5 6.5h10", "M9.5 12h10", "M9.5 17.5h10", "m3.8 6.4 1.4 1.4 2.4-2.6", "m3.8 11.9 1.4 1.4 2.4-2.6", "M4 17.5h3"],
 };
 function NavIcon({ name, size }) {
@@ -931,6 +934,8 @@ function NewUiStyles() {
       .hb-conn[data-on="true"] .hb-conn-dot { background:${T.green}; box-shadow:0 0 0 3px rgba(22,163,74,.15); }
       .hb-conn[data-on="false"] { color:${T.text}; border-style:dashed; }
       .hb-top-new { display:none; }
+      .hb-top-todo { display:inline-flex; align-items:center; padding:6px 12px; border-radius:999px; border:1px solid ${T.accent}; background:#fff;
+        color:${T.accent}; font:inherit; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
       .hb-content { width:100%; max-width:1600px; box-sizing:border-box; padding:30px 32px 72px; }
       /* The page area is narrower than it was under a top menu, so a wide table
          in a rounded card would lose its last columns to the card's clipping.
@@ -960,6 +965,7 @@ function NewUiStyles() {
         .hb-top-logo { display:block; height:34px; width:auto; border-radius:3px; }
         .hb-crumbs { display:none; }
         .hb-conn { display:none; }
+        .hb-top-todo { padding:8px 11px; border-radius:8px; font-size:13.5px; }
         .hb-top-new { display:inline-flex; align-items:center; padding:8px 13px; border:0; border-radius:8px; background:${T.accent}; color:#fff; font:inherit; font-size:13.5px; font-weight:600; cursor:pointer; }
         .hb-content { padding:18px 12px 60px; }
       }
@@ -2813,7 +2819,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-06b";
+const APP_BUILD = "2026-11-06c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -10735,7 +10741,7 @@ function CleanerView({ isAdmin }) {
 
   // Toby, 6 Nov: Upcoming where Live was; Live and Bookings taken out — the
   // three showed the same cleans. (4 Nov: House second, Checklists last.)
-  const tabs = [["upcoming","Upcoming"],["house","House"],["calendar","Calendar"],["checklists","Checklists"]];
+  const tabs = [["upcoming","Upcoming"],["house","House"],["calendar","Calendar"],["checklists","Checklists"],["todo","To-do"]];
 
   if (!loaded) return <div style={{ padding:"40px", textAlign:"center", color:T.textLight }}>Loading…</div>;
 
@@ -10747,6 +10753,9 @@ function CleanerView({ isAdmin }) {
         <div style={{ marginTop:14 }}>
           <ChecklistsPage role={isAdmin ? "admin" : "cleaner"} compact focusRunId={chkFocus} clearFocus={function(){ setChkFocus(null); }}/>
         </div>
+      )}
+      {tab === "todo" && (
+        <div style={{ marginTop:14 }}><TodoPage compact/></div>
       )}
       {tab === "upcoming" && boxErr && (
         <div style={{ marginTop:10, fontSize:12.5, color:T.red }}>Box office events could not be loaded just now — ticketed events may be missing.</div>
@@ -11436,6 +11445,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [staleBuild, setStaleBuild]           = useState(null);   // newer build seen
   const [barSection, setBarSection] = useState("bar");
   const [appHelpOpen, setAppHelpOpen] = useState(false);   // housekeeping: put the app on the phone
+  const [todoAddOpen, setTodoAddOpen] = useState(false);   // "+ To-do" from any page
   const barOnly     = role === "bar";
   const cleanerOnly = role === "cleaner";
   // Housekeeper's view (28 Oct): an admin looking at exactly what the
@@ -12353,7 +12363,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
     // the box office — box-admin.js allows a bar session the door actions only,
     // so the order list, buyer details and takings stay out of reach whatever
     // this screen tries to ask for.
-    const barTabs = [["bar","Bar Management"],["door","Ticket Check-in"],["checklists","Checklists"]];
+    const barTabs = [["bar","Bar Management"],["door","Ticket Check-in"],["checklists","Checklists"],["todo","To-do"]];
     return (
       <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:T.fontUi }}>
         <MobileGlobalStyles/>
@@ -12443,6 +12453,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
           )}
           {barOnly && barSection === "bar"  && <BarView/>}
           {barOnly && barSection === "door" && <BoxDoorScreen/>}
+          {barOnly && barSection === "todo" && (
+            <div style={{ marginTop:14 }}><TodoPage compact/></div>
+          )}
           {barOnly && barSection === "checklists" && (
             <div style={{ marginTop:14 }}>
               <ChecklistsPage role="bar" compact focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}/>
@@ -12492,6 +12505,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
         {view==="checklists" && <ChecklistsPage role="admin" focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}
           onOpenLink={openChecklistLink} onSettings={function(){ setView("chkSettings"); }}/>}
         {view==="chkSettings" && <ChecklistSettings onOpenRun={goToChecklist}/>}
+        {view==="todo" && <TodoPage/>}
         {view==="whatsapp" && <WhatsAppPage/>}
         {view==="contracts" && <ContractSettingsPage/>}
         {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
@@ -12574,8 +12588,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
         <MobileGlobalStyles/>
         <AppThemeStyles/>
         {shellBanners}
-        <Header view={view} setView={setView} onNew={handleNew} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
+        <Header view={view} setView={setView} onNew={handleNew} onNewTodo={function(){ setTodoAddOpen(true); }} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
         {pageArea}
+        <TodoQuickAdd open={todoAddOpen} onClose={function(){ setTodoAddOpen(false); }} onView={view === "todo" ? null : function(){ setView("todo"); }}/>
         {/* The way back to the sidebar layout, at the foot of every page. Not in
             the old top bar, which is already full at laptop width, and not
             floating, where it would sit over the bar's sticky Save button. */}
@@ -12594,11 +12609,12 @@ export default function App({ role = "admin", onSignOut } = {}) {
       onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}
       invoiceDueCount={invoiceDueCount}
       pendingViewings={(viewingRequests||[]).filter(function(r){ return r.status==="pending"; }).length}
-      onNew={handleNew} onSignOut={onSignOut} onBack={goBack} canGoBack={viewHistory.length > 0}
+      onNew={handleNew} onNewTodo={function(){ setTodoAddOpen(true); }} onSignOut={onSignOut} onBack={goBack} canGoBack={viewHistory.length > 0}
       xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect}
       gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect}>
       {shellBanners}
       {pageArea}
+      <TodoQuickAdd open={todoAddOpen} onClose={function(){ setTodoAddOpen(false); }} onView={view === "todo" ? null : function(){ setView("todo"); }}/>
     </SidebarLayout>
   );
 }
@@ -17718,6 +17734,816 @@ function PhoneAppPanel() {
   );
 }
 
+// ─── TO-DO LIST (6 Nov 2026) ─────────────────────────────────────────────────
+// Longer-term jobs than checklists: each has a heading, an optional
+// description and photos, who it is for (a person, a group or Everyone), an
+// area (editable list), a project (editable list) and a priority that is a
+// scope counted from the day it was set — 1 day, 7 days, 1 month or
+// Eventually — with an optional deadline. Ticked like a checklist item: Done,
+// Done with a comment, or Not applicable. The rules are in src/shared/todos.js.
+//
+// Stored in app_data, saved by id through saveArrayMerged (a fresh read, only
+// this screen's difference applied), so two phones never undo each other:
+//   hbf_todos_v1, hbf_todo_areas_v1, hbf_todo_projects_v1.
+// Photos go to booking-files/todos/<todo id>/<random>.jpg, shrunk on the
+// phone first.
+//
+// One small module store holds all three lists, so the To-do page, the
+// sidebar's count and the "+ To-do" button on every page agree.
+const TODO_KEY = "hbf_todos_v1";
+const TODO_AREAS_KEY = "hbf_todo_areas_v1";
+const TODO_PROJECTS_KEY = "hbf_todo_projects_v1";
+const TODO_MAX_PHOTOS = 6;
+
+const todoStore = { todos: null, areas: null, projects: null, people: null, me: null, err: "", loadedAt: 0 };
+const todoSubs = new Set();
+let todoLoading = null;
+function todoNotify() { todoSubs.forEach(function(f) { f(); }); }
+function todoPatch(p) { Object.assign(todoStore, p); todoNotify(); }
+
+// Reads all three lists strictly — a failed read shows an error and leaves
+// what was on screen, never an empty list that a save could then write back.
+function todoLoad() {
+  if (todoLoading) return todoLoading;
+  todoLoading = (async function() {
+    try {
+      const got = await Promise.all([sbGetStrict(TODO_KEY), sbGetStrict(TODO_AREAS_KEY), sbGetStrict(TODO_PROJECTS_KEY)]);
+      if (got[0] != null && !Array.isArray(got[0])) throw new Error("The to-do list is not in the expected shape.");
+      let areas = Array.isArray(got[1]) ? got[1] : null;
+      // The first time anybody opens it, the standard areas are written.
+      // Their ids are fixed, so two first opens at once agree.
+      if (!areas) {
+        try { areas = await saveArrayMerged(TODO_AREAS_KEY, [], TODO_DEFAULT_AREAS); }
+        catch (e) { areas = null; }
+      }
+      todoPatch({ todos: got[0] || [], areas: areas, projects: Array.isArray(got[2]) ? got[2] : [], err: "", loadedAt: Date.now() });
+    } catch (e) {
+      todoPatch({ err: (e && e.message) || "The to-do list could not be read." });
+    }
+    if (!todoStore.me) {
+      try { const me = await sbRpcQuiet("my_profile"); if (me && me.id) todoPatch({ me: me }); } catch (e) {}
+    }
+    if (!todoStore.people) {
+      try {
+        const r = await sbRpcQuiet("chk_people", {});
+        const people = (r.people || []).map(function(p) { return p.who === "anyone" ? { who: "anyone", label: "Everyone" } : p; });
+        todoPatch({ people: people });
+      } catch (e) {
+        todoPatch({ people: [{ who: "role:admin", label: "Office" }, { who: "role:bar", label: "Bar" },
+          { who: "role:cleaner", label: "Housekeeping" }, { who: "anyone", label: "Everyone" }] });
+      }
+    }
+  })();
+  const p = todoLoading;
+  p.then(function() { if (todoLoading === p) todoLoading = null; });
+  return p;
+}
+
+function useTodoStore(autoLoad) {
+  const [, force] = useState(0);
+  useEffect(function() {
+    function f() { force(function(n) { return n + 1; }); }
+    todoSubs.add(f);
+    if (autoLoad !== false && (!todoStore.todos || Date.now() - todoStore.loadedAt > 60000)) todoLoad();
+    return function() { todoSubs.delete(f); };
+  }, []);
+  return todoStore;
+}
+
+// Show the change at once, save only the difference over a fresh read, then
+// show what the server holds. A failed save puts the screen back and throws.
+async function todoSaveList(field, key, updater) {
+  if (!todoStore[field]) throw new Error("The list has not loaded yet, so nothing was saved. Try again in a moment.");
+  const before = todoStore[field];
+  const next = updater(before);
+  const p = {}; p[field] = next; todoPatch(p);
+  try {
+    const merged = await saveArrayMerged(key, before, next);
+    if (todoStore[field] === next) { const q = {}; q[field] = merged; todoPatch(q); }
+    return merged;
+  } catch (e) {
+    if (todoStore[field] === next) { const q = {}; q[field] = before; todoPatch(q); }
+    throw e;
+  }
+}
+function todoSaveTodos(updater) { return todoSaveList("todos", TODO_KEY, updater); }
+function todoUpdate(id, fields) {
+  return todoSaveTodos(function(list) {
+    return list.map(function(t) { return t.id === id ? Object.assign({}, t, fields, { updatedAt: new Date().toISOString() }) : t; });
+  });
+}
+// Areas: if the standard ones never got written, write them first, or an
+// edit to one of them would be read as a change to something not there.
+async function todoSaveAreas(updater) {
+  if (!todoStore.areas) {
+    const seeded = await saveArrayMerged(TODO_AREAS_KEY, [], TODO_DEFAULT_AREAS);
+    todoPatch({ areas: seeded });
+  }
+  return todoSaveList("areas", TODO_AREAS_KEY, updater);
+}
+function todoSaveProjects(updater) { return todoSaveList("projects", TODO_PROJECTS_KEY, updater); }
+
+function todoRandomId() {
+  try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch (e) {}
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+function todoMeLabel(me) {
+  if (!me) return "";
+  return me.name || (me.role === "bar" ? "Bar" : me.role === "cleaner" ? "Housekeeping" : me.email || "");
+}
+function todoWhoLabel(who, people, fallback) {
+  if (!who || who === "anyone") return "Everyone";
+  const p = (people || []).filter(function(x) { return x.who === who; })[0];
+  return p ? p.label : (fallback || "Someone no longer listed");
+}
+function todoNameOf(list, id) {
+  const x = (list || []).filter(function(a) { return a.id === id; })[0];
+  return x ? x.name : "";
+}
+// "Fr 13 Nov" — two-letter day, as on housekeeping.
+function todoDay(iso) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "";
+  const d = new Date(iso.slice(0, 10) + "T00:00:00Z");
+  return ["Su","Mo","Tu","We","Th","Fr","Sa"][d.getUTCDay()] + " " + d.getUTCDate() + " " +
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()];
+}
+function todoDueText(t, today) {
+  const due = todoDueOn(t);
+  if (!due) return "";
+  const timing = todoTiming(t, today);
+  if (timing === "overdue") return "Overdue, was due " + todoDay(due);
+  if (timing === "today") return "Due today";
+  if (due === todoAddDays(today, 1)) return "Due tomorrow";
+  return "By " + todoDay(due);
+}
+function todoPriorityStyle(p) {
+  if (p === "day") return { color: T.red, background: T.redBg };
+  if (p === "week") return { color: T.amber, background: T.amberBg };
+  if (p === "month") return { color: T.infoText, background: T.infoBg };
+  return { color: T.textMid, background: T.bgInput };
+}
+function todoCanEdit(t, me) {
+  if (!me) return false;
+  return me.role === "admin" || (!!me.id && t.createdById === me.id);
+}
+
+// Phone photos are several megabytes; 1600px across is plenty to see a
+// broken hinge. Anything the browser cannot decode goes up as it is.
+async function todoShrinkImage(file) {
+  if (!file || !/^image\//.test(file.type || "") || file.type === "image/gif") return file;
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    if (s === 1 && file.size < 1500000) return file;
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise(function(res) { c.toBlob(res, "image/jpeg", 0.82); });
+    return blob || file;
+  } catch (e) { return file; }
+}
+
+// A photo from the private bucket: fetched with the session and shown from a
+// blob. Kept for the page's life so scrolling does not fetch it again.
+const TODO_IMG_CACHE = {};
+function TodoPhoto({ path, size, onOpen }) {
+  const [url, setUrl] = useState(TODO_IMG_CACHE[path] || "");
+  const [bad, setBad] = useState(false);
+  useEffect(function() {
+    if (TODO_IMG_CACHE[path]) { setUrl(TODO_IMG_CACHE[path]); return; }
+    let gone = false;
+    fetch(storageUrl(path), { headers: sbAuthHeaders() })
+      .then(function(r) { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
+      .then(function(b) { const u = URL.createObjectURL(b); TODO_IMG_CACHE[path] = u; if (!gone) setUrl(u); })
+      .catch(function() { if (!gone) setBad(true); });
+    return function() { gone = true; };
+  }, [path]);
+  const box = { width: size, height: size, borderRadius: 8, border: `1px solid ${T.border}`, background: T.bgInput,
+    objectFit: "cover", display: "block", flexShrink: 0 };
+  if (bad) return <div style={Object.assign({}, box, { display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: T.textLight })}>No photo</div>;
+  if (!url) return <div style={box}/>;
+  return <img src={url} alt="" style={Object.assign({}, box, { cursor: onOpen ? "zoom-in" : "default" })}
+    onClick={onOpen ? function() { onOpen(url); } : undefined}/>;
+}
+function TodoPhotoViewer({ url, onClose }) {
+  return (
+    <div onClick={onClose} role="dialog" aria-modal="true" aria-label="Photo"
+      style={{ position: "fixed", inset: 0, background: "rgba(10,14,12,.88)", zIndex: 2100, display: "flex",
+        alignItems: "center", justifyContent: "center", padding: 12 }}>
+      <img src={url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 6 }}/>
+    </div>
+  );
+}
+
+// A row of big, tappable choices — priority and who.
+function TodoChips({ options, value, onChange, label }) {
+  return (
+    <div role="radiogroup" aria-label={label} style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+      {options.map(function(o) {
+        const on = value === o.value;
+        const c = o.style || null;
+        return (
+          <button key={o.value} type="button" role="radio" aria-checked={on ? "true" : "false"}
+            onClick={function() { onChange(o.value); }}
+            style={{ border: `1.5px solid ${on ? (c ? c.color : T.accent) : T.border}`,
+              background: on ? (c ? c.background : T.accentLight) : "#fff",
+              color: on && c ? c.color : T.text, fontWeight: on ? 700 : 500,
+              borderRadius: 18, padding: "8px 13px", fontFamily: "inherit", fontSize: 14, cursor: "pointer" }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const todoLabelCss = { display: "block", fontSize: 12, fontWeight: 600, color: T.textMid, margin: "14px 0 6px" };
+
+// Add or change a to-do. A sheet from the bottom on a phone. `preset` fills
+// the fields of a new one (from a group's own + button).
+function TodoEditSheet({ todo, preset, onClose, onSaved }) {
+  const store = useTodoStore();
+  const me = store.me;
+  const isNew = !todo;
+  const [d, setD] = useState(function() {
+    if (todo) return Object.assign({}, todo, { photos: (todo.photos || []).slice() });
+    const office = me && me.role === "admin";
+    return Object.assign({
+      id: "td_" + todoRandomId(), title: "", detail: "",
+      who: office && me.id ? "person:" + me.id : (me ? "role:admin" : "anyone"),
+      area: "", project: "", priority: "week", deadline: "", photos: [], state: "open", private: false,
+    }, preset || {});
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [uploading, setUploading] = useState(0);
+  const [askDelete, setAskDelete] = useState(false);
+  const [viewer, setViewer] = useState(null);
+  const uploadedRef = useRef([]);     // photos put up in this sheet, removed again on Cancel
+  const fileRef = useRef(null);
+  const titleRef = useRef(null);
+  useEffect(function() { if (isNew && titleRef.current) titleRef.current.focus(); }, []);
+
+  const office = !!me && me.role === "admin";
+  // The bar and housekeeping logins can tick anything they can see, but
+  // change only what they wrote themselves.
+  const canEdit = isNew || todoCanEdit(todo, me);
+  const people = store.people || [];
+  const areas = (store.areas || TODO_DEFAULT_AREAS).filter(function(a) { return !a.hidden || a.id === d.area; });
+  const projects = (store.projects || []).filter(function(p) { return todoListVisibleTo(p, me) && (!p.hidden || p.id === d.project); });
+  const inPrivateProject = !!d.project && (store.projects || []).some(function(p) { return p.id === d.project && p.private; });
+  function set(k, v) { setD(function(x) { const y = Object.assign({}, x); y[k] = v; return y; }); }
+
+  async function addPhotos(files) {
+    const list = Array.prototype.slice.call(files || []).slice(0, TODO_MAX_PHOTOS - d.photos.length);
+    if (!list.length) return;
+    setErr(""); setUploading(function(n) { return n + list.length; });
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      try {
+        const small = await todoShrinkImage(f);
+        const ext = small.type === "image/jpeg" ? "jpg" : (String(f.name || "").split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || "jpg";
+        const path = "todos/" + d.id + "/" + todoRandomId() + "." + ext;
+        await sbUploadFile(path, small);
+        uploadedRef.current.push(path);
+        setD(function(x) { return Object.assign({}, x, { photos: x.photos.concat([{ path: path, name: f.name || "photo" }]) }); });
+      } catch (e) { setErr("A photo did not upload (" + ((e && e.message) || "error").slice(0, 120) + ")."); }
+      setUploading(function(n) { return n - 1; });
+    }
+  }
+  function removePhoto(path) {
+    setD(function(x) { return Object.assign({}, x, { photos: x.photos.filter(function(p) { return p.path !== path; }) }); });
+  }
+  function cancel() {
+    // Photos put up in this sheet and not kept are taken down again.
+    uploadedRef.current.forEach(function(p) { sbDeleteFile(p).catch(function() {}); });
+    onClose();
+  }
+  async function newListItem(kind) {
+    const name = (window.prompt(kind === "area" ? "Name of the new area" : "Name of the new project") || "").trim();
+    if (!name) return;
+    setErr("");
+    try {
+      let id = null;
+      // A project made from a private to-do starts private too.
+      const make = function(list) {
+        id = todoSlug(name, list);
+        const rec = { id: id, name: name, createdAt: new Date().toISOString(), ownerId: (me && me.id) || null };
+        if (kind === "project" && d.private) rec.private = true;
+        return list.concat([rec]);
+      };
+      if (kind === "area") await todoSaveAreas(make); else await todoSaveProjects(make);
+      set(kind, id);
+    } catch (e) { setErr((e && e.message) || "That did not save."); }
+  }
+  async function save() {
+    const title = String(d.title || "").trim();
+    if (!title) { setErr("Give it a heading."); if (titleRef.current) titleRef.current.focus(); return; }
+    if (uploading) { setErr("Wait for the photos to finish."); return; }
+    setBusy(true); setErr("");
+    const now = new Date().toISOString();
+    const priorityChanged = !todo || todo.priority !== d.priority;
+    const rec = Object.assign({}, d, {
+      title: title, detail: String(d.detail || "").trim(),
+      whoLabel: todoWhoLabel(d.who, people, todo && todo.whoLabel),
+      area: d.area || null, project: d.project || null, deadline: d.deadline || null, private: !!d.private,
+      setOn: priorityChanged ? londonToday() : (todo.setOn || londonToday()),
+      updatedAt: now,
+    });
+    if (isNew) Object.assign(rec, { createdAt: now, createdBy: todoMeLabel(me), createdById: (me && me.id) || null, state: "open" });
+    try {
+      await todoSaveTodos(function(list) {
+        return isNew ? list.concat([rec]) : list.map(function(t) { return t.id === rec.id ? Object.assign({}, t, rec) : t; });
+      });
+      // Photos that were on it and are not now: take them down after the save.
+      if (todo) {
+        const keep = {}; rec.photos.forEach(function(p) { keep[p.path] = true; });
+        (todo.photos || []).forEach(function(p) { if (!keep[p.path]) sbDeleteFile(p.path).catch(function() {}); });
+      }
+      uploadedRef.current = [];
+      setBusy(false);
+      if (onSaved) onSaved(rec, isNew);
+      onClose();
+    } catch (e) { setBusy(false); setErr((e && e.message) || "That did not save."); }
+  }
+  async function del() {
+    setBusy(true); setErr("");
+    try {
+      await todoSaveTodos(function(list) { return list.filter(function(t) { return t.id !== todo.id; }); });
+      (todo.photos || []).concat(d.photos).forEach(function(p) { sbDeleteFile(p.path).catch(function() {}); });
+      setBusy(false); onClose();
+    } catch (e) { setBusy(false); setErr((e && e.message) || "That did not delete."); }
+  }
+
+  const whoOptions = people.map(function(p) { return { value: p.who, label: me && p.who === "person:" + me.id ? p.label + " (me)" : p.label }; });
+  if (d.who && !whoOptions.some(function(o) { return o.value === d.who; })) whoOptions.push({ value: d.who, label: d.whoLabel || "Someone no longer listed" });
+  const prOptions = TODO_PRIORITY_ORDER.map(function(p) { return { value: p, label: TODO_PRIORITY_LABEL[p], style: todoPriorityStyle(p) }; });
+  const due = todoDueOn(Object.assign({}, d, { setOn: !todo || todo.priority !== d.priority ? londonToday() : todo.setOn }));
+  const big = { padding: "13px 14px", borderRadius: 10, fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer" };
+
+  return (
+    <ChecklistSheetFrame onClose={cancel}>
+      <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1, fontSize: 17, fontWeight: 700, color: T.text }}>{isNew ? "New to-do" : "To-do"}</div>
+        <button type="button" onClick={cancel} aria-label="Close"
+          style={{ background: "none", border: "none", fontSize: 26, lineHeight: 1, color: T.textLight, cursor: "pointer", padding: "0 4px", fontFamily: "inherit" }}>&times;</button>
+      </div>
+      {err && <div style={{ marginTop: 10 }}><ErrBanner text={err}/></div>}
+      {!canEdit && <div style={{ fontSize: 12.5, color: T.textMid, marginTop: 8 }}>Only the office, or whoever added it, can change this. Tick it or use More on the list.</div>}
+
+      <fieldset disabled={!canEdit} style={{ border: "none", margin: 0, padding: 0, minWidth: 0 }}>
+      <label style={todoLabelCss} htmlFor="todo-title">Heading</label>
+      <input id="todo-title" ref={titleRef} value={d.title} maxLength={140} placeholder="e.g. Fix the latch on the wood store door"
+        onChange={function(e) { set("title", e.target.value); }}
+        style={Object.assign({}, inputCss, { fontSize: 16, padding: "11px 12px" })}/>
+
+      <label style={todoLabelCss}>Description <span style={{ fontWeight: 400, color: T.textLight }}>(optional)</span></label>
+      <GrowTextarea value={d.detail || ""} onChange={function(v) { set("detail", v); }} maxLength={4000} maxHeight="40vh"
+        placeholder="Anything that helps whoever does it" style={Object.assign({}, inputCss, { fontSize: 15, minHeight: 64 })}/>
+
+      <label style={todoLabelCss}>Priority</label>
+      <TodoChips options={prOptions} value={d.priority} onChange={function(v) { set("priority", v); }} label="Priority"/>
+      <div style={{ fontSize: 12, color: T.textLight, marginTop: 6 }}>
+        {due ? "Due by " + todoDay(due) + (d.deadline && due === d.deadline ? " (the deadline)" : "") : "No date — whenever there is time."}
+      </div>
+
+      <label style={todoLabelCss}>Who</label>
+      <TodoChips options={whoOptions} value={d.who} onChange={function(v) { set("who", v); }} label="Who"/>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0 12px" }}>
+        <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+          <label style={todoLabelCss} htmlFor="todo-area">Area</label>
+          <select id="todo-area" value={d.area || ""} style={Object.assign({}, inputCss, { fontSize: 15, padding: "10px" })}
+            onChange={function(e) { if (e.target.value === "__new") newListItem("area"); else set("area", e.target.value); }}>
+            <option value="">No area</option>
+            {areas.map(function(a) { return <option key={a.id} value={a.id}>{a.name}</option>; })}
+            {office && <option value="__new">+ New area…</option>}
+          </select>
+        </div>
+        <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+          <label style={todoLabelCss} htmlFor="todo-project">Project</label>
+          <select id="todo-project" value={d.project || ""} style={Object.assign({}, inputCss, { fontSize: 15, padding: "10px" })}
+            onChange={function(e) { if (e.target.value === "__new") newListItem("project"); else set("project", e.target.value); }}>
+            <option value="">No project</option>
+            {projects.map(function(p) { return <option key={p.id} value={p.id}>{p.name}</option>; })}
+            {office && <option value="__new">+ New project…</option>}
+          </select>
+        </div>
+      </div>
+
+      <label style={{ display: "flex", flexWrap: "nowrap", alignItems: "flex-start", gap: 10, marginTop: 16, cursor: "pointer" }}>
+        <input type="checkbox" checked={!!d.private} onChange={function(e) { set("private", e.target.checked); }}
+          style={{ width: 22, height: 22, margin: "1px 0 0", flexShrink: 0, accentColor: T.accent }}/>
+        <span style={{ fontSize: 14, color: T.text, lineHeight: 1.35 }}>
+          <strong>Private</strong>
+          <span style={{ display: "block", fontSize: 12.5, color: T.textMid }}>
+            {inPrivateProject ? "It is in a private project, so only you see it either way."
+              : "Only you" + (d.who && d.who.indexOf("person:") === 0 && !(me && d.who === "person:" + me.id) ? " and " + todoWhoLabel(d.who, people) : "") + " will see it."}
+          </span>
+        </span>
+      </label>
+
+      <label style={todoLabelCss} htmlFor="todo-deadline">Deadline <span style={{ fontWeight: 400, color: T.textLight }}>(optional)</span></label>
+      <div style={{ display: "flex", flexWrap: "nowrap", gap: 8, alignItems: "center" }}>
+        <input id="todo-deadline" type="date" value={d.deadline || ""} onChange={function(e) { set("deadline", e.target.value); }}
+          style={Object.assign({}, inputCss, { fontSize: 15, padding: "9px 10px", maxWidth: 200 })}/>
+        {d.deadline && <button type="button" onClick={function() { set("deadline", ""); }} style={btnQuiet}>Clear</button>}
+      </div>
+
+      <label style={todoLabelCss}>Photos</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        {d.photos.map(function(p) {
+          return (
+            <div key={p.path} style={{ position: "relative" }}>
+              <TodoPhoto path={p.path} size={72} onOpen={setViewer}/>
+              <button type="button" onClick={function() { removePhoto(p.path); }} aria-label="Remove photo"
+                style={{ position: "absolute", top: -7, right: -7, width: 24, height: 24, borderRadius: 12, border: `1.5px solid ${T.border}`,
+                  background: "#fff", color: T.textMid, fontSize: 15, lineHeight: "18px", cursor: "pointer", padding: 0, fontFamily: "inherit" }}>&times;</button>
+            </div>
+          );
+        })}
+        {uploading > 0 && <div style={{ fontSize: 12.5, color: T.textLight }}>Uploading…</div>}
+        {d.photos.length < TODO_MAX_PHOTOS && (
+          <button type="button" onClick={function() { if (fileRef.current) fileRef.current.click(); }}
+            style={{ width: 72, height: 72, borderRadius: 8, border: `1.5px dashed ${T.border}`, background: "#fff", color: T.textMid,
+              fontFamily: "inherit", fontSize: 12.5, cursor: "pointer", lineHeight: 1.3 }}>+ Photo</button>
+        )}
+        <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }}
+          onChange={function(e) { const f = e.target.files; addPhotos(f); e.target.value = ""; }}/>
+      </div>
+      </fieldset>
+
+      {todo && !todoIsOpen(todo) && (
+        <div style={{ marginTop: 14, fontSize: 12.5, color: T.textMid }}>
+          {todo.state === "na" ? "Marked not applicable" : "Done"} by {todo.doneBy || "someone"} {todo.doneAt ? "on " + todoDay(londonDateOf(todo.doneAt)) : ""}
+        </div>
+      )}
+      {todo && todo.createdBy && (
+        <div style={{ marginTop: 6, fontSize: 12, color: T.textLight }}>Added by {todo.createdBy}{todo.createdAt ? " on " + todoDay(londonDateOf(todo.createdAt)) : ""}</div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 18 }}>
+        {canEdit && <button type="button" onClick={save} disabled={busy || uploading > 0}
+          style={Object.assign({}, big, { background: T.accent, color: "#fff", border: "none", opacity: busy || uploading ? 0.6 : 1 })}>
+          {busy ? "Saving…" : isNew ? "Add to-do" : "Save"}
+        </button>}
+        {!isNew && todoCanEdit(todo, me) && (askDelete
+          ? <button type="button" onClick={del} disabled={busy} style={Object.assign({}, big, { background: T.red, color: "#fff", border: "none" })}>Press again to delete</button>
+          : <button type="button" onClick={function() { setAskDelete(true); }} style={Object.assign({}, big, { background: "none", color: T.red, border: `1.5px solid ${T.border}`, fontWeight: 600 })}>Delete</button>)}
+        <button type="button" onClick={cancel} style={Object.assign({}, big, { background: "none", border: "none", color: T.textMid, fontWeight: 500 })}>{canEdit ? "Cancel" : "Close"}</button>
+      </div>
+      {viewer && <TodoPhotoViewer url={viewer} onClose={function() { setViewer(null); }}/>}
+    </ChecklistSheetFrame>
+  );
+}
+
+
+// "More" on a to-do: not applicable, done with a comment, change it.
+function TodoMoreSheet({ todo, onClose, onState, onEdit }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const big = { width: "100%", padding: "13px 14px", borderRadius: 10, fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 10 };
+  async function go(state) { setBusy(true); await onState(todo, state, text); setBusy(false); }
+  return (
+    <ChecklistSheetFrame onClose={onClose}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{todo.title}</div>
+      {todo.detail && <div style={{ fontSize: 13, color: T.textMid, marginTop: 3, whiteSpace: "pre-wrap" }}>{todo.detail}</div>}
+      <button type="button" onClick={onEdit} style={Object.assign({}, big, { background: "#fff", border: `1.5px solid ${T.border}`, color: T.text })}>
+        Open / change it
+      </button>
+      <button type="button" disabled={busy} onClick={function() { go("na"); }}
+        style={Object.assign({}, big, { background: T.bgInput, border: `1.5px solid ${T.border}`, color: T.text })}>
+        Not applicable
+      </button>
+      <div style={{ fontSize: 12, color: T.textLight, margin: "16px 0 5px" }}>Or done, with a comment:</div>
+      <textarea rows={3} value={text} onChange={function(e) { setText(e.target.value); }} maxLength={1000}
+        placeholder="e.g. New latch fitted, old one in the workshop" style={Object.assign({}, inputCss, { fontSize: 15, resize: "vertical" })}/>
+      <button type="button" disabled={busy || !text.trim()} onClick={function() { go("note"); }}
+        style={Object.assign({}, big, { background: text.trim() ? T.green : T.bgInput, border: "none", color: text.trim() ? "#fff" : T.textLight })}>
+        Done, with this comment
+      </button>
+      <button type="button" onClick={onClose} style={Object.assign({}, big, { background: "none", border: "none", color: T.textMid, fontWeight: 500 })}>Cancel</button>
+    </ChecklistSheetFrame>
+  );
+}
+
+// One to-do: the box to tick, the heading, one line of what/who/where/when.
+function TodoRow({ todo, today, ctx, showWho, showArea, showProject, busy, canUntick, onTick, onMore, onOpen }) {
+  const open = todoIsOpen(todo);
+  const timing = open ? todoTiming(todo, today) : "none";
+  const late = timing === "overdue";
+  const done = todo.state === "done" || todo.state === "note";
+  const boxColour = done ? T.green : todo.state === "na" ? T.textLight : late ? T.red : T.border;
+  const canPress = !busy && (open || canUntick);
+  const pr = todoPriorityStyle(todo.priority);
+  const bits = [];
+  if (showWho) bits.push(todoWhoLabel(todo.who, ctx.people, todo.whoLabel));
+  if (showArea && todo.area) bits.push(todoNameOf(ctx.areas, todo.area));
+  if (showProject && todo.project) bits.push(todoNameOf(ctx.projects, todo.project));
+  const dueText = open ? todoDueText(todo, today) : "";
+  const photos = (todo.photos || []).length;
+  const priv = !!todo.private || (!!todo.project && (ctx.projects || []).some(function(p) { return p.id === todo.project && p.private; }));
+  return (
+    <div data-todo-id={todo.id} style={{ display: "flex", flexWrap: "nowrap", alignItems: "flex-start", gap: 12, padding: "10px 2px",
+      borderBottom: `1px solid ${T.border}`, opacity: open ? 1 : 0.75 }}>
+      <button type="button" disabled={!canPress}
+        aria-label={open ? "Mark done: " + todo.title : "Untick: " + todo.title} aria-pressed={open ? "false" : "true"}
+        onClick={function() { onTick(todo, open ? "done" : "open"); }}
+        style={{ width: 42, height: 42, flexShrink: 0, borderRadius: 9, border: `2.5px solid ${boxColour}`,
+          background: done ? T.green : todo.state === "na" ? T.bgInput : "#fff",
+          color: todo.state === "na" ? T.textMid : "#fff", fontSize: todo.state === "na" ? 11 : 22, fontWeight: 800, lineHeight: 1,
+          cursor: canPress ? "pointer" : "default", fontFamily: "inherit", padding: 0 }}>
+        {busy ? "…" : todo.state === "na" ? "N/A" : open ? "" : <span>&#10003;</span>}
+      </button>
+      <div role="button" tabIndex={0} onClick={function() { onOpen(todo); }}
+        onKeyDown={function(e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(todo); } }}
+        style={{ flex: 1, minWidth: 0, cursor: "pointer", color: T.text }}>
+        <div style={{ fontSize: 15.5, fontWeight: 600, lineHeight: 1.3, textDecoration: todo.state === "na" ? "line-through" : "none", overflowWrap: "anywhere" }}>{todo.title}</div>
+        {todo.detail && open && (
+          <div style={{ fontSize: 13, color: T.textMid, marginTop: 2, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis",
+            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflowWrap: "anywhere" }}>{todo.detail}</div>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 8px", marginTop: 4, fontSize: 12, color: T.textLight }}>
+          {open && <span style={{ fontWeight: 700, borderRadius: 5, padding: "1px 7px", color: pr.color, background: pr.background }}>{TODO_PRIORITY_LABEL[todo.priority] || "Eventually"}</span>}
+          {dueText && <span style={{ color: late ? T.red : timing === "today" ? T.amber : T.textLight, fontWeight: late || timing === "today" ? 700 : 400 }}>{dueText}</span>}
+          {bits.filter(Boolean).map(function(b, i) { return <span key={i}>{b}</span>; })}
+          {photos > 0 && <span>{photos === 1 ? "1 photo" : photos + " photos"}</span>}
+          {priv && <span style={{ fontWeight: 700, color: T.textMid, border: `1px solid ${T.border}`, borderRadius: 5, padding: "0 6px" }}>Private</span>}
+          {!open && <span>{todo.state === "na" ? "Not applicable" : "Done"} · {todo.doneBy || ""} {todo.doneAt ? todoDay(londonDateOf(todo.doneAt)) : ""}</span>}
+        </div>
+        {todo.comment && (
+          <div style={{ fontSize: 13, color: T.text, background: T.amberBg, borderRadius: 7, padding: "6px 9px", marginTop: 5, lineHeight: 1.4 }}>{todo.comment}</div>
+        )}
+      </div>
+      {open && (
+        <button type="button" onClick={function() { onMore(todo); }} disabled={busy}
+          style={{ background: "none", border: `1.5px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", fontFamily: "inherit",
+            fontSize: 12.5, color: T.textMid, cursor: "pointer", flexShrink: 0 }}>More</button>
+      )}
+    </div>
+  );
+}
+
+// Areas or projects: rename, hide, delete (only when nothing uses it), add.
+function TodoListEditor({ title, field, list, todos, onSave, hideWord, me }) {
+  const privacy = field === "project";
+  const [rows, setRows] = useState(function() { return (list || []).map(function(x) { return Object.assign({}, x); }); });
+  const [name, setName] = useState("");
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [onlyMe, setOnlyMe] = useState(false);
+  // Keyed on the content: a list built afresh each render must not reset the
+  // boxes being typed in.
+  const listKey = JSON.stringify(list || []);
+  useEffect(function() { setRows((list || []).map(function(x) { return Object.assign({}, x); })); }, [listKey]);
+  async function apply(fn, msg) {
+    setErr(""); setNote("");
+    try { await onSave(fn); if (msg) setNote(msg); } catch (e) { setErr((e && e.message) || "That did not save."); }
+  }
+  function rename(id, v) {
+    const n = String(v || "").trim();
+    const was = (list || []).filter(function(x) { return x.id === id; })[0];
+    if (!n || !was || was.name === n) { setRows((list || []).map(function(x) { return Object.assign({}, x); })); return; }
+    apply(function(l) { return l.map(function(x) { return x.id === id ? Object.assign({}, x, { name: n }) : x; }); }, "Saved.");
+  }
+  function add() {
+    const n = name.trim();
+    if (!n) return;
+    apply(function(l) {
+      const rec = { id: todoSlug(n, l), name: n, createdAt: new Date().toISOString(), ownerId: (me && me.id) || null };
+      if (privacy && onlyMe) rec.private = true;
+      return l.concat([rec]);
+    }, "Added " + n + (privacy && onlyMe ? " (private)." : "."));
+    setName(""); setOnlyMe(false);
+  }
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: T.text, margin: "12px 0 6px" }}>{title}</div>
+      {err && <ErrBanner text={err}/>}
+      {note && <div style={{ fontSize: 12.5, color: T.green, marginBottom: 6 }}>{note}</div>}
+      {rows.map(function(x) {
+        const uses = todoUses(todos, field, x.id);
+        // Labelled by the SAVED name, so the label does not change while typing.
+        const saved = (list || []).filter(function(y) { return y.id === x.id; })[0];
+        const savedName = saved ? saved.name : x.name;
+        return (
+          <div key={x.id} style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, padding: "5px 0" }}>
+            <input value={x.name} aria-label={"Name of " + savedName}
+              onChange={function(e) { const v = e.target.value; setRows(function(r) { return r.map(function(y) { return y.id === x.id ? Object.assign({}, y, { name: v }) : y; }); }); }}
+              onBlur={function(e) { rename(x.id, e.target.value); }}
+              style={Object.assign({}, inputCss, { flex: 1, minWidth: 0, fontSize: 15, opacity: x.hidden ? 0.55 : 1 })}/>
+            <span style={{ fontSize: 11.5, color: T.textLight, whiteSpace: "nowrap", minWidth: 44, textAlign: "right" }}>{uses ? uses + " use" + (uses === 1 ? "" : "s") : ""}</span>
+            {privacy && me && x.ownerId === me.id && (
+              <button type="button" aria-pressed={x.private ? "true" : "false"} title={x.private ? "Only you see it. Press to share it with everyone." : "Everyone sees it. Press to keep it to yourself."}
+                style={Object.assign({}, btnQuiet, { padding: "7px 10px", fontSize: 12.5, whiteSpace: "nowrap", color: x.private ? T.text : T.textMid, fontWeight: x.private ? 700 : 500 })}
+                onClick={function() { apply(function(l) { return l.map(function(y) { return y.id === x.id ? Object.assign({}, y, { private: !x.private }) : y; }); }, x.private ? "Now shared with everyone." : "Now private to you."); }}>
+                {x.private ? "Private" : "Public"}
+              </button>
+            )}
+            <button type="button" style={Object.assign({}, btnQuiet, { padding: "7px 10px", fontSize: 12.5, whiteSpace: "nowrap" })}
+              onClick={function() { apply(function(l) { return l.map(function(y) { return y.id === x.id ? Object.assign({}, y, { hidden: !x.hidden }) : y; }); }); }}>
+              {x.hidden ? "Show" : hideWord}
+            </button>
+            <button type="button" disabled={uses > 0} title={uses ? "In use — " + hideWord.toLowerCase() + " it instead" : "Delete"}
+              aria-label={"Delete " + savedName}
+              style={Object.assign({}, btnQuiet, { padding: "7px 10px", fontSize: 12.5, color: uses ? T.textLight : T.red, cursor: uses ? "default" : "pointer" })}
+              onClick={function() { if (uses) return; if (!window.confirm("Delete " + savedName + "?")) return; apply(function(l) { return l.filter(function(y) { return y.id !== x.id; }); }, "Deleted."); }}>
+              &times;
+            </button>
+          </div>
+        );
+      })}
+      {!rows.length && <div style={{ fontSize: 13, color: T.textLight, padding: "4px 0" }}>None yet.</div>}
+      <div style={{ display: "flex", flexWrap: "nowrap", gap: 8, marginTop: 8 }}>
+        <input value={name} onChange={function(e) { setName(e.target.value); }} placeholder={field === "area" ? "New area" : "New project"}
+          onKeyDown={function(e) { if (e.key === "Enter") add(); }} maxLength={60}
+          style={Object.assign({}, inputCss, { flex: 1, minWidth: 0, fontSize: 15 })}/>
+        <button type="button" onClick={add} disabled={!name.trim()}
+          style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontFamily: "inherit", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>Add</button>
+      </div>
+      {privacy && (
+        <label style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, marginTop: 8, fontSize: 13, color: T.textMid, cursor: "pointer" }}>
+          <input type="checkbox" checked={onlyMe} onChange={function(e) { setOnlyMe(e.target.checked); }} style={{ width: 18, height: 18, accentColor: T.accent }}/>
+          Private — only I see this project and its to-dos
+        </label>
+      )}
+    </div>
+  );
+}
+function TodoListsSheet({ onClose }) {
+  const store = useTodoStore();
+  return (
+    <ChecklistSheetFrame onClose={onClose}>
+      <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center" }}>
+        <div style={{ flex: 1, fontSize: 17, fontWeight: 700, color: T.text }}>Areas and projects</div>
+        <button type="button" onClick={onClose} aria-label="Close"
+          style={{ background: "none", border: "none", fontSize: 26, lineHeight: 1, color: T.textLight, cursor: "pointer", padding: "0 4px", fontFamily: "inherit" }}>&times;</button>
+      </div>
+      <div style={{ fontSize: 12.5, color: T.textMid, marginTop: 4, lineHeight: 1.5 }}>
+        Change a name and it changes on every to-do. One in use can be hidden from the choices but not deleted.
+        A private project, and everything in it, is seen only by whoever made it.
+      </div>
+      <TodoListEditor title="Projects" field="project" me={store.me} todos={store.todos} onSave={todoSaveProjects} hideWord="Archive"
+        list={(store.projects || []).filter(function(p) { return todoListVisibleTo(p, store.me); })}/>
+      <TodoListEditor title="Areas" field="area" me={store.me} list={store.areas || TODO_DEFAULT_AREAS} todos={store.todos} onSave={todoSaveAreas} hideWord="Hide"/>
+      <button type="button" onClick={onClose}
+        style={{ width: "100%", padding: "12px", marginTop: 16, background: "none", border: `1.5px solid ${T.border}`, borderRadius: 10, color: T.text, fontFamily: "inherit", fontSize: 14, cursor: "pointer" }}>Done</button>
+    </ChecklistSheetFrame>
+  );
+}
+
+const TODO_GROUP_TABS = [["priority", "Priority"], ["person", "Person"], ["area", "Area"], ["project", "Project"]];
+
+// The To-do page. `role` is the login's ("admin", "bar", "cleaner"); `compact`
+// leaves the page heading off (inside the bar and housekeeping tabs).
+function TodoPage({ compact }) {
+  const store = useTodoStore();
+  const me = store.me;
+  const office = !me || me.role === "admin";
+  const [by, setBy] = useState(function() { try { return localStorage.getItem("hbf_todo_by") || "priority"; } catch (e) { return "priority"; } });
+  const [mine, setMine] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const [edit, setEdit] = useState(null);         // { todo } or { preset }
+  const [more, setMore] = useState(null);
+  const [lists, setLists] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState("");
+  const [today, setToday] = useState(londonToday());
+  useEffect(function() {
+    const t = setInterval(function() { setToday(londonToday()); }, 60000);
+    const onVis = function() { if (document.visibilityState === "visible") todoLoad(); };
+    document.addEventListener("visibilitychange", onVis);
+    return function() { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+  function pickBy(v) { setBy(v); try { localStorage.setItem("hbf_todo_by", v); } catch (e) {} }
+
+  async function setState(todo, state, comment) {
+    setBusyId(todo.id); setErr("");
+    const fields = state === "open"
+      ? { state: "open", comment: null, doneAt: null, doneBy: null, doneById: null }
+      : { state: state, comment: String(comment || "").trim() || null, doneAt: new Date().toISOString(), doneBy: todoMeLabel(me), doneById: (me && me.id) || null };
+    try { await todoUpdate(todo.id, fields); setMore(null); }
+    catch (e) { setErr((e && e.message) || "That did not save."); }
+    setBusyId(null);
+  }
+
+  const ctx = { today: today, me: me, people: store.people || [], areas: store.areas || TODO_DEFAULT_AREAS,
+    projects: (store.projects || []).filter(function(p) { return todoListVisibleTo(p, me); }) };
+  const all = (store.todos || []).filter(function(t) { return todoVisibleTo(t, me, store.projects); });
+  const shown = mine ? all.filter(function(t) { return todoIsFor(t, me); }) : all;
+  const groups = todoGroups(shown, by, ctx);
+  const openCount = shown.filter(todoIsOpen).length;
+  const overdue = shown.filter(function(t) { return todoIsOpen(t) && todoTiming(t, today) === "overdue"; }).length;
+  const done = todoRecentlyDone(shown, 30);
+
+  const head = (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+      <button type="button" onClick={function() { setEdit({ preset: {} }); }}
+        style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontFamily: "inherit", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+        + New to-do
+      </button>
+      {office && <button type="button" onClick={function() { setLists(true); }} style={btnQuiet}>Areas &amp; projects</button>}
+    </div>
+  );
+  return (
+    <div style={{ maxWidth: 820 }}>
+      {!compact && <PageHeader title="To-do" sub={openCount + " to do" + (overdue ? " · " + overdue + " overdue" : "")} actions={head}/>}
+      {compact && <div style={{ margin: "4px 0 12px" }}>{head}</div>}
+      {store.err && <ErrBanner text={store.err}/>}
+      {err && <ErrBanner text={err}/>}
+      <TabStrip tabs={TODO_GROUP_TABS} value={by} onChange={pickBy}/>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, margin: "-8px 0 6px" }}>
+        {[[false, "Everyone's"], [true, "For me"]].map(function(o) {
+          const on = mine === o[0];
+          return <button key={o[1]} type="button" aria-pressed={on ? "true" : "false"} onClick={function() { setMine(o[0]); }}
+            style={{ border: `1.5px solid ${on ? T.accent : T.border}`, background: on ? T.accentLight : "#fff", color: T.text,
+              fontWeight: on ? 700 : 500, borderRadius: 16, padding: "6px 12px", fontFamily: "inherit", fontSize: 13, cursor: "pointer" }}>{o[1]}</button>;
+        })}
+      </div>
+      {!store.todos && !store.err && <div style={quietText}>Loading…</div>}
+      {store.todos && !groups.length && (
+        <div style={{ fontSize: 14, color: T.textLight, padding: "18px 2px" }}>{mine ? "Nothing for you right now." : "Nothing to do. Add one with + New to-do."}</div>
+      )}
+      {groups.map(function(g) {
+        return (
+          <section key={g.key} aria-label={g.label} style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, borderBottom: `2px solid ${g.key === "overdue" ? T.red : T.border}`, paddingBottom: 4 }}>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13, letterSpacing: .4, textTransform: "uppercase", fontWeight: 800,
+                color: g.key === "overdue" ? T.red : T.textMid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {g.label} <span style={{ fontWeight: 600, color: T.textLight }}>{g.items.length}</span>
+              </div>
+              {g.key !== "overdue" && (
+                <button type="button" onClick={function() { setEdit({ preset: g.preset }); }} aria-label={"New to-do in " + g.label}
+                  style={{ background: "none", border: "none", color: T.accent, fontFamily: "inherit", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "4px 2px" }}>+ Add</button>
+              )}
+            </div>
+            {g.items.map(function(t) {
+              return <TodoRow key={t.id} todo={t} today={today} ctx={ctx} busy={busyId === t.id}
+                showWho={by !== "person"} showArea={by !== "area"} showProject={by !== "project"}
+                canUntick={false} onTick={setState} onMore={setMore} onOpen={function(x) { setEdit({ todo: x }); }}/>;
+            })}
+          </section>
+        );
+      })}
+
+      {done.length > 0 && (
+        <div style={{ marginTop: 22 }}>
+          <button type="button" onClick={function() { setShowDone(!showDone); }} aria-expanded={showDone ? "true" : "false"}
+            style={{ background: "none", border: "none", padding: "6px 0", fontFamily: "inherit", fontSize: 13.5, color: T.textMid, cursor: "pointer", textDecoration: "underline" }}>
+            {showDone ? "Hide" : "Show"} done in the last 30 days ({done.length})
+          </button>
+          {showDone && done.map(function(t) {
+            return <TodoRow key={t.id} todo={t} today={today} ctx={ctx} busy={busyId === t.id} showWho showArea showProject
+              canUntick={!!me && (me.role === "admin" || t.doneById === me.id)}
+              onTick={setState} onMore={setMore} onOpen={function(x) { setEdit({ todo: x }); }}/>;
+          })}
+        </div>
+      )}
+
+      {edit && <TodoEditSheet key={edit.todo ? edit.todo.id : "new"} todo={edit.todo || null} preset={edit.preset}
+        onClose={function() { setEdit(null); }}/>}
+      {more && <TodoMoreSheet todo={more} onClose={function() { setMore(null); }} onState={setState}
+        onEdit={function() { const t = more; setMore(null); setEdit({ todo: t }); }}/>}
+      {lists && <TodoListsSheet onClose={function() { setLists(false); }}/>}
+    </div>
+  );
+}
+
+// "+ To-do" from anywhere in the office app: the same sheet, and a short
+// "Added" note with a way to the list.
+function TodoQuickAdd({ open, onClose, onView }) {
+  const [flash, setFlash] = useState("");
+  useEffect(function() {
+    if (!flash) return;
+    const t = setTimeout(function() { setFlash(""); }, 4000);
+    return function() { clearTimeout(t); };
+  }, [flash]);
+  return (
+    <>
+      {open && <TodoEditSheet todo={null} preset={{}} onClose={onClose}
+        onSaved={function(rec) { setFlash("Added: " + rec.title); }}/>}
+      {flash && (
+        <div role="status" style={{ position: "fixed", left: "50%", bottom: 22, transform: "translateX(-50%)", zIndex: 2050,
+          background: T.slate, color: "#fff", borderRadius: 10, padding: "10px 14px", boxShadow: "0 8px 30px rgba(0,0,0,.25)",
+          display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 12, maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", fontSize: 14 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{flash}</span>
+          {onView && <button type="button" onClick={function() { setFlash(""); onView(); }}
+            style={{ background: "none", border: "none", color: T.brass, fontFamily: "inherit", fontSize: 14, fontWeight: 700, cursor: "pointer", padding: 0, whiteSpace: "nowrap" }}>View</button>}
+        </div>
+      )}
+    </>
+  );
+}
+
+// The sidebar's number: overdue to-dos for the person signed in.
+function useTodoOverdueForMe() {
+  const store = useTodoStore();
+  const today = londonToday();
+  return (store.todos || []).filter(function(t) {
+    return todoIsOpen(t) && todoIsFor(t, store.me) && todoVisibleTo(t, store.me, store.projects) && todoTiming(t, today) === "overdue";
+  }).length;
+}
+
 // ─── SIDEBAR LAYOUT ──────────────────────────────────────────────────────────
 // Sub-page lists, shared by the sidebar and by the sections themselves (which
 // still draw them as a tab strip for the restricted logins and the classic
@@ -17768,6 +18594,7 @@ function buildSidebarNav(o) {
   return [
     { id:"home", icon:"home", label:"Home", on: view === "home", go: function() { setView("home"); } },
     { id:"checklists", icon:"checklists", label:"Checklists", on: view === "checklists", go: function() { setView("checklists"); } },
+    { id:"todo", icon:"todo", label:"To-do", badge: o.todoOverdue, on: view === "todo", go: function() { setView("todo"); } },
     { id:"calendar", icon:"calendar", label:"Calendar", origin:"calendar", on: calOn, go: o.onCalendarTab,
       children: [
         { label:"Lettings", on: calOn && onLetCal, go: o.onCalendarTab },
@@ -17876,7 +18703,7 @@ function AppSidebar({ nav, onNew, onSignOut, onClose }) {
   );
 }
 
-function AppTopBar({ crumbs, canGoBack, onBack, onOpenMenu, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
+function AppTopBar({ crumbs, canGoBack, onBack, onOpenMenu, onNew, onNewTodo, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect }) {
   return (
     <div className="hb-top">
       <button type="button" className="hb-top-menu" onClick={onOpenMenu} aria-label="Open menu"><NavIcon name="menu" size={22}/></button>
@@ -17903,6 +18730,7 @@ function AppTopBar({ crumbs, canGoBack, onBack, onOpenMenu, onNew, xeroToken, on
           onClick={gmailToken ? onGmailDisconnect : onGmailConnect} title={gmailToken ? "Gmail is connected. Click to disconnect." : "Connect Gmail"}>
           <span className="hb-conn-dot"/>{gmailToken ? "Gmail" : "Connect Gmail"}
         </button>
+        {onNewTodo && <button type="button" className="hb-top-todo" onClick={onNewTodo} title="Add a to-do">+ To-do</button>}
         <button type="button" className="hb-top-new" onClick={onNew}>+ New</button>
       </div>
     </div>
@@ -17924,6 +18752,7 @@ function SidebarLayout(props) {
   // Which part of the menu was last pressed ("calendar", "events" or null).
   // Only used to decide which of two entries for the same calendar lights up.
   const [origin, setOrigin] = useState(null);
+  const todoOverdue = useTodoOverdueForMe();
 
   // Close the drawer on Escape, and whenever the page changes underneath it.
   useEffect(function() { setNavOpen(false); }, [props.view]);
@@ -17938,6 +18767,7 @@ function SidebarLayout(props) {
     view: props.view, setView: props.setView, onCalendarTab: props.onCalendarTab,
     reportType: props.reportType, setReportType: props.setReportType,
     invoiceDueCount: props.invoiceDueCount, pendingViewings: props.pendingViewings,
+    todoOverdue: todoOverdue,
     tabs: { lettings: lettingsTab, boxoffice: boxTab, bar: barTab, viewings: viewingsTab },
     origin: origin,
   });
@@ -17966,7 +18796,7 @@ function SidebarLayout(props) {
         <AppSidebar nav={closing} onNew={onNew} onSignOut={props.onSignOut} onClose={function() { setNavOpen(false); }}/>
         <div className="hb-main">
           <AppTopBar crumbs={sidebarCrumbs(nav, props.view)} canGoBack={props.canGoBack} onBack={props.onBack}
-            onOpenMenu={function() { setNavOpen(true); }} onNew={onNew}
+            onOpenMenu={function() { setNavOpen(true); }} onNew={onNew} onNewTodo={props.onNewTodo}
             xeroToken={props.xeroToken} onXeroConnect={props.onXeroConnect} onXeroDisconnect={props.onXeroDisconnect}
             gmailToken={props.gmailToken} onGmailConnect={props.onGmailConnect} onGmailDisconnect={props.onGmailDisconnect}/>
           {props.children}
@@ -17976,11 +18806,12 @@ function SidebarLayout(props) {
   );
 }
 
-function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab, onBack, canGoBack }) {
+function Header({ view, setView, onNew, onNewTodo, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab, onBack, canGoBack }) {
   // "calendar" is a virtual tab that maps to view="lettings" (calendar sub-tab)
   const tabs = [
     {id:"home",label:"Home"},
     {id:"checklists",label:"Checklists"},
+    {id:"todo",label:"To-do"},
     {id:"calendar",label:"Calendar",virtual:true},
     {id:"lettings",label:"Lettings"},
     {id:"list",label:"Events"},
@@ -18031,6 +18862,7 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
               ←
             </button>
           )}
+            {onNewTodo && <button onClick={onNewTodo} style={{ background:"#fff", color:T.accent, border:`1.5px solid ${T.accent}`, padding:"7px 11px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>+ To-do</button>}
             <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"8px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600 }}>+ New</button>
             <button onClick={()=>setMenuOpen(function(v){ return !v; })} aria-label="Menu"
               style={{ background:"none", border:`1.5px solid ${T.border}`, borderRadius:6, width:38, height:38, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, color:T.text }}>
@@ -18077,6 +18909,11 @@ function Header({ view, setView, onNew, xeroToken, onXeroConnect, onXeroDisconne
           {connectButtons}
         </div>
       </nav>
+      {onNewTodo && (
+        <button onClick={onNewTodo} style={{ background:"#fff", color:T.accent, border:`1.5px solid ${T.accent}`, padding:"8px 14px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700, flexShrink:0, marginRight:8 }}>
+          + To-do
+        </button>
+      )}
       <button onClick={onNew} style={{ background:T.midBlue, color:"#fff", border:"none", padding:"9px 22px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600, boxShadow:`0 2px 8px rgba(${T.midRgb},.25)`, flexShrink:0 }}>
         + New Booking
       </button>

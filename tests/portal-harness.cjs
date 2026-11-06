@@ -50,7 +50,7 @@ function b64url(o) { return Buffer.from(JSON.stringify(o)).toString('base64url')
 async function openPortal({ distDir, rpc = {}, auth = {}, signedIn = true, viewport, path: urlPath = '/portal' }) {
   const server = await serve(distDir)
   const origin = 'http://127.0.0.1:' + server.address().port
-  const exe = fs.readdirSync('/opt/pw-browsers').filter((d) => d.startsWith('chromium-')).map((d) => '/opt/pw-browsers/' + d + '/chrome-linux/chrome').find((f) => fs.existsSync(f))
+  const exe = fs.readdirSync('/opt/pw-browsers').filter((d) => d.startsWith('chromium-')).flatMap((d) => ['/chrome-linux/chrome', '/chrome-linux64/chrome'].map((sub) => '/opt/pw-browsers/' + d + sub)).find((f) => fs.existsSync(f))
   const browser = await chromium.launch(exe ? { executablePath: exe } : {})
   const context = await browser.newContext({ viewport: viewport || { width: 1200, height: 900 } })
   const page = await context.newPage()
@@ -113,7 +113,7 @@ async function openPortal({ distDir, rpc = {}, auth = {}, signedIn = true, viewp
 async function openStaff({ distDir, rpc = {}, appData = {}, viewport, path: urlPath = '/' }) {
   const server = await serve(distDir)
   const origin = 'http://127.0.0.1:' + server.address().port
-  const exe = fs.readdirSync('/opt/pw-browsers').filter((d) => d.startsWith('chromium-')).map((d) => '/opt/pw-browsers/' + d + '/chrome-linux/chrome').find((f) => fs.existsSync(f))
+  const exe = fs.readdirSync('/opt/pw-browsers').filter((d) => d.startsWith('chromium-')).flatMap((d) => ['/chrome-linux/chrome', '/chrome-linux64/chrome'].map((sub) => '/opt/pw-browsers/' + d + sub)).find((f) => fs.existsSync(f))
   const browser = await chromium.launch(exe ? { executablePath: exe } : {})
   const context = await browser.newContext({ viewport: viewport || { width: 1400, height: 900 } })
   const page = await context.newPage()
