@@ -53,6 +53,8 @@ async function run(viewport, label) {
       { id: 'td_mine', title: 'Ring the farrier', priority: 'three', setOn: addDays(today, -2), who: 'person:' + ME, createdAt: '2026-11-02T09:00:00Z', createdById: ME },
       { id: 'td_someday', title: 'Paint the gate', priority: 'eventually', who: 'person:' + ME, createdAt: '2026-11-02T09:00:00Z', createdById: ME,
         category: 'maint', area: 'farm' },
+      { id: 'td_gloves', title: 'Work gloves', priority: 'eventually', setOn: today, who: 'anyone', tags: ['to-buy', 'maint'],
+        project: 'upkeep', createdAt: '2026-11-03T08:00:00Z', createdById: ME },
       { id: 'td_bins', title: 'Bins out', priority: 'eventually', repeat: 'weekly', deadline: addDays(today, 3), setOn: today, who: 'anyone',
         category: 'maint', project: 'upkeep', createdAt: '2026-11-03T09:00:00Z', createdById: ME },
       { id: 'td_shower', title: 'Fix the Hamlet shower', priority: 'event', setOn: today, eventOn: addDays(today, 5), who: 'anyone', area: 'hamlet',
@@ -92,6 +94,20 @@ async function run(viewport, label) {
   // ── The board: one column per project, round ticks, filters ──
   const board = page.getByRole('region', { name: 'To-do board' })
   await board.waitFor()
+  // The board scrolls inside itself; the page never goes wider than the screen
+  // (7 Nov: on an iPhone the page scrolled sideways and the edit sheet sat off
+  // to one side).
+  const widths = await page.evaluate(() => {
+    const vw = document.documentElement.clientWidth, wide = []
+    document.querySelectorAll('body *').forEach((el) => {
+      if (el.closest('[aria-label="To-do board"]')) return
+      const r = el.getBoundingClientRect()
+      if (r.right > vw + 1) wide.push(el.tagName + ' ' + Math.round(r.width) + ' ' + (el.getAttribute('style') || '').slice(0, 90))
+    })
+    return { vw, sw: document.documentElement.scrollWidth, wide: wide.slice(0, 6) }
+  })
+  if (process.env.TODO_PROBE) console.log(label, JSON.stringify(widths, null, 1))
+  assert.ok(widths.sw <= widths.vw, label + ': page wider than the screen: ' + JSON.stringify(widths))
   assert.deepStrictEqual(await board.locator('section').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Upkeep', 'No project'],
     label + ': columns by project')
   const shower = board.locator('[data-todo-id="td_shower"]')
@@ -99,28 +115,53 @@ async function run(viewport, label) {
   assert.ok(await shower.getByText(new RegExp(String(Number(checkIn.slice(8))) + ' ')).isVisible(), label + ': due on the Hamlet check-in')
   assert.ok(await board.locator('[data-todo-id="td_bins"]').getByText(/Every week/).isVisible(), label + ': repeat shown')
   if (shots) await page.screenshot({ path: path.join(shots, label + '-board.png'), fullPage: false })
-  await page.getByRole('group', { name: 'Category' }).getByRole('button', { name: 'Maintenance' }).click()
+  // Tags: highlight one, then a second as well (either will do).
+  const tagBar = page.getByRole('group', { name: 'Tags' })
+  await tagBar.getByRole('button', { name: 'To buy' }).click()
   assert.deepStrictEqual(await board.locator('[data-todo-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-todo-id')).sort()),
-    ['td_bins', 'td_shower', 'td_someday'], label + ': category filter')
+    ['td_gloves'], label + ': one tag')
+  await tagBar.getByRole('button', { name: 'Maintenance' }).click()
+  assert.deepStrictEqual(await board.locator('[data-todo-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-todo-id')).sort()),
+    ['td_bins', 'td_gloves', 'td_shower', 'td_someday'], label + ': two tags highlighted')
+  assert.strictEqual(await tagBar.getByRole('button', { name: 'All' }).getAttribute('aria-pressed'), 'false')
+  await tagBar.getByRole('button', { name: 'To buy' }).click()
+  assert.deepStrictEqual(await board.locator('[data-todo-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-todo-id')).sort()),
+    ['td_bins', 'td_gloves', 'td_shower', 'td_someday'], label + ': gloves stay, tagged Maintenance too')
+  // Columns by tag: a to-do with two tags is in both.
+  await page.locator('#todo-f-by').selectOption('tag')
+  assert.deepStrictEqual(await board.locator('section').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Maintenance', 'To buy'],
+    label + ': tag columns')
+  await page.locator('#todo-f-by').selectOption('project')
   await page.locator('#todo-f-area').selectOption('farm')
   assert.deepStrictEqual(await board.locator('section').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['No project'],
     label + ': empty columns go')
-  // A new one from a filtered board starts in that category and area.
+  // A new one from a filtered board starts with that tag and area.
   await page.getByRole('button', { name: 'New to-do in No project' }).click()
-  assert.strictEqual(await page.locator('#todo-category').inputValue(), 'maint')
-  assert.strictEqual(await page.locator('#todo-area').inputValue(), 'farm')
+  const sheetTags = page.getByRole('dialog').getByRole('group', { name: 'Tags' })
+  assert.strictEqual(await sheetTags.getByRole('button', { name: /Maintenance/ }).getAttribute('aria-pressed'), 'true')
+  assert.strictEqual(await page.getByRole('dialog').getByRole('group', { name: 'Areas' }).getByRole('button', { name: /Farm/ }).getAttribute('aria-pressed'), 'true')
+  // The sheet never slides sideways inside itself (7 Nov, on an iPhone).
+  const sheetBox = await page.getByRole('dialog').evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, x: el.getBoundingClientRect().left, ox: getComputedStyle(el).overflowX }))
+  assert.ok(sheetBox.sw <= sheetBox.cw && sheetBox.x >= 0 && sheetBox.ox === 'hidden', label + ': sheet fits: ' + JSON.stringify(sheetBox))
   await page.getByText('Cancel', { exact: true }).click()
   await page.getByRole('button', { name: 'Clear filters' }).click()
   // "Before next event", set now, is fixed to the next Hamlet check-in.
   await page.getByRole('button', { name: '+ New to-do' }).first().click()
   await page.getByLabel('Heading').fill('Hamlet bulbs')
-  await page.locator('#todo-area').selectOption('hamlet')
+  // Two areas: the Hamlet's check-in is before any Grain Store event, so it wins.
+  await page.getByRole('dialog').getByRole('group', { name: 'Areas' }).getByRole('button', { name: 'The Hamlet' }).click()
+  await page.getByRole('dialog').getByRole('group', { name: 'Areas' }).getByRole('button', { name: 'Glamping' }).click()
+  // Two tags on one to-do.
+  await page.getByRole('dialog').getByRole('group', { name: 'Tags' }).getByRole('button', { name: 'Maintenance' }).click()
+  await page.getByRole('dialog').getByRole('group', { name: 'Tags' }).getByRole('button', { name: 'To buy' }).click()
   await page.getByRole('radio', { name: 'Before next event' }).click()
-  await page.getByText(/the next check-in at The Hamlet: due/).waitFor()
+  await page.getByText(/the next check-in at The Hamlet or Glamping: due/).waitFor()
   await page.getByRole('button', { name: 'Add to-do' }).click()
   await page.getByLabel('Heading').waitFor({ state: 'detached' })
   const bulbs = [...db.items.values()].find((t) => t.title === 'Hamlet bulbs')
   assert.strictEqual(bulbs.eventOn, checkIn, label + ': event day fixed when set')
+  assert.deepStrictEqual(bulbs.tags, ['maint', 'to-buy'], label + ': two tags saved')
+  assert.deepStrictEqual(bulbs.areas, ['hamlet', 'glamping'], label + ': two areas saved')
   await board.locator('[data-todo-id="' + bulbs.id + '"]').getByText('Before check-in').waitFor()
   db.items.delete(bulbs.id)
 
@@ -142,7 +183,7 @@ async function run(viewport, label) {
   await page.getByLabel('Heading').fill('Replace the cinema barn projector bulb')
   await page.getByRole('radio', { name: '1 month' }).click()
   await page.getByRole('radio', { name: 'Rosanna' }).click()
-  await page.locator('#todo-area').selectOption('cinema-barn')
+  await page.getByRole('dialog').getByRole('group', { name: 'Areas' }).getByRole('button', { name: 'Cinema Barn' }).click()
   page.once('dialog', (d) => d.accept('Cinema refit'))
   await page.locator('#todo-project').selectOption('__new')
   await page.waitForFunction(() => document.querySelector('#todo-project').value === 'cinema-refit')
@@ -155,7 +196,7 @@ async function run(viewport, label) {
   assert.ok(added, label + ': saved')
   assert.strictEqual(added.priority, 'month'); assert.strictEqual(added.setOn, today)
   assert.strictEqual(added.who, 'person:' + ROS); assert.strictEqual(added.whoLabel, 'Rosanna')
-  assert.strictEqual(added.area, 'cinema-barn'); assert.strictEqual(added.project, 'cinema-refit')
+  assert.deepStrictEqual(added.areas, ['cinema-barn']); assert.strictEqual(added.project, 'cinema-refit')
   assert.strictEqual(added.photos.length, 1)
   assert.ok(added.photos[0].path.startsWith(added.id + '/'), label + ': photo filed under its to-do')
   assert.ok(files[added.photos[0].path], label + ': photo stored in the private bucket')
@@ -219,9 +260,9 @@ async function run(viewport, label) {
   // Areas & projects: rename one; in-use ones cannot be deleted.
   await page.getByRole('button', { name: 'Projects & areas' }).click()
   // Categories are kept there too.
-  await page.getByPlaceholder('New category').fill('Garden')
-  await page.getByPlaceholder('New category').press('Enter')
-  await until(() => db.lists.category.some((c) => c.name === 'Garden'), 'add a category')
+  await page.getByPlaceholder('New tag').fill('Garden')
+  await page.getByPlaceholder('New tag').press('Enter')
+  await until(() => db.lists.category.some((c) => c.name === 'Garden'), 'add a tag')
   const hamlet = page.getByLabel('Name of The Hamlet')
   await hamlet.fill('Hamlet')
   await page.getByLabel('Name of Hamlet').or(hamlet).first().press('Tab')

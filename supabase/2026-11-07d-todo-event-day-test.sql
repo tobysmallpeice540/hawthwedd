@@ -47,3 +47,61 @@ begin
   perform pg_temp.check(exists (select 1 from jsonb_array_elements(r) e where e ->> 'id' = 'td_evday002'), 'event to-do reaches the overdue WhatsApp');
   raise notice 'todo event day: all assertions passed';
 end $t$;
+
+-- ── Tags ──
+do $t$
+declare r jsonb; nid text; today date := (now() at time zone 'Europe/London')::date;
+begin
+  perform set_config('t.uid', '00000000-0000-0000-0000-0000000000a1', false);
+  perform public.todo_save_list('category', '{"name":"Admin"}');
+  perform public.todo_save_list('category', '{"name":"To buy"}');
+  -- What 07c left as a category became a one-tag list.
+  perform pg_temp.check((select tags from todo_items where id = 'td_cat00001') = array['farm-maintenance'], 'category copied into tags');
+  r := public.todo_upsert('{"id":"td_tag00001","title":"Buy and file","tags":["admin","to-buy","admin"]}');
+  perform pg_temp.check((r ->> 'ok')::boolean and r -> 'item' -> 'tags' = '["admin","to-buy"]'::jsonb or r -> 'item' -> 'tags' = '["to-buy","admin"]'::jsonb, 'two tags, once each: ' || r::text);
+  perform pg_temp.check(r -> 'item' ->> 'category' in ('admin', 'to-buy'), 'category is the first tag');
+  perform pg_temp.check(public.todo_upsert('{"id":"td_tag00002","title":"x","tags":["admin","nope"]}') ->> 'error' = 'bad_category', 'unknown tag refused');
+  perform pg_temp.check(public.todo_upsert('{"id":"td_tag00002","title":"x","tags":"admin"}') ->> 'error' = 'bad_category', 'tags must be a list');
+  -- An app of the 07c build sends category alone: one tag.
+  r := public.todo_upsert('{"id":"td_tag00001","title":"Buy and file","category":"admin"}');
+  perform pg_temp.check(r -> 'item' -> 'tags' = '["admin"]'::jsonb, 'category alone means one tag');
+  -- Neither: kept.
+  r := public.todo_upsert('{"id":"td_tag00001","title":"Buy and file, renamed"}');
+  perform pg_temp.check(r -> 'item' -> 'tags' = '["admin"]'::jsonb, 'no tags sent: kept');
+  r := public.todo_upsert('{"id":"td_tag00001","title":"Buy and file","tags":[]}');
+  perform pg_temp.check(r -> 'item' -> 'tags' = '[]'::jsonb and r -> 'item' -> 'category' = 'null'::jsonb, 'cleared');
+  r := public.todo_upsert('{"id":"td_tag00001","title":"Buy and file","tags":["admin","to-buy"]}');
+  perform pg_temp.check((select (e ->> 'uses')::int from jsonb_array_elements(public.todo_get() -> 'categories') e where e ->> 'id' = 'to-buy') = 1, 'a tag''s uses counted');
+  perform pg_temp.check(public.todo_delete_list('category', 'to-buy') ->> 'error' = 'in_use', 'a tag in use is not deleted');
+  -- A repeat keeps its tags.
+  r := public.todo_upsert('{"id":"td_tag00003","title":"Order oil","repeat":"monthly","priority":"eventually","tags":["admin","to-buy"]}');
+  r := public.todo_set_state('td_tag00003', 'done', null);
+  perform pg_temp.check(r -> 'next' -> 'tags' = r -> 'item' -> 'tags', 'the next one keeps its tags');
+  raise notice 'todo tags: all assertions passed';
+end $t$;
+
+-- ── Areas ──
+do $t$
+declare r jsonb; today date := (now() at time zone 'Europe/London')::date;
+begin
+  perform set_config('t.uid', '00000000-0000-0000-0000-0000000000a1', false);
+  perform pg_temp.check((select areas from todo_items where id = 'td_cat00001') = array['farm'], 'area copied into areas');
+  r := public.todo_upsert('{"id":"td_area0001","title":"Fix both gates","areas":["hamlet","glamping","hamlet"]}');
+  perform pg_temp.check(jsonb_array_length(r -> 'item' -> 'areas') = 2 and r -> 'item' ->> 'area' in ('hamlet', 'glamping'), 'two areas, once each: ' || r::text);
+  perform pg_temp.check(public.todo_upsert('{"id":"td_area0002","title":"x","areas":["nope"]}') ->> 'error' = 'bad_area', 'unknown area refused');
+  r := public.todo_upsert('{"id":"td_area0001","title":"Fix both gates","area":"farm"}');
+  perform pg_temp.check(r -> 'item' -> 'areas' = '["farm"]'::jsonb, 'area alone (07c app) means one');
+  r := public.todo_upsert('{"id":"td_area0001","title":"Fix the gates"}');
+  perform pg_temp.check(r -> 'item' -> 'areas' = '["farm"]'::jsonb, 'neither sent: kept');
+  r := public.todo_upsert('{"id":"td_area0001","title":"Fix the gates","areas":[]}');
+  perform pg_temp.check(r -> 'item' -> 'areas' = '[]'::jsonb and r -> 'item' -> 'area' = 'null'::jsonb, 'cleared');
+  -- The event day is kept while the areas stay the same, taken afresh when they change.
+  r := public.todo_upsert(jsonb_build_object('id', 'td_area0003', 'title', 'Both', 'areas', '["hamlet","grain-store"]'::jsonb, 'priority', 'event', 'eventOn', today + 3));
+  r := public.todo_upsert(jsonb_build_object('id', 'td_area0003', 'title', 'Both', 'areas', '["hamlet","grain-store"]'::jsonb, 'priority', 'event', 'eventOn', today + 1));
+  perform pg_temp.check((r -> 'item' ->> 'eventOn')::date = today + 3, 'same areas: day kept');
+  r := public.todo_upsert(jsonb_build_object('id', 'td_area0003', 'title', 'Both', 'areas', '["hamlet"]'::jsonb, 'priority', 'event', 'eventOn', today + 6));
+  perform pg_temp.check((r -> 'item' ->> 'eventOn')::date = today + 6, 'areas changed: new day');
+  perform pg_temp.check((select (e ->> 'uses')::int from jsonb_array_elements(public.todo_get() -> 'areas') e where e ->> 'id' = 'hamlet') >= 1, 'area uses counted');
+  perform pg_temp.check(public.todo_delete_list('area', 'hamlet') ->> 'error' = 'in_use', 'an area in use is not deleted');
+  raise notice 'todo areas: all assertions passed';
+end $t$;

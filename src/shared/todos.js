@@ -19,9 +19,9 @@
 //   until the priority or area changes, and counts it in dueOn.
 // · repeat: null | "daily" | "weekdays" | "weekly" | "monthly" | "yearly".
 //   Ticking one leaves the next one behind (the database does it).
-// · area, project, category: each optional (migration 2026-11-07c). A
-//   category is a tag on the to-do itself — Admin, Maintenance, To buy
-//   (7 Nov 2026, Toby); the Todoist-level grouping above projects is retired.
+// · area, project, tags: each optional. Tags (Admin, Maintenance, To buy… —
+//   the 'category' lists in the database, several per to-do, `tags`;
+//   7 Nov 2026, Toby). The Todoist-level grouping above projects is retired.
 // · deadline: an optional fixed date; whichever of the two comes first is the
 //   date it is due by.
 // · state: "open", "done", "note" (done, with a comment) or "na".
@@ -59,8 +59,20 @@ export const TODO_DEFAULT_AREAS = [
 
 // Which letting property an area is, for "Before next event".
 export const TODO_AREA_PROPERTY = { hamlet: "hamlet", "amly-barn": "amly", glamping: "glamping" };
-// "checkin" when "Before next event" means a check-in there, else "event".
-export function todoEventKind(area) { return TODO_AREA_PROPERTY[area] ? "checkin" : "event"; }
+// A to-do's areas (several; migration 2026-11-07d). One saved before then
+// has at most an `area`.
+export function todoAreas(t) {
+  if (t && Array.isArray(t.areas)) return t.areas;
+  return t && t.area ? [t.area] : [];
+}
+// What "Before next event" waits for, given the areas: "checkin" when every
+// one is a letting, "event" when none is, "either" when they are mixed.
+export function todoEventKind(areas) {
+  const list = Array.isArray(areas) ? areas : areas ? [areas] : [];
+  const lets = list.filter(function (a) { return TODO_AREA_PROPERTY[a]; }).length;
+  if (list.length && lets === list.length) return "checkin";
+  return lets ? "either" : "event";
+}
 
 export function todoAddDays(iso, n) {
   if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
@@ -181,11 +193,29 @@ export function todoGroups(todos, by, ctx) {
       if (!byKey[w]) put(w, t.whoLabel || "Someone no longer listed", null, { who: w });
       byKey[w].items.push(t);
     });
+  } else if (by === "tag" || by === "category") {
+    // A to-do with two tags is in both columns.
+    (ctx.categories || []).forEach(function (x) { put(x.id, x.name, null, { tags: [x.id] }); });
+    put("__none", "No tag", null, {});
+    open.forEach(function (t) {
+      const tags = todoTags(t).filter(function (g) { return byKey[g] && g !== "__none"; });
+      if (!tags.length) byKey.__none.items.push(t);
+      tags.forEach(function (g) { byKey[g].items.push(t); });
+    });
+  } else if (by === "area") {
+    // A to-do in two areas is in both columns.
+    (ctx.areas || []).forEach(function (x) { put(x.id, x.name, null, { areas: [x.id] }); });
+    put("__none", "No area", null, {});
+    open.forEach(function (t) {
+      const as = todoAreas(t).filter(function (a) { return byKey[a] && a !== "__none"; });
+      if (!as.length) byKey.__none.items.push(t);
+      as.forEach(function (a) { byKey[a].items.push(t); });
+    });
   } else {
-    const field = by === "area" ? "area" : by === "category" ? "category" : "project";
-    const list = (by === "area" ? ctx.areas : by === "category" ? ctx.categories : ctx.projects) || [];
+    const field = by === "area" ? "area" : "project";
+    const list = (by === "area" ? ctx.areas : ctx.projects) || [];
     list.forEach(function (x) { const p = {}; p[field] = x.id; put(x.id, x.name, null, p); });
-    put("__none", by === "area" ? "No area" : by === "category" ? "No category" : "No project", null, {});
+    put("__none", by === "area" ? "No area" : "No project", null, {});
     open.forEach(function (t) {
       const k = t[field] && byKey[t[field]] ? t[field] : "__none";
       byKey[k].items.push(t);
@@ -233,25 +263,37 @@ export function todoEventDue(t, cal, today) {
   const from = todoValidDay(t.setOn) ? t.setOn : today;
   if (!from) return null;
   const c = cal || {};
-  const prop = TODO_AREA_PROPERTY[t.area];
+  // Several areas: whichever of their next check-ins / events comes first.
+  // A letting area waits for its check-in; any other area (or none) for the
+  // next event at the venue.
+  const areas = todoAreas(t);
+  const props = areas.map(function (a) { return TODO_AREA_PROPERTY[a]; }).filter(Boolean);
+  const wantEvent = !areas.length || areas.some(function (a) { return !TODO_AREA_PROPERTY[a]; });
   let best = null;
-  const take = function (day) { if (todoValidDay(day) && day >= from && (!best || day < best)) best = day; };
-  if (prop) {
+  const take = function (day, what, propertyId) {
+    if (todoValidDay(day) && day >= from && (!best || day < best.on)) best = { on: day, what: what, propertyId: propertyId };
+  };
+  if (props.length) {
     (c.accom || []).forEach(function (b) {
       if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
-      (b.stays && b.stays.length ? b.stays : [b]).forEach(function (st) { if (st && st.propertyId === prop) take(st.checkIn); });
+      (b.stays && b.stays.length ? b.stays : [b]).forEach(function (st) {
+        if (st && props.indexOf(st.propertyId) !== -1) take(st.checkIn, "checkin", st.propertyId);
+      });
     });
-    return best ? { on: best, what: "checkin", propertyId: prop } : null;
   }
-  (c.events || []).forEach(function (ev) {
-    if (!ev || ev.fromSnapshot || ev.status === "Cancelled" || ev.status === "Holding") return;
-    take(ev.date);
-  });
-  (c.boxEvents || []).forEach(function (bx) {
-    if (!bx || bx.status === "draft" || !bx.starts_at) return;
-    take(todoLondonDay(bx.starts_at));
-  });
-  return best ? { on: best, what: "event" } : null;
+  if (wantEvent) {
+    (c.events || []).forEach(function (ev) {
+      if (!ev || ev.fromSnapshot || ev.status === "Cancelled" || ev.status === "Holding") return;
+      take(ev.date, "event");
+    });
+    (c.boxEvents || []).forEach(function (bx) {
+      if (!bx || bx.status === "draft" || !bx.starts_at) return;
+      take(todoLondonDay(bx.starts_at), "event");
+    });
+  }
+  if (!best) return null;
+  if (best.what === "event") delete best.propertyId;
+  return best;
 }
 
 // The next day a repeat falls on after `today` — the database's
@@ -278,13 +320,26 @@ export function todoNextOn(from, rule, today) {
   return null;
 }
 
-// The board's filters: category, who (a `who` value, "mine" for what is for
-// me, or "" for all) and area; "__none" picks those with none.
+// A to-do's tags (several; migration 2026-11-07d). One saved before then has
+// at most a `category`.
+export function todoTags(t) {
+  if (t && Array.isArray(t.tags)) return t.tags;
+  return t && t.category ? [t.category] : [];
+}
+
+// The board's filters: tags (any of those highlighted; "__none" = untagged),
+// who (a `who` value, "mine" for what is for me, or "" for all) and area
+// ("__none" = no area).
 export function todoFilter(todos, f, me) {
   const o = f || {};
+  const want = Array.isArray(o.tags) ? o.tags : [];
   return (todos || []).filter(function (t) {
-    if (o.category) { if (o.category === "__none" ? !!t.category : t.category !== o.category) return false; }
-    if (o.area) { if (o.area === "__none" ? !!t.area : t.area !== o.area) return false; }
+    if (want.length) {
+      const has = todoTags(t);
+      const ok = want.some(function (g) { return g === "__none" ? !has.length : has.indexOf(g) !== -1; });
+      if (!ok) return false;
+    }
+    if (o.area) { const as = todoAreas(t); if (o.area === "__none" ? as.length > 0 : as.indexOf(o.area) === -1) return false; }
     if (o.who === "mine") { if (!todoIsFor(t, me)) return false; }
     else if (o.who) { if ((t.who || "anyone") !== o.who) return false; }
     return true;

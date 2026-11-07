@@ -1344,6 +1344,16 @@ matters, read the live catalogue with the Supabase MCP tools.
   the to-do** (Admin, Maintenance, To buy); the Todoist-level categories, the
   Maintenance and To buy projects and the Admin area were retired (a data
   move, not in the repo). `TODO_DEFAULT_AREAS` has no Admin.
+  **Tags and areas are lists** (`todo_items.tags`, `areas`, text[]; `todoTags`
+  / `todoAreas` fall back to the single `category` / `area`, which the
+  database keeps as the first of each for an older tab, and which the app
+  still sends). Picked as bubbles (`TodoMultiChips`); a to-do with two is in
+  both columns (`todoGroups` by tag / area); the tag filter highlights
+  several (any of them). "Before next event" over several areas is whichever
+  comes first (`todoEventDue`); the stored day is kept while the areas are
+  unchanged. On screen they are **Tags**; in the database the lists are still
+  kind `category`. The edit sheet's frame never scrolls sideways
+  (`overflowX: hidden` on `ChecklistSheetFrame` — an iPhone slid it).
   Test: `supabase/2026-11-07d-todo-event-day-test.sql` (after 07c's).
 
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)

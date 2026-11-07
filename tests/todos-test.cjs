@@ -146,6 +146,15 @@ const path = require('path')
     assert.strictEqual(T.todoEventDue(t(null), cal, today).on, '2026-11-14')
     assert.strictEqual(T.todoEventDue(Object.assign(t('hamlet'), { setOn: '2026-11-14' }), cal, today), null)   // counted from the day it was set
     assert.strictEqual(T.todoEventDue({ priority: 'week', area: 'hamlet' }, cal, today), null)
+    // Several areas: whichever comes first.
+    const many = (areas) => ({ priority: 'event', setOn: '2026-11-06', areas })
+    assert.deepStrictEqual(T.todoEventDue(many(['amly-barn', 'hamlet']), cal, today), { on: '2026-11-13', what: 'checkin', propertyId: 'hamlet' })
+    assert.deepStrictEqual(T.todoEventDue(many(['amly-barn', 'grain-store']), cal, today), { on: '2026-11-14', what: 'event' })
+    assert.deepStrictEqual(T.todoEventDue(many(['hamlet', 'grain-store']), cal, today), { on: '2026-11-13', what: 'checkin', propertyId: 'hamlet' })
+    assert.strictEqual(T.todoEventDue(many(['glamping']), cal, today), null)
+    assert.strictEqual(T.todoEventKind(['hamlet', 'glamping']), 'checkin')
+    assert.strictEqual(T.todoEventKind(['hamlet', 'farm']), 'either')
+    assert.strictEqual(T.todoEventKind([]), 'event')
     assert.strictEqual(T.todoDueOn({ priority: 'event', setOn: today, eventOn: '2026-11-13' }), '2026-11-13')
     assert.strictEqual(T.todoDueOn({ priority: 'event', setOn: today, eventOn: '2026-11-13', deadline: '2026-11-10' }), '2026-11-10')
     assert.strictEqual(T.todoDueOn({ priority: 'event', setOn: today }), null)
@@ -162,23 +171,36 @@ const path = require('path')
     assert.strictEqual(T.todoNextOn('2026-11-07', 'fortnightly', '2026-11-07'), null)
   })
 
-  ok('categories group like projects; the board filters by category, person and area', () => {
+  ok('tags: several to a to-do, a column each; the board filters by tags, person and area', () => {
     const list = [
-      { id: 'x1', title: 'A', priority: 'week', setOn: today, category: 'maint', area: 'farm', who: 'anyone', createdAt: '1' },
-      { id: 'x2', title: 'B', priority: 'week', setOn: today, category: 'admin', area: 'hamlet', who: 'person:u1', createdAt: '2' },
-      { id: 'x3', title: 'C', priority: 'week', setOn: today, who: 'role:bar', createdAt: '3' },
+      { id: 'x1', title: 'A', priority: 'week', setOn: today, tags: ['maint', 'buy'], area: 'farm', who: 'anyone', createdAt: '1' },
+      { id: 'x2', title: 'B', priority: 'week', setOn: today, category: 'admin', area: 'hamlet', who: 'person:u1', createdAt: '2' },   // saved before tags
+      { id: 'x3', title: 'C', priority: 'week', setOn: today, tags: [], who: 'role:bar', createdAt: '3' },
     ]
-    const c = Object.assign({}, ctx, { categories: [{ id: 'maint', name: 'Farm Maintenance' }, { id: 'admin', name: 'Farm Admin' }] })
-    assert.deepStrictEqual(T.todoGroups(list, 'category', c).map((g) => g.label), ['Farm Maintenance', 'Farm Admin', 'No category'])
-    assert.deepStrictEqual(T.todoGroups(list, 'category', c)[0].preset, { category: 'maint' })
-    assert.deepStrictEqual(T.todoFilter(list, { category: 'maint' }, me).map((t) => t.id), ['x1'])
-    assert.deepStrictEqual(T.todoFilter(list, { category: '__none' }, me).map((t) => t.id), ['x3'])
+    const c = Object.assign({}, ctx, { categories: [{ id: 'admin', name: 'Admin' }, { id: 'maint', name: 'Maintenance' }, { id: 'buy', name: 'To buy' }] })
+    assert.deepStrictEqual(T.todoTags(list[1]), ['admin'])
+    assert.deepStrictEqual(T.todoTags(list[2]), [])
+    const g = T.todoGroups(list, 'tag', c)
+    assert.deepStrictEqual(g.map((x) => x.label + ':' + x.items.map((t) => t.id).join('')), ['Admin:x2', 'Maintenance:x1', 'To buy:x1', 'No tag:x3'])
+    assert.deepStrictEqual(g[1].preset, { tags: ['maint'] })
+    assert.deepStrictEqual(T.todoGroups(list, 'category', c).length, 4, 'a saved "category" column choice still works')
+    assert.deepStrictEqual(T.todoFilter(list, { tags: ['buy'] }, me).map((t) => t.id), ['x1'])
+    assert.deepStrictEqual(T.todoFilter(list, { tags: ['buy', 'admin'] }, me).map((t) => t.id), ['x1', 'x2'], 'any highlighted tag')
+    assert.deepStrictEqual(T.todoFilter(list, { tags: ['__none'] }, me).map((t) => t.id), ['x3'])
+    assert.deepStrictEqual(T.todoFilter(list, { tags: ['__none', 'admin'] }, me).map((t) => t.id), ['x2', 'x3'])
     assert.deepStrictEqual(T.todoFilter(list, { area: '__none' }, me).map((t) => t.id), ['x3'])
+    // Several areas: in each one's column, and found by any of them.
+    const two = [{ id: 'y1', title: 'Y', priority: 'week', setOn: today, areas: ['farm', 'hamlet'], createdAt: '1' }]
+    assert.deepStrictEqual(T.todoFilter(two, { area: 'hamlet' }, me).length, 1)
+    assert.deepStrictEqual(T.todoGroups(two, 'area', Object.assign({}, ctx, { areas: [{ id: 'farm', name: 'Farm' }, { id: 'hamlet', name: 'The Hamlet' }] }))
+      .map((x) => x.label), ['Farm', 'The Hamlet'])
+    assert.deepStrictEqual(T.todoAreas({ area: 'farm' }), ['farm'])
     assert.deepStrictEqual(T.todoFilter(list, { who: 'mine' }, me).map((t) => t.id), ['x1', 'x2'])
     assert.deepStrictEqual(T.todoFilter(list, { who: 'role:bar' }, me).map((t) => t.id), ['x3'])
-    assert.deepStrictEqual(T.todoFilter(list, { category: 'admin', area: 'hamlet', who: 'person:u1' }, me).map((t) => t.id), ['x2'])
-    assert.deepStrictEqual(T.todoFilter(list, {}, me).length, 3)
+    assert.deepStrictEqual(T.todoFilter(list, { tags: ['admin'], area: 'hamlet', who: 'person:u1' }, me).map((t) => t.id), ['x2'])
+    assert.deepStrictEqual(T.todoFilter(list, { tags: [] }, me).length, 3)
     assert.ok(T.TODO_DEFAULT_AREAS.some((a) => a.id === 'farm' && a.name === 'Farm'))
+    assert.ok(!T.TODO_DEFAULT_AREAS.some((a) => a.id === 'admin'), 'Admin is a tag now, not an area')
     assert.deepStrictEqual(T.TODO_PRIORITY_ORDER, ['three', 'week', 'month', 'event', 'eventually'])
   })
 

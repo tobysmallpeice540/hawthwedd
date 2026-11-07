@@ -17,8 +17,10 @@ async function makeTodoDb(opts) {
   const visible = (t) => R.todoVisibleTo(t, me, lists.project)
   const canEdit = (t) => visible(t) && (me.role === 'admin' || t.createdById === me.id)
   const out = (t) => Object.assign({}, t, { dueOn: R.todoDueOn(t), canEdit: canEdit(t) })
+  // A tag (kind 'category') is used by every to-do that carries it.
+  const uses = (t, kind, id) => kind === 'category' ? R.todoTags(t).indexOf(id) !== -1 : kind === 'area' ? R.todoAreas(t).indexOf(id) !== -1 : t[kind] === id
   const listOut = (kind, l) => ({ id: l.id, name: l.name, hidden: !!l.hidden, private: !!l.private, mine: l.ownerId === me.id,
-    uses: [...items.values()].filter((t) => t[kind] === l.id).length })
+    uses: [...items.values()].filter((t) => uses(t, kind, l.id)).length })
   const label = (who) => who === 'anyone' ? 'Everyone' : labels[who] || who
   const fail = (error) => ({ ok: false, error })
 
@@ -34,11 +36,13 @@ async function makeTodoDb(opts) {
       if (old && !canEdit(old)) return fail('not_yours')
       if (!String(p.title || '').trim()) return fail('no_title')
       const rec = Object.assign({}, old || { state: 'open', createdAt: new Date().toISOString(), createdBy: me.name, createdById: me.id },
-        { id: p.id, title: p.title.trim(), detail: p.detail || '', who: p.who, whoLabel: label(p.who), area: p.area, project: p.project,
-          category: p.category || null, repeat: p.repeat || null,
+        { id: p.id, title: p.title.trim(), detail: p.detail || '', who: p.who, whoLabel: label(p.who), project: p.project,
+          areas: Array.isArray(p.areas) ? [...new Set(p.areas)] : p.area ? [p.area] : old ? R.todoAreas(old) : [],
+          tags: Array.isArray(p.tags) ? [...new Set(p.tags)] : p.category ? [p.category] : old ? R.todoTags(old) : [],
+          repeat: p.repeat || null,
           // The day "Before next event" was set for (migration 2026-11-07d).
           eventOn: p.priority !== 'event' ? null
-            : old && old.priority === 'event' && (old.area || null) === (p.area || null) && old.eventOn ? old.eventOn : (p.eventOn || null),
+            : old && old.priority === 'event' && R.todoAreas(old).join('|') === (Array.isArray(p.areas) ? p.areas : R.todoAreas(old)).join('|') && old.eventOn ? old.eventOn : (p.eventOn || null),
           priority: p.priority === 'day' ? 'three' : p.priority, deadline: p.deadline || (p.repeat ? today() : null), private: !!p.private, photos: p.photos || [],
           setOn: old && old.priority === p.priority ? old.setOn : today(), updatedAt: new Date().toISOString() })
       items.set(p.id, rec)
@@ -89,7 +93,7 @@ async function makeTodoDb(opts) {
     },
     todo_delete_list: ({ p_kind, p_id }) => {
       if (me.role !== 'admin') return fail('office_only')
-      if ([...items.values()].some((t) => t[p_kind] === p_id)) return fail('in_use')
+      if ([...items.values()].some((t) => uses(t, p_kind, p_id))) return fail('in_use')
       lists[p_kind] = lists[p_kind].filter((x) => x.id !== p_id)
       return { ok: true }
     },
