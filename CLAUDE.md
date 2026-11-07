@@ -1306,6 +1306,37 @@ matters, read the live catalogue with the Supabase MCP tools.
   `tests/todos-e2e.cjs` (screens, with `tests/todos/fake-db.cjs` standing in
   for the functions), the to-do parts of `tests/whatsapp-reminders-test.cjs`.
 
+### To-do board (7 Nov 2026, migration 2026-11-07c)
+
+- **After Toby's Todoist**: a third list, **categories** (`todo_lists` kind
+  `category`; shared like areas, never private; `todo_items.category`). A
+  to-do may have no category, project or area. A **Farm** area.
+- **Priorities**: `three` (3 days — replaced "1 day"; `todo_upsert` still
+  maps an old tab's `day`), `week`, `month`, **`event`** (Before next event),
+  `eventually`. `event` = the next check-in at that area's property
+  (`TODO_AREA_PROPERTY`: hamlet, amly-barn → amly, glamping), otherwise the
+  next venue event (diary not Cancelled/Holding, box office not draft), on or
+  after `set_on`. Bookings live in app_data JSON, so **the app works it out**
+  (`todoEventDue`) from `todoStore.cal`, which App and CleanerView set
+  (`todoSetCalendar`); the bar login sets none, so it shows no date. `due_on`
+  in the database leaves `event` out, so the overdue WhatsApp never covers it.
+- **Repeats** (`repeat`: daily, weekdays, weekly, monthly, yearly; the
+  deadline is the next due day): `todo_set_state` done / note / na on a repeat
+  inserts the next one (`todo_next_on`, mirrored by `todoNextOn` in JS, after
+  today; monthly counts from the first day so the 31st does not drift) and
+  returns it as `next`; unticking deletes it only if untouched
+  (`updated_at = created_at`). The writer stays the writer.
+- `todo_upsert` keeps category and repeat when the key is absent (an app
+  from before this build); the current app always sends both.
+- **The page is a board** (`TodoBoard` / `TodoCard`, columns from
+  `todoGroups` by project / category / area / person / priority), filtered by
+  category chips and For / Area selects (`todoFilter`), remembered per browser
+  (`hbf_todo_prefs_v2`); List shows the old grouped list. Round ticks
+  (`TodoTick`) everywhere. A new to-do starts in its column and the filters.
+  The Todoist CSV button is gone (`todoist-export.js` stays, unused).
+- Tests: `supabase/2026-11-07c-todo-board-test.sql` (after the 06b sequence
+  and its test), `tests/todos-test.cjs`, `tests/todos-e2e.cjs`.
+
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
 
 - `.github/workflows/schema-snapshot.yml` runs `supabase/schema/snapshot.sh`

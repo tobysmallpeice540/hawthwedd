@@ -2,14 +2,23 @@
 // on their own (tests/todos-test.cjs). Nothing here touches the network.
 //
 // A to-do (the todo_items table, migration 2026-11-06b, as todo_get sends it):
-//   { id, title, detail, who, whoLabel, area, project, priority, setOn,
-//     deadline, photos: [{ path, name }], state, comment,
+//   { id, title, detail, who, whoLabel, area, project, category, priority,
+//     repeat, setOn, deadline, photos: [{ path, name }], state, comment,
 //     doneAt, doneBy, doneById, createdAt, createdBy, createdById, updatedAt }
 // · who: "anyone" (Everyone), "person:<profile id>", "role:admin" (Office),
 //   "role:bar", "role:cleaner" (Housekeeping) — the same values checklists use.
-// · priority: "day" | "week" | "month" | "eventually". It is a scope, counted
-//   from the day it was set (setOn): "1 month" put on the 20th means within
-//   four weeks of the 20th. Changing the priority starts the count again.
+// · priority: "three" | "week" | "month" | "event" | "eventually". The first
+//   three are a scope counted from the day it was set (setOn): "1 month" put
+//   on the 20th means within four weeks of the 20th. Changing the priority
+//   starts the count again. ("1 day" became "3 days" on 7 Nov 2026.)
+//   "event" — Before next event — is due on the next check-in at The Hamlet,
+//   Amly Barn or Glamping when that is its area, otherwise the next event at
+//   the venue (diary or box office), on or after the day it was set. The app
+//   works that day out from the bookings (todoEventDue) and keeps it on the
+//   to-do as `eventOn`; the database does not know it.
+// · repeat: null | "daily" | "weekdays" | "weekly" | "monthly" | "yearly".
+//   Ticking one leaves the next one behind (the database does it).
+// · area, project, category: each optional (migration 2026-11-07c).
 // · deadline: an optional fixed date; whichever of the two comes first is the
 //   date it is due by.
 // · state: "open", "done", "note" (done, with a comment) or "na".
@@ -26,9 +35,11 @@
 // (tests/todos-test.cjs); the app does not filter with them. Likewise the
 // database works out due_on, and todoDueOn must agree with it.
 
-export const TODO_PRIORITY_DAYS = { day: 1, week: 7, month: 28, eventually: null };
-export const TODO_PRIORITY_ORDER = ["day", "week", "month", "eventually"];
-export const TODO_PRIORITY_LABEL = { day: "1 day", week: "7 days", month: "1 month", eventually: "Eventually" };
+export const TODO_PRIORITY_DAYS = { three: 3, week: 7, month: 28, event: null, eventually: null };
+export const TODO_PRIORITY_ORDER = ["three", "week", "month", "event", "eventually"];
+export const TODO_PRIORITY_LABEL = { three: "3 days", week: "7 days", month: "1 month", event: "Before next event", eventually: "Eventually" };
+export const TODO_REPEATS = ["daily", "weekdays", "weekly", "monthly", "yearly"];
+export const TODO_REPEAT_LABEL = { daily: "Every day", weekdays: "Every weekday", weekly: "Every week", monthly: "Every month", yearly: "Every year" };
 
 export const TODO_DEFAULT_AREAS = [
   { id: "admin", name: "Admin" },
@@ -40,7 +51,11 @@ export const TODO_DEFAULT_AREAS = [
   { id: "wood-store", name: "Wood Store" },
   { id: "old-brewery", name: "Old Brewery" },
   { id: "barn-in-the-woods", name: "Barn in the Woods" },
+  { id: "farm", name: "Farm" },
 ];
+
+// Which letting property an area is, for "Before next event".
+export const TODO_AREA_PROPERTY = { hamlet: "hamlet", "amly-barn": "amly", glamping: "glamping" };
 
 export function todoAddDays(iso, n) {
   if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
@@ -54,7 +69,8 @@ export function todoAddDays(iso, n) {
 export function todoDueOn(t) {
   if (!t) return null;
   const days = TODO_PRIORITY_DAYS[t.priority];
-  const fromPriority = days != null && t.setOn ? todoAddDays(t.setOn, days) : null;
+  let fromPriority = days != null && t.setOn ? todoAddDays(t.setOn, days) : null;
+  if (t.priority === "event" && typeof t.eventOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.eventOn)) fromPriority = t.eventOn;
   const deadline = typeof t.deadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.deadline) ? t.deadline : null;
   if (fromPriority && deadline) return fromPriority < deadline ? fromPriority : deadline;
   return fromPriority || deadline;
@@ -161,10 +177,10 @@ export function todoGroups(todos, by, ctx) {
       byKey[w].items.push(t);
     });
   } else {
-    const field = by === "area" ? "area" : "project";
-    const list = (by === "area" ? ctx.areas : ctx.projects) || [];
+    const field = by === "area" ? "area" : by === "category" ? "category" : "project";
+    const list = (by === "area" ? ctx.areas : by === "category" ? ctx.categories : ctx.projects) || [];
     list.forEach(function (x) { const p = {}; p[field] = x.id; put(x.id, x.name, null, p); });
-    put("__none", by === "area" ? "No area" : "No project", null, {});
+    put("__none", by === "area" ? "No area" : by === "category" ? "No category" : "No project", null, {});
     open.forEach(function (t) {
       const k = t[field] && byKey[t[field]] ? t[field] : "__none";
       byKey[k].items.push(t);
@@ -193,6 +209,81 @@ export function todoSlug(name, taken) {
 // How many to-dos use an area or project — one in use is hidden, not deleted.
 export function todoUses(todos, field, id) {
   return (todos || []).filter(function (t) { return t[field] === id; }).length;
+}
+
+// ── Before next event ───────────────────────────────────────────────────────
+// cal: { accom: lettings records, events: diary events (box office rota
+// records, booking-shaped, may be among them), boxEvents: box_events rows }.
+// Returns { on, what: "checkin" | "event", propertyId } or null when nothing
+// is booked. The changeover summary's counting rules: lettings not cancelled
+// or Blocked; diary events not Cancelled or Holding; box office not draft.
+function todoValidDay(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function todoLondonDay(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return null;
+  return d.toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+}
+export function todoEventDue(t, cal, today) {
+  if (!t || t.priority !== "event") return null;
+  const from = todoValidDay(t.setOn) ? t.setOn : today;
+  if (!from) return null;
+  const c = cal || {};
+  const prop = TODO_AREA_PROPERTY[t.area];
+  let best = null;
+  const take = function (day) { if (todoValidDay(day) && day >= from && (!best || day < best)) best = day; };
+  if (prop) {
+    (c.accom || []).forEach(function (b) {
+      if (!b || b.status === "cancelled" || b.bookingType === "Blocked") return;
+      (b.stays && b.stays.length ? b.stays : [b]).forEach(function (st) { if (st && st.propertyId === prop) take(st.checkIn); });
+    });
+    return best ? { on: best, what: "checkin", propertyId: prop } : null;
+  }
+  (c.events || []).forEach(function (ev) {
+    if (!ev || ev.fromSnapshot || ev.status === "Cancelled" || ev.status === "Holding") return;
+    take(ev.date);
+  });
+  (c.boxEvents || []).forEach(function (bx) {
+    if (!bx || bx.status === "draft" || !bx.starts_at) return;
+    take(todoLondonDay(bx.starts_at));
+  });
+  return best ? { on: best, what: "event" } : null;
+}
+
+// The next day a repeat falls on after `today` — the database's
+// todo_next_on, for showing on screen before it is ticked.
+export function todoNextOn(from, rule, today) {
+  if (!todoValidDay(from) || TODO_REPEATS.indexOf(rule) === -1) return null;
+  const p = from.split("-").map(Number);
+  let d = from;
+  for (let n = 1; n < 4000; n++) {
+    if (rule === "daily") d = todoAddDays(from, n);
+    else if (rule === "weekly") d = todoAddDays(from, 7 * n);
+    else if (rule === "weekdays") {
+      d = todoAddDays(d, 1);
+      while ([0, 6].indexOf(new Date(d + "T00:00:00Z").getUTCDay()) !== -1) d = todoAddDays(d, 1);
+    } else {
+      const y = p[0] + (rule === "yearly" ? n : 0), m0 = p[1] - 1 + (rule === "monthly" ? n : 0);
+      const first = new Date(Date.UTC(y, m0, 1));
+      const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+      first.setUTCDate(Math.min(p[2], last));
+      d = first.toISOString().slice(0, 10);
+    }
+    if (d > today) return d;
+  }
+  return null;
+}
+
+// The board's filters: category, who (a `who` value, "mine" for what is for
+// me, or "" for all) and area; "__none" picks those with none.
+export function todoFilter(todos, f, me) {
+  const o = f || {};
+  return (todos || []).filter(function (t) {
+    if (o.category) { if (o.category === "__none" ? !!t.category : t.category !== o.category) return false; }
+    if (o.area) { if (o.area === "__none" ? !!t.area : t.area !== o.area) return false; }
+    if (o.who === "mine") { if (!todoIsFor(t, me)) return false; }
+    else if (o.who) { if ((t.who || "anyone") !== o.who) return false; }
+    return true;
+  });
 }
 
 // ── Todoist → to-do list: the proposed mapping (7 Nov 2026) ─────────────────
@@ -257,7 +348,7 @@ export function todoistPriority(task, today) {
   if (task.dueDate && !task.recurring) {
     const d = todoistDays(today, task.dueDate);
     if (d != null) {
-      if (d <= 1) return "day";
+      if (d <= 3) return "three";
       if (d <= 7) return "week";
       if (d <= 28) return "month";
       return "eventually";

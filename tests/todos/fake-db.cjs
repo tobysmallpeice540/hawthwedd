@@ -11,7 +11,8 @@ async function makeTodoDb(opts) {
   const labels = opts.labels || {}                    // who -> label
   const items = new Map((opts.items || []).map((t) => [t.id, Object.assign({ photos: [], state: 'open', detail: '' }, t)]))
   const lists = { area: (opts.areas || R.TODO_DEFAULT_AREAS).map((a) => Object.assign({}, a)),
-                  project: (opts.projects || []).map((p) => Object.assign({}, p)) }
+                  project: (opts.projects || []).map((p) => Object.assign({}, p)),
+                  category: (opts.categories || []).map((c) => Object.assign({}, c)) }
   const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' })
   const visible = (t) => R.todoVisibleTo(t, me, lists.project)
   const canEdit = (t) => visible(t) && (me.role === 'admin' || t.createdById === me.id)
@@ -25,7 +26,8 @@ async function makeTodoDb(opts) {
     todo_get: () => ({ ok: true, me,
       items: [...items.values()].filter(visible).map(out),
       areas: lists.area.map((l) => listOut('area', l)),
-      projects: lists.project.filter((l) => R.todoListVisibleTo(l, me)).map((l) => listOut('project', l)) }),
+      projects: lists.project.filter((l) => R.todoListVisibleTo(l, me)).map((l) => listOut('project', l)),
+      categories: lists.category.map((l) => listOut('category', l)) }),
     todo_upsert: ({ p }) => {
       const old = items.get(p.id)
       if (old && !visible(old)) return fail('not_found')
@@ -33,7 +35,8 @@ async function makeTodoDb(opts) {
       if (!String(p.title || '').trim()) return fail('no_title')
       const rec = Object.assign({}, old || { state: 'open', createdAt: new Date().toISOString(), createdBy: me.name, createdById: me.id },
         { id: p.id, title: p.title.trim(), detail: p.detail || '', who: p.who, whoLabel: label(p.who), area: p.area, project: p.project,
-          priority: p.priority, deadline: p.deadline, private: !!p.private, photos: p.photos || [],
+          category: p.category || null, repeat: p.repeat || null,
+          priority: p.priority === 'day' ? 'three' : p.priority, deadline: p.deadline || (p.repeat ? today() : null), private: !!p.private, photos: p.photos || [],
           setOn: old && old.priority === p.priority ? old.setOn : today(), updatedAt: new Date().toISOString() })
       items.set(p.id, rec)
       return { ok: true, item: out(rec) }
@@ -42,13 +45,23 @@ async function makeTodoDb(opts) {
       const t = items.get(p_id)
       if (!t || !visible(t)) return fail('not_found')
       if (p_state === 'note' && !p_comment) return fail('comment_needed')
+      let next = null
       if (p_state === 'open') {
         if (me.role !== 'admin' && t.doneById !== me.id) return fail('not_your_tick')
-        Object.assign(t, { state: 'open', comment: null, doneAt: null, doneBy: null, doneById: null })
+        if (t.nextId && items.get(t.nextId) && items.get(t.nextId).state === 'open') items.delete(t.nextId)
+        Object.assign(t, { state: 'open', comment: null, doneAt: null, doneBy: null, doneById: null, nextId: null })
       } else {
         Object.assign(t, { state: p_state, comment: p_state === 'done' ? null : p_comment, doneAt: new Date().toISOString(), doneBy: me.name, doneById: me.id })
+        // A repeat leaves the next one behind (todo_set_state, migration 2026-11-07c).
+        if (t.repeat && !t.nextId) {
+          next = Object.assign({}, t, { id: 'td_next' + Math.random().toString(36).slice(2, 10), state: 'open', comment: null, doneAt: null,
+            doneBy: null, doneById: null, nextId: null, photos: [], setOn: today(),
+            deadline: R.todoNextOn(t.deadline || today(), t.repeat, today()), createdAt: new Date().toISOString() })
+          items.set(next.id, next)
+          t.nextId = next.id
+        }
       }
-      return { ok: true, item: out(t) }
+      return { ok: true, item: out(t), next: next ? out(next) : null }
     },
     todo_delete: ({ p_id }) => {
       const t = items.get(p_id)

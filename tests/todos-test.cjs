@@ -9,7 +9,7 @@ const path = require('path')
   const ok = (name, fn) => { fn(); n++; console.log('  ok  ' + name) }
 
   ok('priority is a scope counted from the day it was set', () => {
-    assert.strictEqual(T.todoDueOn({ priority: 'day', setOn: '2026-11-06' }), '2026-11-07')
+    assert.strictEqual(T.todoDueOn({ priority: 'three', setOn: '2026-11-06' }), '2026-11-09')
     assert.strictEqual(T.todoDueOn({ priority: 'week', setOn: '2026-11-06' }), '2026-11-13')
     // "1 month" put on the 20th means within four weeks of the 20th
     assert.strictEqual(T.todoDueOn({ priority: 'month', setOn: '2026-11-20' }), '2026-12-18')
@@ -18,13 +18,13 @@ const path = require('path')
 
   ok('a deadline wins when it comes first, and stands alone for Eventually', () => {
     assert.strictEqual(T.todoDueOn({ priority: 'month', setOn: '2026-11-06', deadline: '2026-11-10' }), '2026-11-10')
-    assert.strictEqual(T.todoDueOn({ priority: 'day', setOn: '2026-11-06', deadline: '2026-11-30' }), '2026-11-07')
+    assert.strictEqual(T.todoDueOn({ priority: 'three', setOn: '2026-11-06', deadline: '2026-11-30' }), '2026-11-09')
     assert.strictEqual(T.todoDueOn({ priority: 'eventually', deadline: '2026-12-01' }), '2026-12-01')
     assert.strictEqual(T.todoDueOn({ priority: 'eventually', deadline: 'soon' }), null)
   })
 
   ok('timing: overdue only once the due day has passed', () => {
-    const t = { priority: 'day', setOn: '2026-11-06' }   // due 7th
+    const t = { priority: 'three', setOn: '2026-11-04' }   // due 7th
     assert.strictEqual(T.todoTiming(t, '2026-11-06'), 'soon')
     assert.strictEqual(T.todoTiming(t, '2026-11-07'), 'today')
     assert.strictEqual(T.todoTiming(t, '2026-11-08'), 'overdue')
@@ -71,10 +71,10 @@ const path = require('path')
 
   const today = '2026-11-06'
   const todos = [
-    { id: 'a', title: 'Late', priority: 'day', setOn: '2026-11-01', who: 'person:u1', area: 'hamlet', project: 'p1', createdAt: '1' },
+    { id: 'a', title: 'Late', priority: 'three', setOn: '2026-11-01', who: 'person:u1', area: 'hamlet', project: 'p1', createdAt: '1' },
     { id: 'b', title: 'Week', priority: 'week', setOn: '2026-11-06', who: 'role:bar', area: 'grain-store', createdAt: '2' },
     { id: 'c', title: 'Someday', priority: 'eventually', who: 'anyone', project: 'p1', createdAt: '3' },
-    { id: 'd', title: 'Done', priority: 'day', setOn: '2026-11-01', state: 'done', doneAt: new Date().toISOString(), createdAt: '4' },
+    { id: 'd', title: 'Done', priority: 'three', setOn: '2026-11-01', state: 'done', doneAt: new Date().toISOString(), createdAt: '4' },
     { id: 'e', title: 'Gone area', priority: 'month', setOn: '2026-11-06', area: 'deleted-area', who: 'person:zz', whoLabel: 'Old Name', createdAt: '5' },
   ]
   const ctx = { today, me, people: [{ who: 'person:u1', label: 'Toby' }, { who: 'role:admin', label: 'Office' }, { who: 'role:bar', label: 'Bar' }, { who: 'anyone', label: 'Everyone' }],
@@ -122,6 +122,66 @@ const path = require('path')
     assert.strictEqual(T.todoUses(todos, 'project', 'p1'), 2)
   })
 
+  // ── 7 Nov 2026: Before next event, repeats, categories, the board's filters ──
+  const cal = {
+    accom: [
+      { status: 'confirmed', stays: [{ propertyId: 'hamlet', checkIn: '2026-11-13', checkOut: '2026-11-16' }, { propertyId: 'amly', checkIn: '2026-11-20', checkOut: '2026-11-22' }] },
+      { status: 'cancelled', stays: [{ propertyId: 'hamlet', checkIn: '2026-11-09', checkOut: '2026-11-10' }] },
+      { status: 'confirmed', bookingType: 'Blocked', propertyId: 'hamlet', checkIn: '2026-11-08', checkOut: '2026-11-09' },
+      { status: 'confirmed', propertyId: 'hamlet', checkIn: '2026-11-01', checkOut: '2026-11-03' },
+    ],
+    events: [
+      { date: '2026-11-21', status: 'Confirmed' }, { date: '2026-11-10', status: 'Holding' }, { date: '2026-11-11', status: 'Cancelled' },
+      { date: '2026-11-12', status: 'Confirmed', fromSnapshot: true },
+    ],
+    boxEvents: [{ starts_at: '2026-11-14T19:00:00Z', status: 'published' }, { starts_at: '2026-11-08T19:00:00Z', status: 'draft' }],
+  }
+  ok('before next event: the next check-in at its property, else the next event at the venue', () => {
+    const t = (area) => ({ priority: 'event', setOn: '2026-11-06', area })
+    assert.deepStrictEqual(T.todoEventDue(t('hamlet'), cal, today), { on: '2026-11-13', what: 'checkin', propertyId: 'hamlet' })
+    assert.strictEqual(T.todoEventDue(t('amly-barn'), cal, today).on, '2026-11-20')
+    assert.strictEqual(T.todoEventDue(t('glamping'), cal, today), null)              // nothing booked
+    assert.deepStrictEqual(T.todoEventDue(t('grain-store'), cal, today), { on: '2026-11-14', what: 'event' })   // the ticketed night
+    assert.strictEqual(T.todoEventDue(t('farm'), cal, today).on, '2026-11-14')
+    assert.strictEqual(T.todoEventDue(t(null), cal, today).on, '2026-11-14')
+    assert.strictEqual(T.todoEventDue(Object.assign(t('hamlet'), { setOn: '2026-11-14' }), cal, today), null)   // counted from the day it was set
+    assert.strictEqual(T.todoEventDue({ priority: 'week', area: 'hamlet' }, cal, today), null)
+    assert.strictEqual(T.todoDueOn({ priority: 'event', setOn: today, eventOn: '2026-11-13' }), '2026-11-13')
+    assert.strictEqual(T.todoDueOn({ priority: 'event', setOn: today, eventOn: '2026-11-13', deadline: '2026-11-10' }), '2026-11-10')
+    assert.strictEqual(T.todoDueOn({ priority: 'event', setOn: today }), null)
+  })
+
+  ok('repeats: the next day after today, as the database works it out', () => {
+    assert.strictEqual(T.todoNextOn('2026-11-04', 'weekly', '2026-11-03'), '2026-11-11')
+    assert.strictEqual(T.todoNextOn('2026-11-04', 'weekly', '2026-11-20'), '2026-11-25')
+    assert.strictEqual(T.todoNextOn('2026-11-06', 'weekdays', '2026-11-06'), '2026-11-09')
+    assert.strictEqual(T.todoNextOn('2026-01-31', 'monthly', '2026-01-31'), '2026-02-28')
+    assert.strictEqual(T.todoNextOn('2026-01-31', 'monthly', '2026-03-01'), '2026-03-31')
+    assert.strictEqual(T.todoNextOn('2020-01-01', 'daily', '2026-11-07'), '2026-11-08')
+    assert.strictEqual(T.todoNextOn('2026-11-07', 'yearly', '2026-11-07'), '2027-11-07')
+    assert.strictEqual(T.todoNextOn('2026-11-07', 'fortnightly', '2026-11-07'), null)
+  })
+
+  ok('categories group like projects; the board filters by category, person and area', () => {
+    const list = [
+      { id: 'x1', title: 'A', priority: 'week', setOn: today, category: 'maint', area: 'farm', who: 'anyone', createdAt: '1' },
+      { id: 'x2', title: 'B', priority: 'week', setOn: today, category: 'admin', area: 'hamlet', who: 'person:u1', createdAt: '2' },
+      { id: 'x3', title: 'C', priority: 'week', setOn: today, who: 'role:bar', createdAt: '3' },
+    ]
+    const c = Object.assign({}, ctx, { categories: [{ id: 'maint', name: 'Farm Maintenance' }, { id: 'admin', name: 'Farm Admin' }] })
+    assert.deepStrictEqual(T.todoGroups(list, 'category', c).map((g) => g.label), ['Farm Maintenance', 'Farm Admin', 'No category'])
+    assert.deepStrictEqual(T.todoGroups(list, 'category', c)[0].preset, { category: 'maint' })
+    assert.deepStrictEqual(T.todoFilter(list, { category: 'maint' }, me).map((t) => t.id), ['x1'])
+    assert.deepStrictEqual(T.todoFilter(list, { category: '__none' }, me).map((t) => t.id), ['x3'])
+    assert.deepStrictEqual(T.todoFilter(list, { area: '__none' }, me).map((t) => t.id), ['x3'])
+    assert.deepStrictEqual(T.todoFilter(list, { who: 'mine' }, me).map((t) => t.id), ['x1', 'x2'])
+    assert.deepStrictEqual(T.todoFilter(list, { who: 'role:bar' }, me).map((t) => t.id), ['x3'])
+    assert.deepStrictEqual(T.todoFilter(list, { category: 'admin', area: 'hamlet', who: 'person:u1' }, me).map((t) => t.id), ['x2'])
+    assert.deepStrictEqual(T.todoFilter(list, {}, me).length, 3)
+    assert.ok(T.TODO_DEFAULT_AREAS.some((a) => a.id === 'farm' && a.name === 'Farm'))
+    assert.deepStrictEqual(T.TODO_PRIORITY_ORDER, ['three', 'week', 'month', 'event', 'eventually'])
+  })
+
   // ── Todoist → to-do proposal ───────────────────────────────────────────────
   const areas = T.TODO_DEFAULT_AREAS
   const tdData = {
@@ -161,14 +221,14 @@ const path = require('path')
   })
 
   ok('todoist: priority from the due date, else from P1/P2', () => {
-    assert.strictEqual(row('1').priority, '1 day')        // due tomorrow
+    assert.strictEqual(row('1').priority, '3 days')       // due tomorrow
     assert.strictEqual(row('6').priority, '1 month')      // 19 days
     assert.strictEqual(row('7').priority, 'Eventually')   // months away, kept as the deadline
     assert.strictEqual(row('7').deadline, '2027-03-01')
     assert.strictEqual(row('2').priority, '7 days')       // P1, no date
     assert.strictEqual(row('4').priority, '1 month')      // P2, no date
     assert.strictEqual(row('2').todoistPriority, 'P1')
-    assert.strictEqual(T.todoistPriority({ dueDate: '2026-10-01', priority: 1 }, '2026-11-06'), 'day')   // overdue
+    assert.strictEqual(T.todoistPriority({ dueDate: '2026-10-01', priority: 1 }, '2026-11-06'), 'three')   // overdue
   })
 
   ok('todoist: who, sub-tasks folded in, repeats proposed as checklists', () => {

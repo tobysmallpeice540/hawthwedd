@@ -43,20 +43,31 @@ async function run(viewport, label) {
   const today = londonToday()
   const db = await makeTodoDb({
     me: { id: ME, role: 'admin', name: 'Toby' }, labels: LABELS,
+    categories: [{ id: 'maint', name: 'Farm Maintenance' }, { id: 'admin', name: 'Farm Admin' }],
+    projects: [{ id: 'upkeep', name: 'Upkeep' }],
     items: [
       { id: 'td_old', title: 'Clear the gutters on the Hamlet', priority: 'week', setOn: addDays(today, -10), who: 'role:admin',
         area: 'hamlet', project: null, createdAt: '2026-10-01T09:00:00Z', createdById: ME },
-      { id: 'td_bar', title: 'Restock the ice machine', priority: 'day', setOn: today, who: 'role:bar', area: 'grain-store',
+      { id: 'td_bar', title: 'Restock the ice machine', priority: 'three', setOn: addDays(today, -2), who: 'role:bar', area: 'grain-store',
         createdAt: '2026-11-01T09:00:00Z' },
-      { id: 'td_mine', title: 'Ring the farrier', priority: 'day', setOn: today, who: 'person:' + ME, createdAt: '2026-11-02T09:00:00Z', createdById: ME },
-      { id: 'td_someday', title: 'Paint the gate', priority: 'eventually', who: 'person:' + ME, createdAt: '2026-11-02T09:00:00Z', createdById: ME },
+      { id: 'td_mine', title: 'Ring the farrier', priority: 'three', setOn: addDays(today, -2), who: 'person:' + ME, createdAt: '2026-11-02T09:00:00Z', createdById: ME },
+      { id: 'td_someday', title: 'Paint the gate', priority: 'eventually', who: 'person:' + ME, createdAt: '2026-11-02T09:00:00Z', createdById: ME,
+        category: 'maint', area: 'farm' },
+      { id: 'td_bins', title: 'Bins out', priority: 'eventually', repeat: 'weekly', deadline: addDays(today, 3), setOn: today, who: 'anyone',
+        category: 'maint', project: 'upkeep', createdAt: '2026-11-03T09:00:00Z', createdById: ME },
+      { id: 'td_shower', title: 'Fix the Hamlet shower', priority: 'event', setOn: today, who: 'anyone', area: 'hamlet',
+        category: 'maint', project: 'upkeep', createdAt: '2026-11-03T10:00:00Z', createdById: ME },
       // Rosanna's private one, which the database never sends to Toby.
-      { id: 'td_rosa', title: 'Rosanna private', priority: 'day', setOn: today, who: 'role:admin', private: true, createdById: ROS },
+      { id: 'td_rosa', title: 'Rosanna private', priority: 'three', setOn: today, who: 'role:admin', private: true, createdById: ROS },
     ],
   })
   const files = {}
+  // A Hamlet check-in in five days, for "Before next event".
+  const checkIn = addDays(today, 5)
   const { page, errors, close } = await openStaff({
-    distDir, appData: {}, viewport,
+    distDir, viewport,
+    appData: { hbf_accom_v1: [{ id: 'acc1', guestName: 'Jones', status: 'confirmed', bookingType: 'Standard',
+      stays: [{ propertyId: 'hamlet', checkIn: checkIn, checkOut: addDays(checkIn, 2) }], payments: [] }] },
     rpc: Object.assign({ chk_people: () => ({ ok: true, people: PEOPLE }) }, db.rpc),
   })
   await fakePhotos(page, files)
@@ -78,7 +89,37 @@ async function run(viewport, label) {
   await card.getByRole('button', { name: 'All to-dos' }).click()
   await page.getByRole('heading', { name: 'To-do' }).waitFor()
 
+  // ── The board: one column per project, round ticks, filters ──
+  const board = page.getByRole('region', { name: 'To-do board' })
+  await board.waitFor()
+  assert.deepStrictEqual(await board.locator('section').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Upkeep', 'No project'],
+    label + ': columns by project')
+  const shower = board.locator('[data-todo-id="td_shower"]')
+  await shower.getByText('Before check-in').waitFor()
+  assert.ok(await shower.getByText(new RegExp(String(Number(checkIn.slice(8))) + ' ')).isVisible(), label + ': due on the Hamlet check-in')
+  assert.ok(await board.locator('[data-todo-id="td_bins"]').getByText(/Every week/).isVisible(), label + ': repeat shown')
+  if (shots) await page.screenshot({ path: path.join(shots, label + '-board.png'), fullPage: false })
+  await page.getByRole('group', { name: 'Category' }).getByRole('button', { name: 'Farm Maintenance' }).click()
+  assert.deepStrictEqual(await board.locator('[data-todo-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-todo-id')).sort()),
+    ['td_bins', 'td_shower', 'td_someday'], label + ': category filter')
+  await page.locator('#todo-f-area').selectOption('farm')
+  assert.deepStrictEqual(await board.locator('section').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['No project'],
+    label + ': empty columns go')
+  // A new one from a filtered board starts in that category and area.
+  await page.getByRole('button', { name: 'New to-do in No project' }).click()
+  assert.strictEqual(await page.locator('#todo-category').inputValue(), 'maint')
+  assert.strictEqual(await page.locator('#todo-area').inputValue(), 'farm')
+  await page.getByText('Cancel', { exact: true }).click()
+  await page.getByRole('button', { name: 'Clear filters' }).click()
+  // A repeat, ticked, leaves the next one.
+  await board.getByRole('button', { name: 'Mark done: Bins out' }).click()
+  await until(() => item('td_bins').state === 'done' && item('td_bins').nextId, 'repeat ticked')
+  const nextBins = item(item('td_bins').nextId)
+  assert.strictEqual(nextBins.deadline, addDays(today, 10), label + ': next bins a week on')
+  await board.locator('[data-todo-id="' + nextBins.id + '"]').waitFor()
+
   // Overdue goes first, whatever its priority.
+  await page.locator('#todo-f-by').selectOption('priority')
   const firstGroup = await page.locator('section').first().getAttribute('aria-label')
   assert.strictEqual(firstGroup, 'Overdue', label + ': overdue first')
   assert.ok(await page.locator('section[aria-label="Overdue"]').getByText('Clear the gutters on the Hamlet').isVisible())
@@ -88,9 +129,9 @@ async function run(viewport, label) {
   await page.getByLabel('Heading').fill('Replace the cinema barn projector bulb')
   await page.getByRole('radio', { name: '1 month' }).click()
   await page.getByRole('radio', { name: 'Rosanna' }).click()
-  await page.getByLabel('Area').selectOption('cinema-barn')
+  await page.locator('#todo-area').selectOption('cinema-barn')
   page.once('dialog', (d) => d.accept('Cinema refit'))
-  await page.getByLabel('Project').selectOption('__new')
+  await page.locator('#todo-project').selectOption('__new')
   await page.waitForFunction(() => document.querySelector('#todo-project').value === 'cinema-refit')
   await page.locator('input[type=file]').setInputFiles({ name: 'bulb.png', mimeType: 'image/png', buffer: PNG })
   await page.getByRole('button', { name: 'Remove photo' }).waitFor()
@@ -107,8 +148,8 @@ async function run(viewport, label) {
   assert.ok(files[added.photos[0].path], label + ': photo stored in the private bucket')
   assert.ok(db.lists.project.some((p) => p.id === 'cinema-refit'))
 
-  // Group by project.
-  await page.getByRole('tab', { name: 'Project' }).click()
+  // Columns by project.
+  await page.locator('#todo-f-by').selectOption('project')
   await page.locator('section[aria-label="Cinema refit"]').getByText('Replace the cinema barn projector bulb').waitFor()
   if (shots) await page.screenshot({ path: path.join(shots, label + '-project.png'), fullPage: true })
 
@@ -118,7 +159,7 @@ async function run(viewport, label) {
   assert.strictEqual(item('td_old').doneBy, 'Toby')
 
   // Done with a comment, from More.
-  await page.getByRole('tab', { name: 'Priority' }).click()
+  await page.locator('#todo-f-by').selectOption('priority')
   const row = page.locator('[data-todo-id="td_bar"]')
   await row.getByRole('button', { name: 'More' }).click()
   await page.getByPlaceholder('e.g. New latch fitted').fill('Two bags left')
@@ -149,7 +190,10 @@ async function run(viewport, label) {
   if (shots) await page.screenshot({ path: path.join(shots, label + '-quickadd.png') })
   await page.getByRole('status').getByRole('button', { name: 'View' }).click()
   await page.getByRole('heading', { name: 'To-do' }).waitFor()
-  await page.getByRole('tab', { name: 'Person' }).click()
+  // The list, grouped by person.
+  await page.getByRole('button', { name: 'List', exact: true }).click()
+  await page.locator('#todo-f-by').selectOption('person')
+  assert.strictEqual(await page.getByRole('region', { name: 'To-do board' }).count(), 0, label + ': list view')
   if (shots) await page.screenshot({ path: path.join(shots, label + '-person.png'), fullPage: true })
 
   // Delete takes a second press and removes the photo.
@@ -160,7 +204,11 @@ async function run(viewport, label) {
   await until(() => !files[added.photos[0].path], 'photo taken down')
 
   // Areas & projects: rename one; in-use ones cannot be deleted.
-  await page.getByRole('button', { name: 'Areas & projects' }).click()
+  await page.getByRole('button', { name: 'Projects & areas' }).click()
+  // Categories are kept there too.
+  await page.getByPlaceholder('New category').fill('Garden')
+  await page.getByPlaceholder('New category').press('Enter')
+  await until(() => db.lists.category.some((c) => c.name === 'Garden'), 'add a category')
   const hamlet = page.getByLabel('Name of The Hamlet')
   await hamlet.fill('Hamlet')
   await page.getByLabel('Name of Hamlet').or(hamlet).first().press('Tab')
@@ -181,25 +229,6 @@ async function run(viewport, label) {
   await until(() => !db.lists.project.some((p) => p.id === 'cinema-refit'), 'delete an unused project')
   if (shots) await page.screenshot({ path: path.join(shots, label + '-lists.png') })
   await page.getByText('Done', { exact: true }).last().click()
-
-  // Todoist CSV (office only): an error is shown; then the sheet downloads.
-  let todoistReply = { status: 400, body: { error: "Todoist isn't connected yet. Add TODOIST_API_TOKEN." } }
-  await page.route('**/.netlify/functions/todoist-export', (route) =>
-    route.fulfill({ status: todoistReply.status, contentType: 'application/json', body: JSON.stringify(todoistReply.body) }))
-  await page.getByRole('button', { name: 'Todoist CSV' }).click()
-  await page.getByText(/TODOIST_API_TOKEN/).waitFor()
-  todoistReply = { status: 200, body: { ok: true,
-    projects: [{ id: 'p1', name: 'Inbox', inbox: true }, { id: 'p2', name: 'Wood Store', shared: false }],
-    sections: [], people: [],
-    tasks: [{ id: 't1', content: 'Stack logs', projectId: 'p2', labels: [], priority: 1, order: 1 },
-      { id: 't2', content: 'Renew insurance', projectId: 'p1', labels: [], priority: 4, order: 2 }] } }
-  const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Todoist CSV' }).click()])
-  assert.ok(/^todoist-to-do-mapping-\d{4}-\d{2}-\d{2}\.csv$/.test(dl.suggestedFilename()), label + ': csv name')
-  const csv = require('fs').readFileSync(await dl.path(), 'utf8')
-  assert.ok(csv.includes('"Import","Stack logs","Wood Store","project"'), label + ': mapped row')
-  assert.ok(csv.includes('"Renew insurance",""'), label + ': no area found')
-  await page.getByText(/2 Todoist tasks in the sheet · 1 with no area yet\. Nothing has been imported\./).waitFor()
-  if (shots) await page.screenshot({ path: path.join(shots, label + '-todoist.png') })
 
   assert.deepStrictEqual(errors, [], label + ': no page errors')
   await close()
@@ -233,7 +262,6 @@ async function runHousekeeping() {
   await page.getByText('Spare duvet for the Hamlet').click()
   assert.ok(await page.getByLabel('Heading').isDisabled(), 'housekeeping: cannot change the office\'s to-do')
   assert.strictEqual(await page.getByRole('button', { name: 'Save' }).count(), 0)
-  assert.strictEqual(await page.getByRole('button', { name: 'Todoist CSV' }).count(), 0, 'housekeeping: no Todoist CSV')
   await page.getByText('Close', { exact: true }).click()
   await page.getByRole('button', { name: 'Mark done: Spare duvet for the Hamlet' }).click()
   await until(() => db.items.get('h1').state === 'done', 'housekeeping tick')
