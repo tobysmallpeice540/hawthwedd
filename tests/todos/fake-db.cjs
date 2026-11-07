@@ -47,6 +47,10 @@ async function makeTodoDb(opts) {
           areas: Array.isArray(p.areas) ? [...new Set(p.areas)] : p.area ? [p.area] : old ? R.todoAreas(old) : [],
           tags: Array.isArray(p.tags) ? [...new Set(p.tags)] : p.category ? [p.category] : old ? R.todoTags(old) : [],
           repeat: p.repeat || null,
+          // The day a repeat keeps (migration 2026-11-07f).
+          repeatFrom: !p.repeat ? null
+            : old && old.repeatFrom && old.deadline === (p.deadline || null) && old.repeat === p.repeat ? old.repeatFrom
+            : (p.deadline || today()),
           urgent: p.urgent === undefined ? !!(old && old.urgent) : !!p.urgent,
           // The day "Before next event" was set for (migration 2026-11-07d).
           eventOn: p.priority !== 'event' ? null
@@ -71,7 +75,7 @@ async function makeTodoDb(opts) {
         if (t.repeat && !t.nextId) {
           next = Object.assign({}, t, { id: 'td_next' + Math.random().toString(36).slice(2, 10), state: 'open', comment: null, doneAt: null,
             doneBy: null, doneById: null, nextId: null, photos: [], setOn: today(),
-            deadline: R.todoNextOn(t.deadline || today(), t.repeat, today()), createdAt: new Date().toISOString() })
+            repeatFrom: t.repeatFrom || t.deadline || today(), deadline: R.todoRepeatNext(t, today()), createdAt: new Date().toISOString() })
           items.set(next.id, next)
           t.nextId = next.id
         }

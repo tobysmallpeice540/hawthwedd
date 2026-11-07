@@ -171,6 +171,25 @@ const path = require('path')
     assert.strictEqual(T.todoNextOn('2026-11-07', 'fortnightly', '2026-11-07'), null)
   })
 
+  ok('repeats keep their day: the same weekday, the same day of the month or its last day', () => {
+    // As todo_set_state does it (migration 2026-11-07f) — pinned in SQL by 2026-11-07f-todo-repeat-day-test.sql.
+    const m31 = { repeat: 'monthly', repeatFrom: '2027-01-31', deadline: '2027-01-31' }
+    assert.strictEqual(T.todoRepeatNext(m31, '2026-11-07'), '2027-02-28')
+    assert.strictEqual(T.todoRepeatNext(Object.assign({}, m31, { deadline: '2027-02-28' }), '2026-11-07'), '2027-03-31', 'back to the 31st, not stuck on the 28th')
+    const m30 = { repeat: 'monthly', repeatFrom: '2027-01-30', deadline: '2027-02-28' }
+    assert.strictEqual(T.todoRepeatNext(m30, '2027-02-10'), '2027-03-30', 'ticked early')
+    assert.strictEqual(T.todoRepeatNext(m30, '2027-03-15'), '2027-03-30', 'ticked late')
+    assert.strictEqual(T.todoRepeatNext({ repeat: 'weekly', deadline: '2026-10-28' }, '2026-11-07'), '2026-11-11', 'weekly, late: next Wednesday')
+    assert.strictEqual(T.todoRepeatNext({ repeat: 'weekly', deadline: '2026-11-11' }, '2026-11-07'), '2026-11-18', 'weekly, early: a week on')
+    assert.strictEqual(T.todoRepeatNext({ repeat: null, deadline: '2026-11-11' }, '2026-11-07'), null)
+    assert.strictEqual(T.todoRepeatWhen('weekly', '2026-11-11'), 'Every Wednesday')
+    assert.strictEqual(T.todoRepeatWhen('monthly', '2026-11-30'), 'Monthly on the 30th (the last day in a shorter month)')
+    assert.strictEqual(T.todoRepeatWhen('monthly', '2026-12-01'), 'Monthly on the 1st')
+    assert.strictEqual(T.todoRepeatWhen('monthly', '2026-12-22'), 'Monthly on the 22nd')
+    assert.strictEqual(T.todoRepeatWhen('monthly', '2026-12-11'), 'Monthly on the 11th')
+    assert.strictEqual(T.todoRepeatWhen('yearly', '2028-02-29'), 'Every year on 29 Feb (28 Feb in other years)')
+  })
+
   ok('tags: several to a to-do, a column each; the board filters by tags, person and area', () => {
     const list = [
       { id: 'x1', title: 'A', priority: 'week', setOn: today, tags: ['maint', 'buy'], area: 'farm', who: 'anyone', createdAt: '1' },

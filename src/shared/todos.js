@@ -322,6 +322,35 @@ export function todoNextOn(from, rule, today) {
   return null;
 }
 
+// The day the next one of a repeating to-do falls on when it is ticked today
+// (todo_set_state, migration 2026-11-07f): counted from the day the repeat
+// keeps (`repeatFrom` — the deadline as typed), never from the last one, so
+// the 31st goes to 28 Feb and back to 31 Mar; and after both today and the
+// one being ticked, so ticking early moves on one step.
+export function todoRepeatNext(t, today) {
+  if (!t || !t.repeat) return null;
+  const due = t.deadline || today;
+  return todoNextOn(t.repeatFrom || due, t.repeat, due > today ? due : today);
+}
+
+// "Every Wednesday", "Monthly on the 30th (the last day in a shorter month)".
+const TODO_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const TODO_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function todoOrdinal(n) {
+  const s = n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th";
+  return n + s;
+}
+export function todoRepeatWhen(rule, day) {
+  if (!todoValidDay(day)) return "";
+  const p = day.split("-").map(Number);
+  if (rule === "weekly") return "Every " + TODO_WEEKDAYS[new Date(day + "T00:00:00Z").getUTCDay()];
+  if (rule === "monthly") return "Monthly on the " + todoOrdinal(p[2]) + (p[2] > 28 ? " (the last day in a shorter month)" : "");
+  if (rule === "yearly") return "Every year on " + p[2] + " " + TODO_MONTHS[p[1] - 1] + (p[1] === 2 && p[2] === 29 ? " (28 Feb in other years)" : "");
+  if (rule === "weekdays") return "Every weekday";
+  if (rule === "daily") return "Every day";
+  return "";
+}
+
 // A to-do's tags (several; migration 2026-11-07d). One saved before then has
 // at most a `category`.
 export function todoTags(t) {

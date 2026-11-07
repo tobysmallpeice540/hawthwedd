@@ -15,7 +15,7 @@ import { parseContractTemplate, resolveContractNodes, contractAccommodation, con
   htmlToContractMarkup, CONTRACT_FIELDS, CONTRACT_KINDS, CONTRACT_SYNTAX_HELP } from "./shared/contractDoc.js";
 import { DEFAULT_CONTRACT_TEMPLATE } from "./shared/contractTemplate.js";
 import { TODO_PRIORITY_ORDER, TODO_PRIORITY_LABEL, TODO_REPEATS, TODO_REPEAT_LABEL, todoAddDays, todoDueOn, todoTiming, todoIsOpen, todoIsFor,
-  todoGroups, todoRecentlyDone, todoCompare, todoEventDue, todoEventKind, todoNextOn, todoFilter, todoTags, todoAreas } from "./shared/todos.js";
+  todoGroups, todoRecentlyDone, todoCompare, todoEventDue, todoEventKind, todoRepeatNext, todoRepeatWhen, todoFilter, todoTags, todoAreas } from "./shared/todos.js";
 import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07e";
+const APP_BUILD = "2026-11-07f";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18263,7 +18263,11 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
   const evFound = d.priority === "event" && !keepEvent ? todoEventDue(Object.assign({}, d, { setOn: londonToday() }), store.cal, londonToday()) : null;
   const eventOn = d.priority !== "event" ? null : keepEvent ? todo.eventOn : evFound ? evFound.on : null;
   const due = todoDueOn(Object.assign({}, d, { setOn: setOn, eventOn: eventOn }));
-  const repeatDay = d.repeat ? (d.deadline || londonToday()) : null;
+  // The day a repeat keeps (migration 2026-11-07f): the stored one while the deadline
+  // and rule are unchanged, otherwise the deadline as typed — as todo_upsert decides.
+  const repeatAnchor = !d.repeat ? null
+    : todo && todo.repeatFrom && todo.deadline === d.deadline && todo.repeat === d.repeat ? todo.repeatFrom
+    : (d.deadline || londonToday());
   const big = { padding: "13px 14px", borderRadius: 10, fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer" };
 
   return (
@@ -18307,7 +18311,7 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
           <input id="todo-deadline" type="date" value={d.deadline || ""} onChange={function(e) { set("deadline", e.target.value); }}
             style={Object.assign({}, inputCss, { fontSize: 15, padding: "9px 10px", maxWidth: 200 })}/>
           <div style={{ fontSize: 12, color: T.textLight, marginTop: 6 }}>
-            {TODO_REPEAT_LABEL[d.repeat]}. When it is ticked the next one appears, due {todoDay(todoNextOn(repeatDay, d.repeat, repeatDay < londonToday() ? londonToday() : repeatDay))}.
+            {todoRepeatWhen(d.repeat, repeatAnchor) || TODO_REPEAT_LABEL[d.repeat]}. When it is ticked the next one appears, due {todoDay(todoRepeatNext({ repeat: d.repeat, repeatFrom: repeatAnchor, deadline: d.deadline || londonToday() }, londonToday()))}.
           </div>
         </div>
       ) : (

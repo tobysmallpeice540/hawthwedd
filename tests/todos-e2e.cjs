@@ -187,6 +187,13 @@ async function run(viewport, label) {
   await page.getByLabel('Heading').waitFor({ state: 'detached' })
   assert.strictEqual(item('td_someday').urgent, false, label + ': unstarred in the sheet')
 
+  // The sheet says which day a repeat keeps, and when the next one will be.
+  await board.locator('[data-todo-id="td_bins"] [role=button]').click()
+  const binsDay = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date(addDays(today, 3) + 'T00:00:00Z').getUTCDay()]
+  await page.getByRole('dialog').getByText('Every ' + binsDay + '. When it is ticked the next one appears', { exact: false }).waitFor()
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await page.getByLabel('Heading').waitFor({ state: 'detached' })
+
   // A repeat, ticked, leaves the next one.
   await board.getByRole('button', { name: 'Mark done: Bins out' }).click()
   await until(() => item('td_bins').state === 'done' && item('td_bins').nextId, 'repeat ticked')
