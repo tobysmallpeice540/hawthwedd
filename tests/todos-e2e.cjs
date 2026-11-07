@@ -339,8 +339,35 @@ async function run(viewport, label) {
   page.once('dialog', (d) => d.accept())
   await page.getByRole('button', { name: 'Delete Cinema refit' }).click()
   await until(() => !db.lists.project.some((p) => p.id === 'cinema-refit'), 'delete an unused project')
+  // Drag an area into place by its grip (7 Nov, Toby) — a mouse here, a finger
+  // on a phone (pointer events either way); the board's columns follow.
+  const areaIds = () => db.lists.area.map((a) => a.id)
+  const before = areaIds()
+  const lastName = db.lists.area[before.length - 1].name
+  const firstName = db.lists.area[0].name
+  const grip = page.getByRole('button', { name: 'Move ' + lastName + ' (drag, or use the arrow keys)' })
+  const target = page.getByRole('button', { name: 'Move ' + firstName + ' (drag, or use the arrow keys)' })
+  await grip.scrollIntoViewIfNeeded()
+  const gb = await grip.boundingBox()
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2)
+  await page.mouse.down()
+  const tb = await target.boundingBox()
+  await page.mouse.move(gb.x + gb.width / 2, tb.y + 2, { steps: 12 })
+  await page.mouse.up()
+  await until(() => areaIds()[0] === before[before.length - 1], 'dragged to the top')
+  assert.deepStrictEqual(areaIds(), [before[before.length - 1]].concat(before.slice(0, -1)), label + ': the rest keep their order')
+  await page.getByText('Order saved.').first().waitFor()
+  // The arrow keys move one place.
+  await page.getByRole('button', { name: 'Move ' + lastName + ' (drag, or use the arrow keys)' }).press('ArrowDown')
+  await until(() => areaIds()[1] === before[before.length - 1], 'arrow down one place')
   if (shots) await page.screenshot({ path: path.join(shots, label + '-lists.png') })
   await page.getByText('Done', { exact: true }).last().click()
+  // Columns by area follow the new order.
+  await page.locator('#todo-f-by').selectOption('area')
+  const cols = await page.locator('section[aria-label]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')))
+  const names = db.lists.area.map((a) => a.name).filter((n) => cols.indexOf(n) !== -1)
+  assert.deepStrictEqual(cols.filter((c) => names.indexOf(c) !== -1), names, label + ': columns in the dragged order')
+  await page.locator('#todo-f-by').selectOption('project')
 
   assert.deepStrictEqual(errors, [], label + ': no page errors')
   await close()

@@ -103,6 +103,19 @@ async function makeTodoDb(opts) {
       }
       return { ok: true, list: listOut(p_kind, l) }
     },
+    // Migration 2026-11-07g: the ids given first, in that order; any others after.
+    todo_order_list: ({ p_kind, p_ids }) => {
+      if (me.role !== 'admin') return fail('office_only')
+      const list = lists[p_kind]
+      if (!list) return fail('bad_kind')
+      const ids = [...new Set(p_ids || [])]
+      if (!ids.length) return fail('nothing_to_order')
+      if (ids.some((id) => !list.some((x) => x.id === id && (p_kind !== 'project' || R.todoListVisibleTo(x, me))))) return fail('not_found')
+      const rest = list.filter((x) => ids.indexOf(x.id) === -1)
+      lists[p_kind] = ids.map((id) => list.find((x) => x.id === id)).concat(rest)
+      const vis = lists[p_kind].filter((l) => p_kind !== 'project' || R.todoListVisibleTo(l, me))
+      return { ok: true, lists: vis.map((l) => listOut(p_kind, l)) }
+    },
     todo_delete_list: ({ p_kind, p_id }) => {
       if (me.role !== 'admin') return fail('office_only')
       if ([...items.values()].some((t) => uses(t, p_kind, p_id))) return fail('in_use')

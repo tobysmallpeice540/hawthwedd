@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07h";
+const APP_BUILD = "2026-11-07i";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -17952,6 +17952,17 @@ async function todoSaveListDb(kind, p) {
   todoPut(todoListField(kind), r.list);
   return r.list;
 }
+// Projects, tags or areas dragged into order (migration 2026-11-07g).
+async function todoOrderListDb(kind, ids) {
+  let r;
+  try { r = await todoCall("todo_order_list", { p_kind: kind, p_ids: ids }); }
+  catch (e) {
+    if (e && e.code === "PGRST202") throw new Error("Putting these in order needs a database update that is not in yet.");
+    throw e;
+  }
+  const p = {}; p[todoListField(kind)] = r.lists || []; todoPatch(p);
+  return r.lists;
+}
 async function todoDeleteListDb(kind, id) {
   await todoCall("todo_delete_list", { p_kind: kind, p_id: id });
   todoDrop(todoListField(kind), id);
@@ -18554,8 +18565,13 @@ function TodoRow({ todo, today, ctx, showWho, showArea, showProject, busy, canUn
 // Areas or projects: rename, hide, delete (only when nothing uses it), add.
 // onSave(p) with { id?, name?, hidden?, private? }; onDelete(id). The
 // database counts the uses (`uses`) and says whose a project is (`mine`).
-function TodoListEditor({ title, field, list, onSave, onDelete, hideWord }) {
+function TodoListEditor({ title, field, list, onSave, onDelete, onOrder, hideWord }) {
   const privacy = field === "project";
+  // Dragging a row by its grip (7 Nov, Toby): pointer events, so a finger on
+  // an iPhone works as well as a mouse; the arrow keys move it one place.
+  const boxRef = useRef(null);
+  const [dragId, setDragId] = useState(null);
+  const rowsRef = useRef([]);
   const [rows, setRows] = useState(function() { return (list || []).map(function(x) { return Object.assign({}, x); }); });
   const [name, setName] = useState("");
   const [err, setErr] = useState("");
@@ -18564,6 +18580,7 @@ function TodoListEditor({ title, field, list, onSave, onDelete, hideWord }) {
   // Keyed on the content: a list built afresh each render must not reset the
   // boxes being typed in.
   const listKey = JSON.stringify(list || []);
+  rowsRef.current = rows;
   useEffect(function() { setRows((list || []).map(function(x) { return Object.assign({}, x); })); }, [listKey]);
   async function apply(run, msg) {
     setErr(""); setNote("");
@@ -18574,6 +18591,34 @@ function TodoListEditor({ title, field, list, onSave, onDelete, hideWord }) {
     const was = (list || []).filter(function(x) { return x.id === id; })[0];
     if (!n || !was || was.name === n) { setRows((list || []).map(function(x) { return Object.assign({}, x); })); return; }
     apply(function() { return onSave({ id: id, name: n }); }, "Saved.");
+  }
+  function idsOf(r) { return r.map(function(x) { return x.id; }); }
+  function saveOrder(r) {
+    if (!onOrder || idsOf(r).join("|") === idsOf(list || []).join("|")) return;
+    apply(async function() {
+      try { await onOrder(idsOf(r)); }
+      catch (e) { setRows((list || []).map(function(x) { return Object.assign({}, x); })); throw e; }   // back as it was
+    }, "Order saved.");
+  }
+  function moveTo(r, id, to) {
+    const from = r.findIndex(function(x) { return x.id === id; });
+    if (from === -1 || to === from || to < 0 || to >= r.length) return r;
+    const n = r.slice(); const it = n.splice(from, 1)[0]; n.splice(to, 0, it); return n;
+  }
+  function dragMove(e) {
+    if (!dragId || !boxRef.current) return;
+    const els = Array.prototype.slice.call(boxRef.current.querySelectorAll("[data-list-row]"));
+    let to = els.length - 1;
+    for (let i = 0; i < els.length; i++) {
+      const b = els[i].getBoundingClientRect();
+      if (e.clientY < b.top + b.height / 2) { to = i; break; }
+    }
+    setRows(function(r) { return moveTo(r, dragId, to); });
+  }
+  function dragEnd() {
+    if (!dragId) return;
+    setDragId(null);
+    saveOrder(rowsRef.current);
   }
   function add() {
     const n = name.trim();
@@ -18587,13 +18632,30 @@ function TodoListEditor({ title, field, list, onSave, onDelete, hideWord }) {
       <div style={{ fontSize: 15, fontWeight: 700, color: T.text, margin: "12px 0 6px" }}>{title}</div>
       {err && <ErrBanner text={err}/>}
       {note && <div style={{ fontSize: 12.5, color: T.green, marginBottom: 6 }}>{note}</div>}
-      {rows.map(function(x) {
+      <div ref={boxRef}>
+      {rows.map(function(x, i) {
         const uses = Number(x.uses) || 0;
         // Labelled by the SAVED name, so the label does not change while typing.
         const saved = (list || []).filter(function(y) { return y.id === x.id; })[0];
         const savedName = saved ? saved.name : x.name;
         return (
-          <div key={x.id} style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, padding: "5px 0" }}>
+          <div key={x.id} data-list-row="" style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, padding: "5px 0",
+            borderRadius: 8, background: dragId === x.id ? T.accentLight : "transparent", boxShadow: dragId === x.id ? "0 4px 14px rgba(0,0,0,.12)" : "none" }}>
+            {onOrder && rows.length > 1 && (
+              <button type="button" aria-label={"Move " + savedName + " (drag, or use the arrow keys)"} title="Drag up or down"
+                onPointerDown={function(e) { e.preventDefault(); try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) {} setDragId(x.id); }}
+                onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={dragEnd}
+                onKeyDown={function(e) {
+                  const to = e.key === "ArrowUp" ? i - 1 : e.key === "ArrowDown" ? i + 1 : null;
+                  if (to === null) return;
+                  e.preventDefault();
+                  const n = moveTo(rows, x.id, to);
+                  if (n !== rows) { setRows(n); saveOrder(n); }
+                }}
+                style={{ flexShrink: 0, width: 28, height: 36, display: "flex", alignItems: "center", justifyContent: "center", background: "none",
+                  border: "none", padding: 0, color: T.textLight, fontSize: 18, lineHeight: 1, cursor: dragId === x.id ? "grabbing" : "grab",
+                  touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}>&#10303;</button>
+            )}
             <input value={x.name} aria-label={"Name of " + savedName}
               onChange={function(e) { const v = e.target.value; setRows(function(r) { return r.map(function(y) { return y.id === x.id ? Object.assign({}, y, { name: v }) : y; }); }); }}
               onBlur={function(e) { rename(x.id, e.target.value); }}
@@ -18619,6 +18681,7 @@ function TodoListEditor({ title, field, list, onSave, onDelete, hideWord }) {
           </div>
         );
       })}
+      </div>
       {!rows.length && <div style={{ fontSize: 13, color: T.textLight, padding: "4px 0" }}>None yet.</div>}
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 8, marginTop: 8 }}>
         <input value={name} onChange={function(e) { setName(e.target.value); }} placeholder={field === "area" ? "New area" : field === "category" ? "New tag" : "New project"}
@@ -18650,7 +18713,7 @@ function TodoListsSheet({ onClose, view, onView }) {
           style={{ background: "none", border: "none", fontSize: 26, lineHeight: 1, color: T.textLight, cursor: "pointer", padding: "0 4px", fontFamily: "inherit" }}>&times;</button>
       </div>
       <div style={{ fontSize: 12.5, color: T.textMid, marginTop: 4, lineHeight: 1.5 }}>
-        Change a name and it changes on every to-do. One in use can be hidden from the choices but not deleted.
+        Drag &#10303; to put them in order — the board's columns follow. Change a name and it changes on every to-do. One in use can be hidden from the choices but not deleted.
         A private project, and everything in it, is seen only by whoever made it.
       </div>
       {onView && (
@@ -18663,11 +18726,14 @@ function TodoListsSheet({ onClose, view, onView }) {
         </div>
       )}
       <TodoListEditor title="Projects" field="project" hideWord="Archive" list={store.projects || []}
-        onSave={function(p) { return todoSaveListDb("project", p); }} onDelete={function(id) { return todoDeleteListDb("project", id); }}/>
+        onSave={function(p) { return todoSaveListDb("project", p); }} onDelete={function(id) { return todoDeleteListDb("project", id); }}
+        onOrder={function(ids) { return todoOrderListDb("project", ids); }}/>
       <TodoListEditor title="Tags" field="category" hideWord="Hide" list={store.categories || []}
-        onSave={function(p) { return todoSaveListDb("category", p); }} onDelete={function(id) { return todoDeleteListDb("category", id); }}/>
+        onSave={function(p) { return todoSaveListDb("category", p); }} onDelete={function(id) { return todoDeleteListDb("category", id); }}
+        onOrder={function(ids) { return todoOrderListDb("category", ids); }}/>
       <TodoListEditor title="Areas" field="area" hideWord="Hide" list={store.areas || []}
-        onSave={function(p) { return todoSaveListDb("area", p); }} onDelete={function(id) { return todoDeleteListDb("area", id); }}/>
+        onSave={function(p) { return todoSaveListDb("area", p); }} onDelete={function(id) { return todoDeleteListDb("area", id); }}
+        onOrder={function(ids) { return todoOrderListDb("area", ids); }}/>
       <button type="button" onClick={onClose}
         style={{ width: "100%", padding: "12px", marginTop: 16, background: "none", border: `1.5px solid ${T.border}`, borderRadius: 10, color: T.text, fontFamily: "inherit", fontSize: 14, cursor: "pointer" }}>Done</button>
     </ChecklistSheetFrame>

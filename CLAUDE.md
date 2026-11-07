@@ -1373,6 +1373,15 @@ matters, read the live catalogue with the Supabase MCP tools.
   `todoRepeatNext` / `todoRepeatWhen` in JS mirror it for the sheet's wording.
   Test: `supabase/2026-11-07f-todo-repeat-day-test.sql` (the earlier to-do SQL
   tests check data moves, so run each straight after its own migration).
+- **Drag to order (migration 2026-11-07g, Toby):** Projects & areas has a ⠿
+  grip on every project, tag and area (pointer events, so a finger works;
+  arrow keys move one place) → `todo_order_list(kind, ids)`, office only: the
+  ids given take positions 0…n, any others the caller can see follow, someone
+  else's private projects are untouched, an id not there refuses the lot.
+  `todo_get` already sends lists by `position` and the board's columns follow
+  them. Board / List lives in that pop-up too; the office page's header is
+  one line (To-do · count · Projects & areas), filters For / Area / By on
+  one line. Test: `supabase/2026-11-07g-todo-list-order-test.sql` (rolls back).
 
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
 
