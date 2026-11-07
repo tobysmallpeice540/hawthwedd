@@ -1393,6 +1393,16 @@ matters, read the live catalogue with the Supabase MCP tools.
   it opened in the sheet (`todoAgainPreset`: no photos, no repeat). The old
   "Show done in the last 30 days" list is gone. Test:
   `supabase/2026-11-07h-todo-done-history-test.sql` (rolls back).
+- **A done to-do's photos go after a month (migration 2026-11-07i, Toby):**
+  `todo-photo-purge.js` nightly at 03:23 UTC (shim `todo-photo-purge-cron.js`,
+  x-admin-token): `todo_worker_old_photos(before)` → delete the files
+  (Storage API, service key; `todos/…` in booking-files, the rest in
+  todo-photos; only paths under that to-do's id) → `todo_worker_photos_cleared
+  (ids, before)`, only for to-dos still finished before then and only after
+  every delete for them succeeded — so a failed or cut-short run is finished
+  the next night. The to-do itself is kept. Both functions service role only.
+  Tests: `supabase/2026-11-07i-todo-photo-purge-test.sql`,
+  `tests/todo-photo-purge-test.cjs`.
 
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
 

@@ -117,6 +117,12 @@
 [functions."whatsapp-reminders-cron"]
   schedule = "7,22,37,52 * * * *"
 
+# A to-do's photos go a month after it is done (Toby, 7 Nov 2026); the to-do
+# itself is kept. Nightly at 03:23 UTC, clear of the 03:00 backup. Schedule on
+# the shim (see brevo-sync-cron for why).
+[functions."todo-photo-purge-cron"]
+  schedule = "23 3 * * *"
+
 # Contracts signed in the app (contract-reminders.js): seals any contract
 # signed by everyone that has no PDF yet, and — only while switched on in
 # Settings → Email templates → Client portal → Booking form reminder — reminds

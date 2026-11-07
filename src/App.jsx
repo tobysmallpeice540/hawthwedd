@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07k";
+const APP_BUILD = "2026-11-07l";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18428,7 +18428,7 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
         </div>
       )}
 
-      <label style={todoLabelCss}>Photos</label>
+      <label style={todoLabelCss}>Photos <span style={{ fontWeight: 400, color: T.textLight }}>(kept until a month after it is done)</span></label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         {d.photos.map(function(p) {
           return (
