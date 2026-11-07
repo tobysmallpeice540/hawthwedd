@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07j";
+const APP_BUILD = "2026-11-07k";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -19019,7 +19019,8 @@ function TodoPage({ compact }) {
     if (!g) { pref("tags", []); return; }
     pref("tags", tagsOn.indexOf(g) !== -1 ? tagsOn.filter(function(x) { return x !== g; }) : tagsOn.concat([g]));
   }
-  const whoOptions = [["", "Everyone's"], ["mine", "For me"]].concat(people.map(function(p) {
+  // "All people" = no filter; "Everyone" (from the people list) = to-dos set for anyone.
+  const whoOptions = [["", "All people"], ["mine", "For me"]].concat(people.map(function(p) {
     return [p.who, me && p.who === "person:" + me.id ? p.label + " (me)" : p.label];
   }));
   const areaOptions = [["", "All areas"]].concat(areas.filter(function(a) { return !a.hidden || a.id === area; }).map(function(a) { return [a.id, a.name]; })).concat([["__none", "No area"]]);

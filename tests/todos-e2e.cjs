@@ -116,6 +116,10 @@ async function run(viewport, label) {
     assert.ok(f.spread < 6 && f.right <= f.vw, label + ': filters on one line ' + what + ': ' + JSON.stringify(f))
   }
   await filterLine('')
+  // One "Everyone" in For: no filter is "All people" (7 Nov, Toby saw two).
+  const forOpts = await page.locator('#todo-f-who option').allTextContents()
+  assert.strictEqual(forOpts.filter((o) => /^Everyone/.test(o)).length, 1, label + ': one Everyone in For: ' + forOpts.join(' | '))
+  assert.strictEqual(forOpts[0], 'All people')
   await page.locator('#todo-f-who').selectOption('mine')
   await page.getByRole('button', { name: 'Clear filters' }).waitFor()
   await filterLine('with Clear')
