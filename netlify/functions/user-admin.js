@@ -27,6 +27,36 @@ function profileFor(choice) {
   return { role: choice, access: null };
 }
 
+// Until migration 2026-11-07b is applied there is no profiles.access column,
+// and PostgREST refuses any request that names it. These two keep the logins
+// screen working either way round: a read falls back to the old columns, and a
+// write that only CLEARS access is retried without it. Making somebody a
+// handyman needs the column, and says so.
+function missingAccessColumn(err) {
+  return /access/.test(String(err && err.message || "")) && /(42703|PGRST204|column)/.test(String(err && err.message || ""));
+}
+async function readProfile(id) {
+  try {
+    return await sbRest("profiles?id=eq." + id + "&select=role,access,active,name,email");
+  } catch (e) {
+    if (!missingAccessColumn(e)) throw e;
+    return await sbRest("profiles?id=eq." + id + "&select=role,active,name,email");
+  }
+}
+async function patchProfile(id, fields, prefer) {
+  var opts = { method: "PATCH", body: fields };
+  if (prefer) opts.prefer = prefer;
+  try {
+    return await sbRest("profiles?id=eq." + id, opts);
+  } catch (e) {
+    if (!missingAccessColumn(e) || !("access" in fields)) throw e;
+    if (fields.access) throw new Error("The Handyman role needs database migration 2026-11-07b applying first.");
+    var rest = Object.assign({}, fields); delete rest.access;
+    opts.body = rest;
+    return await sbRest("profiles?id=eq." + id, opts);
+  }
+}
+
 // Long enough to be meaningless as a ban duration and short enough to be a
 // valid interval — Supabase treats any future ban as "cannot sign in".
 const BAN_FOREVER = "876000h";
@@ -84,7 +114,7 @@ async function resolveAdmin(event) {
   var user = await res.json();
   if (!user || !user.id) return null;
 
-  var rows = await sbRest("profiles?id=eq." + user.id + "&select=role,access,active,name,email");
+  var rows = await readProfile(user.id);
   var p = rows && rows[0];
   if (!p || p.active === false || p.role !== "admin") return null;
   // A handyman has no Settings, so no logins: he could otherwise make himself
@@ -172,10 +202,9 @@ exports.handler = async function(event) {
 
         // The signup trigger creates the profile. Set the role again here in
         // case this project's trigger predates the metadata handling.
-        await sbRest("profiles?id=eq." + made.body.id, {
-          method: "PATCH", prefer: "return=minimal",
-          body: { role: role, access: prof.access, name: String(body.name || "").trim(), email: email, mobile: mobile || null }
-        });
+        await patchProfile(made.body.id,
+          { role: role, access: prof.access, name: String(body.name || "").trim(), email: email, mobile: mobile || null },
+          "return=minimal");
         return ok({ id: made.body.id, email: email, role: role, access: prof.access });
       }
 
@@ -188,7 +217,7 @@ exports.handler = async function(event) {
         }
         // Role and access in one write: the database refuses access on
         // anything but an admin (profiles_access_check).
-        var upd = await sbRest("profiles?id=eq." + body.id, { method: "PATCH", body: profileFor(body.role) });
+        var upd = await patchProfile(body.id, profileFor(body.role));
         return ok({ user: upd && upd[0] });
       }
 
