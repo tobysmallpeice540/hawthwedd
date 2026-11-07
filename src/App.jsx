@@ -721,6 +721,11 @@ function useNavTab(section, onNavClick) {
 // housekeeping logins have no sidebar, so there the strip still shows.
 const SidebarNavContext = createContext(false);
 
+// True for a Handyman login (profiles.access = "handyman", 7 Nov 2026) and for
+// an admin looking through Other users' view → Handyman. Sections read it to
+// leave out their settings pages. Presentation only — see LIMITED_* below.
+const LimitedAccessContext = createContext(false);
+
 // ─── ICONS ───────────────────────────────────────────────────────────────────
 // Line icons for the sidebar, drawn on a 24px grid with one stroke weight.
 const NAV_ICON_PATHS = {
@@ -2819,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-06d";
+const APP_BUILD = "2026-11-07a";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -9332,10 +9337,12 @@ function SyncHealthBanner({ onFix }) {
       {probs.map(function(p) {
         return <div key={p.key} style={{ fontSize:13, color:T.text, lineHeight:1.55, margin:"3px 0" }}>· {p.text}</div>;
       })}
+      {onFix && (
       <button type="button" onClick={onFix}
         style={{ marginTop:8, background:"#fff", border:"1.5px solid " + T.red, color:T.red, borderRadius:6, padding:"6px 12px", fontSize:12.5, fontWeight:700, fontFamily:"inherit", cursor:"pointer" }}>
         Open Lettings → Settings
       </button>
+      )}
     </div>
   );
 }
@@ -10792,6 +10799,11 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
   // same way the booking form's own exit does.
   const [tab, setTab]               = useNavTab("lettings", function() { setForm(null); setEditId(null); });
   const inSidebar = useContext(SidebarNavContext);
+  // A handyman has no Report, Import or Settings here (7 Nov).
+  const limitedLet = useContext(LimitedAccessContext);
+  const lettingsTabs = limitedLet ? LETTINGS_TABS.filter(function(t) { return LIMITED_LETTINGS_HIDE.indexOf(t[0]) === -1; }) : LETTINGS_TABS;
+  const letTabBlocked = limitedLet && LIMITED_LETTINGS_HIDE.indexOf(tab) !== -1;
+  useEffect(function() { if (letTabBlocked) setTab("calendar"); }, [letTabBlocked]);
   // Jump to calendar sub-tab when the Calendar nav item is clicked. Only on a
   // click made while this screen is open: arriving here already lands on the
   // calendar, and reacting on mount would undo a sidebar choice of sub-page.
@@ -11232,7 +11244,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
         </>}/>
       )}
 
-      {tab!=="form" && !inSidebar && <TabStrip tabs={LETTINGS_TABS} value={tab} onChange={setTab}/>}
+      {tab!=="form" && !inSidebar && <TabStrip tabs={lettingsTabs} value={tab} onChange={setTab}/>}
 
       {loaded && tab!=="form" && (function() {
         const due = bookings.filter(function(b){ return airbnbCancelPrompt(b); })
@@ -11267,9 +11279,9 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
           else onOpenEvent(id);
         } : undefined} onViewEventsCalendar={setAppView && setAppReportType ? function(){ setAppReportType("calendar"); setAppView("reports"); } : null} />}
       {loaded && tab==="list" && <AccomList properties={properties} bookings={bookings} changeovers={changeovers} filterProp={filterProp} setFilterProp={setFilterProp} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onOpen={openEdit} />}
-      {loaded && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
-      {loaded && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} mutateAccom={mutateAccom} bookings={bookings} />}
-      {loaded && tab==="settings" && (
+      {loaded && !letTabBlocked && tab==="report" && <AccomReport properties={properties} bookings={bookings} />}
+      {loaded && !letTabBlocked && tab==="import" && <AccomImport onImported={(p,g,b)=>{ setProperties(p); setGuests(g); setBookings(b.map(normalizeAccom)); setTab("calendar"); }} mutateAccom={mutateAccom} bookings={bookings} />}
+      {loaded && !letTabBlocked && tab==="settings" && (
         <LettingsSetup
           properties={properties} setProperties={setProperties} onSaveProperties={saveProperties}
           discountCodes={discountCodes} setDiscountCodes={setDiscountCodes} onSaveDiscountCodes={saveDiscountCodes}
@@ -11289,7 +11301,7 @@ function LettingsView({ events, calendarTrigger, setView: setAppView, setReportT
 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function App({ role = "admin", onSignOut } = {}) {
+export default function App({ role = "admin", access = null, onSignOut } = {}) {
   const [bookings, setBookings] = useState([]);
   const [staff, setStaff]       = useState([]);
   // Navigation history. setView is used in dozens of places, so rather than
@@ -11448,11 +11460,23 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const [todoAddOpen, setTodoAddOpen] = useState(false);   // "+ To-do" from any page
   const barOnly     = role === "bar";
   const cleanerOnly = role === "cleaner";
-  // Housekeeper's view (28 Oct): an admin looking at exactly what the
-  // housekeeping login sees — the same shell and the same CleanerView — with
-  // a way back. It is the real thing: a sign-off made here is saved.
-  const hkPreview   = !barOnly && !cleanerOnly && view === "housekeeping";
+  // A full administrator — not bar, not housekeeping, not a handyman.
+  const fullAdmin   = !barOnly && !cleanerOnly && access !== "handyman";
+  // Other users' view (28 Oct as Housekeeper's view; 7 Nov, Toby: a dropdown
+  // for Housekeeping, Handyman and Bar, opening on Housekeeping). An admin
+  // looking at exactly what that login sees — the same shell and screens — with
+  // a way back. It is the real thing: anything saved here is saved.
+  // Housekeeping and Bar are view "housekeeping" with otherRole; Handyman is
+  // the whole app with the handyman's limits, on any page, so it is a flag.
+  const [otherRole, setOtherRole]       = useState("cleaner");
+  const [handyPreview, setHandyPreview] = useState(false);
+  const inOtherView = fullAdmin && view === "housekeeping" && !handyPreview;
+  const hkPreview   = inOtherView && otherRole === "cleaner";
+  const barPreview  = inOtherView && otherRole === "bar";
   const cleanerShell = cleanerOnly || hkPreview;
+  const barShell     = barOnly || barPreview;
+  // The handyman's limits: his own login, or an admin looking through his view.
+  const limited = access === "handyman" || (fullAdmin && handyPreview);
   // Ticketed events' rotas (2 Nov), for the staffing reports, the staff page and
   // the event form's clash warning. Read again on arriving at any of those, so
   // a rota changed in the box office a minute ago is there.
@@ -11461,6 +11485,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
   useEffect(function() {
     if (view === "reports" || view === "staff" || view === "form") reloadBoxRota();
   }, [view, reloadBoxRota]);
+  // A handyman has the two rota reports and the events calendar only.
+  useEffect(function() {
+    if (limited && LIMITED_REPORTS.indexOf(reportType) === -1 && reportType !== "calendar") setReportType("staffing");
+  }, [limited, reportType]);
 
   // Publish this build on load, then watch for a newer one. Any tab left open
   // across a deploy finds out within a minute instead of silently running old
@@ -11504,6 +11532,20 @@ export default function App({ role = "admin", onSignOut } = {}) {
   const goToBoxEvent = (id) => { if (id == null) { setView("boxoffice"); return; } setFocusBoxEventId(id); setView("boxoffice"); };
   const goToViewingRequest = (id) => { setFocusViewingReqId(id == null ? null : id); setView("viewings"); };
   const goToChecklist = (id) => { setFocusChecklistId(id || null); setView("checklists"); };
+  // Other users' view: always opens on Housekeeping; the dropdown changes it.
+  const openOtherUsers = () => { setHandyPreview(false); setOtherRole("cleaner"); setView("housekeeping"); };
+  const switchOtherView = (r) => {
+    if (r === "handyman") { setHandyPreview(true); setView("home"); return; }
+    setHandyPreview(false); setOtherRole(r); setView("housekeeping");
+  };
+  // Back to admin: from Housekeeping or Bar to the page before (as before);
+  // from Handyman, stay on the page as the full admin.
+  const leaveOtherView = () => {
+    const wasHandy = handyPreview;
+    setHandyPreview(false); setOtherRole("cleaner");
+    if (wasHandy && view !== "housekeeping") return;
+    if (viewHistory.length) goBack(); else setView("home");
+  };
   // What a checklist was for: its letting, event, ticketed event or enquiry.
   const openChecklistLink = (link) => {
     if (!link) return;
@@ -12357,8 +12399,9 @@ export default function App({ role = "admin", onSignOut } = {}) {
   if(!loaded) return <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,color:T.accent,fontFamily:T.fontUi,fontSize:20 }}>Loading…</div>;
 
   // Restricted logins: their own section, and nothing else reachable.
-  if (barOnly || cleanerShell) {
-    const shellTitle = barOnly ? "Bar Management" : "Housekeeping";
+  if (barShell || cleanerShell) {
+    const shellTitle = barShell ? "Bar Management" : "Housekeeping";
+    const shellPreview = hkPreview || barPreview;
     // Bar staff also work the door. They get the scanner and nothing else from
     // the box office — box-admin.js allows a bar session the door actions only,
     // so the order list, buyer details and takings stay out of reach whatever
@@ -12400,15 +12443,10 @@ export default function App({ role = "admin", onSignOut } = {}) {
               App
             </button>
           )}
-          {hkPreview && (
-            <button onClick={function(){ if (viewHistory.length) goBack(); else setView("home"); }}
-              style={UI_CLASSIC
-                ? { background:T.accent, border:`1.5px solid ${T.accent}`, color:"#fff", padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 }
-                : { background:"#fff", border:"1px solid #fff", color:T.slate, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 }}>
-              ← Back to admin
-            </button>
+          {shellPreview && (
+            <OtherUsersSwitch value={otherRole} onChange={switchOtherView} onBack={leaveOtherView} dark={!UI_CLASSIC}/>
           )}
-          {onSignOut && !hkPreview && (
+          {onSignOut && !shellPreview && (
             <button onClick={function() {
                 // Housekeeping stays signed in for good on its phones; a stray
                 // tap here would mean finding the password again.
@@ -12423,18 +12461,18 @@ export default function App({ role = "admin", onSignOut } = {}) {
           )}
         </header>
         <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-mini"} style={{ maxWidth:1240, margin:"0 auto", padding:"24px 24px 60px" }}>
-          {hkPreview && (
+          {shellPreview && (
             <div role="note" style={{ background:T.amberBg, border:`1px solid ${T.amber}`, borderRadius:8, padding:"8px 12px", marginBottom:14,
               fontSize:12.5, color:T.text, lineHeight:1.5 }}>
-              <strong>Housekeeper's view</strong> — this is what the housekeeping login sees. Anything signed off here is saved for real.
+              <strong>{hkPreview ? "Housekeeping" : "Bar"} view</strong> — {OTHER_USER_NOTES[otherRole]}
             </div>
           )}
           {/* The bar's live checklists sit above everything, on every tab, so
               opening and closing lists are seen without going looking. */}
-          {barOnly && barSection !== "checklists" && (
+          {barShell && barSection !== "checklists" && (
             <ChecklistsHomePanel onOpen={function(id){ setFocusChecklistId(id); setBarSection("checklists"); }}/>
           )}
-          {barOnly && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
+          {barShell && <TabStrip tabs={barTabs} value={barSection} onChange={function(id) { navResetExcept(null); setBarSection(id); }}/>}
           <PageErrorBoundary key={cleanerShell ? "cleaner" : "bar-" + barSection} page={cleanerShell ? "cleaner" : barSection}>
           {cleanerShell && <CleanerView isAdmin={hkPreview}/>}
           {cleanerShell && appHelpOpen && (
@@ -12451,12 +12489,12 @@ export default function App({ role = "admin", onSignOut } = {}) {
               </div>
             </div>
           )}
-          {barOnly && barSection === "bar"  && <BarView/>}
-          {barOnly && barSection === "door" && <BoxDoorScreen/>}
-          {barOnly && barSection === "todo" && (
+          {barShell && barSection === "bar"  && <BarView/>}
+          {barShell && barSection === "door" && <BoxDoorScreen/>}
+          {barShell && barSection === "todo" && (
             <div style={{ marginTop:14 }}><TodoPage compact/></div>
           )}
-          {barOnly && barSection === "checklists" && (
+          {barShell && barSection === "checklists" && (
             <div style={{ marginTop:14 }}>
               <ChecklistsPage role="bar" compact focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}/>
             </div>
@@ -12493,25 +12531,35 @@ export default function App({ role = "admin", onSignOut } = {}) {
     </>
   );
 
+  // A page the handyman cannot have shows a note instead (7 Nov).
+  const pv = limited && limitedBlocksView(view) ? "__blocked" : view;
   const pageArea = (
       <div className={UI_CLASSIC ? "app-shell" : "app-shell hb-content"} style={UI_CLASSIC ? { maxWidth:1240, margin:"0 auto", padding:"0 24px 60px" } : undefined}>
         {/* One boundary round whichever page is showing, keyed by it (and by
             the event, on the event form) so a crash on one page clears when
             you move to another. pageArea is used by both layouts. */}
+        {handyPreview && (
+          <div role="note" style={{ background:T.amberBg, border:`1px solid ${T.amber}`, borderRadius:8, padding:"8px 12px", margin: UI_CLASSIC ? "16px 0 0" : "0 0 14px",
+            fontSize:12.5, color:T.text, lineHeight:1.5, display:"flex", flexWrap:"wrap", alignItems:"center", gap:10 }}>
+            <span style={{ flex:"1 1 260px" }}><strong>Handyman view</strong> — {OTHER_USER_NOTES.handyman}</span>
+            <OtherUsersSwitch value="handyman" onChange={switchOtherView} onBack={leaveOtherView}/>
+          </div>
+        )}
         <PageErrorBoundary key={view === "form" ? "form-" + formKey : view} page={view}>
-        {view==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}
+        {pv==="__blocked" && <NotOnThisLogin onHome={function(){ setView("home"); }}/>}
+        {pv==="home"    && <DashboardView bookings={bookings} viewingRequests={viewingRequests} setView={setView} xeroToken={xeroToken} onDeleteAccom={deleteAccomBooking} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenEvent={goToEvent}
           enquiries={enquiries} onOpenEnquiry={goToEnquiry} onOpenBoxEvent={goToBoxEvent} onOpenViewingRequest={goToViewingRequest}
           onOpenChecklist={goToChecklist}/>}
-        {view==="checklists" && <ChecklistsPage role="admin" focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}
-          onOpenLink={openChecklistLink} onSettings={function(){ setView("chkSettings"); }}/>}
-        {view==="chkSettings" && <ChecklistSettings onOpenRun={goToChecklist}/>}
-        {view==="todo" && <TodoPage/>}
-        {view==="whatsapp" && <WhatsAppPage/>}
-        {view==="contracts" && <ContractSettingsPage/>}
-        {view==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
-        {view==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
-        {view==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
-        {view==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId, true) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} boxEvents={boxRota.records} onOpenBoxEvent={goToBoxEvent} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
+        {pv==="checklists" && <ChecklistsPage role="admin" focusRunId={focusChecklistId} clearFocus={function(){ setFocusChecklistId(null); }}
+          onOpenLink={openChecklistLink} onSettings={limited ? null : function(){ setView("chkSettings"); }}/>}
+        {pv==="chkSettings" && <ChecklistSettings onOpenRun={goToChecklist}/>}
+        {pv==="todo" && <TodoPage/>}
+        {pv==="whatsapp" && <WhatsAppPage/>}
+        {pv==="contracts" && <ContractSettingsPage/>}
+        {pv==="list"    && <ListView bookings={filtered} search={search} setSearch={setSearch} onEdit={handleEdit} onDelete={handleDelete} onNew={handleNew} staff={staff} accomBookings={accomBookings} onOpenAccom={goToAccomBooking} xeroToken={xeroToken} onOpenInvoices={limited ? null : ()=>setView("invoices")} invoiceDueCount={invoiceDueCount} onOpenPortal={limited ? null : ()=>setView("portal")} enquiries={enquiries} onOpenEnquiry={goToEnquiry}/>}
+        {pv==="portal"  && <PortalAdminScreen bookings={bookings} onBack={()=>setView("list")} onOpenEvent={goToEvent} />}
+        {pv==="invoices" && <InvoiceWorklistView bookings={bookings} accomBookings={accomBookings} records={invoiceRecords} onSaveRecords={saveInvoiceRecords} onBack={()=>setView("list")} onEdit={handleEdit} xeroToken={xeroToken}/>}
+        {pv==="form"    && <FormView key={formKey} onOpenEvent={handleEdit} onOpenFunctionSheet={function(ev){ openFunctionSheet(ev, staff); }} formData={formData} setFormData={setFormData} onSubmit={handleSubmit} onCancel={()=>setView("list")} isEdit={!!editId} staff={staff} xeroToken={xeroToken} gmailToken={gmailToken} onDelete={editId ? ()=>handleDelete(editId, true) : null} accomBookings={accomBookings} accomProperties={accomProperties} onSaveAccomBooking={saveAccomBooking} onCreateAccomBookings={createAccomBookings} onUpdateAccomBookings={updateAccomBookings} onOpenAccomBooking={goToAccomBooking} allBookings={bookings} boxEvents={boxRota.records} onOpenBoxEvent={goToBoxEvent} invoiceRecords={invoiceRecords} onSaveInvoiceRecords={saveInvoiceRecords} onAddAccom={addAccomForEvent} enquiries={enquiries} onOpenEnquiry={goToEnquiry}
           onAutoSave={async(fd)=>{
             // Only a name is required to start persisting. This previously also
             // required a date and returned silently otherwise, which meant edits
@@ -12561,11 +12609,11 @@ export default function App({ role = "admin", onSignOut } = {}) {
             }
           }}
         />}
-        {view==="staff"   && <StaffView staff={staff} bookings={bookings.concat(boxRota.records)} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onPurgeOrphan={removeStaffFromRotas} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
-        {view==="bar"        && <BarView/>}
-        {view==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)} onOpenEvent={goToEvent} onOpenBoxEvent={goToBoxEvent}/>}
-        {view==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)} bookings={bookings} onOpenEvent={goToEvent} onEnquiriesChanged={setEnquiries}/>}
-        {view==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
+        {pv==="staff"   && <StaffView staff={staff} bookings={bookings.concat(boxRota.records)} staffForm={staffForm} setStaffForm={setStaffForm} editStaffId={editStaffId} onNew={handleNewStaff} onEdit={handleEditStaff} onDelete={handleDeleteStaff} onPurgeOrphan={removeStaffFromRotas} onSubmit={handleSubmitStaff} onCancel={()=>{setStaffForm(null);setEditStaffId(null);}}/>}
+        {pv==="bar"        && <BarView/>}
+        {pv==="lettings"   && <LettingsView events={bookings} calendarTrigger={lettingsCalTrigger} setView={setView} setReportType={setReportType} focusBookingId={focusAccomBookingId} clearFocusBooking={()=>setFocusAccomBookingId(null)} prefillNew={accomPrefill} clearPrefillNew={()=>setAccomPrefill(null)} onOpenEvent={goToEvent} onOpenBoxEvent={goToBoxEvent}/>}
+        {pv==="enquiries"  && <EnquiriesView gmailToken={gmailToken} onConvertToBooking={handleConvertEnquiryToBooking} focusEnquiryId={focusEnquiryId} clearFocus={()=>setFocusEnquiryId(null)} bookings={bookings} onOpenEvent={goToEvent} onEnquiriesChanged={setEnquiries}/>}
+        {pv==="viewings"   && <ViewingsView bookings={bookings} setBookings={setBookings} setView={setView} setReportType={setReportType} onEditBooking={handleEdit}
           viewingRequests={viewingRequests} setViewingRequests={setViewingRequests}
           viewingBlocks={viewingBlocks} setViewingBlocks={setViewingBlocks}
           enquiries={enquiries} setEnquiries={setEnquiries}
@@ -12573,22 +12621,23 @@ export default function App({ role = "admin", onSignOut } = {}) {
           patchBooking={patchBooking}
           onSelectEnquiry={goToEnquiry}
           focusRequestId={focusViewingReqId} clearFocusRequest={()=>setFocusViewingReqId(null)}/>}
-        {view==="boxoffice"  && <BoxOfficeView bookings={bookings} staff={staff} focusEventId={focusBoxEventId} clearFocusEvent={()=>setFocusBoxEventId(null)}/>}
-        {view==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenBoxEvent={goToBoxEvent} boxRota={boxRota.records}/>}
-        {view==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
-        {view==="activity"   && <ActivityView/>}
-        {view==="emails"     && <EmailsView/>}
+        {pv==="boxoffice"  && <BoxOfficeView bookings={bookings} staff={staff} focusEventId={focusBoxEventId} clearFocusEvent={()=>setFocusBoxEventId(null)}/>}
+        {pv==="reports"    && <ReportsView bookings={bookings} staff={staff} reportType={reportType} setReportType={setReportType} enquiries={enquiries} setView={setView} onEditBooking={handleEdit} onSelectEnquiry={goToEnquiry} accomBookings={accomBookings} accomProperties={accomProperties} onOpenAccom={goToAccomBooking} onOpenBoxEvent={goToBoxEvent} boxRota={boxRota.records}/>}
+        {pv==="settings"   && <SettingsView xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} setView={setView}/>}
+        {pv==="activity"   && <ActivityView/>}
+        {pv==="emails"     && <EmailsView/>}
         </PageErrorBoundary>
       </div>
   );
 
   if (UI_CLASSIC) {
     return (
+      <LimitedAccessContext.Provider value={limited}>
       <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"system-ui,-apple-system,sans-serif" }}>
         <MobileGlobalStyles/>
         <AppThemeStyles/>
         {shellBanners}
-        <Header view={view} setView={setView} onNew={handleNew} onNewTodo={function(){ setTodoAddOpen(true); }} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
+        <Header limited={limited} onOtherUsers={openOtherUsers} view={view} setView={setView} onNew={handleNew} onNewTodo={function(){ setTodoAddOpen(true); }} xeroToken={xeroToken} onXeroConnect={handleXeroConnect} onXeroDisconnect={handleXeroDisconnect} gmailToken={gmailToken} onGmailConnect={handleGmailConnect} onGmailDisconnect={handleGmailDisconnect} onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }} onBack={goBack} canGoBack={viewHistory.length>0}/>
         {pageArea}
         <TodoQuickAdd open={todoAddOpen} onClose={function(){ setTodoAddOpen(false); }} onView={view === "todo" ? null : function(){ setView("todo"); }}/>
         {/* The way back to the sidebar layout, at the foot of every page. Not in
@@ -12601,11 +12650,14 @@ export default function App({ role = "admin", onSignOut } = {}) {
           </button>
         </div>
       </div>
+      </LimitedAccessContext.Provider>
     );
   }
 
   return (
+    <LimitedAccessContext.Provider value={limited}>
     <SidebarLayout view={view} setView={setView} reportType={reportType} setReportType={setReportType}
+      limited={limited} onOtherUsers={openOtherUsers}
       onCalendarTab={()=>{ setView("lettings"); setLettingsCalTrigger(function(n){ return n+1; }); }}
       invoiceDueCount={invoiceDueCount}
       pendingViewings={(viewingRequests||[]).filter(function(r){ return r.status==="pending"; }).length}
@@ -12616,6 +12668,7 @@ export default function App({ role = "admin", onSignOut } = {}) {
       {pageArea}
       <TodoQuickAdd open={todoAddOpen} onClose={function(){ setTodoAddOpen(false); }} onView={view === "todo" ? null : function(){ setView("todo"); }}/>
     </SidebarLayout>
+    </LimitedAccessContext.Provider>
   );
 }
 
@@ -18712,15 +18765,97 @@ const REPORT_TYPES = [
 const HIDDEN_REPORT_TYPES = ["calendar"];
 // The pages under Settings in the sidebar.
 const SETTINGS_VIEWS = ["settings", "staff", "activity", "emails", "contracts", "chkSettings", "whatsapp"];
+
+// ─── HANDYMAN LOGIN (7 Nov 2026, Toby) ───────────────────────────────────────
+// An office login with less of the app: no Settings, no Enquiries, no Other
+// users' view; Reports has only the two rota reports; and none of the settings
+// pages that live inside a section — Lettings → Report / Import / Settings,
+// Events → Invoices / Portal settings, Box Office → Settings, checklist set-up.
+// In the database he is role "admin" (with profiles.access "handyman"), because
+// the office's functions all check for admin; so this is what he is SHOWN, not
+// what he could call. user-admin.js is the one server-side refusal.
+const LIMITED_HIDDEN_VIEWS = ["enquiries", "invoices", "portal", "housekeeping"];
+const LIMITED_REPORTS = ["staffing", "timeline"];   // + the events calendar, which is a hidden report type
+const LIMITED_LETTINGS_HIDE = ["report", "import", "settings"];
+const LIMITED_BOX_HIDE = ["settings"];
+function limitedBlocksView(view) {
+  return LIMITED_HIDDEN_VIEWS.indexOf(view) !== -1 || SETTINGS_VIEWS.indexOf(view) !== -1;
+}
+// What Other users' view can show. The order is the dropdown's.
+const OTHER_USER_VIEWS = [["cleaner", "Housekeeping"], ["handyman", "Handyman"], ["bar", "Bar"]];
+
+// Shown in place of a page a handyman cannot have (reached by a link from
+// somewhere he can — an enquiry from a calendar, say).
+function NotOnThisLogin({ onHome }) {
+  return (
+    <div style={{ padding: UI_CLASSIC ? "28px 4px 0" : 0 }}>
+      <PageHeader title="Not on this login"/>
+      <div style={{ background:"#fff", border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 18px", fontSize:14, color:T.textMid, lineHeight:1.55 }}>
+        This page isn't part of the handyman login. Ask the office if you need something from it.
+        <div style={{ marginTop:12 }}>
+          <button type="button" onClick={onHome}
+            style={{ background:T.accent, color:"#fff", border:"none", padding:"8px 16px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:700 }}>
+            Go to Home
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The dropdown and the way back, for an admin in Other users' view. `dark` is
+// for the slate bar of the restricted shell.
+function OtherUsersSwitch({ value, onChange, onBack, dark }) {
+  const sel = dark
+    ? { background:"rgba(255,255,255,.12)", border:"1px solid rgba(255,255,255,.35)", color:"#fff", borderRadius:7, padding:"6px 8px", fontFamily:"inherit", fontSize:12.5, fontWeight:600 }
+    : { background:"#fff", border:`1.5px solid ${T.border}`, color:T.text, borderRadius:7, padding:"6px 8px", fontFamily:"inherit", fontSize:12.5, fontWeight:600 };
+  const back = dark
+    ? { background:"#fff", border:"1px solid #fff", color:T.slate, padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12.5, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 }
+    : { background:T.accent, border:`1.5px solid ${T.accent}`, color:"#fff", padding:"7px 14px", borderRadius:7, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 };
+  return (
+    <span style={{ display:"inline-flex", flexWrap:"nowrap", alignItems:"center", gap:8, flexShrink:0 }}>
+      <select aria-label="Whose view" value={value} onChange={function(e) { onChange(e.target.value); }} style={sel}>
+        {OTHER_USER_VIEWS.map(function(o) {
+          return <option key={o[0]} value={o[0]} style={{ color:T.text }}>{o[1] + " view"}</option>;
+        })}
+      </select>
+      <button type="button" onClick={onBack} style={back}>← Back to admin</button>
+    </span>
+  );
+}
+
+// What each view is, under the bar at the top of it.
+const OTHER_USER_NOTES = {
+  cleaner: "this is what the housekeeping login sees. Anything signed off here is saved for real.",
+  bar: "this is what the bar login sees. Anything saved here is saved for real. Checklists and to-dos are read as you, so you may see more than the bar would.",
+  handyman: "this is what a handyman login sees. Anything saved here is saved for real.",
+};
 function openAccomReport(setView) { navClick("lettings", "report"); setView("lettings"); }
 
 // The sidebar's contents, worked out from where the app is. Each entry's `go`
 // does exactly what the old top-menu tab or section tab did.
 function buildSidebarNav(o) {
+  const nav = buildSidebarNavFull(o);
+  if (!o.limited) return nav;
+  // The handyman's menu: the same entries, less the ones he does not have.
+  const out = [];
+  nav.forEach(function(n) {
+    if (n.id === "enquiries" || n.id === "settings" || n.id === "housekeeping") return;
+    let kids = n.children;
+    if (n.id === "events") kids = kids.filter(function(c) { return c.label !== "Invoices" && c.label !== "Portal settings"; });
+    if (n.id === "lettings") kids = kids.filter(function(c) { return c.key == null || LIMITED_LETTINGS_HIDE.indexOf(c.key) === -1; });
+    if (n.id === "boxoffice") kids = kids.filter(function(c) { return c.key == null || LIMITED_BOX_HIDE.indexOf(c.key) === -1; });
+    if (n.id === "reports") kids = kids.filter(function(c) { return LIMITED_REPORTS.indexOf(c.key) !== -1; });
+    out.push(kids === n.children ? n : Object.assign({}, n, { children: kids }));
+  });
+  return out;
+}
+
+function buildSidebarNavFull(o) {
   const view = o.view, setView = o.setView;
   function sectionKids(section, tabs, current) {
     return tabs.map(function(t) {
-      return { label: t[1], on: o.view === section && current === t[0], badge: t[2],
+      return { key: t[0], label: t[1], on: o.view === section && current === t[0], badge: t[2],
         go: function() { navClick(section, t[0]); setView(section); } };
     });
   }
@@ -18769,12 +18904,14 @@ function buildSidebarNav(o) {
     { id:"reports", icon:"reports", label:"Reports", on: view === "reports" && !calOn && !evCalOn,
       go: function() { setView("reports"); },
       children: REPORT_TYPES.map(function(r) {
-        return { label: r.label, on: view === "reports" && reportOn === r.id && !calOn && !evCalOn,
+        return { key: r.id, label: r.label, on: view === "reports" && reportOn === r.id && !calOn && !evCalOn,
           go: function() { if (r.id === "accommodation") { openAccomReport(setView); } else { o.setReportType(r.id); setView("reports"); } } };
       }) },
-    // What the housekeeping login sees, for the office to check (28 Oct).
-    { id:"housekeeping", icon:"housekeeping", label:"Housekeeper's view", on: view === "housekeeping",
-      go: function() { setView("housekeeping"); } },
+    // What the other logins see, for the office to check (28 Oct; Other
+    // users' view with Housekeeping / Handyman / Bar from 7 Nov). Always
+    // opens on Housekeeping.
+    { id:"housekeeping", icon:"housekeeping", label:"Other users' view", on: view === "housekeeping",
+      go: o.onOtherUsers || function() { setView("housekeeping"); } },
     { id:"settings", icon:"settings", label:"Settings", on: SETTINGS_VIEWS.indexOf(view) !== -1,
       go: function() { setView("settings"); },
       children: [
@@ -18914,6 +19051,7 @@ function SidebarLayout(props) {
     todoOverdue: todoOverdue,
     tabs: { lettings: lettingsTab, boxoffice: boxTab, bar: barTab, viewings: viewingsTab },
     origin: origin,
+    limited: props.limited, onOtherUsers: props.onOtherUsers,
   });
   // A tap in the drawer always closes it, including a sub-page of the page
   // already showing (which does not change the view). Every tap also records
@@ -18950,9 +19088,9 @@ function SidebarLayout(props) {
   );
 }
 
-function Header({ view, setView, onNew, onNewTodo, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab, onBack, canGoBack }) {
+function Header({ view, setView, onNew, onNewTodo, xeroToken, onXeroConnect, onXeroDisconnect, gmailToken, onGmailConnect, onGmailDisconnect, onCalendarTab, onBack, canGoBack, limited, onOtherUsers }) {
   // "calendar" is a virtual tab that maps to view="lettings" (calendar sub-tab)
-  const tabs = [
+  const allTabs = [
     {id:"home",label:"Home"},
     {id:"checklists",label:"Checklists"},
     {id:"todo",label:"To-do"},
@@ -18965,9 +19103,12 @@ function Header({ view, setView, onNew, onNewTodo, xeroToken, onXeroConnect, onX
     // Not "Events" — that has always meant weddings in this app.
     {id:"boxoffice",label:"Box Office"},
     {id:"reports",label:"Reports"},
-    {id:"housekeeping",label:"Housekeeper's view"},
+    {id:"housekeeping",label:"Other users' view"},
     {id:"settings",label:"Settings"},
   ];
+  // The handyman's top menu leaves out what he does not have (7 Nov).
+  const tabs = limited ? allTabs.filter(function(t) { return !limitedBlocksView(t.id); }) : allTabs;
+  function goTab(id) { if (id === "housekeeping" && onOtherUsers) onOtherUsers(); else setView(id); }
   const isXeroConnected  = !!xeroToken;
   const isGmailConnected = !!gmailToken;
   const isMobile = useIsMobile();
@@ -19018,7 +19159,7 @@ function Header({ view, setView, onNew, onNewTodo, xeroToken, onXeroConnect, onX
           <div style={{ position:"absolute", top:"100%", left:0, right:0, background:"#fff", borderBottom:`2px solid ${T.border}`, boxShadow:"0 8px 20px rgba(0,0,0,.12)", zIndex:50, maxHeight:"80vh", overflowY:"auto" }}>
             <nav style={{ display:"flex", flexDirection:"column", padding:"6px 0" }}>
               {tabs.map(t=>(
-                <button key={t.id} onClick={function(){ setMenuOpen(false); if (t.virtual) onCalendarTab(); else setView(t.id); }}
+                <button key={t.id} onClick={function(){ setMenuOpen(false); if (t.virtual) onCalendarTab(); else goTab(t.id); }}
                   style={{ background: isActive(t) ? T.accentLight : "none", border:"none", borderLeft: isActive(t) ? `3px solid ${T.accent}` : "3px solid transparent", color:isActive(t)?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:15, fontWeight:isActive(t)?700:400, padding:"13px 18px", textAlign:"left", cursor:"pointer" }}>{t.label}</button>
               ))}
             </nav>
@@ -19046,7 +19187,7 @@ function Header({ view, setView, onNew, onNewTodo, xeroToken, onXeroConnect, onX
       </div>
       <nav style={{ display:"flex", gap:0, flex:1 }}>
         {tabs.map(t=>(
-          <button key={t.id} onClick={t.virtual ? onCalendarTab : ()=>setView(t.id)}
+          <button key={t.id} onClick={t.virtual ? onCalendarTab : ()=>goTab(t.id)}
             style={{ background:"none", border:"none", color:isActive(t)?T.navActive:T.navInactive, fontFamily:"inherit", fontSize:14, fontWeight:isActive(t)?700:400, padding:"22px 20px 18px", cursor:"pointer", borderBottom:isActive(t)?`3px solid ${T.accent}`:"3px solid transparent", transition:"all .2s", letterSpacing:.2 }}>{t.label}</button>
         ))}
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6, paddingRight:8 }}>
@@ -23362,10 +23503,12 @@ function ReportsView({ bookings, staff, reportType, setReportType, enquiries, se
     }
     onEditBooking(id);
   };
-  const types = REPORT_TYPES;
+  // A handyman has the two rota reports (and the events calendar), 7 Nov.
+  const limitedReports = useContext(LimitedAccessContext);
+  const types = limitedReports ? REPORT_TYPES.filter(function(t) { return LIMITED_REPORTS.indexOf(t.id) !== -1; }) : REPORT_TYPES;
   const inSidebar = useContext(SidebarNavContext);
-  // If an old/removed report type is still selected, fall back to summary
-  const activeType = types.some(t=>t.id===reportType) || HIDDEN_REPORT_TYPES.indexOf(reportType) !== -1 ? reportType : "summary";
+  // If an old/removed report type is still selected, fall back to the first
+  const activeType = types.some(t=>t.id===reportType) || HIDDEN_REPORT_TYPES.indexOf(reportType) !== -1 ? reportType : types[0].id;
   const activeLabel = activeType === "calendar" ? "Year Calendar" : (types.filter(function(t){ return t.id === activeType; })[0] || {}).label;
   return (
     <div style={{ paddingTop: UI_CLASSIC ? 28 : 0 }}>
@@ -24862,6 +25005,7 @@ function ArrivalBadges({ badges, lead }) {
 }
 
 function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDeleteAccom, accomProperties, onOpenAccom, onOpenEvent, enquiries, onOpenEnquiry, onOpenBoxEvent, onOpenViewingRequest, onOpenChecklist }) {
+  const limitedHome = useContext(LimitedAccessContext);
   // Each row opens its own record; the section list is the fallback only when
   // the handler is missing (an older caller) or the record cannot be found.
   const openEvent = function(id) { if (onOpenEvent) onOpenEvent(id); else setView("list"); };
@@ -25109,7 +25253,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
 
       {/* The Gmail connection or an Airbnb calendar has stopped — above
           everything, because nothing else on the page can show it. */}
-      <SyncHealthBanner onFix={function() { navSet("lettings", "settings"); setView("lettings"); }}/>
+      <SyncHealthBanner onFix={limitedHome ? null : function() { navSet("lettings", "settings"); setView("lettings"); }}/>
 
       {/* Checklists that have started and are not finished — first, because
           they are things somebody should be doing now. */}
@@ -25355,7 +25499,9 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
       {/* The wedding pipeline, then brochure requests, at the bottom (Toby, 30 Oct). */}
       <ContractPipeline bookings={bookings} today={today} onOpen={function(){ setView("list"); }}/>
         {/* Brochure requests — last on the page (Toby, 30 Oct). Nothing here
-            needs confirming; the brochure has already gone. */}
+            needs confirming; the brochure has already gone. Enquiries, so not
+            on the handyman's home (7 Nov). */}
+        {!limitedHome && (
         <div style={sectionStyle}>
           {secHead("Brochure Requests", brochureReqs.length || null, recentBrochure.length ? T.accent : null)}
           {!loaded && <div style={{ color:T.textLight, fontSize:13 }}>Loading…</div>}
@@ -25388,6 +25534,7 @@ function DashboardView({ bookings, viewingRequests, setView, xeroToken, onDelete
             </div>
           )}
         </div>
+        )}
 
     </div>
   );
@@ -32136,8 +32283,11 @@ function BoxOfficeView({ bookings, staff, focusEventId, clearFocusEvent }) {
     if (clearFocusEvent) clearFocusEvent();
   }, [focusEventId]);
   const inSidebar = useContext(SidebarNavContext);
-
-  const tabs = [["events","Events"],["orders","Orders"],["door","Door"],["settings","Settings"]];
+  // A handyman has no box office Settings (7 Nov).
+  const limitedBox = useContext(LimitedAccessContext);
+  const boxTabs = limitedBox ? BOX_TABS.filter(function(t) { return LIMITED_BOX_HIDE.indexOf(t[0]) === -1; }) : BOX_TABS;
+  const boxTabBlocked = limitedBox && LIMITED_BOX_HIDE.indexOf(tab) !== -1;
+  useEffect(function() { if (boxTabBlocked) setTab("events"); }, [boxTabBlocked]);
 
   // No key to paste any more. Access is the signed-in role, checked by
   // box-admin.js on every request — which is both less to remember and a
@@ -32148,7 +32298,7 @@ function BoxOfficeView({ bookings, staff, focusEventId, clearFocusEvent }) {
       <PageHeader title="Box Office" sub="Ticketed events in the Grain Store"/>
 
       {!inSidebar && (
-        <TabStrip tabs={BOX_TABS} value={tab}
+        <TabStrip tabs={boxTabs} value={tab}
           onChange={function(id) { setTab(id); if (id !== "events") setOpenEventId(null); }}/>
       )}
 
@@ -32157,7 +32307,7 @@ function BoxOfficeView({ bookings, staff, focusEventId, clearFocusEvent }) {
         : <BoxEventsScreen onOpen={setOpenEventId}/>)}
       {tab === "orders"   && <BoxOrdersScreen onOpenEvent={function(id) { setOpenEventId(id); setTab("events"); }}/>}
       {tab === "door"     && <BoxDoorScreen/>}
-      {tab === "settings" && <BoxSettingsScreen/>}
+      {tab === "settings" && !boxTabBlocked && <BoxSettingsScreen/>}
     </div>
   );
 }
@@ -34920,6 +35070,8 @@ async function userAdmin(action, payload) {
 
 const ROLE_LABEL = {
   admin:   { label: "Administrator", note: "Everything",                       bg: T.accentLight, fg: T.accent },
+  // An administrator shown less (profiles.access "handyman", 7 Nov 2026).
+  handyman:{ label: "Handyman",      note: "Most things — no Settings, Enquiries, invoices or money reports", bg: T.bgInput, fg: T.midBlue },
   bar:     { label: "Bar",           note: "Bar stock take and ticket check-in", bg: T.amberBg,    fg: T.amber },
   cleaner: { label: "Housekeeping",  note: "Changeovers",                      bg: T.greenBg,     fg: T.green },
 };
@@ -35043,6 +35195,7 @@ function StaffLogins() {
               <select value={form.role} onChange={e=>setForm(Object.assign({}, form, { role:e.target.value }))} style={boxInput}>
                 <option value="bar">Bar</option>
                 <option value="cleaner">Housekeeping</option>
+                <option value="handyman">Handyman</option>
                 <option value="admin">Administrator</option>
               </select>
             </BoxField>
@@ -35067,7 +35220,9 @@ function StaffLogins() {
       {users && !users.length && !err && <div style={{ fontSize:13, color:T.textLight }}>No logins yet.</div>}
 
       {(users || []).map(function(u) {
-        const r = ROLE_LABEL[u.role] || { label: u.role, note: "", bg: T.bgInput, fg: T.textMid };
+        // A handyman is stored as an admin with access "handyman".
+        const shownRole = u.role === "admin" && u.access === "handyman" ? "handyman" : u.role;
+        const r = ROLE_LABEL[shownRole] || { label: u.role, note: "", bg: T.bgInput, fg: T.textMid };
         const isMe = u.id === meId;
         return (
           <div key={u.id} style={{ display:"flex", gap:12, alignItems:"center", padding:"12px 0", borderTop:`1px solid ${T.border}`, flexWrap:"wrap", opacity: u.active === false ? .55 : 1 }}>
@@ -35091,11 +35246,12 @@ function StaffLogins() {
               <MobileCell user={u} onSaved={function(){ flash("Mobile saved."); load(); }} onError={setErr}/>
             )}
 
-            <select value={u.role} disabled={busy === u.id || u.active === false}
+            <select value={shownRole} disabled={busy === u.id || u.active === false}
               onChange={e=>act(u.id, function() { return userAdmin("users.setRole", { id: u.id, role: e.target.value }); }, "Role updated.")}
               style={Object.assign({}, boxInput, { width:150 })}>
               <option value="bar">Bar</option>
               <option value="cleaner">Housekeeping</option>
+              <option value="handyman">Handyman</option>
               <option value="admin">Administrator</option>
             </select>
 

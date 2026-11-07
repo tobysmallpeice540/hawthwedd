@@ -748,7 +748,8 @@ matters, read the live catalogue with the Supabase MCP tools.
   change shows against them). Karina's pay is House hours plus her changeover
   pop-up hours, by Toby's choice. Its three reads are strict: a failed read
   shows an error, never a short sheet that Paid could be ticked against.
-- **Housekeeper's view** (admin menu, 28 Oct): view `"housekeeping"` renders
+- **Housekeeper's view** (admin menu, 28 Oct; now Other users' view →
+  Housekeeping, see "Handyman login" below): view `"housekeeping"` renders
   the housekeeping login's own shell and `CleanerView` for an admin
   (`hkPreview`), with "← Back to admin" in place of Sign out and a note that
   sign-offs made there are real.
@@ -1341,6 +1342,35 @@ matters, read the live catalogue with the Supabase MCP tools.
   run emails Toby.
 - `supabase/box-office-schema.sql` is an older hand-made copy, superseded by
   `public.sql`.
+
+### Handyman login and Other users' view (7 Nov 2026, migration 2026-11-07b)
+
+- **A handyman is role `admin` with `profiles.access = 'handyman'`**, not a
+  role of its own — every office function (`wp_is_admin`, `chk_my_role`,
+  `todo_*`, `resolveStaff(["admin"])` in a dozen Netlify functions) checks for
+  admin, and he needs most of them (the event form alone calls admin-only
+  portal functions). `profiles_access_check` allows access only on an admin.
+  `my_profile` returns `access`; `main.jsx` passes it to `App`.
+- **What he is shown** (`LimitedAccessContext`, `LIMITED_*` and
+  `limitedBlocksView` in App.jsx): no Settings, Enquiries or Other users'
+  view; Events without Invoices and Portal settings; Lettings without Report,
+  Import and Settings; Box Office without Settings; Reports only Rota Overview
+  and Event Rota (plus the events calendar, a hidden report type); no
+  checklist set-up; no Brochure requests on Home. A blocked page reached by a
+  link (an enquiry from a calendar) shows `NotOnThisLogin`. **This is
+  presentation only** — he could call anything an admin can. The one
+  server-side refusal: `user-admin.js` `resolveAdmin` refuses any profile with
+  `access` set, so he cannot make himself a full admin. Settings → Staff →
+  Logins offers "Handyman"; `users.setRole` / `users.create` write role and
+  access together (`profileFor`).
+- **Other users' view** (sidebar, was Housekeeper's view): always opens on
+  Housekeeping; the `Whose view` dropdown (`OtherUsersSwitch`) changes to
+  Handyman (`handyPreview`: the whole app with his limits and a bar on every
+  page) or Bar (the bar shell, `barPreview`). Housekeeping and Bar are view
+  `"housekeeping"` + `otherRole`. Back to admin: from Handyman stays on the
+  page; from the others goes back. Checklists and to-dos in the Bar view are
+  read as the admin (the database knows who is signed in), so it can show
+  more than the bar login would. Test: `tests/handyman-e2e.cjs`.
 
 ## Working in this folder from a Claude session
 

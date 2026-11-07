@@ -26,7 +26,7 @@
 //   · setup cleans: ticked on a letting / event / box office event, their window,
 //     shown on Live, Upcoming and Bookings, signed off like a changeover;
 //   · no exit clean: ticked, the clean after is no job — not red, not overdue;
-//   · admin: Housekeeper's view (the cleaners' screens, Back to admin);
+//   · admin: Other users' view → Housekeeping (the cleaners' screens, Back to admin);
 //   · admin: home tiles, lost property on the booking, box office events on
 //     the lettings calendar, Reports → Housekeeping Hours.
 //
@@ -845,12 +845,12 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     try {
       const pg = c.page
       await pg.getByRole('group', { name: 'Property status' }).waitFor({ timeout: 15000 })
-      await pg.locator('nav, aside').getByText("Housekeeper's view", { exact: true }).first().click()
+      await pg.locator('nav, aside').getByText("Other users' view", { exact: true }).first().click()
       await pg.getByText('Still to sign off').waitFor({ timeout: 10000 })
       const tabs = await pg.getByRole('tab').allInnerTexts()
       check("hk view: the housekeeping tabs", tabs.join('|') === 'Live|House|Upcoming|Calendar|Bookings|Checklists', tabs.join('|'))
       const body = await pg.locator('body').innerText()
-      check("hk view: says what it is, and that sign-offs are real", /Housekeeper's view/.test(body) && /saved for real/.test(body))
+      check("hk view: says what it is, and that sign-offs are real", /Housekeeping view/.test(body) && /saved for real/.test(body))
       check("hk view: no Sign out, a way back instead", (await pg.getByRole('button', { name: 'Sign out' }).count()) === 0
         && (await pg.getByRole('button', { name: '← Back to admin' }).count()) === 1)
       await pg.getByRole('button', { name: '← Back to admin' }).click()
@@ -893,7 +893,7 @@ const lastSave = (s) => s.calls.filter((c) => c.fn === 'write:app_data').map((c)
     try {
       const pg = c.page
       await pg.getByRole('group', { name: 'Property status' }).waitFor({ timeout: 15000 })
-      await pg.locator('nav, aside').getByText("Housekeeper's view", { exact: true }).first().click()
+      await pg.locator('nav, aside').getByText("Other users' view", { exact: true }).first().click()
       await pg.getByRole('tab', { name: 'Bookings', exact: true }).click()
       await pg.getByRole('button', { name: /past/i }).first().click().catch(() => {})
       const card = pg.locator('div', { has: pg.getByText('Hat Guest', { exact: true }) }).filter({ has: pg.getByRole('button', { name: 'Ready' }) }).last()

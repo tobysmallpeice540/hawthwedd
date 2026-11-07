@@ -220,6 +220,9 @@ function Splash({ children }) {
 function Root() {
   const [session, setSession] = useState(null)
   const [role, setRole]       = useState(null)
+  // profiles.access: null, or "handyman" — an admin shown less of the app
+  // (7 Nov 2026). Read with the role, kept with it on a failed re-read.
+  const [access, setAccess]   = useState(null)
   const [ready, setReady]     = useState(false)
   const [problem, setProblem] = useState('')
 
@@ -258,6 +261,7 @@ function Root() {
       }
       setProblem('')
       roleFor.current = { userId, role: data.role }
+      setAccess(data.role === 'admin' && data.access ? data.access : null)
       setRole(data.role)
     } catch (e) {
       if (!latest()) return
@@ -350,7 +354,7 @@ function Root() {
     )
   }
 
-  return <App role={role} onSignOut={signOut} />
+  return <App role={role} access={access} onSignOut={signOut} />
 }
 
 createRoot(document.getElementById('root')).render(

@@ -16,7 +16,16 @@
 const SUPABASE_URL = "https://rkqbyisfmvwulsyxzwjz.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 
-const ROLES = ["admin", "bar", "cleaner"];
+// What the logins screen offers. profiles.role is admin / bar / cleaner;
+// "handyman" is not a role of its own: it is role "admin" with profiles.access = "handyman" (migration 2026-11-07b) — the
+// office's functions all check for admin, and a handyman needs most of them.
+// The app hides Settings, Enquiries, most reports and the section settings
+// pages from him.
+const CHOICES = ["admin", "handyman", "bar", "cleaner"];
+function profileFor(choice) {
+  if (choice === "handyman") return { role: "admin", access: "handyman" };
+  return { role: choice, access: null };
+}
 
 // Long enough to be meaningless as a ban duration and short enough to be a
 // valid interval — Supabase treats any future ban as "cannot sign in".
@@ -75,9 +84,12 @@ async function resolveAdmin(event) {
   var user = await res.json();
   if (!user || !user.id) return null;
 
-  var rows = await sbRest("profiles?id=eq." + user.id + "&select=role,active,name,email");
+  var rows = await sbRest("profiles?id=eq." + user.id + "&select=role,access,active,name,email");
   var p = rows && rows[0];
   if (!p || p.active === false || p.role !== "admin") return null;
+  // A handyman has no Settings, so no logins: he could otherwise make himself
+  // a full administrator. The one place his narrower access is enforced here.
+  if (p.access) return null;
 
   return { id: user.id, role: p.role, who: p.name || p.email || "admin" };
 }
@@ -132,7 +144,9 @@ exports.handler = async function(event) {
       case "users.create": {
         var email = String(body.email || "").trim().toLowerCase();
         var password = String(body.password || "");
-        var role = ROLES.indexOf(body.role) !== -1 ? body.role : "bar";
+        var choice = CHOICES.indexOf(body.role) !== -1 ? body.role : "bar";
+        var prof = profileFor(choice);
+        var role = prof.role;
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return bad("That doesn't look like an email address.");
         if (password.length < 10) return bad("Use a password of at least 10 characters.");
         var mobile = normaliseMobile(body.mobile);
@@ -160,19 +174,21 @@ exports.handler = async function(event) {
         // case this project's trigger predates the metadata handling.
         await sbRest("profiles?id=eq." + made.body.id, {
           method: "PATCH", prefer: "return=minimal",
-          body: { role: role, name: String(body.name || "").trim(), email: email, mobile: mobile || null }
+          body: { role: role, access: prof.access, name: String(body.name || "").trim(), email: email, mobile: mobile || null }
         });
-        return ok({ id: made.body.id, email: email, role: role });
+        return ok({ id: made.body.id, email: email, role: role, access: prof.access });
       }
 
       case "users.setRole": {
-        if (ROLES.indexOf(body.role) === -1) return bad("Unknown role.");
+        if (CHOICES.indexOf(body.role) === -1) return bad("Unknown role.");
         // The last admin must not be able to demote themselves out of the
         // building — there would then be nobody who could put it right.
         if (body.id === me.id && body.role !== "admin") {
           return bad("You can't remove your own administrator access.", 409);
         }
-        var upd = await sbRest("profiles?id=eq." + body.id, { method: "PATCH", body: { role: body.role } });
+        // Role and access in one write: the database refuses access on
+        // anything but an admin (profiles_access_check).
+        var upd = await sbRest("profiles?id=eq." + body.id, { method: "PATCH", body: profileFor(body.role) });
         return ok({ user: upd && upd[0] });
       }
 
