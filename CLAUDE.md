@@ -1363,6 +1363,16 @@ matters, read the live catalogue with the Supabase MCP tools.
   in `hbf_whatsapp_settings_v1`; `planTodos` `urgentOnly`; the worker sends
   `urgent`). The app shows no star while `todo_get` sends no `urgent` (a
   database before 07e). Test: `supabase/2026-11-07e-todo-urgent-test.sql`.
+- **Repeats keep their day (migration 2026-11-07f, Toby):** weekly = the same
+  weekday; monthly = the same day of the month, or the month's last day when
+  it is shorter (the 30th → 28 Feb → 30 Mar, never stuck on the 28th). Each
+  repeat carries `repeat_from` (the deadline as typed; reset whenever the
+  deadline or rule is edited, kept otherwise) and the next one is
+  `todo_next_on(repeat_from, rule, greatest(today, deadline))` — so ticking
+  early moves on one step, ticking late lands on the next proper day.
+  `todoRepeatNext` / `todoRepeatWhen` in JS mirror it for the sheet's wording.
+  Test: `supabase/2026-11-07f-todo-repeat-day-test.sql` (the earlier to-do SQL
+  tests check data moves, so run each straight after its own migration).
 
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
 
