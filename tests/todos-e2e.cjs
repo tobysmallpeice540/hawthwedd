@@ -43,7 +43,7 @@ async function run(viewport, label) {
   const today = londonToday()
   const db = await makeTodoDb({
     me: { id: ME, role: 'admin', name: 'Toby' }, labels: LABELS,
-    categories: [{ id: 'maint', name: 'Farm Maintenance' }, { id: 'admin', name: 'Farm Admin' }],
+    categories: [{ id: 'admin', name: 'Admin' }, { id: 'maint', name: 'Maintenance' }, { id: 'to-buy', name: 'To buy' }],
     projects: [{ id: 'upkeep', name: 'Upkeep' }],
     items: [
       { id: 'td_old', title: 'Clear the gutters on the Hamlet', priority: 'week', setOn: addDays(today, -10), who: 'role:admin',
@@ -55,7 +55,7 @@ async function run(viewport, label) {
         category: 'maint', area: 'farm' },
       { id: 'td_bins', title: 'Bins out', priority: 'eventually', repeat: 'weekly', deadline: addDays(today, 3), setOn: today, who: 'anyone',
         category: 'maint', project: 'upkeep', createdAt: '2026-11-03T09:00:00Z', createdById: ME },
-      { id: 'td_shower', title: 'Fix the Hamlet shower', priority: 'event', setOn: today, who: 'anyone', area: 'hamlet',
+      { id: 'td_shower', title: 'Fix the Hamlet shower', priority: 'event', setOn: today, eventOn: addDays(today, 5), who: 'anyone', area: 'hamlet',
         category: 'maint', project: 'upkeep', createdAt: '2026-11-03T10:00:00Z', createdById: ME },
       // Rosanna's private one, which the database never sends to Toby.
       { id: 'td_rosa', title: 'Rosanna private', priority: 'three', setOn: today, who: 'role:admin', private: true, createdById: ROS },
@@ -99,7 +99,7 @@ async function run(viewport, label) {
   assert.ok(await shower.getByText(new RegExp(String(Number(checkIn.slice(8))) + ' ')).isVisible(), label + ': due on the Hamlet check-in')
   assert.ok(await board.locator('[data-todo-id="td_bins"]').getByText(/Every week/).isVisible(), label + ': repeat shown')
   if (shots) await page.screenshot({ path: path.join(shots, label + '-board.png'), fullPage: false })
-  await page.getByRole('group', { name: 'Category' }).getByRole('button', { name: 'Farm Maintenance' }).click()
+  await page.getByRole('group', { name: 'Category' }).getByRole('button', { name: 'Maintenance' }).click()
   assert.deepStrictEqual(await board.locator('[data-todo-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-todo-id')).sort()),
     ['td_bins', 'td_shower', 'td_someday'], label + ': category filter')
   await page.locator('#todo-f-area').selectOption('farm')
@@ -111,6 +111,19 @@ async function run(viewport, label) {
   assert.strictEqual(await page.locator('#todo-area').inputValue(), 'farm')
   await page.getByText('Cancel', { exact: true }).click()
   await page.getByRole('button', { name: 'Clear filters' }).click()
+  // "Before next event", set now, is fixed to the next Hamlet check-in.
+  await page.getByRole('button', { name: '+ New to-do' }).first().click()
+  await page.getByLabel('Heading').fill('Hamlet bulbs')
+  await page.locator('#todo-area').selectOption('hamlet')
+  await page.getByRole('radio', { name: 'Before next event' }).click()
+  await page.getByText(/the next check-in at The Hamlet: due/).waitFor()
+  await page.getByRole('button', { name: 'Add to-do' }).click()
+  await page.getByLabel('Heading').waitFor({ state: 'detached' })
+  const bulbs = [...db.items.values()].find((t) => t.title === 'Hamlet bulbs')
+  assert.strictEqual(bulbs.eventOn, checkIn, label + ': event day fixed when set')
+  await board.locator('[data-todo-id="' + bulbs.id + '"]').getByText('Before check-in').waitFor()
+  db.items.delete(bulbs.id)
+
   // A repeat, ticked, leaves the next one.
   await board.getByRole('button', { name: 'Mark done: Bins out' }).click()
   await until(() => item('td_bins').state === 'done' && item('td_bins').nextId, 'repeat ticked')

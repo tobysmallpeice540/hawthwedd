@@ -36,6 +36,9 @@ async function makeTodoDb(opts) {
       const rec = Object.assign({}, old || { state: 'open', createdAt: new Date().toISOString(), createdBy: me.name, createdById: me.id },
         { id: p.id, title: p.title.trim(), detail: p.detail || '', who: p.who, whoLabel: label(p.who), area: p.area, project: p.project,
           category: p.category || null, repeat: p.repeat || null,
+          // The day "Before next event" was set for (migration 2026-11-07d).
+          eventOn: p.priority !== 'event' ? null
+            : old && old.priority === 'event' && (old.area || null) === (p.area || null) && old.eventOn ? old.eventOn : (p.eventOn || null),
           priority: p.priority === 'day' ? 'three' : p.priority, deadline: p.deadline || (p.repeat ? today() : null), private: !!p.private, photos: p.photos || [],
           setOn: old && old.priority === p.priority ? old.setOn : today(), updatedAt: new Date().toISOString() })
       items.set(p.id, rec)

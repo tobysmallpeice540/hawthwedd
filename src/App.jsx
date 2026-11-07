@@ -15,7 +15,7 @@ import { parseContractTemplate, resolveContractNodes, contractAccommodation, con
   htmlToContractMarkup, CONTRACT_FIELDS, CONTRACT_KINDS, CONTRACT_SYNTAX_HELP } from "./shared/contractDoc.js";
 import { DEFAULT_CONTRACT_TEMPLATE } from "./shared/contractTemplate.js";
 import { TODO_PRIORITY_ORDER, TODO_PRIORITY_LABEL, TODO_REPEATS, TODO_REPEAT_LABEL, todoAddDays, todoDueOn, todoTiming, todoIsOpen, todoIsFor,
-  todoGroups, todoRecentlyDone, todoCompare, todoEventDue, todoNextOn, todoFilter } from "./shared/todos.js";
+  todoGroups, todoRecentlyDone, todoCompare, todoEventDue, todoEventKind, todoNextOn, todoFilter } from "./shared/todos.js";
 import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07b";
+const APP_BUILD = "2026-11-07c";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -17796,7 +17796,8 @@ function PhoneAppPanel() {
 // ─── TO-DO LIST (6 Nov 2026) ─────────────────────────────────────────────────
 // Longer-term jobs than checklists: each has a heading, an optional
 // description and photos, who it is for (a person, a group or Everyone), an
-// area, a project and a category (three editable lists, each optional) and a
+// area, a project and a category (Admin, Maintenance, To buy… — a tag on the
+// to-do; three editable lists, each optional) and a
 // priority that is a scope counted from the day it was set — 3 days, 7 days,
 // 1 month — or Before next event, or Eventually, with an optional deadline,
 // and may repeat. Ticked like a checklist item: Done, Done with a comment, or
@@ -17823,24 +17824,11 @@ const todoStore = { todos: null, areas: null, projects: null, categories: null, 
 const todoSubs = new Set();
 let todoLoading = null;
 function todoNotify() { todoSubs.forEach(function(f) { f(); }); }
-// "Before next event" is worked out here from the bookings the app holds
-// (todoStore.cal, set by the app shells) and kept on each to-do as eventOn.
-function todoDecorate(t) {
-  if (!t) return t;
-  if (t.priority !== "event") {
-    if (t.eventOn === undefined && t.eventWhat === undefined) return t;
-    const c = Object.assign({}, t); delete c.eventOn; delete c.eventWhat; return c;
-  }
-  const ev = todoEventDue(t, todoStore.cal, londonToday());
-  return Object.assign({}, t, { eventOn: ev ? ev.on : null, eventWhat: ev ? ev.what : null });
-}
-function todoPatch(p) {
-  Object.assign(todoStore, p);
-  if ((p.todos || p.cal) && todoStore.todos) todoStore.todos = todoStore.todos.map(todoDecorate);
-  todoNotify();
-}
-// cal: { accom, events, boxEvents } — see todoEventDue.
-function todoSetCalendar(cal) { todoPatch({ cal: cal }); }
+function todoPatch(p) { Object.assign(todoStore, p); todoNotify(); }
+// The bookings the app holds (set by the app shells), for turning "Before
+// next event" into a day when a to-do is set. cal: { accom, events, boxEvents }
+// — see todoEventDue. Once set, the day is the database's (eventOn).
+function todoSetCalendar(cal) { todoStore.cal = cal; }
 function todoListField(kind) { return kind === "area" ? "areas" : kind === "category" ? "categories" : "projects"; }
 
 // The database's refusals, in words.
@@ -18010,12 +17998,12 @@ function todoDay(iso) {
 }
 function todoDueText(t, today) {
   const due = todoDueOn(t);
-  if (!due) return t && t.priority === "event" ? (t.eventWhat === undefined ? "" : "Nothing booked yet") : "";
+  if (!due) return t && t.priority === "event" ? "Nothing was booked when it was set" : "";
   const timing = todoTiming(t, today);
   if (timing === "overdue") return "Overdue, was due " + todoDay(due);
   if (timing === "today") return "Due today";
   if (due === todoAddDays(today, 1)) return "Due tomorrow";
-  if (t.priority === "event" && t.eventOn && due === t.eventOn) return (t.eventWhat === "checkin" ? "Before check-in " : "Before the event ") + todoDay(due);
+  if (t.priority === "event" && t.eventOn && due === t.eventOn) return (todoEventKind(t.area) === "checkin" ? "Before check-in " : "Before the event ") + todoDay(due);
   return "By " + todoDay(due);
 }
 function todoPriorityStyle(p) {
@@ -18197,6 +18185,7 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
     const rec = { id: d.id, title: title, detail: String(d.detail || "").trim(), who: d.who || "anyone",
       area: d.area || null, project: d.project || null, category: d.category || null,
       priority: d.repeat ? "eventually" : d.priority, repeat: d.repeat || null,
+      eventOn: d.repeat ? null : eventOn,
       deadline: d.deadline || (d.repeat ? londonToday() : null),
       private: !!d.private, photos: d.photos.map(function(p) { return { path: p.path, name: p.name }; }) };
     try {
@@ -18226,8 +18215,12 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
   if (d.who && !whoOptions.some(function(o) { return o.value === d.who; })) whoOptions.push({ value: d.who, label: d.whoLabel || "Someone no longer listed" });
   const prOptions = TODO_PRIORITY_ORDER.map(function(p) { return { value: p, label: TODO_PRIORITY_LABEL[p], style: todoPriorityStyle(p) }; });
   const setOn = !todo || todo.priority !== d.priority ? londonToday() : todo.setOn;
-  const evDue = d.priority === "event" ? todoEventDue(Object.assign({}, d, { setOn: setOn }), store.cal, londonToday()) : null;
-  const due = todoDueOn(Object.assign({}, d, { setOn: setOn, eventOn: evDue ? evDue.on : null }));
+  // "Before next event" is a day fixed when it is set: the stored one while the
+  // priority and area are unchanged, otherwise the next one from today.
+  const keepEvent = !!todo && todo.priority === "event" && d.priority === "event" && (todo.area || "") === (d.area || "") && !!todo.eventOn;
+  const evFound = d.priority === "event" && !keepEvent ? todoEventDue(Object.assign({}, d, { setOn: londonToday() }), store.cal, londonToday()) : null;
+  const eventOn = d.priority !== "event" ? null : keepEvent ? todo.eventOn : evFound ? evFound.on : null;
+  const due = todoDueOn(Object.assign({}, d, { setOn: setOn, eventOn: eventOn }));
   const repeatDay = d.repeat ? (d.deadline || londonToday()) : null;
   const big = { padding: "13px 14px", borderRadius: 10, fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer" };
 
@@ -18273,7 +18266,7 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
           <TodoChips options={prOptions} value={d.priority} onChange={function(v) { set("priority", v); }} label="Priority"/>
           <div style={{ fontSize: 12, color: T.textLight, marginTop: 6 }}>
             {d.priority === "event"
-              ? "Before " + todoEventWords(d.area, store.areas) + (evDue ? ": " + todoDay(evDue.on) : " — nothing booked yet.") + (d.deadline && due === d.deadline ? " The deadline comes first: " + todoDay(due) + "." : "")
+              ? "Before " + todoEventWords(d.area, store.areas) + (eventOn ? ": due " + todoDay(eventOn) + (keepEvent ? " (fixed when it was set)." : ".") : " — nothing is booked, so no date.") + (d.deadline && due === d.deadline ? " The deadline comes first: " + todoDay(due) + "." : "")
               : due ? "Due by " + todoDay(due) + (d.deadline && due === d.deadline ? " (the deadline)" : "") : "No date — whenever there is time."}
           </div>
         </div>
@@ -25762,6 +25755,8 @@ function BarView() {
   const [events, setEvents]     = useState([]);
   const [farmEvents, setFarmEvents] = useState([]);
   const [staff, setStaff]       = useState([]);
+  // The to-do tab's "Before next event" days come from these.
+  useEffect(function() { todoSetCalendar({ events: farmEvents }); }, [farmEvents]);
   const [loaded, setLoaded]     = useState(false);
   // A sidebar click does what the section's own tab buttons do.
   const [barView, setBarView] = useNavTab("bar", function() { setEditingEvent(null); });

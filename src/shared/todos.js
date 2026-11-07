@@ -14,11 +14,14 @@
 //   "event" — Before next event — is due on the next check-in at The Hamlet,
 //   Amly Barn or Glamping when that is its area, otherwise the next event at
 //   the venue (diary or box office), on or after the day it was set. The app
-//   works that day out from the bookings (todoEventDue) and keeps it on the
-//   to-do as `eventOn`; the database does not know it.
+//   works that day out from the bookings when it is set (todoEventDue) and
+//   sends it as `eventOn`; the database keeps it (migration 2026-11-07d)
+//   until the priority or area changes, and counts it in dueOn.
 // · repeat: null | "daily" | "weekdays" | "weekly" | "monthly" | "yearly".
 //   Ticking one leaves the next one behind (the database does it).
-// · area, project, category: each optional (migration 2026-11-07c).
+// · area, project, category: each optional (migration 2026-11-07c). A
+//   category is a tag on the to-do itself — Admin, Maintenance, To buy
+//   (7 Nov 2026, Toby); the Todoist-level grouping above projects is retired.
 // · deadline: an optional fixed date; whichever of the two comes first is the
 //   date it is due by.
 // · state: "open", "done", "note" (done, with a comment) or "na".
@@ -41,8 +44,8 @@ export const TODO_PRIORITY_LABEL = { three: "3 days", week: "7 days", month: "1 
 export const TODO_REPEATS = ["daily", "weekdays", "weekly", "monthly", "yearly"];
 export const TODO_REPEAT_LABEL = { daily: "Every day", weekdays: "Every weekday", weekly: "Every week", monthly: "Every month", yearly: "Every year" };
 
+// Admin moved from areas to categories on 7 Nov 2026.
 export const TODO_DEFAULT_AREAS = [
-  { id: "admin", name: "Admin" },
   { id: "amly-barn", name: "Amly Barn" },
   { id: "grain-store", name: "Grain Store" },
   { id: "glamping", name: "Glamping" },
@@ -56,6 +59,8 @@ export const TODO_DEFAULT_AREAS = [
 
 // Which letting property an area is, for "Before next event".
 export const TODO_AREA_PROPERTY = { hamlet: "hamlet", "amly-barn": "amly", glamping: "glamping" };
+// "checkin" when "Before next event" means a check-in there, else "event".
+export function todoEventKind(area) { return TODO_AREA_PROPERTY[area] ? "checkin" : "event"; }
 
 export function todoAddDays(iso, n) {
   if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;

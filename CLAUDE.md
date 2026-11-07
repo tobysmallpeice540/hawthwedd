@@ -1336,6 +1336,15 @@ matters, read the live catalogue with the Supabase MCP tools.
   The Todoist CSV button is gone (`todoist-export.js` stays, unused).
 - Tests: `supabase/2026-11-07c-todo-board-test.sql` (after the 06b sequence
   and its test), `tests/todos-test.cjs`, `tests/todos-e2e.cjs`.
+- **Later the same day (migration 2026-11-07d):** "Before next event" is a
+  DAY fixed when the to-do is set (`event_on`, sent by the app as `eventOn`
+  from `todoEventDue`; kept until the priority or area changes) and counted in
+  `due_on` — so the overdue WhatsApp and the bar login see it. The bar shell
+  now sets the calendar from its diary events. **Category now means a tag on
+  the to-do** (Admin, Maintenance, To buy); the Todoist-level categories, the
+  Maintenance and To buy projects and the Admin area were retired (a data
+  move, not in the repo). `TODO_DEFAULT_AREAS` has no Admin.
+  Test: `supabase/2026-11-07d-todo-event-day-test.sql` (after 07c's).
 
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
 
