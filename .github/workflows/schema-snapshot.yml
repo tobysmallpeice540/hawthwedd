@@ -1,0 +1,49 @@
+# Nightly copy of the database's STRUCTURE into the repo (never its data):
+# supabase/schema/public.sql, supabase/functions.sql, supabase/schema/storage.sql.
+# The work is in supabase/schema/snapshot.sh; the login is schema_reader
+# (migration 2026-11-07a), which cannot read a row.
+#
+# Commits only when something changed, with [skip netlify] so a schema commit
+# never redeploys the app. Needs the repository secret
+# SUPABASE_SCHEMA_DB_PASSWORD. "Run workflow" on the Actions tab runs it now.
+name: Database schema snapshot
+
+on:
+  schedule:
+    - cron: "41 2 * * *"   # 02:41 UTC every night
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: schema-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Read the structure
+        env:
+          PGPASSWORD: ${{ secrets.SUPABASE_SCHEMA_DB_PASSWORD }}
+        run: bash supabase/schema/snapshot.sh
+
+      - name: Commit if anything changed
+        run: |
+          git add supabase/schema supabase/functions.sql
+          if git diff --cached --quiet; then
+            echo "No change in the database structure."
+            exit 0
+          fi
+          git diff --cached --stat
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Database schema snapshot $(date -u +%F) [skip netlify]"
+          git pull -q --rebase origin main
+          git push -q origin HEAD:main

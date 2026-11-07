@@ -24,11 +24,14 @@ Almost all UI lives in one file: `src/App.jsx` — ~19,000 lines, 1.2MB.
 | `supabase/` | Box office schema, the seven security-phase migrations, their `.mjs` test suites. |
 | `tests/` | Node suites (`.cjs`) run against a real Postgres and real pages. |
 
-The schema is only **partly** captured: `supabase/box-office-schema.sql` and
-`supabase/functions.sql` (22 functions, 58 execute grants). Tables, indexes,
-triggers, RLS policies and table grants are captured nowhere. Refresh
-`functions.sql` whenever a function changes — the regeneration query is in its
-own header.
+The database's **structure** is copied into the repo every night (from 7 Nov
+2026 — see "Schema snapshot" below): `supabase/schema/public.sql` (tables,
+indexes, triggers, RLS, policies, grants, functions — `pg_dump --schema-only`),
+`supabase/functions.sql` (every function, alphabetical) and
+`supabase/schema/storage.sql` (buckets and storage policies). **Never edit
+those three by hand**; change the database with a dated migration and the next
+run picks it up. They can be up to a day behind production — for anything that
+matters, read the live catalogue with the Supabase MCP tools.
 
 ## Rules learned the hard way — do not rediscover these
 
@@ -1301,6 +1304,43 @@ own header.
   `tests/todos/seed-app-data.sql`), `tests/todos-test.cjs` (JS rules),
   `tests/todos-e2e.cjs` (screens, with `tests/todos/fake-db.cjs` standing in
   for the functions), the to-do parts of `tests/whatsapp-reminders-test.cjs`.
+
+### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
+
+- `.github/workflows/schema-snapshot.yml` runs `supabase/schema/snapshot.sh`
+  at 02:41 UTC nightly (and on "Run workflow"), and commits the three files
+  above **only when something changed**, as github-actions[bot], with
+  `[skip netlify]` so it never redeploys the app. Toby pulls in GitHub Desktop
+  as usual; a session fetches before pushing anyway.
+- It signs in as **`schema_reader`**, which can see the structure and **cannot
+  read a row**: MAINTAIN on the public tables (pg_dump must lock each table it
+  describes; PostgreSQL 17's MAINTAIN allows that without SELECT), SELECT on
+  `storage.buckets`, nothing else. The cost: someone with the password could
+  lock or VACUUM a table. Tables created by `postgres` get MAINTAIN by default
+  privileges; a table created by another role would make the run fail loudly.
+- Through the **session pooler** (`aws-1`/`aws-0-eu-central-1.pooler.supabase.com`,
+  user `schema_reader.rkqbyisfmvwulsyxzwjz`) — the direct database address is
+  IPv6-only and GitHub's runners cannot reach it. pg_dump runs from the
+  `postgres:17` Docker image; when Supabase moves to PostgreSQL 18 the run will
+  fail with a version mismatch until that image is bumped.
+- The script refuses to write anything that looks short (no app_data or
+  todo_items table, under 100 functions, missing storage policies), and strips
+  the lines that change every run (`\restrict` keys, pg_dump's own version).
+- **The password** lives only in the database and in the repository secret
+  `SUPABASE_SCHEMA_DB_PASSWORD`. To make a new one (the old one stops
+  working), run this in the Supabase SQL editor and paste the value it shows
+  into that secret — the password is made inside the database, so it never
+  appears in the text of a logged statement:
+
+      select set_config('hbf.schema_pw', encode(extensions.gen_random_bytes(24), 'hex'), false);
+      do $$ begin execute format('alter role schema_reader password %L', current_setting('hbf.schema_pw')); end $$;
+      select current_setting('hbf.schema_pw') as paste_into_github;
+
+- A Claude session **cannot** see GitHub Actions (secrets, runs, logs are
+  blocked by its proxy) — it sees a run only by the commit it makes. A failed
+  run emails Toby.
+- `supabase/box-office-schema.sql` is an older hand-made copy, superseded by
+  `public.sql`.
 
 ## Working in this folder from a Claude session
 
