@@ -103,6 +103,19 @@ async function run(viewport, label) {
   assert.ok(/to do/.test(tops.subText), label + ': count beside the title')
   assert.strictEqual(await page.getByRole('button', { name: '+ New to-do' }).count(), 0, label + ': no + New to-do on the page')
   assert.strictEqual(await page.getByRole('group', { name: 'Show as' }).count(), 0, label + ': Board / List not on the page')
+  // For, Area and Columns on one line, inside the screen — even with a filter on.
+  const filterLine = async (what) => {
+    const f = await page.getByRole('group', { name: 'Filters' }).evaluate((g) => {
+      const mids = [...g.querySelectorAll('select, button')].map((el) => { const r = el.getBoundingClientRect(); return { mid: r.top + r.height / 2, right: r.right } })
+      return { spread: Math.max(...mids.map((m) => m.mid)) - Math.min(...mids.map((m) => m.mid)), right: Math.max(...mids.map((m) => m.right)), vw: innerWidth, n: mids.length }
+    })
+    assert.ok(f.spread < 6 && f.right <= f.vw, label + ': filters on one line ' + what + ': ' + JSON.stringify(f))
+  }
+  await filterLine('')
+  await page.locator('#todo-f-who').selectOption('mine')
+  await page.getByRole('button', { name: 'Clear filters' }).waitFor()
+  await filterLine('with Clear')
+  await page.getByRole('button', { name: 'Clear filters' }).click()
 
   // ── The board: one column per project, round ticks, filters ──
   const board = page.getByRole('region', { name: 'To-do board' })

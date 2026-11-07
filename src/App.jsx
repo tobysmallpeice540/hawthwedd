@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07g";
+const APP_BUILD = "2026-11-07h";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18755,10 +18755,12 @@ function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onA
 // A small labelled dropdown for the filter bar.
 function TodoFilterSelect({ id, label, value, options, onChange }) {
   return (
-    <label htmlFor={id} style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 6, fontSize: 12, color: T.textMid, fontWeight: 600 }}>
-      {label}
+    <label htmlFor={id} style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 5, fontSize: 12, color: T.textMid, fontWeight: 600,
+      flex: "1 1 0", minWidth: 0, maxWidth: 230 }}>
+      <span style={{ flexShrink: 0 }}>{label}</span>
+      {/* Shrinks so For, Area and Columns stay on one line on a phone (7 Nov, Toby). */}
       <select id={id} value={value} onChange={function(e) { onChange(e.target.value); }}
-        style={Object.assign({}, inputCss, { width: "auto", maxWidth: 190, fontSize: 13.5, padding: "6px 8px", fontWeight: 500 })}>
+        style={Object.assign({}, inputCss, { width: "100%", minWidth: 0, flex: "1 1 auto", fontSize: 13.5, padding: "6px 4px 6px 7px", fontWeight: 500, textOverflow: "ellipsis" })}>
         {options.map(function(o) { return <option key={o[0]} value={o[0]}>{o[1]}</option>; })}
       </select>
     </label>
@@ -18906,13 +18908,13 @@ function TodoPage({ compact }) {
           })}
         </div>
       )}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 14px", margin: "0 0 12px" }}>
+      <div role="group" aria-label="Filters" style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 10, margin: "0 0 12px", minWidth: 0, maxWidth: "100%" }}>
         <TodoFilterSelect id="todo-f-who" label="For" value={who} options={whoOptions} onChange={function(v) { pref("who", v); }}/>
         <TodoFilterSelect id="todo-f-area" label="Area" value={area} options={areaOptions} onChange={function(v) { pref("area", v); }}/>
-        <TodoFilterSelect id="todo-f-by" label={board ? "Columns" : "Group by"} value={by} options={TODO_GROUP_TABS} onChange={function(v) { pref("by", v); }}/>
+        <TodoFilterSelect id="todo-f-by" label="By" value={by} options={TODO_GROUP_TABS} onChange={function(v) { pref("by", v); }}/>
         {filtered && (
           <button type="button" onClick={function() { const n = Object.assign({}, prefs, { tags: [], who: "", area: "", urgent: false }); todoSavePrefs(n); setPrefs(n); }}
-            style={{ background: "none", border: "none", color: T.midBlue, fontFamily: "inherit", fontSize: 13, cursor: "pointer", padding: 0 }}>Clear filters</button>
+            style={{ background: "none", border: "none", color: T.midBlue, fontFamily: "inherit", fontSize: 13, cursor: "pointer", padding: 0, flexShrink: 0, whiteSpace: "nowrap" }} aria-label="Clear filters">Clear</button>
         )}
       </div>
 
