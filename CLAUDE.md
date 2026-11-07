@@ -1382,6 +1382,17 @@ matters, read the live catalogue with the Supabase MCP tools.
   them. Board / List lives in that pop-up too; the office page's header is
   one line (To-do · count · Projects & areas), filters For / Area / By on
   one line. Test: `supabase/2026-11-07g-todo-list-order-test.sql` (rolls back).
+- **Done to-dos are kept for good and can be looked back on (migration
+  2026-11-07h, Toby):** nothing deletes a done to-do; `todo_get` still sends
+  only the last 45 days of them, and the **✓ Done** chip on the to-do page
+  reads the rest from `todo_done_list(before, limit)` (pages of 500, newest
+  first, by `todo_visible`). Each column / group then lists its finished ones
+  under the open ones (`todoGroups(..., { done })`, `TodoDoneList`: five, then
+  "Show all"), with the date (and year if not this one), who, the comment,
+  untick (whoever ticked, or the office) and **Do again** — a new to-do like
+  it opened in the sheet (`todoAgainPreset`: no photos, no repeat). The old
+  "Show done in the last 30 days" list is gone. Test:
+  `supabase/2026-11-07h-todo-done-history-test.sql` (rolls back).
 
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
 

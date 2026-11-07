@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07i";
+const APP_BUILD = "2026-11-07j";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -17822,7 +17822,8 @@ function PhoneAppPanel() {
 const TODO_MAX_PHOTOS = 6;
 const TODO_BUCKET = "todo-photos";
 
-const todoStore = { todos: null, areas: null, projects: null, categories: null, people: null, me: null, err: "", loadedAt: 0, cal: null };
+const todoStore = { todos: null, areas: null, projects: null, categories: null, people: null, me: null, err: "", loadedAt: 0, cal: null,
+  doneAll: null, doneMore: false, doneErr: "", doneLoading: false };
 const todoSubs = new Set();
 let todoLoading = null;
 function todoNotify() { todoSubs.forEach(function(f) { f(); }); }
@@ -17857,6 +17858,39 @@ function todoErrorText(e) {
 
 // Everything this login may see, read fresh. A failed read shows an error
 // and leaves what was on screen.
+// Every finished to-do this login may see, however old (todo_get sends only
+// the last 45 days of them) — a page of 500 at a time, newest first. Before
+// migration 2026-11-07h there is no such function: the recent ones still show.
+async function todoLoadDone(older) {
+  if (todoStore.doneLoading) return;
+  const have = older ? (todoStore.doneAll || []) : [];
+  const before = older && have.length ? have[have.length - 1].doneAt : null;
+  todoPatch({ doneLoading: true, doneErr: "" });
+  try {
+    const r = await sbRpcQuiet("todo_done_list", { p_before: before, p_limit: 500 });
+    const seen = {}; have.forEach(function(t) { seen[t.id] = true; });
+    todoPatch({ doneAll: have.concat((r.items || []).filter(function(t) { return !seen[t.id]; })), doneMore: !!r.more, doneLoading: false });
+  } catch (e) {
+    todoPatch({ doneLoading: false, doneAll: have.length ? have : null,
+      doneErr: e && e.code === "PGRST202" ? "Only the last six weeks of done to-dos can be shown until a database update is in." : todoErrorText(e) });
+  }
+}
+// The finished to-dos to show: the long list once read, with anything ticked
+// or unticked since taken from the fresh copy.
+function todoDoneItems(store) {
+  const byId = {};
+  (store.doneAll || []).forEach(function(t) { byId[t.id] = t; });
+  (store.todos || []).forEach(function(t) { if (byId[t.id] || !todoIsOpen(t)) byId[t.id] = t; });
+  return Object.keys(byId).map(function(k) { return byId[k]; }).filter(function(t) { return !todoIsOpen(t); });
+}
+// "Do again": a new to-do like a finished one, opened in the sheet to set its
+// priority or day first. Photos and the repeat are not carried over.
+function todoAgainPreset(t) {
+  return { title: t.title, detail: t.detail || "", who: t.who, areas: todoAreas(t).slice(), tags: todoTags(t).slice(),
+    project: t.project || "", priority: TODO_PRIORITY_LABEL[t.priority] ? t.priority : "week",
+    urgent: !!t.urgent, private: !!t.private };
+}
+
 function todoLoad() {
   if (todoLoading) return todoLoading;
   todoLoading = (async function() {
@@ -18015,6 +18049,7 @@ function todoDay(iso) {
   return ["Su","Mo","Tu","We","Th","Fr","Sa"][d.getUTCDay()] + " " + d.getUTCDate() + " " +
     ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()];
 }
+function todoYearOf(iso) { const d = londonDateOf(iso); return d ? d.slice(0, 4) : ""; }
 function todoDueText(t, today) {
   const due = todoDueOn(t);
   if (!due) return t && t.priority === "event" ? "Nothing was booked when it was set" : "";
@@ -18744,7 +18779,7 @@ const TODO_GROUP_TABS = [["project", "Project"], ["tag", "Tag"], ["area", "Area"
 
 // One to-do on the board: a card with the round tick, the heading, a line of
 // when / where / who, and More.
-function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen, onStar }) {
+function TodoCard({ todo, today, ctx, by, busy, canUntick, onTick, onMore, onOpen, onStar, onAgain }) {
   const open = todoIsOpen(todo);
   const timing = open ? todoTiming(todo, today) : "none";
   const late = timing === "overdue";
@@ -18761,8 +18796,9 @@ function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen, onStar }
       style={{ background: "#fff", border: `${todo.urgent ? 2 : 1}px solid ${late ? T.red : todo.urgent ? T.amber : T.border}`, borderRadius: 10, padding: "12px 10px 10px 13px",
         display: "flex", flexWrap: "nowrap", alignItems: "flex-start", gap: 10, cursor: "pointer", color: T.text,
         boxShadow: "0 1px 2px rgba(" + T.shadowRgb + ",.06)" }}>
-      <TodoTick todo={todo} today={today} busy={busy} canUntick={false} onTick={onTick}/>
-      <div role="button" tabIndex={0} style={{ flex: 1, minWidth: 0, outlineOffset: 3 }}
+      <TodoTick todo={todo} today={today} busy={busy} canUntick={!!canUntick} onTick={onTick}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+      <div role="button" tabIndex={0} style={{ minWidth: 0, outlineOffset: 3, opacity: open ? 1 : 0.8 }}
         onKeyDown={function(e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(todo); } }}>
         <div style={{ fontSize: 14.5, fontWeight: 500, lineHeight: 1.35, overflowWrap: "anywhere" }}>{todo.title}</div>
         {todo.detail && (
@@ -18772,13 +18808,23 @@ function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen, onStar }
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "3px 9px", marginTop: 5, fontSize: 12, color: T.textLight }}>
           {dueText && <span style={{ color: late ? T.red : timing === "today" ? T.amber : todoRingColour(todo, today), fontWeight: 600 }}>{dueText}</span>}
           {!dueText && open && by !== "priority" && todo.priority !== "eventually" && <span style={{ color: todoRingColour(todo, today), fontWeight: 600 }}>{TODO_PRIORITY_LABEL[todo.priority]}</span>}
+          {!open && <span style={{ color: T.green, fontWeight: 600 }}>{todo.state === "na" ? "Not applicable" : "Done"}{todo.doneAt ? " " + todoDay(londonDateOf(todo.doneAt)) + (todoYearOf(todo.doneAt) !== today.slice(0, 4) ? " " + todoYearOf(todo.doneAt) : "") : ""}{todo.doneBy ? " · " + todo.doneBy : ""}</span>}
           {todo.repeat && <span>&#8635; {TODO_REPEAT_LABEL[todo.repeat] || "Repeats"}</span>}
           {bits.filter(Boolean).map(function(b, i) { return <span key={i}>{b}</span>; })}
           {photos > 0 && <span>{photos === 1 ? "1 photo" : photos + " photos"}</span>}
           {priv && <span style={{ fontWeight: 700, color: T.textMid }}>Private</span>}
         </div>
+        {!open && todo.comment && (
+          <div style={{ fontSize: 12.5, color: T.text, background: T.amberBg, borderRadius: 7, padding: "5px 8px", marginTop: 5, lineHeight: 1.4, overflowWrap: "anywhere" }}>{todo.comment}</div>
+        )}
       </div>
-      <TodoStar todo={todo} busy={busy} onStar={onStar}/>
+        {!open && onAgain && (
+          <button type="button" onClick={function(e) { e.stopPropagation(); onAgain(todo); }} aria-label={"Do again: " + todo.title}
+            style={{ marginTop: 7, background: "#fff", border: `1.5px solid ${T.border}`, borderRadius: 7, padding: "5px 10px",
+              fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: T.accent, cursor: "pointer" }}>&#8634; Do again</button>
+        )}
+      </div>
+      {open && <TodoStar todo={todo} busy={busy} onStar={onStar}/>}
       <button type="button" onClick={function(e) { e.stopPropagation(); onMore(todo); }} disabled={busy} aria-label={"More: " + todo.title}
         style={{ background: "none", border: "none", padding: "0 2px", margin: "-4px -2px 0 0", fontFamily: "inherit", fontSize: 18, lineHeight: 1,
           color: T.textLight, cursor: "pointer", flexShrink: 0, letterSpacing: 1 }}>&middot;&middot;&middot;</button>
@@ -18786,9 +18832,31 @@ function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen, onStar }
   );
 }
 
+// Under a column or group: its finished to-dos, newest first — five, then the
+// rest on request (7 Nov, Toby: kept to look back on and do again).
+function TodoDoneList({ label, items, render }) {
+  const [all, setAll] = useState(false);
+  if (!items || !items.length) return null;
+  const shown = all ? items : items.slice(0, 5);
+  return (
+    <div role="group" aria-label={"Done: " + label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: .4, textTransform: "uppercase", color: T.green, padding: "6px 2px 0" }}>
+        Done <span style={{ color: T.textLight, fontWeight: 600 }}>{items.length}</span>
+      </div>
+      {shown.map(render)}
+      {items.length > shown.length && (
+        <button type="button" onClick={function() { setAll(true); }}
+          style={{ alignSelf: "flex-start", background: "none", border: "none", padding: "2px", fontFamily: "inherit", fontSize: 13, color: T.midBlue, cursor: "pointer", textDecoration: "underline" }}>
+          Show all {items.length} done
+        </button>
+      )}
+    </div>
+  );
+}
+
 // The board: one column per group, side by side, scrolled sideways (a
 // column at a time on a phone). Only columns with something in them.
-function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onAdd, onStar }) {
+function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onAdd, onStar, canUntick, onAgain }) {
   return (
     <div role="region" aria-label="To-do board" tabIndex={0}
       style={{ display: "flex", flexWrap: "nowrap", alignItems: "flex-start", gap: 12, overflowX: "auto", scrollSnapType: "x mandatory",
@@ -18800,7 +18868,7 @@ function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onA
             style={{ flex: "0 0 300px", maxWidth: "86vw", scrollSnapAlign: "start", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
             <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "baseline", gap: 8, padding: "2px 2px 2px" }}>
               <div style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: 700, color: red ? T.red : T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {g.label} <span style={{ fontWeight: 500, color: T.textLight, fontSize: 13.5 }}>{g.items.length}</span>
+                {g.label} <span style={{ fontWeight: 500, color: T.textLight, fontSize: 13.5 }}>{g.items.length || ""}</span>
               </div>
               {!red && (
                 <button type="button" onClick={function() { onAdd(g.preset); }} aria-label={"New to-do in " + g.label}
@@ -18811,6 +18879,10 @@ function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onA
               return <TodoCard key={t.id} todo={t} today={today} ctx={ctx} by={by} busy={busyId === t.id}
                 onTick={onTick} onMore={onMore} onOpen={onOpen} onStar={onStar}/>;
             })}
+            <TodoDoneList label={g.label} items={g.done} render={function(t) {
+              return <TodoCard key={t.id} todo={t} today={today} ctx={ctx} by={by} busy={busyId === t.id} canUntick={canUntick && canUntick(t)}
+                onTick={onTick} onMore={onMore} onOpen={onOpen} onAgain={onAgain}/>;
+            }}/>
           </section>
         );
       })}
@@ -18851,7 +18923,6 @@ function TodoPage({ compact }) {
     return Object.assign({ view: "board", by: "project", tags: [], who: "", area: "" }, todoReadPrefs());
   });
   function pref(k, v) { setPrefs(function(p) { const n = Object.assign({}, p); n[k] = v; todoSavePrefs(n); return n; }); }
-  const [showDone, setShowDone] = useState(false);
   const [edit, setEdit] = useState(null);         // { todo } or { preset }
   const [more, setMore] = useState(null);
   const [lists, setLists] = useState(false);
@@ -18895,10 +18966,15 @@ function TodoPage({ compact }) {
     oneArea: area && area !== "__none" ? area : null };
   const all = store.todos || [];
   const shown = todoFilter(all, { tags: tagsOn, who: who, area: area, urgent: !!prefs.urgent }, me);
-  const groups = todoGroups(shown, by, ctx);
+  // ✓ Done: each column also lists its finished to-dos, however old.
+  const showDone = !!prefs.done;
+  useEffect(function() { if (showDone && !store.doneAll && !store.doneLoading && !store.doneErr) todoLoadDone(false); }, [showDone]);
+  const doneShown = showDone ? todoFilter(todoDoneItems(store), { tags: tagsOn, who: who, area: area, urgent: !!prefs.urgent }, me) : [];
+  const canUntick = function(t) { return !!me && (me.role === "admin" || t.doneById === me.id); };
+  const doAgain = function(t) { setEdit({ preset: todoAgainPreset(t) }); };
+  const groups = todoGroups(shown, by, ctx, { done: doneShown });
   const openCount = shown.filter(todoIsOpen).length;
   const overdue = shown.filter(function(t) { return todoIsOpen(t) && todoTiming(t, today) === "overdue"; }).length;
-  const done = todoRecentlyDone(shown, 30);
   const filtered = !!(tagsOn.length || area || who || prefs.urgent);
   // A new to-do starts in the column it was added from, and in whatever the
   // filters are showing.
@@ -18962,8 +19038,12 @@ function TodoPage({ compact }) {
       {compact && <div style={{ margin: "4px 0 12px" }}>{head}</div>}
       {store.err && <ErrBanner text={store.err}/>}
       {err && <ErrBanner text={err}/>}
-      {(catChips.length > 1 || all.some(function(t) { return t.urgent; })) && (
+      {(
         <div role="group" aria-label="Tags" style={{ display: "flex", flexWrap: "nowrap", gap: 7, overflowX: "auto", padding: "0 0 8px", maxWidth: "100%" }}>
+          <button type="button" aria-pressed={showDone ? "true" : "false"} onClick={function() { pref("done", !showDone); }}
+            style={Object.assign({}, chip(showDone), showDone ? { borderColor: T.green, background: T.greenBg || T.accentLight } : {})}>
+            <span style={{ color: T.green }}>&#10003;</span> Done
+          </button>
           {all.some(function(t) { return t.urgent !== undefined; }) && <button type="button" aria-pressed={prefs.urgent ? "true" : "false"} onClick={function() { pref("urgent", !prefs.urgent); }}
             style={Object.assign({}, chip(!!prefs.urgent), prefs.urgent ? { borderColor: T.amber, background: T.amberBg } : {})}>
             <span style={{ color: T.amber }}>&#9733;</span> Urgent
@@ -18989,7 +19069,7 @@ function TodoPage({ compact }) {
         <div style={{ fontSize: 14, color: T.textLight, padding: "18px 2px" }}>{filtered ? "Nothing matches these filters." : compact ? "Nothing to do. Add one with + New to-do." : "Nothing to do. Add one with + To-do at the top."}</div>
       )}
       {board && groups.length > 0 && (
-        <TodoBoard groups={groups} today={today} ctx={ctx} by={by} busyId={busyId} onTick={setState} onMore={setMore} onStar={star}
+        <TodoBoard groups={groups} today={today} ctx={ctx} by={by} busyId={busyId} onTick={setState} onMore={setMore} onStar={star} canUntick={canUntick} onAgain={doAgain}
           onOpen={function(x) { setEdit({ todo: x }); }} onAdd={function(p) { setEdit({ preset: presetFor(p) }); }}/>
       )}
       {!board && groups.map(function(g) {
@@ -19010,21 +19090,30 @@ function TodoPage({ compact }) {
                 showWho={by !== "person"} showArea={by !== "area"} showProject={by !== "project"}
                 canUntick={false} onTick={setState} onMore={setMore} onStar={star} onOpen={function(x) { setEdit({ todo: x }); }}/>;
             })}
+            <TodoDoneList label={g.label} items={g.done} render={function(t) {
+              return (
+                <div key={t.id}>
+                  <TodoRow todo={t} today={today} ctx={ctx} busy={busyId === t.id}
+                    showWho={by !== "person"} showArea={by !== "area"} showProject={by !== "project"}
+                    canUntick={canUntick(t)} onTick={setState} onMore={setMore} onOpen={function(x) { setEdit({ todo: x }); }}/>
+                  <button type="button" onClick={function() { doAgain(t); }} aria-label={"Do again: " + t.title}
+                    style={{ margin: "0 0 6px 40px", background: "#fff", border: `1.5px solid ${T.border}`, borderRadius: 7, padding: "4px 10px",
+                      fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: T.accent, cursor: "pointer" }}>&#8634; Do again</button>
+                </div>
+              );
+            }}/>
           </section>
         );
       })}
 
-      {done.length > 0 && (
-        <div style={{ marginTop: 22, maxWidth: 820 }}>
-          <button type="button" onClick={function() { setShowDone(!showDone); }} aria-expanded={showDone ? "true" : "false"}
-            style={{ background: "none", border: "none", padding: "6px 0", fontFamily: "inherit", fontSize: 13.5, color: T.textMid, cursor: "pointer", textDecoration: "underline" }}>
-            {showDone ? "Hide" : "Show"} done in the last 30 days ({done.length})
-          </button>
-          {showDone && done.map(function(t) {
-            return <TodoRow key={t.id} todo={t} today={today} ctx={ctx} busy={busyId === t.id} showWho showArea showProject
-              canUntick={!!me && (me.role === "admin" || t.doneById === me.id)}
-              onTick={setState} onMore={setMore} onOpen={function(x) { setEdit({ todo: x }); }}/>;
-          })}
+      {showDone && (
+        <div style={{ marginTop: 14, fontSize: 13, color: T.textMid, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+          {store.doneLoading && <span>Reading done to-dos…</span>}
+          {store.doneErr && <span>{store.doneErr}</span>}
+          {store.doneMore && !store.doneLoading && (
+            <button type="button" onClick={function() { todoLoadDone(true); }} style={btnQuiet}>Load older done to-dos</button>
+          )}
+          {!store.doneLoading && !store.doneErr && !doneShown.length && <span>Nothing done yet{filtered ? " that matches these filters" : ""}.</span>}
         </div>
       )}
 

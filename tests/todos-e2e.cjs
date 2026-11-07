@@ -46,6 +46,10 @@ async function run(viewport, label) {
     categories: [{ id: 'admin', name: 'Admin' }, { id: 'maint', name: 'Maintenance' }, { id: 'to-buy', name: 'To buy' }],
     projects: [{ id: 'upkeep', name: 'Upkeep' }],
     items: [
+      // Done last winter: todo_get no longer sends it; ✓ Done reads it back.
+      { id: 'td_winter', title: 'Lag the Hamlet pipes', priority: 'month', setOn: '2025-11-20', who: 'anyone', project: 'upkeep',
+        state: 'note', comment: 'Used 3 rolls of lagging', doneAt: '2025-12-10T10:00:00Z', doneBy: 'Toby', doneById: ME,
+        createdAt: '2025-11-20T09:00:00Z', createdById: ME, area: 'hamlet' },
       { id: 'td_old', title: 'Clear the gutters on the Hamlet', priority: 'week', setOn: addDays(today, -10), who: 'role:admin',
         area: 'hamlet', project: null, createdAt: '2026-10-01T09:00:00Z', createdById: ME },
       { id: 'td_bar', title: 'Restock the ice machine', priority: 'three', setOn: addDays(today, -2), who: 'role:bar', area: 'grain-store',
@@ -276,11 +280,29 @@ async function run(viewport, label) {
   await until(() => item('td_bar').state === 'note', 'done with a comment')
   assert.strictEqual(item('td_bar').comment, 'Two bags left')
 
-  // Show done, untick.
-  await page.getByRole('button', { name: /Show done in the last 30 days/ }).click()
+  // ✓ Done (7 Nov, Toby): each column lists its finished to-dos, however old.
+  await page.locator('#todo-f-by').selectOption('project')
+  assert.strictEqual(await page.getByText('Lag the Hamlet pipes').count(), 0, label + ': old done ones hidden until asked for')
+  await page.getByRole('group', { name: 'Tags' }).getByRole('button', { name: /Done$/ }).click()
+  const upkeepDone = page.getByRole('group', { name: 'Done: Upkeep' })
+  await upkeepDone.getByText('Lag the Hamlet pipes').waitFor()
+  assert.ok(await upkeepDone.getByText(/Done We 10 Dec 2025 · Toby/).isVisible(), label + ': when and who, with the year')
+  assert.ok(await upkeepDone.getByText('Used 3 rolls of lagging').isVisible(), label + ': the comment')
+  await page.getByRole('group', { name: 'Done: No project' }).getByText('Clear the gutters on the Hamlet').waitFor()
+  // Untick from there.
   await page.getByRole('button', { name: 'Untick: Clear the gutters on the Hamlet' }).click()
   await until(() => item('td_old').state === 'open', 'untick')
   assert.strictEqual(item('td_old').doneBy, null)
+  // Do again: a new to-do like it, opened to set the day first.
+  await upkeepDone.getByRole('button', { name: 'Do again: Lag the Hamlet pipes' }).click()
+  assert.strictEqual(await page.getByLabel('Heading').inputValue(), 'Lag the Hamlet pipes')
+  assert.strictEqual(await page.getByRole('dialog').getByRole('group', { name: 'Areas' }).getByRole('button', { name: /Hamlet/ }).getAttribute('aria-pressed'), 'true')
+  await page.getByRole('button', { name: 'Add to-do' }).click()
+  await page.getByLabel('Heading').waitFor({ state: 'detached' })
+  const again = [...db.items.values()].find((t) => t.title === 'Lag the Hamlet pipes' && t.state === 'open')
+  assert.ok(again && again.id !== 'td_winter' && again.project === 'upkeep' && item('td_winter').state === 'note', label + ': a new one, the old one kept')
+  await page.getByRole('group', { name: 'Tags' }).getByRole('button', { name: /Done$/ }).click()
+  assert.strictEqual(await page.getByRole('group', { name: 'Done: Upkeep' }).count(), 0, label + ': done hidden again')
 
   // "+ To-do" from another page.
   if (phone) { await page.getByRole('button', { name: 'Open menu' }).click() }

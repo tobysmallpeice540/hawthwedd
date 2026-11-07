@@ -156,25 +156,31 @@ export function todoCompare(a, b) {
 // Returns [{ key, label, items, preset }] — `preset` is what a new to-do
 // added from that group's own button starts with. Empty groups are left out,
 // except projects and areas still in use elsewhere are not invented.
-export function todoGroups(todos, by, ctx) {
+export function todoGroups(todos, by, ctx, opts) {
   const today = ctx.today;
   const open = (todos || []).filter(todoIsOpen).slice().sort(todoCompare);
+  // Finished ones to show under each column (7 Nov, Toby: kept to look back on
+  // and do again), newest first. A column with only finished ones still shows.
+  const done = ((opts && opts.done) || []).filter(function (t) { return !todoIsOpen(t); }).slice()
+    .sort(function (a, b) { return String(b.doneAt || "").localeCompare(String(a.doneAt || "")); });
   const groups = [];
   const byKey = {};
   function put(key, label, item, preset) {
-    if (!byKey[key]) { byKey[key] = { key: key, label: label, items: [], preset: preset || {} }; groups.push(byKey[key]); }
+    if (!byKey[key]) { byKey[key] = { key: key, label: label, items: [], done: [], preset: preset || {} }; groups.push(byKey[key]); }
     if (item) byKey[key].items.push(item);
   }
+  // Where a to-do goes: the keys of its columns (one or more).
+  let keysOf;
   if (by === "priority") {
     // Overdue first, whatever priority it was given, so it is not missed.
     const order = ["overdue"].concat(TODO_PRIORITY_ORDER);
     order.forEach(function (k) {
       put(k, k === "overdue" ? "Overdue" : TODO_PRIORITY_LABEL[k], null, k === "overdue" ? {} : { priority: k });
     });
-    open.forEach(function (t) {
-      const k = todoTiming(t, today) === "overdue" ? "overdue" : (TODO_PRIORITY_DAYS[t.priority] !== undefined ? t.priority : "eventually");
-      byKey[k].items.push(t);
-    });
+    keysOf = function (t, isDone) {
+      if (!isDone && todoTiming(t, today) === "overdue") return ["overdue"];
+      return [TODO_PRIORITY_DAYS[t.priority] !== undefined ? t.priority : "eventually"];
+    };
   } else if (by === "person") {
     const me = ctx.me || {};
     const known = {};
@@ -190,40 +196,35 @@ export function todoGroups(todos, by, ctx) {
       const label = w === "anyone" ? "Everyone" : (me.id && w === "person:" + me.id ? (known[w] || "Me") + " (me)" : known[w] || w);
       put(w, label, null, { who: w });
     });
-    open.forEach(function (t) {
+    keysOf = function (t) {
       const w = t.who || "anyone";
       if (!byKey[w]) put(w, t.whoLabel || "Someone no longer listed", null, { who: w });
-      byKey[w].items.push(t);
-    });
+      return [w];
+    };
   } else if (by === "tag" || by === "category") {
     // A to-do with two tags is in both columns.
     (ctx.categories || []).forEach(function (x) { put(x.id, x.name, null, { tags: [x.id] }); });
     put("__none", "No tag", null, {});
-    open.forEach(function (t) {
+    keysOf = function (t) {
       const tags = todoTags(t).filter(function (g) { return byKey[g] && g !== "__none"; });
-      if (!tags.length) byKey.__none.items.push(t);
-      tags.forEach(function (g) { byKey[g].items.push(t); });
-    });
+      return tags.length ? tags : ["__none"];
+    };
   } else if (by === "area") {
     // A to-do in two areas is in both columns.
     (ctx.areas || []).forEach(function (x) { put(x.id, x.name, null, { areas: [x.id] }); });
     put("__none", "No area", null, {});
-    open.forEach(function (t) {
+    keysOf = function (t) {
       const as = todoAreas(t).filter(function (a) { return byKey[a] && a !== "__none"; });
-      if (!as.length) byKey.__none.items.push(t);
-      as.forEach(function (a) { byKey[a].items.push(t); });
-    });
+      return as.length ? as : ["__none"];
+    };
   } else {
-    const field = by === "area" ? "area" : "project";
-    const list = (by === "area" ? ctx.areas : ctx.projects) || [];
-    list.forEach(function (x) { const p = {}; p[field] = x.id; put(x.id, x.name, null, p); });
-    put("__none", by === "area" ? "No area" : "No project", null, {});
-    open.forEach(function (t) {
-      const k = t[field] && byKey[t[field]] ? t[field] : "__none";
-      byKey[k].items.push(t);
-    });
+    (ctx.projects || []).forEach(function (x) { put(x.id, x.name, null, { project: x.id }); });
+    put("__none", "No project", null, {});
+    keysOf = function (t) { return [t.project && byKey[t.project] ? t.project : "__none"]; };
   }
-  return groups.filter(function (g) { return g.items.length > 0; });
+  open.forEach(function (t) { keysOf(t, false).forEach(function (k) { byKey[k].items.push(t); }); });
+  done.forEach(function (t) { keysOf(t, true).forEach(function (k) { byKey[k].done.push(t); }); });
+  return groups.filter(function (g) { return g.items.length > 0 || g.done.length > 0; });
 }
 
 // Finished to-dos, newest first, from the last `days` days.

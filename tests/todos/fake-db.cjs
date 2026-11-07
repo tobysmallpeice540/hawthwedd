@@ -25,11 +25,19 @@ async function makeTodoDb(opts) {
   const fail = (error) => ({ ok: false, error })
 
   const rpc = {
+    // Like the database: open ones, and done ones from the last 45 days only.
     todo_get: () => ({ ok: true, me,
-      items: [...items.values()].filter(visible).map(out),
+      items: [...items.values()].filter(visible).filter((t) => t.state === 'open' || !t.doneAt || Date.parse(t.doneAt) > Date.now() - 45 * 86400000).map(out),
       areas: lists.area.map((l) => listOut('area', l)),
       projects: lists.project.filter((l) => R.todoListVisibleTo(l, me)).map((l) => listOut('project', l)),
       categories: lists.category.map((l) => listOut('category', l)) }),
+    // Migration 2026-11-07h: every done one, however old, newest first, by pages.
+    todo_done_list: ({ p_before, p_limit }) => {
+      const lim = Math.min(Math.max(p_limit || 500, 1), 1000)
+      const done = [...items.values()].filter(visible).filter((t) => t.state !== 'open' && t.doneAt && (!p_before || t.doneAt < p_before))
+        .sort((a, b) => String(b.doneAt).localeCompare(String(a.doneAt)))
+      return { ok: true, more: done.length > lim, items: done.slice(0, lim).map(out) }
+    },
     todo_set_urgent: ({ p_id, p_on }) => {
       const t = items.get(p_id)
       if (!t || !visible(t)) return fail('not_found')
