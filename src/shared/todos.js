@@ -194,3 +194,241 @@ export function todoSlug(name, taken) {
 export function todoUses(todos, field, id) {
   return (todos || []).filter(function (t) { return t[field] === id; }).length;
 }
+
+// ── Todoist → to-do list: the proposed mapping (7 Nov 2026) ─────────────────
+// The To-do page's "Todoist CSV" button fetches Toby's Todoist through
+// netlify/functions/todoist-export.js and turns it into a spreadsheet: one row
+// per open Todoist task, what it was in Todoist, and what it would become here.
+// Nothing is imported. The proposal is only a starting point for him to edit.
+//
+// The rules:
+// · Area: the first area named in the task's labels, section, project, parent
+//   project or title (word match; a few nicknames such as "Amly" or "bell
+//   tent"). None found → blank, flagged to pick one.
+// · Project: the Todoist project, unless it is the Inbox or was itself read as
+//   an area. Marked "(new)" when the app has no project of that name yet.
+// · Priority: from the due date — overdue or within a day → 1 day, within 7 →
+//   7 days, within 28 → 1 month, later → Eventually. With no date, Todoist's
+//   P1 → 7 days, P2 → 1 month, otherwise Eventually.
+// · Deadline: Todoist's deadline, else a one-off due date.
+// · For: the Todoist assignee if an app login has that name; unassigned tasks
+//   in a project only Toby sees go to whoever downloaded the sheet; anything
+//   else is Everyone.
+// · Sub-tasks fold into their top task's description (the app does not nest);
+//   repeating tasks are proposed as checklist items instead, since checklists
+//   are what repeat.
+
+const TODOIST_AREA_NICKNAMES = {
+  "amly-barn": ["amly"],
+  "grain-store": ["grainstore"],
+  "glamping": ["bell tent", "bell tents", "bell-tent"],
+  "hamlet": ["hamlet"],
+  "cinema-barn": ["cinema"],
+  "wood-store": ["woodstore"],
+  "barn-in-the-woods": ["bitw"],
+};
+
+function todoistEsc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function todoistAreaTerms(areas) {
+  return (areas || []).filter(function(a) { return a && !a.hidden && a.name; }).map(function(a) {
+    const base = String(a.name).toLowerCase().trim();
+    const terms = [base];
+    if (base.indexOf("the ") === 0) terms.push(base.slice(4));
+    (TODOIST_AREA_NICKNAMES[a.id] || []).forEach(function(n) { terms.push(n); });
+    const res = terms.map(function(t) { return new RegExp("(^|[^a-z0-9])" + todoistEsc(t) + "($|[^a-z0-9])", "i"); });
+    return { area: a, res: res };
+  });
+}
+
+function todoistAreaIn(text, terms) {
+  const s = String(text || "");
+  if (!s) return [];
+  return terms.filter(function(t) { return t.res.some(function(r) { return r.test(s); }); }).map(function(t) { return t.area; });
+}
+
+function todoistDays(from, to) {
+  const a = Date.parse(from + "T00:00:00Z"), b = Date.parse(to + "T00:00:00Z");
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+export function todoistPriority(task, today) {
+  if (task.dueDate && !task.recurring) {
+    const d = todoistDays(today, task.dueDate);
+    if (d != null) {
+      if (d <= 1) return "day";
+      if (d <= 7) return "week";
+      if (d <= 28) return "month";
+      return "eventually";
+    }
+  }
+  if (task.priority === 4) return "week";
+  if (task.priority === 3) return "month";
+  return "eventually";
+}
+
+// data: the function's reply { projects, sections, people, tasks }.
+// opts: { areas, projects, people, me, today } from the to-do store.
+// Returns one row object per task, sorted for reading.
+export function todoistProposal(data, opts) {
+  const o = opts || {};
+  const today = o.today;
+  const projById = {}, secById = {}, tPeople = {};
+  (data.projects || []).forEach(function(p) { projById[p.id] = p; });
+  (data.sections || []).forEach(function(s) { secById[s.id] = s; });
+  (data.people || []).forEach(function(p) { tPeople[p.id] = p.name; });
+  const tasks = (data.tasks || []).slice();
+  const byId = {};
+  tasks.forEach(function(t) { byId[t.id] = t; });
+  const terms = todoistAreaTerms(o.areas);
+  const appProjects = {};
+  (o.projects || []).forEach(function(p) { if (p && p.name) appProjects[String(p.name).toLowerCase().trim()] = p; });
+  const appPeople = (o.people || []).filter(function(p) { return p && p.who && p.who.indexOf("person:") === 0; });
+  const meRow = o.me && o.me.id ? appPeople.filter(function(p) { return p.who === "person:" + o.me.id; })[0] : null;
+
+  function personFor(name) {
+    const n = String(name || "").toLowerCase().trim();
+    if (!n) return null;
+    const exact = appPeople.filter(function(p) { return String(p.label).toLowerCase().trim() === n; })[0];
+    if (exact) return exact;
+    const firstName = n.split(/\s+/)[0];
+    const hits = appPeople.filter(function(p) { return String(p.label).toLowerCase().trim().split(/\s+/)[0] === firstName; });
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  // The top task each sub-task folds into (following parents up the chain).
+  function topOf(t) {
+    let cur = t, guard = 0;
+    while (cur.parentId && byId[cur.parentId] && guard++ < 20) cur = byId[cur.parentId];
+    return cur;
+  }
+  const children = {};
+  tasks.forEach(function(t) {
+    if (!t.parentId || !byId[t.parentId]) return;
+    const top = topOf(t);
+    (children[top.id] = children[top.id] || []).push(t);
+  });
+
+  const rows = tasks.map(function(t) {
+    const proj = projById[t.projectId] || { name: "", inbox: false, shared: false };
+    const parentProj = proj.parentId ? projById[proj.parentId] : null;
+    const sec = t.sectionId ? secById[t.sectionId] : null;
+    const flags = [];
+
+    // Area, looking in the most deliberate places first.
+    const places = [
+      ["label", t.labels.join(" , ")],
+      ["section", sec ? sec.name : ""],
+      ["project", proj.inbox ? "" : proj.name],
+      ["parent project", parentProj ? parentProj.name : ""],
+      ["title", t.content],
+    ];
+    let area = null, areaFrom = "";
+    for (let i = 0; i < places.length && !area; i++) {
+      const hits = todoistAreaIn(places[i][1], terms);
+      if (hits.length) {
+        area = hits[0]; areaFrom = places[i][0];
+        if (hits.length > 1) flags.push("Mentions " + hits.map(function(a) { return a.name; }).join(" and ") + " - check the area");
+      }
+    }
+    if (!area) flags.push("No area - pick one");
+
+    // Project: the Todoist project, unless it was the Inbox or was the area.
+    let project = "";
+    if (!proj.inbox && proj.name && !(areaFrom === "project")) {
+      const hit = appProjects[proj.name.toLowerCase().trim()];
+      project = hit ? hit.name : proj.name + " (new)";
+    }
+
+    // Who.
+    let who = "Everyone";
+    if (t.assigneeId) {
+      const tName = tPeople[t.assigneeId] || "";
+      const p = personFor(tName);
+      if (p) who = p.label;
+      else flags.push("Todoist has it for " + (tName || "someone") + ", who has no app login");
+    } else if (!proj.shared && meRow) {
+      who = meRow.label;
+    }
+
+    const isSub = !!(t.parentId && byId[t.parentId]);
+    const action = isSub ? "Fold into parent" : (t.recurring ? "Checklist candidate" : "Import");
+    if (t.recurring) flags.push("Repeats (" + (t.dueString || "recurring") + ")");
+
+    // What the imported to-do's description would say.
+    const extra = [];
+    if (t.description) extra.push(t.description);
+    const kids = children[t.id] || [];
+    if (kids.length) extra.push("Steps:\n" + kids.map(function(k) { return "- " + k.content; }).join("\n"));
+    const meta = [];
+    if (sec) meta.push("Section: " + sec.name);
+    if (t.labels.length) meta.push("Labels: " + t.labels.join(", "));
+    meta.push("From Todoist" + (proj.name ? " (" + proj.name + ")" : ""));
+    extra.push(meta.join(" · "));
+
+    const priority = todoistPriority(t, today);
+    return {
+      todoistId: t.id,
+      todoistProject: (parentProj ? parentProj.name + " / " : "") + (proj.name || ""),
+      todoistSection: sec ? sec.name : "",
+      todoistTask: t.content,
+      todoistDescription: t.description,
+      todoistLabels: t.labels.join(", "),
+      todoistPriority: "P" + (5 - (t.priority || 1)),
+      todoistDue: t.dueDate || "",
+      todoistRepeats: t.recurring ? (t.dueString || "Yes") : "",
+      todoistAssignee: t.assigneeId ? (tPeople[t.assigneeId] || "") : "",
+      todoistParent: isSub ? (byId[t.parentId].content || "") : "",
+      todoistAdded: t.addedAt || "",
+      action: action,
+      title: t.content,
+      area: area ? area.name : "",
+      areaFrom: areaFrom,
+      project: project,
+      priority: TODO_PRIORITY_LABEL[priority],
+      deadline: t.deadline || (!t.recurring && t.dueDate) || "",
+      who: who,
+      private: "No",
+      detail: isSub ? "" : extra.join("\n\n"),
+      flags: flags.join("; "),
+      _order: t.order,
+    };
+  });
+
+  const actionRank = { "Import": 0, "Checklist candidate": 1, "Fold into parent": 2 };
+  rows.sort(function(a, b) {
+    if (actionRank[a.action] !== actionRank[b.action]) return actionRank[a.action] - actionRank[b.action];
+    if (!a.area !== !b.area) return a.area ? -1 : 1;
+    if (a.area !== b.area) return a.area < b.area ? -1 : 1;
+    if (a.project !== b.project) return a.project < b.project ? -1 : 1;
+    return (a._order || 0) - (b._order || 0);
+  });
+  rows.forEach(function(r) { delete r._order; });
+  return rows;
+}
+
+export const TODOIST_CSV_COLUMNS = [
+  ["action", "Proposed action"], ["title", "Heading"], ["area", "Area"], ["areaFrom", "Area found in"],
+  ["project", "Project"], ["priority", "Priority"], ["deadline", "Deadline"], ["who", "For"], ["private", "Private"],
+  ["flags", "Check"], ["detail", "Description to import"],
+  ["todoistProject", "Todoist project"], ["todoistSection", "Todoist section"], ["todoistTask", "Todoist task"],
+  ["todoistDescription", "Todoist description"], ["todoistLabels", "Todoist labels"], ["todoistPriority", "Todoist priority"],
+  ["todoistDue", "Todoist due"], ["todoistRepeats", "Todoist repeats"], ["todoistAssignee", "Todoist assignee"],
+  ["todoistParent", "Todoist parent task"], ["todoistAdded", "Todoist added"], ["todoistId", "Todoist ID"],
+];
+
+// A CSV Excel and Numbers open cleanly: BOM, CRLF, every cell quoted. A cell
+// starting = + @ or a tab is prefixed with ' so a spreadsheet never runs it as
+// a formula (a task title is text somebody typed).
+export function todoCsv(rows, columns) {
+  const cols = columns || TODOIST_CSV_COLUMNS;
+  function cell(v) {
+    let s = v == null ? "" : String(v);
+    if (/^[=+@\t\r]/.test(s)) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  const lines = [cols.map(function(c) { return cell(c[1]); }).join(",")];
+  (rows || []).forEach(function(r) { lines.push(cols.map(function(c) { return cell(r[c[0]]); }).join(",")); });
+  return "﻿" + lines.join("\r\n") + "\r\n";
+}

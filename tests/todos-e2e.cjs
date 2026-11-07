@@ -182,6 +182,25 @@ async function run(viewport, label) {
   if (shots) await page.screenshot({ path: path.join(shots, label + '-lists.png') })
   await page.getByText('Done', { exact: true }).last().click()
 
+  // Todoist CSV (office only): an error is shown; then the sheet downloads.
+  let todoistReply = { status: 400, body: { error: "Todoist isn't connected yet. Add TODOIST_API_TOKEN." } }
+  await page.route('**/.netlify/functions/todoist-export', (route) =>
+    route.fulfill({ status: todoistReply.status, contentType: 'application/json', body: JSON.stringify(todoistReply.body) }))
+  await page.getByRole('button', { name: 'Todoist CSV' }).click()
+  await page.getByText(/TODOIST_API_TOKEN/).waitFor()
+  todoistReply = { status: 200, body: { ok: true,
+    projects: [{ id: 'p1', name: 'Inbox', inbox: true }, { id: 'p2', name: 'Wood Store', shared: false }],
+    sections: [], people: [],
+    tasks: [{ id: 't1', content: 'Stack logs', projectId: 'p2', labels: [], priority: 1, order: 1 },
+      { id: 't2', content: 'Renew insurance', projectId: 'p1', labels: [], priority: 4, order: 2 }] } }
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Todoist CSV' }).click()])
+  assert.ok(/^todoist-to-do-mapping-\d{4}-\d{2}-\d{2}\.csv$/.test(dl.suggestedFilename()), label + ': csv name')
+  const csv = require('fs').readFileSync(await dl.path(), 'utf8')
+  assert.ok(csv.includes('"Import","Stack logs","Wood Store","project"'), label + ': mapped row')
+  assert.ok(csv.includes('"Renew insurance",""'), label + ': no area found')
+  await page.getByText(/2 Todoist tasks in the sheet · 1 with no area yet\. Nothing has been imported\./).waitFor()
+  if (shots) await page.screenshot({ path: path.join(shots, label + '-todoist.png') })
+
   assert.deepStrictEqual(errors, [], label + ': no page errors')
   await close()
   console.log('  ok  ' + label)
@@ -214,6 +233,7 @@ async function runHousekeeping() {
   await page.getByText('Spare duvet for the Hamlet').click()
   assert.ok(await page.getByLabel('Heading').isDisabled(), 'housekeeping: cannot change the office\'s to-do')
   assert.strictEqual(await page.getByRole('button', { name: 'Save' }).count(), 0)
+  assert.strictEqual(await page.getByRole('button', { name: 'Todoist CSV' }).count(), 0, 'housekeeping: no Todoist CSV')
   await page.getByText('Close', { exact: true }).click()
   await page.getByRole('button', { name: 'Mark done: Spare duvet for the Hamlet' }).click()
   await until(() => db.items.get('h1').state === 'done', 'housekeeping tick')

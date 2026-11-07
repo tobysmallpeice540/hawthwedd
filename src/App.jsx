@@ -15,7 +15,7 @@ import { parseContractTemplate, resolveContractNodes, contractAccommodation, con
   htmlToContractMarkup, CONTRACT_FIELDS, CONTRACT_KINDS, CONTRACT_SYNTAX_HELP } from "./shared/contractDoc.js";
 import { DEFAULT_CONTRACT_TEMPLATE } from "./shared/contractTemplate.js";
 import { TODO_PRIORITY_ORDER, TODO_PRIORITY_LABEL, todoAddDays, todoDueOn, todoTiming, todoIsOpen, todoIsFor,
-  todoGroups, todoRecentlyDone, todoCompare } from "./shared/todos.js";
+  todoGroups, todoRecentlyDone, todoCompare, todoistProposal, todoCsv } from "./shared/todos.js";
 import { Component as ReactComponent } from "react";
 
 // ─── MOBILE / RESPONSIVE ────────────────────────────────────────────────────
@@ -18439,6 +18439,29 @@ const TODO_GROUP_TABS = [["priority", "Priority"], ["person", "Person"], ["area"
 
 // The To-do page. `role` is the login's ("admin", "bar", "cleaner"); `compact`
 // leaves the page heading off (inside the bar and housekeeping tabs).
+// "Todoist CSV" (office only): reads Todoist through todoist-export.js and
+// downloads the proposed mapping into this list as a spreadsheet. Nothing is
+// imported. The rules are todoistProposal in src/shared/todos.js.
+async function todoDownloadTodoistCsv() {
+  const res = await fetch("/.netlify/functions/todoist-export", {
+    method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, sbAuthHeaders()), body: "{}"
+  });
+  const d = await res.json().catch(function() { return {}; });
+  if (!res.ok || !d.ok) throw new Error(d.error || ("Todoist could not be read (" + res.status + ")."));
+  const rows = todoistProposal(d, { areas: todoStore.areas || [], projects: todoStore.projects || [],
+    people: todoStore.people || [], me: todoStore.me, today: londonToday() });
+  const blob = new Blob([todoCsv(rows)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "todoist-to-do-mapping-" + londonToday() + ".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+  const noArea = rows.filter(function(r) { return r.action === "Import" && !r.area; }).length;
+  return rows.length + " Todoist task" + (rows.length === 1 ? "" : "s") + " in the sheet" +
+    (noArea ? " · " + noArea + " with no area yet" : "") + ". Nothing has been imported.";
+}
+
 function TodoPage({ compact }) {
   const store = useTodoStore();
   const me = store.me;
@@ -18451,6 +18474,8 @@ function TodoPage({ compact }) {
   const [lists, setLists] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [err, setErr] = useState("");
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvNote, setCsvNote] = useState("");
   const [today, setToday] = useState(londonToday());
   useEffect(function() {
     const t = setInterval(function() { setToday(londonToday()); }, 60000);
@@ -18459,6 +18484,13 @@ function TodoPage({ compact }) {
     return function() { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, []);
   function pickBy(v) { setBy(v); try { localStorage.setItem("hbf_todo_by", v); } catch (e) {} }
+
+  async function todoistCsv() {
+    setCsvBusy(true); setErr(""); setCsvNote("");
+    try { setCsvNote(await todoDownloadTodoistCsv()); }
+    catch (e) { setErr((e && e.message) || "Todoist could not be read."); }
+    setCsvBusy(false);
+  }
 
   async function setState(todo, state, comment) {
     setBusyId(todo.id); setErr("");
@@ -18483,6 +18515,12 @@ function TodoPage({ compact }) {
         + New to-do
       </button>
       {office && <button type="button" onClick={function() { setLists(true); }} style={btnQuiet}>Areas &amp; projects</button>}
+      {me && me.role === "admin" && (
+        <button type="button" onClick={todoistCsv} disabled={csvBusy} title="Download a spreadsheet of your Todoist tasks and where each would go here. Nothing is imported."
+          style={Object.assign({}, btnQuiet, { opacity: csvBusy ? .6 : 1, cursor: csvBusy ? "wait" : "pointer" })}>
+          {csvBusy ? "Reading Todoist..." : "Todoist CSV"}
+        </button>
+      )}
     </div>
   );
   return (
@@ -18491,6 +18529,7 @@ function TodoPage({ compact }) {
       {compact && <div style={{ margin: "4px 0 12px" }}>{head}</div>}
       {store.err && <ErrBanner text={store.err}/>}
       {err && <ErrBanner text={err}/>}
+      {csvNote && <div role="status" style={{ fontSize: 13.5, color: T.textMid, margin: "0 0 10px" }}>{csvNote}</div>}
       <TabStrip tabs={TODO_GROUP_TABS} value={by} onChange={pickBy}/>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 7, margin: "-8px 0 6px" }}>
         {[[false, "Everyone's"], [true, "For me"]].map(function(o) {

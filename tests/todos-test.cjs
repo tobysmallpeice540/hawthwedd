@@ -122,5 +122,72 @@ const path = require('path')
     assert.strictEqual(T.todoUses(todos, 'project', 'p1'), 2)
   })
 
+  // ── Todoist → to-do proposal ───────────────────────────────────────────────
+  const areas = T.TODO_DEFAULT_AREAS
+  const tdData = {
+    projects: [
+      { id: 'in', name: 'Inbox', inbox: true, shared: false },
+      { id: 'hm', name: 'Hamlet', shared: false },
+      { id: 'wb', name: 'Website', shared: true },
+      { id: 'mk', name: 'Marketing', shared: false },
+    ],
+    sections: [{ id: 's1', name: 'Grain Store jobs', projectId: 'mk' }],
+    people: [{ id: 'u-toby', name: 'Toby Smallpeice' }, { id: 'u-ros', name: 'Rosanna Smith' }, { id: 'u-x', name: 'Builder Bob' }],
+    tasks: [
+      { id: '1', content: 'Fix Hamlet gutter', projectId: 'in', labels: [], priority: 1, dueDate: '2026-11-07', order: 1 },
+      { id: '2', content: 'Repaint door', projectId: 'hm', labels: [], priority: 4, order: 2 },
+      { id: '3', content: 'Buy screws', projectId: 'hm', parentId: '2', labels: [], priority: 1, order: 3 },
+      { id: '4', content: 'New homepage', projectId: 'wb', labels: ['web'], priority: 3, assigneeId: 'u-ros', order: 4 },
+      { id: '5', content: 'Check bell tents', projectId: 'in', labels: [], priority: 1, dueDate: '2026-11-10', recurring: true, dueString: 'every week', order: 5 },
+      { id: '6', content: 'Posters', projectId: 'mk', sectionId: 's1', labels: [], priority: 1, dueDate: '2026-11-25', order: 6 },
+      { id: '7', content: 'Call the bank', projectId: 'wb', labels: [], priority: 1, assigneeId: 'u-x', dueDate: '2027-03-01', order: 7 },
+      { id: '8', content: '=SUM(A1)', projectId: 'in', labels: [], priority: 2, order: 8 },
+    ],
+  }
+  const tdOpts = {
+    areas, projects: [{ id: 'p-web', name: 'website' }], today: '2026-11-06', me: { id: 'me1' },
+    people: [{ who: 'anyone', label: 'Everyone' }, { who: 'person:me1', label: 'Toby' }, { who: 'person:r1', label: 'Rosanna' }],
+  }
+  const prop = T.todoistProposal(tdData, tdOpts)
+  const row = (id) => prop.find((r) => r.todoistId === id)
+
+  ok('todoist: area from title, project, section and nicknames; Inbox is never a project', () => {
+    assert.strictEqual(row('1').area, 'The Hamlet'); assert.strictEqual(row('1').areaFrom, 'title'); assert.strictEqual(row('1').project, '')
+    assert.strictEqual(row('2').area, 'The Hamlet'); assert.strictEqual(row('2').areaFrom, 'project'); assert.strictEqual(row('2').project, '')
+    assert.strictEqual(row('6').area, 'Grain Store'); assert.strictEqual(row('6').areaFrom, 'section'); assert.strictEqual(row('6').project, 'Marketing (new)')
+    assert.strictEqual(row('5').area, 'Glamping')
+    assert.strictEqual(row('4').area, ''); assert.ok(/No area/.test(row('4').flags))
+    assert.strictEqual(row('4').project, 'website')   // matches the app's existing project, any case
+  })
+
+  ok('todoist: priority from the due date, else from P1/P2', () => {
+    assert.strictEqual(row('1').priority, '1 day')        // due tomorrow
+    assert.strictEqual(row('6').priority, '1 month')      // 19 days
+    assert.strictEqual(row('7').priority, 'Eventually')   // months away, kept as the deadline
+    assert.strictEqual(row('7').deadline, '2027-03-01')
+    assert.strictEqual(row('2').priority, '7 days')       // P1, no date
+    assert.strictEqual(row('4').priority, '1 month')      // P2, no date
+    assert.strictEqual(row('2').todoistPriority, 'P1')
+    assert.strictEqual(T.todoistPriority({ dueDate: '2026-10-01', priority: 1 }, '2026-11-06'), 'day')   // overdue
+  })
+
+  ok('todoist: who, sub-tasks folded in, repeats proposed as checklists', () => {
+    assert.strictEqual(row('4').who, 'Rosanna')            // first-name match to an app login
+    assert.strictEqual(row('7').who, 'Everyone'); assert.ok(/Builder Bob/.test(row('7').flags))
+    assert.strictEqual(row('2').who, 'Toby')               // unassigned in a project only Toby sees
+    assert.strictEqual(row('3').action, 'Fold into parent'); assert.strictEqual(row('3').detail, '')
+    assert.ok(/Steps:\n- Buy screws/.test(row('2').detail))
+    assert.strictEqual(row('5').action, 'Checklist candidate'); assert.strictEqual(row('5').deadline, '')
+    assert.deepStrictEqual(prop.map((r) => r.action).slice(-2), ['Checklist candidate', 'Fold into parent'])
+  })
+
+  ok('todoist: CSV is quoted, BOM-led and never starts a formula', () => {
+    const csv = T.todoCsv(prop)
+    assert.ok(csv.charCodeAt(0) === 0xfeff)
+    assert.ok(csv.indexOf('"\'=SUM(A1)"') > 0)
+    assert.ok(T.todoCsv([{ title: 'a "b"' }], [['title', 'Heading']]).indexOf('"a ""b"""') > 0)
+    assert.ok(T.todoCsv([{ title: '- fine' }], [['title', 'Heading']]).indexOf('"- fine"') > 0)
+  })
+
   console.log(n + ' passed')
 })().catch((e) => { console.error(e); process.exit(1) })
