@@ -90,6 +90,19 @@ async function run(viewport, label) {
   await card.getByText('Ring the farrier').waitFor({ state: 'detached' })
   await card.getByRole('button', { name: 'All to-dos' }).click()
   await page.getByRole('heading', { name: 'To-do' }).waitFor()
+  // One line at the top (7 Nov, Toby): To-do, the count, Projects & areas —
+  // no "+ New to-do" (the top bar's + To-do adds one) and no Board / List.
+  const tops = await page.evaluate(() => {
+    const h = document.querySelector('h1.hb-title'); const row = h.parentElement
+    const sub = row.querySelector('.hb-sub'); const b = [...row.querySelectorAll('button')].find((x) => x.textContent === 'Projects & areas')
+    const mid = (el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2 }
+    return { h: mid(h), sub: sub && mid(sub), b: b && mid(b), subText: sub && sub.textContent, right: b && b.getBoundingClientRect().right, vw: innerWidth }
+  })
+  assert.ok(tops.sub && tops.b && Math.abs(tops.h - tops.sub) < 14 && Math.abs(tops.h - tops.b) < 14 && tops.right <= tops.vw,
+    label + ': title, count and Projects & areas on one line: ' + JSON.stringify(tops))
+  assert.ok(/to do/.test(tops.subText), label + ': count beside the title')
+  assert.strictEqual(await page.getByRole('button', { name: '+ New to-do' }).count(), 0, label + ': no + New to-do on the page')
+  assert.strictEqual(await page.getByRole('group', { name: 'Show as' }).count(), 0, label + ': Board / List not on the page')
 
   // ── The board: one column per project, round ticks, filters ──
   const board = page.getByRole('region', { name: 'To-do board' })
@@ -146,7 +159,7 @@ async function run(viewport, label) {
   await page.getByText('Cancel', { exact: true }).click()
   await page.getByRole('button', { name: 'Clear filters' }).click()
   // "Before next event", set now, is fixed to the next Hamlet check-in.
-  await page.getByRole('button', { name: '+ New to-do' }).first().click()
+  await page.locator('.hb-top-todo').click()
   await page.getByLabel('Heading').fill('Hamlet bulbs')
   // Two areas: the Hamlet's check-in is before any Grain Store event, so it wins.
   await page.getByRole('dialog').getByRole('group', { name: 'Areas' }).getByRole('button', { name: 'The Hamlet' }).click()
@@ -208,7 +221,7 @@ async function run(viewport, label) {
   assert.ok(await page.locator('section[aria-label="Overdue"]').getByText('Clear the gutters on the Hamlet').isVisible())
 
   // A new project from the edit sheet, then a to-do in it with a photo.
-  await page.locator('.hb-actions, div').getByRole('button', { name: '+ New to-do' }).first().click()
+  await page.locator('.hb-top-todo').click()
   await page.getByLabel('Heading').fill('Replace the cinema barn projector bulb')
   await page.getByRole('radio', { name: '1 month' }).click()
   await page.getByRole('radio', { name: 'Rosanna' }).click()
@@ -273,8 +286,11 @@ async function run(viewport, label) {
   if (shots) await page.screenshot({ path: path.join(shots, label + '-quickadd.png') })
   await page.getByRole('status').getByRole('button', { name: 'View' }).click()
   await page.getByRole('heading', { name: 'To-do' }).waitFor()
-  // The list, grouped by person.
-  await page.getByRole('button', { name: 'List', exact: true }).click()
+  // The list, grouped by person: Board / List is in Projects & areas.
+  await page.getByRole('button', { name: 'Projects & areas' }).click()
+  await page.getByRole('dialog').getByRole('group', { name: 'Show as' }).getByRole('button', { name: 'List', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Done', exact: true }).click()
+  await page.getByRole('dialog').waitFor({ state: 'detached' })
   await page.locator('#todo-f-by').selectOption('person')
   assert.strictEqual(await page.getByRole('region', { name: 'To-do board' }).count(), 0, label + ': list view')
   if (shots) await page.screenshot({ path: path.join(shots, label + '-person.png'), fullPage: true })

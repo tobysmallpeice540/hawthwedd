@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07f";
+const APP_BUILD = "2026-11-07g";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -18636,8 +18636,12 @@ function TodoListEditor({ title, field, list, onSave, onDelete, hideWord }) {
     </div>
   );
 }
-function TodoListsSheet({ onClose }) {
+function TodoListsSheet({ onClose, view, onView }) {
   const store = useTodoStore();
+  const seg = function(on) {
+    return { border: "none", background: on ? T.accent : "transparent", color: on ? "#fff" : T.textMid, fontWeight: on ? 700 : 500,
+      borderRadius: 6, padding: "7px 14px", fontFamily: "inherit", fontSize: 13.5, cursor: "pointer" };
+  };
   return (
     <ChecklistSheetFrame onClose={onClose}>
       <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center" }}>
@@ -18649,6 +18653,15 @@ function TodoListsSheet({ onClose }) {
         Change a name and it changes on every to-do. One in use can be hidden from the choices but not deleted.
         A private project, and everything in it, is seen only by whoever made it.
       </div>
+      {onView && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 6 }}>Show the to-do page as</div>
+          <div role="group" aria-label="Show as" style={{ display: "inline-flex", flexWrap: "nowrap", border: `1.5px solid ${T.border}`, borderRadius: 8, padding: 2, background: "#fff" }}>
+            <button type="button" aria-pressed={view !== "list" ? "true" : "false"} onClick={function() { onView("board"); }} style={seg(view !== "list")}>Board</button>
+            <button type="button" aria-pressed={view === "list" ? "true" : "false"} onClick={function() { onView("list"); }} style={seg(view === "list")}>List</button>
+          </div>
+        </div>
+      )}
       <TodoListEditor title="Projects" field="project" hideWord="Archive" list={store.projects || []}
         onSave={function(p) { return todoSaveListDb("project", p); }} onDelete={function(id) { return todoDeleteListDb("project", id); }}/>
       <TodoListEditor title="Tags" field="category" hideWord="Hide" list={store.categories || []}
@@ -18869,7 +18882,15 @@ function TodoPage({ compact }) {
 
   return (
     <div style={{ maxWidth: board ? "none" : 820, minWidth: 0 }}>
-      {!compact && <PageHeader title="To-do" sub={openCount + " to do" + (overdue ? " · " + overdue + " overdue" : "") + (filtered ? " (filtered)" : "")} actions={head}/>}
+      {!compact && (
+        <div className="hb-page-head" style={{ flexWrap: "nowrap", alignItems: "baseline", justifyContent: "flex-start", gap: "0 14px" }}>
+          <h1 className="hb-title" style={{ flexShrink: 0 }}>To-do</h1>
+          <div className="hb-sub" style={{ marginTop: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {openCount + " to do" + (overdue ? " · " + overdue + " overdue" : "") + (filtered ? " (filtered)" : "")}
+          </div>
+          {office && <button type="button" onClick={function() { setLists(true); }} style={Object.assign({}, btnQuiet, { flexShrink: 0, whiteSpace: "nowrap" })}>Projects &amp; areas</button>}
+        </div>
+      )}
       {compact && <div style={{ margin: "4px 0 12px" }}>{head}</div>}
       {store.err && <ErrBanner text={store.err}/>}
       {err && <ErrBanner text={err}/>}
@@ -18897,7 +18918,7 @@ function TodoPage({ compact }) {
 
       {!store.todos && !store.err && <div style={quietText}>Loading…</div>}
       {store.todos && !groups.length && (
-        <div style={{ fontSize: 14, color: T.textLight, padding: "18px 2px" }}>{filtered ? "Nothing matches these filters." : "Nothing to do. Add one with + New to-do."}</div>
+        <div style={{ fontSize: 14, color: T.textLight, padding: "18px 2px" }}>{filtered ? "Nothing matches these filters." : compact ? "Nothing to do. Add one with + New to-do." : "Nothing to do. Add one with + To-do at the top."}</div>
       )}
       {board && groups.length > 0 && (
         <TodoBoard groups={groups} today={today} ctx={ctx} by={by} busyId={busyId} onTick={setState} onMore={setMore} onStar={star}
@@ -18943,7 +18964,7 @@ function TodoPage({ compact }) {
         onClose={function() { setEdit(null); }}/>}
       {more && <TodoMoreSheet todo={more} onClose={function() { setMore(null); }} onState={setState}
         onEdit={function() { const t = more; setMore(null); setEdit({ todo: t }); }}/>}
-      {lists && <TodoListsSheet onClose={function() { setLists(false); }}/>}
+      {lists && <TodoListsSheet view={board ? "board" : "list"} onView={function(v) { pref("view", v); }} onClose={function() { setLists(false); }}/>}
     </div>
   );
 }
