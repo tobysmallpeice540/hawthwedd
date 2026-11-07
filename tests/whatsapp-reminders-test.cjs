@@ -279,6 +279,14 @@ assert.strictEqual(P.SUMMARY_DAYS, 7);
   const again = P.planTodos({ items: its, people: ppl, now: at("2026-11-06T12:00:00Z"), sent: new Set([m.key]) });
   assert.strictEqual(again.send.length, 0, "not twice in a day");
   assert.strictEqual(P.planTodos({ items: [its[0]], people: ppl, now: at("2026-11-06T09:00:00Z") }).send[0].values.count, "1 to-do");
+  // The "only urgent to-dos" tick (7 Nov 2026): starred ones only.
+  const urg = its.map(function (i) { return Object.assign({}, i, { urgent: i.id === "td_2" }); });
+  const u = P.planTodos({ items: urg, people: ppl, now: at("2026-11-06T09:00:00Z"), urgentOnly: true });
+  assert.deepStrictEqual(u.send.map(function (x) { return x.values; }), [{ name: "Rosanna", count: "1 to-do", items: "Order more logs" }], "urgent only");
+  assert.deepStrictEqual(u.noMobile, [], "nobody without an urgent one is reported");
+  assert.strictEqual(P.planTodos({ items: its, people: ppl, now: at("2026-11-06T09:00:00Z"), urgentOnly: true }).send.length, 0,
+    "an older database (no urgent field) sends nothing when the tick is on");
+  assert.strictEqual(P.planTodos({ items: urg, people: ppl, now: at("2026-11-06T09:00:00Z") }).send[0].values.count, "2 to-dos", "tick off: all");
   const chk = T.checkBody("todo_overdue", T.TEMPLATES.todo_overdue.body);
   assert.ok(chk.ok, JSON.stringify(chk));
   assert.strictEqual(T.TEMPLATES.todo_overdue.category, "UTILITY");

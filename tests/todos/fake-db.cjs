@@ -16,7 +16,7 @@ async function makeTodoDb(opts) {
   const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' })
   const visible = (t) => R.todoVisibleTo(t, me, lists.project)
   const canEdit = (t) => visible(t) && (me.role === 'admin' || t.createdById === me.id)
-  const out = (t) => Object.assign({}, t, { dueOn: R.todoDueOn(t), canEdit: canEdit(t) })
+  const out = (t) => Object.assign({}, t, { urgent: !!t.urgent, dueOn: R.todoDueOn(t), canEdit: canEdit(t) })
   // A tag (kind 'category') is used by every to-do that carries it.
   const uses = (t, kind, id) => kind === 'category' ? R.todoTags(t).indexOf(id) !== -1 : kind === 'area' ? R.todoAreas(t).indexOf(id) !== -1 : t[kind] === id
   const listOut = (kind, l) => ({ id: l.id, name: l.name, hidden: !!l.hidden, private: !!l.private, mine: l.ownerId === me.id,
@@ -30,6 +30,13 @@ async function makeTodoDb(opts) {
       areas: lists.area.map((l) => listOut('area', l)),
       projects: lists.project.filter((l) => R.todoListVisibleTo(l, me)).map((l) => listOut('project', l)),
       categories: lists.category.map((l) => listOut('category', l)) }),
+    todo_set_urgent: ({ p_id, p_on }) => {
+      const t = items.get(p_id)
+      if (!t || !visible(t)) return fail('not_found')
+      if (!canEdit(t)) return fail('not_yours')
+      t.urgent = !!p_on
+      return { ok: true, item: out(t) }
+    },
     todo_upsert: ({ p }) => {
       const old = items.get(p.id)
       if (old && !visible(old)) return fail('not_found')
@@ -40,6 +47,7 @@ async function makeTodoDb(opts) {
           areas: Array.isArray(p.areas) ? [...new Set(p.areas)] : p.area ? [p.area] : old ? R.todoAreas(old) : [],
           tags: Array.isArray(p.tags) ? [...new Set(p.tags)] : p.category ? [p.category] : old ? R.todoTags(old) : [],
           repeat: p.repeat || null,
+          urgent: p.urgent === undefined ? !!(old && old.urgent) : !!p.urgent,
           // The day "Before next event" was set for (migration 2026-11-07d).
           eventOn: p.priority !== 'event' ? null
             : old && old.priority === 'event' && R.todoAreas(old).join('|') === (Array.isArray(p.areas) ? p.areas : R.todoAreas(old)).join('|') && old.eventOn ? old.eventOn : (p.eventOn || null),

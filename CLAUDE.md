@@ -1355,6 +1355,14 @@ matters, read the live catalogue with the Supabase MCP tools.
   kind `category`. The edit sheet's frame never scrolls sideways
   (`overflowX: hidden` on `ChecklistSheetFrame` — an iPhone slid it).
   Test: `supabase/2026-11-07d-todo-event-day-test.sql` (after 07c's).
+- **Urgent star (migration 2026-11-07e):** `todo_items.urgent`; starred from a
+  card or row by whoever may change the to-do (`todo_set_urgent`), or in the
+  edit sheet; first in every column (`todoCompare`), always on the person's
+  home card, an "Urgent" filter chip. The overdue WhatsApp has a tick, "Only
+  remind about urgent (starred) to-dos" (`templates.todo_overdue.urgentOnly`
+  in `hbf_whatsapp_settings_v1`; `planTodos` `urgentOnly`; the worker sends
+  `urgent`). The app shows no star while `todo_get` sends no `urgent` (a
+  database before 07e). Test: `supabase/2026-11-07e-todo-urgent-test.sql`.
 
 ### Schema snapshot (7 Nov 2026, migration 2026-11-07a)
 

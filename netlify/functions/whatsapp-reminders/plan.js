@@ -421,7 +421,8 @@ function planSummary(input) {
 //         private ones the person may not see and logins that have left.
 // people: { <uuid>: { name, mobile, active } }
 // One message per person per day, from TODO_HOUR; a to-do is due on one day
-// only, so it is in one message at most.
+// only, so it is in one message at most. urgentOnly (the tick on the card,
+// 7 Nov 2026): only to-dos starred Urgent.
 const TODO_HOUR = 9;
 function todoCount(n) { return n === 1 ? "1 to-do" : n + " to-dos"; }
 function planTodos(input) {
@@ -432,6 +433,7 @@ function planTodos(input) {
   (input.items || []).forEach(function (it) {
     const id = String((it && it.person) || "").toLowerCase();
     if (!/^[0-9a-f-]{36}$/.test(id) || !it.title) return;
+    if (input.urgentOnly && it.urgent !== true) return;
     (byPerson[id] = byPerson[id] || []).push(it);
   });
   const send = [], noMobile = [];

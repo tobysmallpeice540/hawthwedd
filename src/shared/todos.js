@@ -140,6 +140,8 @@ export function todoVisibleTo(t, me, projects) {
 
 // Nearest due first, nothing-due last, then oldest first.
 export function todoCompare(a, b) {
+  // Urgent (starred) first (7 Nov 2026, Toby), then nearest due.
+  if (!!a.urgent !== !!b.urgent) return a.urgent ? -1 : 1;
   const da = todoDueOn(a) || "9999-99-99", db = todoDueOn(b) || "9999-99-99";
   if (da !== db) return da < db ? -1 : 1;
   const pa = TODO_PRIORITY_ORDER.indexOf(a.priority), pb = TODO_PRIORITY_ORDER.indexOf(b.priority);
@@ -339,6 +341,7 @@ export function todoFilter(todos, f, me) {
       const ok = want.some(function (g) { return g === "__none" ? !has.length : has.indexOf(g) !== -1; });
       if (!ok) return false;
     }
+    if (o.urgent && !t.urgent) return false;
     if (o.area) { const as = todoAreas(t); if (o.area === "__none" ? as.length > 0 : as.indexOf(o.area) === -1) return false; }
     if (o.who === "mine") { if (!todoIsFor(t, me)) return false; }
     else if (o.who) { if ((t.who || "anyone") !== o.who) return false; }

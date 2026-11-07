@@ -2824,7 +2824,7 @@ function darkenHex(hex, amount) {
 // Bumped whenever this file changes meaningfully, and shown on the Home page.
 // Lets you tell at a glance whether the browser is running the build you just
 // deployed, instead of guessing why a change "hasn't worked".
-const APP_BUILD = "2026-11-07d";
+const APP_BUILD = "2026-11-07e";
 
 // Year-calendar diagonals. A single pair of blues rather than per-property
 // colours: the letter badges already identify the property, so colouring the
@@ -17915,6 +17915,12 @@ async function todoSaveItem(rec) {
   return r.item;
 }
 // A tick shows at once; a refusal puts it back.
+// The Urgent star alone, from a card or row (migration 2026-11-07e).
+async function todoSetUrgentDb(todo, on) {
+  const r = await todoCall("todo_set_urgent", { p_id: todo.id, p_on: !!on });
+  todoPut("todos", r.item);
+  return r.item;
+}
 async function todoSetStateDb(todo, state, comment) {
   const before = todo;
   todoPut("todos", Object.assign({}, todo, state === "open"
@@ -18218,6 +18224,7 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
       areas: d.areas || [], project: d.project || null, tags: d.tags || [],
       // The first of each the old way too, for a database before migration 2026-11-07d.
       area: (d.areas || [])[0] || null, category: (d.tags || [])[0] || null,
+      urgent: !!d.urgent,
       priority: d.repeat ? "eventually" : d.priority, repeat: d.repeat || null,
       eventOn: d.repeat ? null : eventOn,
       deadline: d.deadline || (d.repeat ? londonToday() : null),
@@ -18278,6 +18285,14 @@ function TodoEditSheet({ todo, preset, onClose, onSaved }) {
       <label style={todoLabelCss}>Description <span style={{ fontWeight: 400, color: T.textLight }}>(optional)</span></label>
       <GrowTextarea value={d.detail || ""} onChange={function(v) { set("detail", v); }} maxLength={4000} maxHeight="40vh"
         placeholder="Anything that helps whoever does it" style={Object.assign({}, inputCss, { fontSize: 15, minHeight: 64 })}/>
+
+      {(isNew ? (store.todos || []).some(function(t) { return t.urgent !== undefined; }) : todo.urgent !== undefined) && <button type="button" aria-pressed={d.urgent ? "true" : "false"} onClick={function() { set("urgent", !d.urgent); }}
+        style={{ marginTop: 12, display: "inline-flex", flexWrap: "nowrap", alignItems: "center", gap: 7, borderRadius: 18, padding: "8px 14px",
+          border: `1.5px solid ${d.urgent ? T.amber : T.border}`, background: d.urgent ? T.amberBg : "#fff", color: T.text,
+          fontFamily: "inherit", fontSize: 14, fontWeight: d.urgent ? 700 : 500, cursor: "pointer" }}>
+        <span style={{ color: T.amber, fontSize: 17, lineHeight: 1 }}>{d.urgent ? <span>&#9733;</span> : <span>&#9734;</span>}</span>
+        {d.urgent ? "Urgent" : "Mark urgent"}
+      </button>}
 
       <label style={todoLabelCss} htmlFor="todo-repeat">Repeats</label>
       <select id="todo-repeat" value={d.repeat || ""} style={Object.assign({}, inputCss, { fontSize: 15, padding: "10px", maxWidth: 260 })}
@@ -18440,6 +18455,26 @@ function TodoMoreSheet({ todo, onClose, onState, onEdit }) {
   );
 }
 
+// The Urgent star (7 Nov 2026, Toby): any to-do can be starred; starred ones
+// go to the top of every column and onto the person's home card. A button for
+// whoever may change the to-do, otherwise just the star when it is on.
+function TodoStar({ todo, busy, onStar }) {
+  // Nothing until the database knows about it (migration 2026-11-07e sends
+  // `urgent` on every to-do).
+  if (todo.urgent === undefined) return null;
+  const on = !!todo.urgent;
+  if (!onStar || !todo.canEdit || !todoIsOpen(todo)) {
+    return on ? <span aria-label="Urgent" title="Urgent" style={{ color: T.amber, fontSize: 17, lineHeight: 1, flexShrink: 0 }}>&#9733;</span> : null;
+  }
+  return (
+    <button type="button" disabled={busy} aria-pressed={on ? "true" : "false"} aria-label={"Urgent: " + todo.title}
+      title={on ? "Urgent. Tap to take the star off." : "Mark urgent"}
+      onClick={function(e) { e.stopPropagation(); onStar(todo, !on); }}
+      style={{ background: "none", border: "none", padding: "0 2px", margin: "-3px 0 0", fontFamily: "inherit", fontSize: 19, lineHeight: 1,
+        color: on ? T.amber : T.textLight, cursor: "pointer", flexShrink: 0 }}>{on ? <span>&#9733;</span> : <span>&#9734;</span>}</button>
+  );
+}
+
 // The round tick (Toby preferred Todoist's small circles to big boxes): a
 // 22px ring in the priority's colour inside a 40px target, filled green with
 // a tick when done, grey "N/A" when not applicable.
@@ -18465,7 +18500,7 @@ function TodoTick({ todo, today, busy, canUntick, onTick }) {
 }
 
 // One to-do: the round tick, the heading, one line of what/who/where/when.
-function TodoRow({ todo, today, ctx, showWho, showArea, showProject, busy, canUntick, onTick, onMore, onOpen }) {
+function TodoRow({ todo, today, ctx, showWho, showArea, showProject, busy, canUntick, onTick, onMore, onOpen, onStar }) {
   const open = todoIsOpen(todo);
   const timing = open ? todoTiming(todo, today) : "none";
   const late = timing === "overdue";
@@ -18502,6 +18537,7 @@ function TodoRow({ todo, today, ctx, showWho, showArea, showProject, busy, canUn
           <div style={{ fontSize: 13, color: T.text, background: T.amberBg, borderRadius: 7, padding: "6px 9px", marginTop: 5, lineHeight: 1.4 }}>{todo.comment}</div>
         )}
       </div>
+      <TodoStar todo={todo} busy={busy} onStar={onStar}/>
       {open && (
         <button type="button" onClick={function() { onMore(todo); }} disabled={busy}
           style={{ background: "none", border: `1.5px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", fontFamily: "inherit",
@@ -18625,7 +18661,7 @@ const TODO_GROUP_TABS = [["project", "Project"], ["tag", "Tag"], ["area", "Area"
 
 // One to-do on the board: a card with the round tick, the heading, a line of
 // when / where / who, and More.
-function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen }) {
+function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen, onStar }) {
   const open = todoIsOpen(todo);
   const timing = open ? todoTiming(todo, today) : "none";
   const late = timing === "overdue";
@@ -18639,7 +18675,7 @@ function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen }) {
   const priv = !!todo.private || (!!todo.project && (ctx.projects || []).some(function(p) { return p.id === todo.project && p.private; }));
   return (
     <div data-todo-id={todo.id} onClick={function() { onOpen(todo); }}
-      style={{ background: "#fff", border: `1px solid ${late ? T.red : T.border}`, borderRadius: 10, padding: "12px 10px 10px 13px",
+      style={{ background: "#fff", border: `${todo.urgent ? 2 : 1}px solid ${late ? T.red : todo.urgent ? T.amber : T.border}`, borderRadius: 10, padding: "12px 10px 10px 13px",
         display: "flex", flexWrap: "nowrap", alignItems: "flex-start", gap: 10, cursor: "pointer", color: T.text,
         boxShadow: "0 1px 2px rgba(" + T.shadowRgb + ",.06)" }}>
       <TodoTick todo={todo} today={today} busy={busy} canUntick={false} onTick={onTick}/>
@@ -18659,6 +18695,7 @@ function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen }) {
           {priv && <span style={{ fontWeight: 700, color: T.textMid }}>Private</span>}
         </div>
       </div>
+      <TodoStar todo={todo} busy={busy} onStar={onStar}/>
       <button type="button" onClick={function(e) { e.stopPropagation(); onMore(todo); }} disabled={busy} aria-label={"More: " + todo.title}
         style={{ background: "none", border: "none", padding: "0 2px", margin: "-4px -2px 0 0", fontFamily: "inherit", fontSize: 18, lineHeight: 1,
           color: T.textLight, cursor: "pointer", flexShrink: 0, letterSpacing: 1 }}>&middot;&middot;&middot;</button>
@@ -18668,7 +18705,7 @@ function TodoCard({ todo, today, ctx, by, busy, onTick, onMore, onOpen }) {
 
 // The board: one column per group, side by side, scrolled sideways (a
 // column at a time on a phone). Only columns with something in them.
-function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onAdd }) {
+function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onAdd, onStar }) {
   return (
     <div role="region" aria-label="To-do board" tabIndex={0}
       style={{ display: "flex", flexWrap: "nowrap", alignItems: "flex-start", gap: 12, overflowX: "auto", scrollSnapType: "x mandatory",
@@ -18689,7 +18726,7 @@ function TodoBoard({ groups, today, ctx, by, busyId, onTick, onMore, onOpen, onA
             </div>
             {g.items.map(function(t) {
               return <TodoCard key={t.id} todo={t} today={today} ctx={ctx} by={by} busy={busyId === t.id}
-                onTick={onTick} onMore={onMore} onOpen={onOpen}/>;
+                onTick={onTick} onMore={onMore} onOpen={onOpen} onStar={onStar}/>;
             })}
           </section>
         );
@@ -18750,6 +18787,12 @@ function TodoPage({ compact }) {
     catch (e) { setErr((e && e.message) || "That did not save."); }
     setBusyId(null);
   }
+  async function star(todo, on) {
+    setBusyId(todo.id); setErr("");
+    try { await todoSetUrgentDb(todo, on); }
+    catch (e) { setErr((e && e.message) || "That did not save."); }
+    setBusyId(null);
+  }
 
   // The database sends only what this login may see.
   const categories = store.categories || [];
@@ -18766,12 +18809,12 @@ function TodoPage({ compact }) {
     oneTag: tagsOn.length === 1 && tagsOn[0] !== "__none" ? tagsOn[0] : null,
     oneArea: area && area !== "__none" ? area : null };
   const all = store.todos || [];
-  const shown = todoFilter(all, { tags: tagsOn, who: who, area: area }, me);
+  const shown = todoFilter(all, { tags: tagsOn, who: who, area: area, urgent: !!prefs.urgent }, me);
   const groups = todoGroups(shown, by, ctx);
   const openCount = shown.filter(todoIsOpen).length;
   const overdue = shown.filter(function(t) { return todoIsOpen(t) && todoTiming(t, today) === "overdue"; }).length;
   const done = todoRecentlyDone(shown, 30);
-  const filtered = !!(tagsOn.length || area || who);
+  const filtered = !!(tagsOn.length || area || who || prefs.urgent);
   // A new to-do starts in the column it was added from, and in whatever the
   // filters are showing.
   function presetFor(groupPreset) {
@@ -18826,8 +18869,12 @@ function TodoPage({ compact }) {
       {compact && <div style={{ margin: "4px 0 12px" }}>{head}</div>}
       {store.err && <ErrBanner text={store.err}/>}
       {err && <ErrBanner text={err}/>}
-      {catChips.length > 1 && (
+      {(catChips.length > 1 || all.some(function(t) { return t.urgent; })) && (
         <div role="group" aria-label="Tags" style={{ display: "flex", flexWrap: "nowrap", gap: 7, overflowX: "auto", padding: "0 0 8px", maxWidth: "100%" }}>
+          {all.some(function(t) { return t.urgent !== undefined; }) && <button type="button" aria-pressed={prefs.urgent ? "true" : "false"} onClick={function() { pref("urgent", !prefs.urgent); }}
+            style={Object.assign({}, chip(!!prefs.urgent), prefs.urgent ? { borderColor: T.amber, background: T.amberBg } : {})}>
+            <span style={{ color: T.amber }}>&#9733;</span> Urgent
+          </button>}
           {catChips.map(function(o) {
             const on = o[0] ? tagsOn.indexOf(o[0]) !== -1 : !tagsOn.length;
             return <button key={o[0] || "all"} type="button" aria-pressed={on ? "true" : "false"} onClick={function() { toggleTag(o[0]); }} style={chip(on)}>{o[1]}</button>;
@@ -18839,7 +18886,7 @@ function TodoPage({ compact }) {
         <TodoFilterSelect id="todo-f-area" label="Area" value={area} options={areaOptions} onChange={function(v) { pref("area", v); }}/>
         <TodoFilterSelect id="todo-f-by" label={board ? "Columns" : "Group by"} value={by} options={TODO_GROUP_TABS} onChange={function(v) { pref("by", v); }}/>
         {filtered && (
-          <button type="button" onClick={function() { const n = Object.assign({}, prefs, { tags: [], who: "", area: "" }); todoSavePrefs(n); setPrefs(n); }}
+          <button type="button" onClick={function() { const n = Object.assign({}, prefs, { tags: [], who: "", area: "", urgent: false }); todoSavePrefs(n); setPrefs(n); }}
             style={{ background: "none", border: "none", color: T.midBlue, fontFamily: "inherit", fontSize: 13, cursor: "pointer", padding: 0 }}>Clear filters</button>
         )}
       </div>
@@ -18849,7 +18896,7 @@ function TodoPage({ compact }) {
         <div style={{ fontSize: 14, color: T.textLight, padding: "18px 2px" }}>{filtered ? "Nothing matches these filters." : "Nothing to do. Add one with + New to-do."}</div>
       )}
       {board && groups.length > 0 && (
-        <TodoBoard groups={groups} today={today} ctx={ctx} by={by} busyId={busyId} onTick={setState} onMore={setMore}
+        <TodoBoard groups={groups} today={today} ctx={ctx} by={by} busyId={busyId} onTick={setState} onMore={setMore} onStar={star}
           onOpen={function(x) { setEdit({ todo: x }); }} onAdd={function(p) { setEdit({ preset: presetFor(p) }); }}/>
       )}
       {!board && groups.map(function(g) {
@@ -18868,7 +18915,7 @@ function TodoPage({ compact }) {
             {g.items.map(function(t) {
               return <TodoRow key={t.id} todo={t} today={today} ctx={ctx} busy={busyId === t.id}
                 showWho={by !== "person"} showArea={by !== "area"} showProject={by !== "project"}
-                canUntick={false} onTick={setState} onMore={setMore} onOpen={function(x) { setEdit({ todo: x }); }}/>;
+                canUntick={false} onTick={setState} onMore={setMore} onStar={star} onOpen={function(x) { setEdit({ todo: x }); }}/>;
             })}
           </section>
         );
@@ -18944,6 +18991,7 @@ function TodoHomeCard({ onAll }) {
   const horizon = todoAddDays(today, 7);
   const mine = store.todos.filter(function(t) {
     if (!todoIsOpen(t) || !todoIsFor(t, me)) return false;
+    if (t.urgent) return true;   // starred: always on the card
     const due = todoDueOn(t);
     return !!due && due <= horizon;
   }).sort(todoCompare);
@@ -18953,6 +19001,12 @@ function TodoHomeCard({ onAll }) {
   async function setState(todo, state, comment) {
     setBusyId(todo.id); setErr("");
     try { await todoSetStateDb(todo, state, comment); setMore(null); }
+    catch (e) { setErr((e && e.message) || "That did not save."); }
+    setBusyId(null);
+  }
+  async function star(todo, on) {
+    setBusyId(todo.id); setErr("");
+    try { await todoSetUrgentDb(todo, on); }
     catch (e) { setErr((e && e.message) || "That did not save."); }
     setBusyId(null);
   }
@@ -18967,11 +19021,11 @@ function TodoHomeCard({ onAll }) {
       <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 10, padding: "2px 12px 4px" }}>
         {err && <div style={{ marginTop: 8 }}><ErrBanner text={err}/></div>}
         {!shown.length && (
-          <div style={{ fontSize: 13.5, color: T.textLight, padding: "11px 0" }}>Nothing due for you this week.</div>
+          <div style={{ fontSize: 13.5, color: T.textLight, padding: "11px 0" }}>Nothing due for you this week, and nothing urgent.</div>
         )}
         {shown.map(function(t) {
           return <TodoRow key={t.id} todo={t} today={today} ctx={ctx} busy={busyId === t.id} showWho={false} showArea showProject
-            canUntick={false} onTick={setState} onMore={setMore} onOpen={function(x) { setEdit({ todo: x }); }}/>;
+            canUntick={false} onTick={setState} onMore={setMore} onStar={star} onOpen={function(x) { setEdit({ todo: x }); }}/>;
         })}
         {mine.length > shown.length && (
           <button type="button" onClick={onAll}
@@ -21518,6 +21572,13 @@ function WhatsAppPage() {
           return <WaTemplateCard key={t.name} t={t} conf={tpls[t.name] || {}} busy={busy}
             when={t.name === "changeover_summary" && settings !== null ? <WaSummaryWhen summary={summary} busy={!!busy} onSave={saveSummaryWhen}/>
               : t.name === "pre_arrival" && settings !== null ? <div style={{ fontSize:13, color:T.text }}>Goes from {waHourLabel(arrival.hour)} on {Number(arrival.daysBefore) === 1 ? "the day before arrival" : "the arrival day"} — change it, the gate code and the packs on the Setup tab.</div>
+              : t.name === "todo_overdue" && settings !== null ? (
+                <label style={{ display:"flex", flexWrap:"nowrap", alignItems:"center", gap:8, fontSize:13, color:T.text, cursor:"pointer" }}>
+                  <input type="checkbox" checked={!!(tpls.todo_overdue || {}).urgentOnly} disabled={!!busy}
+                    onChange={function(e){ const on = e.target.checked; save(function(x){ x.templates = x.templates || {}; x.templates.todo_overdue = Object.assign({}, x.templates.todo_overdue, { urgentOnly: on }); return x; }, on ? "Only urgent to-dos from now on." : "All overdue to-dos from now on."); }}
+                    style={{ width:18, height:18, accentColor:T.accent, margin:0 }}/>
+                  Only remind about urgent (starred) to-dos
+                </label>)
               : null}
             onToggle={function(on){ save(function(x){ x.templates = x.templates || {}; x.templates[t.name] = Object.assign({}, x.templates[t.name], { on: on }); return x; }, on ? "Switched on." : "Switched off."); }}
             onSaveBody={function(body){ return save(function(x){ x.templates = x.templates || {}; x.templates[t.name] = Object.assign({}, x.templates[t.name], { body: body }); return x; }, "Wording saved (not yet sent to Meta)."); }}

@@ -165,6 +165,28 @@ async function run(viewport, label) {
   await board.locator('[data-todo-id="' + bulbs.id + '"]').getByText('Before check-in').waitFor()
   db.items.delete(bulbs.id)
 
+  // Urgent: star a card from the board; it goes first, gets a filter, and is on
+  // the home card whatever its day.
+  await board.locator('[data-todo-id="td_someday"]').getByRole('button', { name: 'Urgent: Paint the gate' }).click()
+  await until(() => item('td_someday').urgent === true, 'star from the card')
+  await page.waitForFunction(() => {
+    const c = document.querySelector('[aria-label="To-do board"] section[aria-label="No project"] [data-todo-id]')
+    return c && c.getAttribute('data-todo-id') === 'td_someday'
+  }, null, { timeout: 5000 }).catch(() => {})
+  assert.strictEqual(await board.locator('section[aria-label="No project"] [data-todo-id]').first().getAttribute('data-todo-id'), 'td_someday',
+    label + ': urgent first in its column')
+  await page.getByRole('group', { name: 'Tags' }).getByRole('button', { name: /Urgent/ }).click()
+  assert.deepStrictEqual(await board.locator('[data-todo-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-todo-id'))), ['td_someday'],
+    label + ': urgent filter')
+  await page.getByRole('group', { name: 'Tags' }).getByRole('button', { name: /Urgent/ }).click()
+  // The edit sheet's toggle takes it off again.
+  await board.locator('[data-todo-id="td_someday"] [role=button]').click()
+  await page.getByRole('dialog').getByRole('button', { name: /Urgent$/ }).click()
+  await page.getByRole('dialog').getByRole('button', { name: /Mark urgent$/ }).waitFor()
+  await page.getByRole('button', { name: 'Save' }).click()
+  await page.getByLabel('Heading').waitFor({ state: 'detached' })
+  assert.strictEqual(item('td_someday').urgent, false, label + ': unstarred in the sheet')
+
   // A repeat, ticked, leaves the next one.
   await board.getByRole('button', { name: 'Mark done: Bins out' }).click()
   await until(() => item('td_bins').state === 'done' && item('td_bins').nextId, 'repeat ticked')

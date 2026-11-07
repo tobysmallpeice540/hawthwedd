@@ -132,7 +132,8 @@ async function planNow(now) {
     const profiles = await rest("profiles?select=id,name,mobile,active");
     const people = {};
     profiles.forEach(function (p) { people[String(p.id).toLowerCase()] = { name: p.name, mobile: p.mobile, active: p.active }; });
-    const p = plan.planTodos({ items: Array.isArray(items) ? items : [], people: people, now: now });
+    const p = plan.planTodos({ items: Array.isArray(items) ? items : [], people: people, now: now,
+      urgentOnly: !!(tpl.todo_overdue && tpl.todo_overdue.urgentOnly) });
     all.push.apply(all, p.send); noMobile.push.apply(noMobile, p.noMobile);
   }
   if (isOn("pre_arrival")) {

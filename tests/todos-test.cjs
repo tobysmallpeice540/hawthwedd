@@ -199,6 +199,11 @@ const path = require('path')
     assert.deepStrictEqual(T.todoFilter(list, { who: 'role:bar' }, me).map((t) => t.id), ['x3'])
     assert.deepStrictEqual(T.todoFilter(list, { tags: ['admin'], area: 'hamlet', who: 'person:u1' }, me).map((t) => t.id), ['x2'])
     assert.deepStrictEqual(T.todoFilter(list, { tags: [] }, me).length, 3)
+    // Urgent (7 Nov): first in every group, and a filter of its own.
+    const u = [{ id: 'u1', title: 'Soon', priority: 'three', setOn: today, createdAt: '1' },
+      { id: 'u2', title: 'Starred, later', priority: 'eventually', setOn: today, urgent: true, createdAt: '2' }]
+    assert.deepStrictEqual(u.slice().sort(T.todoCompare).map((t) => t.id), ['u2', 'u1'])
+    assert.deepStrictEqual(T.todoFilter(u, { urgent: true }, me).map((t) => t.id), ['u2'])
     assert.ok(T.TODO_DEFAULT_AREAS.some((a) => a.id === 'farm' && a.name === 'Farm'))
     assert.ok(!T.TODO_DEFAULT_AREAS.some((a) => a.id === 'admin'), 'Admin is a tag now, not an area')
     assert.deepStrictEqual(T.TODO_PRIORITY_ORDER, ['three', 'week', 'month', 'event', 'eventually'])
